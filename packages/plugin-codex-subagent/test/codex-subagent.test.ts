@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -117,15 +117,9 @@ interface PluginModule {
       env?: Record<string, string | undefined>
     },
   ) => { argv: string[]; env: Record<string, string>; cleanup: () => void }
-  codexAppServerArgs: (cwd: string, serenaHome: string) => string[]
+  codexAppServerArgs: () => string[]
   codexLoginCommand: (executable?: string) => string
   bundledCodexInfo: () => BundledInfo
-  serenaCommandLine: () => string
-  SERENA_MCP_COMMAND: string
-  SERENA_MCP_ARGS: readonly string[]
-  SERENA_CONFIG_OVERRIDES: readonly string[]
-  SERENA_DISABLED_TOOLS: readonly string[]
-  SERENA_CONFIG_FILENAME: string
   resolveCodexCli: (options: FakeResolveOptions) => Promise<{
     path: string
     version: string
@@ -148,7 +142,6 @@ interface StatusReport {
   version?: string
   source?: DiscoverySource
   bundledVersion?: string
-  serena: string
   loginCommand: string
   codexHome: string
   snippet: string
@@ -232,16 +225,7 @@ interface RecordedRequest {
   params?: Record<string, unknown>
 }
 
-type AppServerMode =
-  | 'success'
-  | 'mismatch'
-  | 'serena-missing'
-  | 'serena-inherited-disabled'
-  | 'serena-write-attempt'
-  | 'serena-project-read'
-  | 'stall'
-  | 'noncompleted'
-  | 'crash'
+type AppServerMode = 'success' | 'mismatch' | 'stall' | 'noncompleted' | 'crash'
 
 interface FakeAppServer {
   handle: FakeHandle
@@ -252,8 +236,6 @@ interface FakeAppServer {
 }
 
 interface FakeAppServerOptions {
-  serenaTool?: string
-  serenaWriteFile?: string
   threadId?: string
   resumeError?: string
 }
@@ -277,19 +259,6 @@ function createAppServer(mode: AppServerMode, options: FakeAppServerOptions = {}
   )
   const send = (message: Record<string, unknown>): void => {
     if (!stdout.writableEnded) stdout.write(`${JSON.stringify(message)}\n`)
-  }
-  const serenaDisabledTools = (): string[] => {
-    for (const argv of spawnArgv) {
-      for (const arg of argv) {
-        if (!arg.startsWith('mcp_servers.serena.disabled_tools=')) continue
-        try {
-          return JSON.parse(arg.slice(arg.indexOf('=') + 1)) as string[]
-        } catch {
-          return []
-        }
-      }
-    }
-    return []
   }
   const terminate = (): void => {
     if (terminated) return
@@ -330,35 +299,6 @@ function createAppServer(mode: AppServerMode, options: FakeAppServerOptions = {}
         })
         return
       }
-      if (mode === 'serena-missing') {
-        send({
-          jsonrpc: '2.0',
-          id: request.id,
-          error: {
-            code: -32603,
-            message:
-              'error creating thread: Fatal error: Failed to initialize session: required MCP servers failed to initialize: serena: program not found',
-          },
-        })
-        return
-      }
-      // Models an inherited `mcp_servers.serena.enabled=false`: only the fixed
-      // child override can enable the required server.
-      if (
-        mode === 'serena-inherited-disabled' &&
-        !spawnArgv.some((argv) => argv.includes('mcp_servers.serena.enabled=true'))
-      ) {
-        send({
-          jsonrpc: '2.0',
-          id: request.id,
-          error: {
-            code: -32603,
-            message:
-              'error creating thread: Fatal error: Failed to initialize session: required MCP server serena is disabled',
-          },
-        })
-        return
-      }
       send({
         jsonrpc: '2.0',
         id: request.id,
@@ -377,137 +317,7 @@ function createAppServer(mode: AppServerMode, options: FakeAppServerOptions = {}
     if (request.method === 'turn/start' && request.id !== undefined) {
       send({ jsonrpc: '2.0', id: request.id, result: { turn: { id: 'turn-1' } } })
       setTimeout(() => {
-        if (mode === 'serena-project-read') {
-          const spec = spawnSpecs[spawnSpecs.length - 1]
-          const home = spec?.env.SERENA_HOME
-          const cwd = spec?.cwd ?? process.cwd()
-          const configPath = typeof home === 'string' ? join(home, 'serena_config.yml') : undefined
-          const configText =
-            configPath !== undefined && existsSync(configPath)
-              ? readFileSync(configPath, 'utf8')
-              : ''
-          const dataDir =
-            typeof home === 'string' ? join(home, 'projects', basename(cwd)) : undefined
-          const argv = spawnArgv[spawnArgv.length - 1] ?? []
-          const argsArg = argv.find((arg) => arg.startsWith('mcp_servers.serena.args='))
-          let serenaArgs: string[] = []
-          try {
-            serenaArgs =
-              argsArg === undefined
-                ? []
-                : (JSON.parse(argsArg.slice(argsArg.indexOf('=') + 1)) as string[])
-          } catch {
-            serenaArgs = []
-          }
-          const projectIndex = serenaArgs.indexOf('--project')
-          const exactProject = projectIndex >= 0 && serenaArgs[projectIndex + 1] === cwd
-          const isolated =
-            configText.includes('trusted_project_path_patterns: []') &&
-            configText.includes('project_serena_folder_location:') &&
-            dataDir !== undefined &&
-            existsSync(dataDir) &&
-            exactProject &&
-            !serenaArgs.includes('--project-from-cwd') &&
-            argv.some((arg) => arg.startsWith('mcp_servers.serena.cwd=')) &&
-            argv.some((arg) => arg.startsWith('mcp_servers.serena.env.SERENA_HOME='))
-          if (isolated) {
-            send({
-              jsonrpc: '2.0',
-              method: 'item/completed',
-              params: {
-                threadId: activeThreadId,
-                turnId: 'turn-1',
-                item: { type: 'agentMessage', phase: 'final_answer', text: 'symbol found' },
-              },
-            })
-            send({
-              jsonrpc: '2.0',
-              method: 'turn/completed',
-              params: { threadId: activeThreadId, turn: { id: 'turn-1', status: 'completed' } },
-            })
-          } else {
-            // Models Serena resolving an ancestor project and falling back to
-            // rewriting that checkout `.serena` folder.
-            if (options.serenaWriteFile !== undefined) {
-              writeFileSync(options.serenaWriteFile, 'activation hook ran', 'utf8')
-            }
-            let ancestor = cwd
-            let fallback: string | undefined
-            for (;;) {
-              const candidate = join(ancestor, '.serena', 'project.yml')
-              if (existsSync(candidate)) {
-                fallback = candidate
-                break
-              }
-              const parent = dirname(ancestor)
-              if (parent === ancestor) break
-              ancestor = parent
-            }
-            if (fallback !== undefined) {
-              writeFileSync(fallback, 'fallback rewrite', 'utf8')
-            } else {
-              mkdirSync(join(cwd, '.serena'), { recursive: true })
-              writeFileSync(join(cwd, '.serena', 'project.yml'), 'fallback rewrite', 'utf8')
-            }
-            send({
-              jsonrpc: '2.0',
-              method: 'item/completed',
-              params: {
-                threadId: activeThreadId,
-                turnId: 'turn-1',
-                item: {
-                  type: 'agentMessage',
-                  phase: 'final_answer',
-                  text: 'fallback used',
-                },
-              },
-            })
-            send({
-              jsonrpc: '2.0',
-              method: 'turn/completed',
-              params: { threadId: activeThreadId, turn: { id: 'turn-1', status: 'completed' } },
-            })
-          }
-        } else if (mode === 'serena-write-attempt') {
-          const tool = options.serenaTool ?? 'replace_symbol_body'
-          if (serenaDisabledTools().includes(tool)) {
-            send({
-              jsonrpc: '2.0',
-              method: 'turn/completed',
-              params: {
-                threadId: activeThreadId,
-                turn: {
-                  id: 'turn-1',
-                  status: 'failed',
-                  error: {
-                    message: `tool ${tool} is disabled in this configuration`,
-                    codexErrorInfo: 'other',
-                  },
-                },
-              },
-            })
-          } else {
-            // Models an inherited approval_mode="approve" or trusted activation
-            // hook reaching the filesystem outside the Codex sandbox.
-            if (options.serenaWriteFile !== undefined) {
-              writeFileSync(options.serenaWriteFile, 'mutated', 'utf8')
-            }
-            send({
-              jsonrpc: '2.0',
-              method: 'item/completed',
-              params: {
-                threadId: activeThreadId,
-                turnId: 'turn-1',
-                item: { type: 'agentMessage', phase: 'final_answer', text: 'mutated file' },
-              },
-            })
-            send({
-              jsonrpc: '2.0',
-              method: 'turn/completed',
-              params: { threadId: activeThreadId, turn: { id: 'turn-1', status: 'completed' } },
-            })
-          }
-        } else if (mode === 'success' || mode === 'serena-inherited-disabled') {
+        if (mode === 'success') {
           send({
             jsonrpc: '2.0',
             method: 'turn/started',
@@ -588,8 +398,6 @@ function createSpawn(options: {
   versionStderr?: string
   versionFor?: (argv: string[]) => { text?: string; exitCode?: number; stderr?: string } | undefined
   appServerMode?: AppServerMode
-  serenaTool?: string
-  serenaWriteFile?: string
   threadId?: string
   resumeError?: string
 }): {
@@ -602,8 +410,6 @@ function createSpawn(options: {
     options.appServerMode === undefined
       ? undefined
       : createAppServer(options.appServerMode, {
-          serenaTool: options.serenaTool,
-          serenaWriteFile: options.serenaWriteFile,
           threadId: options.threadId,
           resumeError: options.resumeError,
         })
@@ -623,7 +429,7 @@ function createSpawn(options: {
       if (isVersionProbe) {
         const custom = options.versionFor?.(spec.argv)
         return versionHandle(
-          custom?.text ?? options.versionText ?? 'codex-cli 0.164.0\n',
+          custom?.text ?? options.versionText ?? 'codex-cli 0.169.0\n',
           custom?.exitCode ?? options.versionExit ?? 0,
           custom?.stderr ?? options.versionStderr ?? '',
         )
@@ -646,15 +452,28 @@ interface FakeProvider {
 interface FakeTool {
   name: string
   description?: string
-  execute: (args: unknown, exec: { signal?: AbortSignal }) => Promise<StatusReport>
+  output?: {
+    schema?: {
+      properties?: Record<string, unknown>
+      additionalProperties?: boolean
+    }
+  }
+  execute: (args: unknown, exec: { signal?: AbortSignal; agent?: unknown }) => Promise<unknown>
 }
 
 interface FakeContext {
   providers: Map<string, FakeProvider>
   tools: FakeTool[]
+  activations: Record<string, unknown>[]
   ctx: {
     subagents: {
       registerProvider: (provider: FakeProvider) => () => void
+      startActivation: (spec: Record<string, unknown>) => Promise<{
+        childId: string
+        name: string
+        result: Promise<never>
+        dispose: () => Promise<void>
+      }>
     }
     subprocess: { spawn: (spec: SpawnSpec) => FakeHandle }
     tools: { register: (tool: FakeTool) => () => void }
@@ -665,6 +484,7 @@ interface FakeContext {
 function createContext(spawn: (spec: SpawnSpec) => FakeHandle): FakeContext {
   const providers = new Map<string, FakeProvider>()
   const tools: FakeTool[] = []
+  const activations: Record<string, unknown>[] = []
   const ctx = {
     subagents: {
       registerProvider(provider: FakeProvider): () => void {
@@ -673,6 +493,20 @@ function createContext(spawn: (spec: SpawnSpec) => FakeHandle): FakeContext {
         }
         providers.set(provider.name, provider)
         return () => providers.delete(provider.name)
+      },
+      startActivation(spec: Record<string, unknown>): Promise<{
+        childId: string
+        name: string
+        result: Promise<never>
+        dispose: () => Promise<void>
+      }> {
+        activations.push(spec)
+        return Promise.resolve({
+          childId: 'child-1',
+          name: typeof spec.name === 'string' ? spec.name : 'agent-1',
+          result: new Promise<never>(() => {}),
+          dispose: async () => {},
+        })
       },
     },
     subprocess: { spawn },
@@ -684,7 +518,7 @@ function createContext(spawn: (spec: SpawnSpec) => FakeHandle): FakeContext {
     },
     logger: { warn: () => {} },
   }
-  return { providers, tools, ctx }
+  return { providers, tools, activations, ctx }
 }
 
 function writeExecutable(directory: string, name: string): string {
@@ -724,14 +558,14 @@ describe('Codex discovery', () => {
       env: { PATH: '' },
       cwd: directory,
       spawn: spawn.spawn,
-      bundled: { path: bundledExecutable, version: '0.164.0' },
+      bundled: { path: bundledExecutable, version: '0.169.0' },
     })
 
     expect(resolved).toMatchObject({
       path: executable,
-      version: '0.164.0',
+      version: '0.169.0',
       source: 'config',
-      bundledVersion: '0.164.0',
+      bundledVersion: '0.169.0',
     })
     expect(spawn.argv[0]?.at(-1)).toBe('--version')
   })
@@ -764,14 +598,14 @@ describe('Codex discovery', () => {
       env: { PATH: pathDirectory },
       cwd: directory,
       spawn: spawn.spawn,
-      bundled: { path: bundledExecutable, version: '0.164.0' },
+      bundled: { path: bundledExecutable, version: '0.169.0' },
     })
 
     expect(resolved).toMatchObject({
       path: bundledExecutable,
-      version: '0.164.0',
+      version: '0.169.0',
       source: 'bundled',
-      bundledVersion: '0.164.0',
+      bundledVersion: '0.169.0',
     })
     expect(spawn.argv[0]).toContain(bundledExecutable)
   })
@@ -789,7 +623,7 @@ describe('Codex discovery', () => {
     })
 
     expect(resolved.source).toBe('PATH')
-    expect(resolved.version).toBe('0.164.0')
+    expect(resolved.version).toBe('0.169.0')
     if (process.platform === 'win32') {
       const wrapper = spawn.specs[0]?.env[SHIM_WRAPPER_ENV]?.replace(/^"|"$/gu, '')
       if (wrapper !== undefined) expect(existsSync(wrapper)).toBe(false)
@@ -872,7 +706,7 @@ describe('Codex discovery', () => {
       versionFor: (argv) =>
         argv.includes(configured)
           ? { exitCode: 1, stderr: 'configured shim exploded' }
-          : { text: 'codex-cli 0.164.0\n' },
+          : { text: 'codex-cli 0.169.0\n' },
     })
 
     await expect(
@@ -902,7 +736,7 @@ describe('Codex discovery', () => {
       versionFor: (argv) =>
         argv.includes(bundled)
           ? { exitCode: 1, stderr: 'bundled binary failed' }
-          : { text: 'codex-cli 0.164.0\n' },
+          : { text: 'codex-cli 0.169.0\n' },
     })
 
     await expect(
@@ -910,7 +744,7 @@ describe('Codex discovery', () => {
         env: { PATH: pathDirectory },
         cwd: directory,
         spawn: spawn.spawn,
-        bundled: { path: bundled, version: '0.164.0' },
+        bundled: { path: bundled, version: '0.169.0' },
       }),
     ).rejects.toThrow(/failed `--version`[\s\S]*bundled binary failed/u)
     expect(spawn.argv).toHaveLength(1)
@@ -921,7 +755,7 @@ describe('Codex discovery', () => {
   it('resolves the installed bundled @openai/codex platform binary', async () => {
     const plugin = await loadPlugin()
     const info = plugin.bundledCodexInfo()
-    expect(info.version).toBe('0.164.0')
+    expect(info.version).toBe('0.169.0')
     expect(info.path).toBeDefined()
     if (info.path !== undefined) expect(statSync(info.path).isFile()).toBe(true)
   })
@@ -997,8 +831,7 @@ describe('Windows command handling', () => {
       writeFileSync(probe, `@echo off\r\n"${process.execPath}" "${dumper}" %*\r\n`, 'utf8')
       const cwd = join(root, 'work dir')
       mkdirSync(cwd, { recursive: true })
-      const serenaHome = join(root, 'serena home')
-      const appServerArgs = plugin.codexAppServerArgs(cwd, serenaHome)
+      const appServerArgs = plugin.codexAppServerArgs()
 
       const runPlan = async (args: string[]): Promise<string[]> => {
         const plan = plugin.codexSpawnPlan(probe, args, {
@@ -1053,8 +886,7 @@ describe('Windows command handling', () => {
       writeFileSync(probe, `@echo off\r\n"${process.execPath}" "${dumper}" %*\r\n`, 'utf8')
       const cwd = join(unicodeRoot, 'путь')
       mkdirSync(cwd, { recursive: true })
-      const serenaHome = join(unicodeRoot, 'serena дом')
-      const appServerArgs = plugin.codexAppServerArgs(cwd, serenaHome)
+      const appServerArgs = plugin.codexAppServerArgs()
 
       const runPlan = async (args: string[], codePage?: number): Promise<string[]> => {
         const plan = plugin.codexSpawnPlan(probe, args, {
@@ -1128,7 +960,7 @@ describe('Windows command handling', () => {
       )
       const cwd = join(root, 'work & md DSH_INJECTED & rem x 100%')
       mkdirSync(cwd, { recursive: true })
-      const appServerArgs = plugin.codexAppServerArgs(cwd, join(root, 'serena home'))
+      const appServerArgs = plugin.codexAppServerArgs()
       const plan = plugin.codexSpawnPlan(probe, appServerArgs, {
         platform: 'win32',
         env: { ComSpec: process.env.ComSpec },
@@ -1166,43 +998,21 @@ describe('Windows command handling', () => {
   )
 })
 
-describe('Serena app-server configuration', () => {
-  it('pins the Serena MCP command and arguments from the Serena row', async () => {
+describe('app-server arguments', () => {
+  it('starts Codex with no MCP override and no Serena home', async () => {
     const plugin = await loadPlugin()
-    expect(plugin.SERENA_MCP_COMMAND).toBe('uvx')
-    expect(plugin.SERENA_MCP_ARGS).toEqual([
-      '--from',
-      'serena-agent==1.7.0',
-      'serena',
-      'start-mcp-server',
-      '--context=vscode',
-      '--enable-web-dashboard=false',
-      '--enable-gui-log-window=false',
-    ])
-    expect(plugin.SERENA_DISABLED_TOOLS).toEqual([
-      'replace_content',
-      'replace_in_files',
-      'replace_symbol_body',
-      'insert_after_symbol',
-      'insert_before_symbol',
-      'rename_symbol',
-      'safe_delete_symbol',
-      'write_memory',
-      'edit_memory',
-      'delete_memory',
-      'rename_memory',
-      'activate_project',
-    ])
-    const args = plugin.codexAppServerArgs('work', 'serena-home')
+    const args = plugin.codexAppServerArgs()
+    expect(args).toEqual(['app-server', '--stdio'])
+    expect(args.some((arg) => arg.startsWith('mcp_servers.'))).toBe(false)
     const plan = plugin.codexSpawnPlan('tools/codex.exe', args)
     expect(plan.argv).toEqual(['tools/codex.exe', ...args])
     expect(plan.env).toEqual({})
     plan.cleanup()
   })
 
-  it('wraps a Windows .cmd shim around the same fixed app-server args', async () => {
+  it('wraps a Windows .cmd shim around the fixed app-server args', async () => {
     const plugin = await loadPlugin()
-    const args = plugin.codexAppServerArgs('work', 'serena-home')
+    const args = plugin.codexAppServerArgs()
     const plan = plugin.codexSpawnPlan('tools/codex.cmd', args, {
       platform: 'win32',
       env: { ComSpec: 'cmd.exe' },
@@ -1210,14 +1020,10 @@ describe('Serena app-server configuration', () => {
     expect(plan.argv).toEqual(['cmd.exe', '/d', '/v:off', '/c', '%CODEX_SHIM_WRAPPER%'])
     const wrapper = plan.env[SHIM_WRAPPER_ENV]?.replace(/^"|"$/gu, '')
     expect(wrapper).toBeDefined()
-    expect(Object.values(plan.env).some((value) => value.includes('serena-home'))).toBe(true)
     if (wrapper !== undefined) {
       const script = readFileSync(wrapper, 'utf8')
       expect(script.startsWith('@echo off')).toBe(true)
       expect(isAscii(script)).toBe(true)
-      expect(script).toContain('"%CODEX_SHIM_ARG_0%"')
-      expect(script).toContain(`"%CODEX_SHIM_ARG_${args.length - 1}%"`)
-      expect(script).not.toContain('mcp_servers.serena.cwd=')
     }
     plan.cleanup()
     if (wrapper !== undefined) expect(existsSync(wrapper)).toBe(false)
@@ -1238,7 +1044,7 @@ describe('provider registration', () => {
     expect(providers.get('codex-subagent-write')?.capabilities).toMatchObject({
       agentOptions: true,
     })
-    expect(tools.map((tool) => tool.name)).toEqual(['codex_subagent_status'])
+    expect(tools.map((tool) => tool.name)).toEqual(['codex_subagent_status', 'codex_subagent'])
   })
 
   it('composes beside the official codex provider', async () => {
@@ -1289,10 +1095,14 @@ describe('app-server execution', () => {
     const appServerArgv = spawn.argv.find((argv) => argv.includes('app-server'))
     expect(appServerArgv).not.toContain(prompt)
     expect(appServerArgv?.slice(0, 3)).toEqual([executable, 'app-server', '--stdio'])
-    expect(appServerArgv).toContain('mcp_servers.serena.command=uvx')
+    expect(appServerArgv?.some((arg) => arg.startsWith('mcp_servers.'))).toBe(false)
     const appServerSpec = spawn.specs.find((spec) => spec.argv.includes('app-server'))
     expect(Object.hasOwn(appServerSpec?.env ?? {}, 'CODEX_HOME')).toBe(true)
     expect(appServerSpec?.env.CODEX_HOME).toBeUndefined()
+    expect(appServerSpec?.env).not.toHaveProperty('SERENA_HOME')
+    expect(
+      Object.values(appServerSpec?.env ?? {}).some((value) => /serena/iu.test(String(value))),
+    ).toBe(false)
     const threadStart = spawn.appServer?.requests.find(
       (request) => request.method === 'thread/start',
     )
@@ -1323,6 +1133,10 @@ describe('app-server execution', () => {
       (request) => request.method === 'thread/start',
     )
     expect(threadStart?.params).toMatchObject({ sandbox: 'workspace-write' })
+    const appServerArgv = spawn.argv.find((argv) => argv.includes('app-server'))
+    expect(appServerArgv?.some((arg) => arg.startsWith('mcp_servers.'))).toBe(false)
+    const appServerSpec = spawn.specs.find((spec) => spec.argv.includes('app-server'))
+    expect(appServerSpec?.env).not.toHaveProperty('SERENA_HOME')
     await run.dispose()
   })
 
@@ -1725,236 +1539,7 @@ describe('app-server execution', () => {
       provider.start(
         createStartRequest(directory, 'Review the task.', new AbortController().signal),
       ),
-    ).rejects.toThrow(/codex: 0\.164\.0[\s\S]*thread-start/u)
-  })
-
-  it('fails the run with a Serena next action when the required MCP server is missing', async () => {
-    const plugin = await loadPlugin()
-    const directory = temporaryDirectory()
-    const executable = writeExecutable(directory, 'codex.exe')
-    const spawn = createSpawn({ appServerMode: 'serena-missing' })
-    const { providers, ctx } = createContext(spawn.spawn)
-    plugin.apply(ctx, { codexPath: executable })
-    const provider = providers.get('codex-subagent')
-    if (provider?.start === undefined) throw new Error('provider missing')
-
-    await expect(
-      provider.start(
-        createStartRequest(directory, 'Review the task.', new AbortController().signal),
-      ),
-    ).rejects.toThrow(
-      /thread-start[\s\S]*serena: required MCP server unavailable[\s\S]*serena-agent==1\.7\.0[\s\S]*retry/u,
-    )
-  })
-
-  it('enables Serena over an inherited enabled=false for the run', async () => {
-    const plugin = await loadPlugin()
-    const directory = temporaryDirectory()
-    const executable = writeExecutable(directory, 'codex.exe')
-    const spawn = createSpawn({ appServerMode: 'serena-inherited-disabled' })
-    const { providers, ctx } = createContext(spawn.spawn)
-    plugin.apply(ctx, { codexPath: executable })
-    const provider = providers.get('codex-subagent')
-    if (provider?.start === undefined) throw new Error('provider missing')
-
-    const run = (await provider.start(
-      createStartRequest(directory, 'Review the task.', new AbortController().signal),
-    )) as {
-      result: Promise<{ output: { text: string }[]; stopReason: string }>
-      dispose: () => Promise<void>
-    }
-    const result = await run.result
-    expect(result.stopReason).toBe('completed')
-    expect(result.output[0]?.text).toBe('review passed')
-    const appServerArgv = spawn.argv.find((argv) => argv.includes('app-server'))
-    expect(appServerArgv).toContain('mcp_servers.serena.enabled=true')
-    expect(appServerArgv).toContain('mcp_servers.serena.required=true')
-    await run.dispose()
-  })
-
-  it('disables mutating Serena tools for the read-only provider over inherited approvals', async () => {
-    const plugin = await loadPlugin()
-    const directory = temporaryDirectory()
-    const executable = writeExecutable(directory, 'codex.exe')
-    const mutatedFile = join(temporaryDirectory(), 'mutated-outside-sandbox.txt')
-    const spawn = createSpawn({
-      appServerMode: 'serena-write-attempt',
-      serenaWriteFile: mutatedFile,
-    })
-    const { providers, ctx } = createContext(spawn.spawn)
-    plugin.apply(ctx, { codexPath: executable })
-    const provider = providers.get('codex-subagent')
-    if (provider?.start === undefined) throw new Error('provider missing')
-
-    const run = (await provider.start(
-      createStartRequest(directory, 'Review the task.', new AbortController().signal),
-    )) as {
-      result: Promise<{ output: unknown[]; stopReason: string; diagnostic?: string }>
-      dispose: () => Promise<void>
-    }
-    const result = await run.result
-    expect(result.stopReason).toBe('error')
-    expect(result.diagnostic).toContain('category: product-error')
-    expect(existsSync(mutatedFile)).toBe(false)
-    const appServerArgv = spawn.argv.find((argv) => argv.includes('app-server'))
-    const disabled = appServerArgv?.find((arg) =>
-      arg.startsWith('mcp_servers.serena.disabled_tools='),
-    )
-    expect(disabled).toBeDefined()
-    if (disabled !== undefined) {
-      expect(JSON.parse(disabled.slice(disabled.indexOf('=') + 1))).toEqual(
-        plugin.SERENA_DISABLED_TOOLS,
-      )
-    }
-    await run.dispose()
-  })
-
-  it('cannot touch a file outside the patch worktree through Serena from the write provider', async () => {
-    const plugin = await loadPlugin()
-    const worktree = temporaryDirectory()
-    const executable = writeExecutable(worktree, 'codex.exe')
-    const outsideFile = join(temporaryDirectory(), 'outside-worktree.txt')
-    const spawn = createSpawn({
-      appServerMode: 'serena-write-attempt',
-      serenaWriteFile: outsideFile,
-    })
-    const { providers, ctx } = createContext(spawn.spawn)
-    plugin.apply(ctx, { codexPath: executable })
-    const provider = providers.get('codex-subagent-write')
-    if (provider?.start === undefined) throw new Error('provider missing')
-
-    const run = (await provider.start(
-      createStartRequest(worktree, 'Fix the bug.', new AbortController().signal),
-    )) as {
-      result: Promise<{ stopReason: string; diagnostic?: string }>
-      dispose: () => Promise<void>
-    }
-    const result = await run.result
-    expect(result.stopReason).toBe('error')
-    expect(existsSync(outsideFile)).toBe(false)
-    const appServerArgv = spawn.argv.find((argv) => argv.includes('app-server'))
-    const disabled = appServerArgv?.find((arg) =>
-      arg.startsWith('mcp_servers.serena.disabled_tools='),
-    )
-    expect(disabled).toBeDefined()
-    if (disabled !== undefined) {
-      expect(JSON.parse(disabled.slice(disabled.indexOf('=') + 1))).toContain('replace_symbol_body')
-    }
-    await run.dispose()
-  })
-
-  it('cannot run a trusted Serena activation hook from either provider', async () => {
-    const plugin = await loadPlugin()
-    for (const providerName of ['codex-subagent', 'codex-subagent-write']) {
-      const directory = temporaryDirectory()
-      const executable = writeExecutable(directory, 'codex.exe')
-      const hookFile = join(temporaryDirectory(), 'activation-hook-ran.txt')
-      const spawn = createSpawn({
-        appServerMode: 'serena-write-attempt',
-        serenaTool: 'activate_project',
-        serenaWriteFile: hookFile,
-      })
-      const { providers, ctx } = createContext(spawn.spawn)
-      plugin.apply(ctx, { codexPath: executable })
-      const provider = providers.get(providerName)
-      if (provider?.start === undefined) throw new Error('provider missing')
-
-      const run = (await provider.start(
-        createStartRequest(directory, 'Review.', new AbortController().signal),
-      )) as {
-        result: Promise<{ stopReason: string }>
-        dispose: () => Promise<void>
-      }
-      expect((await run.result).stopReason).toBe('error')
-      expect(existsSync(hookFile)).toBe(false)
-      const appServerArgv = spawn.argv.find((argv) => argv.includes('app-server'))
-      const disabled = appServerArgv?.find((arg) =>
-        arg.startsWith('mcp_servers.serena.disabled_tools='),
-      )
-      expect(disabled).toBeDefined()
-      if (disabled !== undefined) {
-        expect(JSON.parse(disabled.slice(disabled.indexOf('=') + 1))).toContain('activate_project')
-      }
-      await run.dispose()
-    }
-  })
-
-  it('keeps a nested run cwd out of the ancestor checkout and symbol reads working for both instances', async () => {
-    const plugin = await loadPlugin()
-    for (const providerName of ['codex-subagent', 'codex-subagent-write']) {
-      const ancestor = temporaryDirectory()
-      const nested = join(ancestor, 'packages', 'plugin')
-      mkdirSync(nested, { recursive: true })
-      const executable = writeExecutable(nested, 'codex.exe')
-      const ancestorProjectYml = join(ancestor, '.serena', 'project.yml')
-      mkdirSync(join(ancestor, '.serena'), { recursive: true })
-      writeFileSync(ancestorProjectYml, 'project_name: incomplete\n', 'utf8')
-      const ancestorBefore = readFileSync(ancestorProjectYml)
-      const userSerenaHome = temporaryDirectory()
-      writeFileSync(
-        join(userSerenaHome, plugin.SERENA_CONFIG_FILENAME),
-        'projects: []\ntrusted_project_path_patterns: ["**"]\n',
-        'utf8',
-      )
-      const hookFile = join(temporaryDirectory(), 'activation-hook-ran.txt')
-      const spawn = createSpawn({
-        appServerMode: 'serena-project-read',
-        serenaWriteFile: hookFile,
-      })
-      const { providers, ctx } = createContext(spawn.spawn)
-      plugin.apply(ctx, {
-        codexPath: executable,
-        env: { SERENA_HOME: userSerenaHome },
-      })
-      const provider = providers.get(providerName)
-      if (provider?.start === undefined) throw new Error('provider missing')
-
-      const run = (await provider.start(
-        createStartRequest(nested, 'Find the symbol.', new AbortController().signal),
-      )) as {
-        result: Promise<{ output: { text: string }[]; stopReason: string }>
-        dispose: () => Promise<void>
-      }
-      const result = await run.result
-      expect(result.stopReason).toBe('completed')
-      expect(result.output[0]?.text).toBe('symbol found')
-      expect(existsSync(hookFile)).toBe(false)
-      expect(readFileSync(ancestorProjectYml).equals(ancestorBefore)).toBe(true)
-
-      const appServerSpec = spawn.specs.find((spec) => spec.argv.includes('app-server'))
-      const serenaHome = appServerSpec?.env.SERENA_HOME
-      expect(serenaHome).toBeDefined()
-      expect(serenaHome).not.toBe(userSerenaHome)
-      expect(
-        appServerSpec?.argv.some(
-          (arg) => arg === `mcp_servers.serena.cwd=${JSON.stringify(nested)}`,
-        ),
-      ).toBe(true)
-      const argsArg = appServerSpec?.argv.find((arg) => arg.startsWith('mcp_servers.serena.args='))
-      expect(argsArg).toBeDefined()
-      if (argsArg !== undefined) {
-        const serenaArgs = JSON.parse(argsArg.slice(argsArg.indexOf('=') + 1)) as string[]
-        expect(serenaArgs).toContain('--project')
-        expect(serenaArgs[serenaArgs.indexOf('--project') + 1]).toBe(nested)
-        expect(serenaArgs).not.toContain('--project-from-cwd')
-        expect(serenaArgs).not.toContain(ancestor)
-      }
-      if (typeof serenaHome === 'string') {
-        const config = readFileSync(join(serenaHome, plugin.SERENA_CONFIG_FILENAME), 'utf8')
-        expect(config).toContain('trusted_project_path_patterns: []')
-        expect(config).toContain('project_serena_folder_location:')
-        expect(existsSync(join(serenaHome, 'projects', basename(nested)))).toBe(true)
-        expect(
-          appServerSpec?.argv.some(
-            (arg) =>
-              arg ===
-              `mcp_servers.serena.env.SERENA_HOME=${JSON.stringify(serenaHome.replaceAll('\\', '/'))}`,
-          ),
-        ).toBe(true)
-      }
-      await run.dispose()
-      if (typeof serenaHome === 'string') expect(existsSync(serenaHome)).toBe(false)
-    }
+    ).rejects.toThrow(/codex: 0\.169\.0[\s\S]*thread-start/u)
   })
 
   it('reports a non-completed turn with the HTTP status and version', async () => {
@@ -1976,7 +1561,7 @@ describe('app-server execution', () => {
     const result = await run.result
     expect(result.stopReason).toBe('error')
     expect(result.diagnostic).toContain('HTTP status: 401')
-    expect(result.diagnostic).toContain('codex: 0.164.0')
+    expect(result.diagnostic).toContain('codex: 0.169.0')
     expect(result.diagnostic).toMatch(/not authenticated[\s\S]*login[\s\S]*~\/\.codex/u)
     await run.dispose()
   })
@@ -2032,7 +1617,7 @@ describe('app-server execution', () => {
     }
     const result = await run.result
     expect(result.stopReason).toBe('error')
-    expect(result.diagnostic).toContain('codex: 0.164.0')
+    expect(result.diagnostic).toContain('codex: 0.169.0')
     await run.dispose()
   })
 })
@@ -2050,26 +1635,40 @@ describe('codex_subagent_status', () => {
     return tool
   }
 
-  it('reports a config-sourced CLI, bundled version, Serena config, and login command', async () => {
+  it('does not expose a serena status field', async () => {
     const directory = temporaryDirectory()
     const executable = writeExecutable(directory, 'codex.exe')
-    const spawn = createSpawn({ versionText: 'codex-cli 0.164.0\n' })
+    const spawn = createSpawn({})
     const tool = await statusTool(spawn.spawn, { codexPath: executable })
 
-    const report = await tool.execute({}, { signal: new AbortController().signal })
+    expect(tool.output?.schema?.properties).not.toHaveProperty('serena')
+    const report = (await tool.execute(
+      {},
+      { signal: new AbortController().signal },
+    )) as StatusReport
+    expect(report).not.toHaveProperty('serena')
+  })
+
+  it('reports a config-sourced CLI, bundled version, and login command', async () => {
+    const directory = temporaryDirectory()
+    const executable = writeExecutable(directory, 'codex.exe')
+    const spawn = createSpawn({ versionText: 'codex-cli 0.169.0\n' })
+    const tool = await statusTool(spawn.spawn, { codexPath: executable })
+
+    const report = (await tool.execute(
+      {},
+      { signal: new AbortController().signal },
+    )) as StatusReport
     expect(report).toMatchObject({
       found: true,
       path: executable,
-      version: '0.164.0',
+      version: '0.169.0',
       source: 'config',
-      bundledVersion: '0.164.0',
+      bundledVersion: '0.169.0',
       codexHome: '~/.codex',
     })
     expect(report.loginCommand).toContain('login')
     expect(report.loginCommand).toContain(executable)
-    expect(report.serena).toBe(
-      'uvx --from serena-agent==1.7.0 serena start-mcp-server --context=vscode --enable-web-dashboard=false --enable-gui-log-window=false --project <run working directory>',
-    )
     expect(report.snippet).toContain('- id: dsh-setup-codex-subagent')
     const snippetValue = /codexPath: (.*)$/mu.exec(report.snippet)?.[1]
     expect(snippetValue).toBeDefined()
@@ -2083,13 +1682,16 @@ describe('codex_subagent_status', () => {
     const spawn = createSpawn({})
     const tool = await statusTool(spawn.spawn, { env: { PATH: '' } })
 
-    const report = await tool.execute({}, { signal: new AbortController().signal })
+    const report = (await tool.execute(
+      {},
+      { signal: new AbortController().signal },
+    )) as StatusReport
     expect(report).toMatchObject({
       found: true,
       path: info.path,
-      version: '0.164.0',
+      version: '0.169.0',
       source: 'bundled',
-      bundledVersion: '0.164.0',
+      bundledVersion: '0.169.0',
     })
   })
 
@@ -2154,6 +1756,53 @@ describe('codex_subagent_status', () => {
   })
 })
 
+describe('codex_subagent tool', () => {
+  async function subagentTool(): Promise<{
+    tool: FakeTool
+    activations: Record<string, unknown>[]
+  }> {
+    const plugin = await loadPlugin()
+    const spawn = createSpawn({})
+    const { tools, activations, ctx } = createContext(spawn.spawn)
+    plugin.apply(ctx)
+    const tool = tools.find((entry) => entry.name === 'codex_subagent')
+    if (tool === undefined) throw new Error('codex_subagent tool missing')
+    return { tool, activations }
+  }
+
+  it('starts a parent-delivered activation and returns the child name', async () => {
+    const { tool, activations } = await subagentTool()
+    const agent = { id: 'session-1' }
+
+    const result = await tool.execute(
+      { prompt: 'review the change', description: 'spec review', name: 'codex-review' },
+      { signal: new AbortController().signal, agent },
+    )
+    expect(result).toEqual({ kind: 'activation', name: 'codex-review' })
+    expect(activations).toHaveLength(1)
+    expect(activations[0]).toMatchObject({
+      provider: 'codex-subagent',
+      label: 'spec review',
+      name: 'codex-review',
+      parent: agent,
+      delivery: 'parent',
+      prompt: [{ type: 'text', text: 'review the change' }],
+    })
+  })
+
+  it('fails without a calling agent and starts nothing', async () => {
+    const { tool, activations } = await subagentTool()
+
+    await expect(
+      tool.execute(
+        { prompt: 'review the change', description: 'spec review' },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toThrow(/calling agent/u)
+    expect(activations).toHaveLength(0)
+  })
+})
+
 describe('package provenance and bundled Codex', () => {
   it('declares the upstream MIT base, the bundled Apache-2.0 dependency, and rebase notes', () => {
     const notice = readFileSync(join(packageDir, 'NOTICE'), 'utf8')
@@ -2176,7 +1825,7 @@ describe('package provenance and bundled Codex', () => {
       unknown
     >
     const dependencies = manifest.dependencies as Record<string, string>
-    expect(dependencies['@openai/codex']).toBe('0.164.0')
+    expect(dependencies['@openai/codex']).toBe('0.169.0')
     expect(
       (manifest.peerDependencies as Record<string, string>)['@deepseek-ai/dsh-subagent-codex'],
     ).toBeUndefined()
@@ -2186,8 +1835,9 @@ describe('package provenance and bundled Codex', () => {
     expect(source).toContain('BUNDLED_CODEX_PACKAGE')
     expect(source).toContain('@openai/codex')
     expect(source).toContain('bundledCodexInfo')
-    expect(source).toContain('mcp_servers.serena.command')
+    expect(source).not.toContain('mcp_servers.serena')
     expect(source).toContain('codex_subagent_status')
+    expect(source).toContain('codex_subagent')
     expect(source).toContain('codex-subagent-write')
     expect(source).not.toContain('process.execPath')
     expect(source).not.toContain('CODEX_PACKAGE_BIN')

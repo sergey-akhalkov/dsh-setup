@@ -2,10 +2,10 @@
 * MIT fork of `@deepseek-ai/dsh-subagent-codex` 0.2.1-rc.3 (Copyright (c)
 * 2026 DeepSeek) for `@dsh-setup/plugin-codex-subagent`. Local patch: resolve
 * Codex from `codexPath`, then the pinned bundled `@openai/codex` platform
-* binary, then `codex` on `PATH`, validate it with `codex --version`, pass fixed
-* Serena MCP `-c` overrides and the target model/reasoning effort to the 0.164
-* app-server, spawn Windows shims through ComSpec, register read-only and
-* workspace-write providers, and expose `codex_subagent_status`. The app-server
+* binary, then `codex` on `PATH`, validate it with `codex --version`, map the
+* target model/reasoning effort onto the app-server, spawn Windows shims through
+* ComSpec, register read-only and workspace-write providers, and expose
+* `codex_subagent_status` plus the visible `codex_subagent` tool. The app-server
 * protocol adapter, lifecycle, cancellation, and teardown code are retained
 * from upstream. See NOTICE and README.md in this package.
 */
@@ -17,15 +17,15 @@ import { randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, isAbsolute, join } from "node:path";
+import { dirname, extname, isAbsolute, join } from "node:path";
 import { brandString } from "@deepseek-ai/dsh-brand";
 import { JsonRpcLineTransport } from "@deepseek-ai/dsh-sdk-protocol";
 //#region lib/types/resolve.js
 /**
-* Bundled/installed Codex discovery, version validation, Serena MCP config,
-* login guidance, and Windows command-line handling. This region is the fork's
-* local patch: upstream resolved only its own `@openai/codex` wrapper and had no
-* Serena, login, or target-option mapping.
+* Bundled/installed Codex discovery, version validation, login guidance, and
+* Windows command-line handling. This region is the fork's local patch: upstream
+* resolved only its own `@openai/codex` wrapper and had no login or
+* target-option mapping.
 *
 * The resolved executable path is trusted local configuration, never model
 * input. It is always its own argv entry; the delegation prompt never touches a
@@ -41,93 +41,6 @@ const CODEX_ERROR_PREFIX = "subagent-codex: ";
 const BUNDLED_CODEX_PACKAGE = "@openai/codex";
 /** Fixed Codex home display; the child deliberately keeps the user's real `~/.codex`. */
 const CODEX_HOME_DISPLAY = "~/.codex";
-/** Serena MCP server command from `packages/plugin-serena/cordis.fragment.yml`. */
-const SERENA_MCP_COMMAND = "uvx";
-/** Pinned Serena arguments from the same row, including the vscode context. */
-const SERENA_MCP_ARGS = [
-	"--from",
-	"serena-agent==1.7.0",
-	"serena",
-	"start-mcp-server",
-	"--context=vscode",
-	"--enable-web-dashboard=false",
-	// No GUI log window on a fatal error inside the Harness process.
-	"--enable-gui-log-window=false"
-];
-/**
-* Per-run Serena arguments: the exact run working directory is the project.
-* `--project` is used instead of `--project-from-cwd` because the latter resolves
-* the nearest ancestor with `.git`/`.serena`, which would activate an ancestor
-* project for a nested run cwd and could rewrite its checkout `.serena`.
-* @param cwd - the run's exact working directory.
-* @returns the pinned Serena arguments for this run.
-*/
-function serenaArgsFor(cwd) {
-	return [
-		...SERENA_MCP_ARGS,
-		"--project",
-		cwd
-	];
-}
-/** Throwaway Serena home config file name used for each run. */
-const SERENA_CONFIG_FILENAME = "serena_config.yml";
-/**
-* Build the minimal per-run Serena configuration. Empty
-* `trusted_project_path_patterns` keeps `--project` activation from running an
-* inherited activation_command; `projects: []` is required by Serena's loader;
-* `project_serena_folder_location` points at the throwaway home so project data
-* never falls back to (and rewrites) the checkout `.serena`.
-* @param home - throwaway Serena home for this run.
-* @returns the YAML config text.
-*/
-function serenaConfigContent(home) {
-	return [
-		"projects: []",
-		"trusted_project_path_patterns: []",
-		`project_serena_folder_location: ${JSON.stringify(`${home.replaceAll("\\", "/")}/projects/$projectFolderName`)}`,
-		""
-	].join("\n");
-}
-/**
-* Create a throwaway Serena home for one run so project activation never uses
-* the user's `~/.serena` config, runs its trusted activation hooks, or writes
-* project data into the session checkout. The configured project data folder is
-* precreated so Serena does not fall back to an existing checkout `.serena`.
-* @param cwd - the run's working directory, whose basename names the project.
-* @returns the temporary home directory containing the minimal config.
-*/
-function createSerenaHome(cwd) {
-	const home = mkdtempSync(join(tmpdir(), "dsh-serena-home-"));
-	try {
-		mkdirSync(join(home, "projects", basename(cwd)), {
-			recursive: true
-		});
-		writeFileSync(join(home, SERENA_CONFIG_FILENAME), serenaConfigContent(home), {
-			encoding: "utf8",
-			mode: 384
-		});
-	} catch (error) {
-		rmSync(home, {
-			recursive: true,
-			force: true
-		});
-		throw error;
-	}
-	return home;
-}
-/**
-* Best-effort removal of one run's throwaway Serena home.
-* @param home - temporary home created for the run, when it exists.
-*/
-function removeSerenaHome(home) {
-	if (home === void 0) return;
-	try {
-		rmSync(home, {
-			recursive: true,
-			force: true
-		});
-	} catch {}
-}
 /** Local scratch file mapping review keys to Codex thread ids. */
 const REVIEW_THREAD_STATE_FILE = "codex-review-threads.json";
 /**
@@ -206,26 +119,6 @@ function rememberReviewThread(cwd, reviewKey, threadId, sandbox) {
 	reviewThreadStateTail = write.catch(() => {});
 	return write.catch(() => {});
 }
-/**
-* Fixed Codex `-c` overrides for Serena. Values never come from model input and
-* the user's `~/.codex/config.toml` is never rewritten. `enabled=true` wins over
-* an inherited `enabled=false`, and `required=true` makes a missing Serena
-* runtime fail the run instead of silently dropping its tools; the timeouts
-* mirror the Serena row's first-call allowance. The per-run args are added by
-* `codexAppServerArgs`.
-*/
-const SERENA_CONFIG_OVERRIDES = [
-	"-c",
-	`mcp_servers.serena.command=${SERENA_MCP_COMMAND}`,
-	"-c",
-	"mcp_servers.serena.enabled=true",
-	"-c",
-	"mcp_servers.serena.required=true",
-	"-c",
-	"mcp_servers.serena.startup_timeout_sec=120",
-	"-c",
-	"mcp_servers.serena.tool_timeout_sec=120"
-];
 /** Official `@openai/codex` platform package names by Rust target triple. */
 const PLATFORM_PACKAGE_BY_TARGET = {
 	"x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
@@ -384,7 +277,7 @@ function discoverCodexPath(codexPath, env, platform = process.platform, bundled 
 	};
 }
 /**
-* Extract the CLI version from `codex --version` (`codex-cli 0.164.0`).
+* Extract the CLI version from `codex --version` (`codex-cli 0.169.0`).
 * @param output - combined command output.
 * @returns the semantic version token, or undefined when none is present.
 */
@@ -530,52 +423,11 @@ function codexSpawnPlan(executable, args, options = {}) {
 	};
 }
 /**
-* Serena tools disabled for both provider instances: the mutating tools plus
-* `activate_project`, whose trusted activation hook runs a shell outside the
-* Codex sandbox. Names come from the pinned `serena-agent==1.7.0` vscode context
-* (verified against the installed server). Serena's MCP server runs outside the
-* Codex sandbox, so an inherited `approval_mode = "approve"` or activation hook
-* could otherwise edit files or leave the isolated patch worktree; Codex writes
-* must stay inside its sandbox.
-*/
-const SERENA_DISABLED_TOOLS = [
-	"replace_content",
-	"replace_in_files",
-	"replace_symbol_body",
-	"insert_after_symbol",
-	"insert_before_symbol",
-	"rename_symbol",
-	"safe_delete_symbol",
-	"write_memory",
-	"edit_memory",
-	"delete_memory",
-	"rename_memory",
-	"activate_project"
-];
-/** Fixed overrides that remove those tools from both provider instances. */
-const SERENA_DISABLED_TOOLS_OVERRIDES = [
-	"-c",
-	`mcp_servers.serena.disabled_tools=${JSON.stringify(SERENA_DISABLED_TOOLS)}`
-];
-/**
 * Fixed app-server arguments (without the executable) for one run.
-* @param cwd - run working directory, also pinned as the Serena server cwd and project.
-* @param serenaHome - per-run throwaway Serena home for the MCP child.
 * @returns the `codex app-server --stdio` argument list.
 */
-function codexAppServerArgs(cwd, serenaHome) {
-	return [
-		"app-server",
-		"--stdio",
-		...SERENA_CONFIG_OVERRIDES,
-		"-c",
-		`mcp_servers.serena.args=${JSON.stringify(serenaArgsFor(cwd))}`,
-		"-c",
-		`mcp_servers.serena.cwd=${JSON.stringify(cwd)}`,
-		"-c",
-		`mcp_servers.serena.env.SERENA_HOME=${JSON.stringify(serenaHome.replaceAll("\\", "/"))}`,
-		...SERENA_DISABLED_TOOLS_OVERRIDES
-	];
+function codexAppServerArgs() {
+	return ["app-server", "--stdio"];
 }
 /**
 * Paste-ready login command for one resolved CLI.
@@ -593,19 +445,6 @@ function codexLoginCommand(executable) {
 */
 function codexLoginHint(executable) {
 	return `Codex is not authenticated; run \`${codexLoginCommand(executable)}\` once (it writes ${CODEX_HOME_DISPLAY}) and retry`;
-}
-/**
-* Render the Serena MCP command line for status output. The project is the run
-* working directory, shown as a placeholder because status is not a run.
-* @returns the command followed by its pinned arguments.
-*/
-function serenaCommandLine() {
-	return [
-		SERENA_MCP_COMMAND,
-		...SERENA_MCP_ARGS,
-		"--project",
-		"<run working directory>"
-	].join(" ");
 }
 function streamText(stream) {
 	return new Promise((resolve, reject) => {
@@ -722,13 +561,12 @@ function codexPathSnippet(path) {
 * @param options - configured path, environment, spawn seam, cwd, signal, and
 * optional bundled-info override.
 * @returns the reported fields (found, or error plus snippet), bundled version,
-* Serena config summary, and login command.
+* and login command.
 */
 async function codexSubagentStatus(options) {
 	const bundled = options.bundled === void 0 ? bundledCodexInfo() : options.bundled;
 	const common = {
 		bundledVersion: bundled.version,
-		serena: serenaCommandLine(),
 		codexHome: CODEX_HOME_DISPLAY
 	};
 	try {
@@ -758,7 +596,6 @@ async function codexSubagentStatus(options) {
 function renderCodexSubagentStatus(report) {
 	const sourceLabel = report.source === "config" ? "codexPath config" : report.source === "bundled" ? "bundled @openai/codex" : "PATH";
 	const bundledLine = `bundled @openai/codex: ${report.bundledVersion === void 0 ? "not installed" : report.bundledVersion}`;
-	const serenaLine = `Serena MCP (fixed): ${report.serena}`;
 	const loginLines = [
 		`Codex home: ${report.codexHome} (used as-is; never rewritten)`,
 		`login: \`${report.loginCommand}\``
@@ -767,7 +604,6 @@ function renderCodexSubagentStatus(report) {
 		`Codex CLI ${report.version} (${sourceLabel})`,
 		`path: ${report.path}`,
 		bundledLine,
-		serenaLine,
 		...loginLines,
 		"",
 		"To pin this CLI, override the row in the profile's cordis.patch.yml (the status tool writes nothing):",
@@ -778,7 +614,6 @@ function renderCodexSubagentStatus(report) {
 	return [
 		`Codex CLI unavailable: ${report.error}`,
 		bundledLine,
-		serenaLine,
 		...loginLines,
 		"",
 		"Fix the bundled dependency, an explicit `codexPath`, or PATH, then re-run this tool. Paste-ready row override:",
@@ -791,7 +626,7 @@ function renderCodexSubagentStatus(report) {
 //#region lib/types/wire.js
 /**
 * Minimal Codex app-server protocol adapter, retained from upstream (written
-* against 0.153.4 and verified against the installed 0.164.0). The shared
+* against 0.153.4 and verified against the installed 0.169.0). The shared
 * JSON-RPC transport owns framing and request correlation; this module owns
 * only the product methods, current thread/turn association, unattended
 * approval responses, and terminal-answer selection.
@@ -1013,7 +848,7 @@ var CodexAppServerWire = class {
 	}
 	/**
 	* Resume a persisted review thread under this run's cwd, sandbox, model, and
-	* effort. The resumed thread keeps the fixed Serena/MCP policy of this child.
+	* effort. The resumed thread keeps the fixed sandbox of this child.
 	* @param threadId - persisted thread id.
 	* @param cwd - selected child working directory.
 	* @param signal - unpublished-start cancellation.
@@ -1367,7 +1202,6 @@ function failureDiagnostic(facts) {
 		`category: ${facts.category}`
 	];
 	if (facts.httpStatus !== void 0) fields.push(`HTTP status: ${facts.httpStatus}`);
-	if (facts.serenaFailure === true) fields.push("serena: required MCP server unavailable (install `uvx`, allow `serena-agent==1.7.0`, then retry)");
 	const processFields = [["exit code", facts.outcome?.exitCode], ["signal", facts.outcome?.signal]];
 	for (const [label, value] of processFields) if (value !== null && value !== void 0) fields.push(`${label}: ${value}`);
 	return `Product subagent failure (${fields.join("; ")})`;
@@ -1396,17 +1230,6 @@ function codexStartupFailure(cause, codexVersion) {
 function thrown(value) {
 	/* v8 ignore next -- typed subprocess/wire failures reject with Error. */
 	return value instanceof Error ? value : new Error(String(value));
-}
-/**
-* Whether a startup failure is the required Serena MCP server, so the
-* diagnostic can name the fixed next action instead of only a category.
-* @param error - thrown startup failure.
-* @returns true when its message names Serena.
-*/
-function isSerenaFailure(error) {
-	const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
-	const text = error instanceof Error ? `${error.message} ${cause}` : String(error);
-	return /serena/iu.test(text);
 }
 /**
 * Validate and preserve the one-shot task before crossing the process boundary.
@@ -1490,20 +1313,10 @@ async function disposeCodexChild(wire, child, codexVersion) {
 async function startCodexRun(request, spec) {
 	const texts = textTask(request.prompt);
 	if (request.signal.aborted) throw new Error("subagent-codex: request was aborted before app-server startup");
-	let serenaHome;
-	try {
-		serenaHome = createSerenaHome(spec.cwd);
-	} catch (error) {
-		throw new CodexRunFailure({
-			stage: "initialize",
-			category: "unknown",
-			codexVersion: spec.codexVersion
-		}, thrown(error));
-	}
 	let child;
 	let shimCleanup = () => {};
 	try {
-		const appServerArgs = codexAppServerArgs(spec.cwd, serenaHome);
+		const appServerArgs = codexAppServerArgs();
 		const plan = codexSpawnPlan(spec.codexPath, appServerArgs);
 		shimCleanup = plan.cleanup;
 		child = spec.spawn({
@@ -1518,13 +1331,11 @@ async function startCodexRun(request, spec) {
 			env: {
 				...spec.env,
 				...plan.env,
-				CODEX_HOME: void 0,
-				SERENA_HOME: serenaHome
+				CODEX_HOME: void 0
 			}
 		});
 	} catch (error) {
 		shimCleanup();
-		removeSerenaHome(serenaHome);
 		throw new CodexRunFailure({
 			stage: "initialize",
 			category: "unknown",
@@ -1550,7 +1361,6 @@ async function startCodexRun(request, spec) {
 		} finally {
 			child.stderr?.off("data", onStderr);
 			child.stderr?.off("error", onStderrError);
-			removeSerenaHome(serenaHome);
 			shimCleanup();
 		}
 	};
@@ -1617,8 +1427,7 @@ async function startCodexRun(request, spec) {
 			stage: startupStage,
 			category: "unknown",
 			outcome: error instanceof CodexRunFailure ? error.facts.outcome : processFailureFacts?.outcome,
-			codexVersion: spec.codexVersion,
-			...isSerenaFailure(error) ? { serenaFailure: true } : {}
+			codexVersion: spec.codexVersion
 		}, thrown(error));
 		try {
 			await disposeProcess();
@@ -1844,7 +1653,7 @@ var CodexProvider = class {
 };
 /**
 * Build the read-only status tool. It resolves the same CLI as a run and
-* reports source, bundled version, Serena config, login command, and a
+* reports source, bundled version, login command, and a
 * paste-ready row override; it never writes the profile or `~/.codex`.
 * @param ctx - context carrying the subprocess service.
 * @param config - resolved row config (path, environment, grace).
@@ -1853,7 +1662,7 @@ var CodexProvider = class {
 function codexStatusTool(ctx, config) {
 	return defineTool({
 		name: "codex_subagent_status",
-		description: "Report the Codex CLI used by codex-subagent and codex-subagent-write: resolved path, version, discovery source (codexPath config, bundled @openai/codex, or PATH), bundled version, fixed Serena MCP config, Codex home, login command, and a paste-ready codexPath row snippet. Read-only; it never edits the profile or ~/.codex.",
+		description: "Report the Codex CLI used by codex-subagent and codex-subagent-write: resolved path, version, discovery source (codexPath config, bundled @openai/codex, or PATH), bundled version, Codex home, login command, and a paste-ready codexPath row snippet. Read-only; it never edits the profile or ~/.codex.",
 		parameters: {},
 		output: {
 			schema: {
@@ -1865,7 +1674,6 @@ function codexStatusTool(ctx, config) {
 					version: { type: "string" },
 					source: { type: "string" },
 					bundledVersion: { type: "string" },
-					serena: { type: "string" },
 					loginCommand: { type: "string" },
 					codexHome: { type: "string" },
 					snippet: { type: "string" },
@@ -1892,7 +1700,69 @@ function codexStatusTool(ctx, config) {
 	});
 }
 /**
-* Register both Codex provider instances and the status tool.
+* Build the visible-subagent tool. It starts a parent-delivered activation on
+* the read-only provider so the run is cataloged as an external child and its
+* answer arrives as a settlement notice; it accepts no follow-up input.
+* @param ctx - context carrying the shared subagent service.
+* @returns the registry-ready tool definition.
+*/
+function codexSubagentTool(ctx) {
+	return defineTool({
+		name: "codex_subagent",
+		description: "Start a visible Codex subagent on the read-only `codex-subagent` provider: the run is cataloged as an external entry in this Session's subagent list, and its answer arrives later as a settlement notice that starts a new turn. Use it only when the user explicitly asks for a Codex delegation; it accepts no follow-up messages. Write work stays on the `delegate` patch rule.",
+		parameters: {
+			prompt: {
+				type: "string",
+				required: true,
+				description: "The complete, self-contained task for the Codex subagent."
+			},
+			description: {
+				type: "string",
+				required: true,
+				description: "A short (3-5 word) task label shown in the subagent list."
+			},
+			name: {
+				type: "string",
+				description: "Optional short child name, unique among this Session's subagents: lower-case letters, digits, and hyphens, starting with a letter, at most 32 characters."
+			},
+			cwd: {
+				type: "string",
+				description: "Initial child working directory; relative paths use this Session's directory, and omission inherits it."
+			}
+		},
+		output: {
+			schema: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					kind: { type: "string", required: true, const: "activation" },
+					name: { type: "string", required: true }
+				}
+			},
+			render(_args, value) {
+				return [{ type: "text", text: `started subagent ${value.name}` }];
+			}
+		},
+		isConcurrencySafe: () => true,
+		async execute(args, exec) {
+			const parent = exec.agent;
+			if (parent === undefined) throw new Error("codex_subagent requires a calling agent (exec.agent was undefined)");
+			const started = await ctx.subagents.startActivation({
+				provider: READ_ONLY_PROVIDER_NAME,
+				label: args.description,
+				...args.name === void 0 ? {} : { name: args.name },
+				...args.cwd === void 0 ? {} : { cwd: args.cwd },
+				prompt: [{ type: "text", text: args.prompt }],
+				parent,
+				signal: exec.signal,
+				delivery: "parent"
+			});
+			return { kind: "activation", name: started.name };
+		}
+	});
+}
+/**
+* Register both Codex provider instances, the status tool, and the visible-subagent tool.
 * @param ctx - context carrying shared subagent, subprocess, and tools services.
 * @param config - optional CLI path, model, reasoning effort, child environment, and disposal grace.
 */
@@ -1903,7 +1773,8 @@ function apply(ctx, config = {}) {
 	ctx.subagents.registerProvider(new CodexProvider(READ_ONLY_PROVIDER_NAME, ctx, resolved, READ_ONLY_SANDBOX));
 	ctx.subagents.registerProvider(new CodexProvider(WRITE_PROVIDER_NAME, ctx, resolved, WORKSPACE_WRITE_SANDBOX));
 	ctx.tools.register(codexStatusTool(ctx, resolved));
+	ctx.tools.register(codexSubagentTool(ctx));
 }
 //#endregion
-export { BUNDLED_CODEX_PACKAGE, CODEX_PERMISSION_MODES, CODEX_SANDBOX_MODES, CodexCliError, Config, DEFAULT_CODEX_PERMISSION_MODE, DEFAULT_DISPOSE_GRACE_MS, SERENA_CONFIG_FILENAME, SERENA_CONFIG_OVERRIDES, SERENA_DISABLED_TOOLS, SERENA_DISABLED_TOOLS_OVERRIDES, SERENA_MCP_ARGS, SERENA_MCP_COMMAND, apply, bundledCodexInfo, codexAppServerArgs, codexLoginCommand, codexSpawnPlan, codexSubagentStatus, codexTargetTriple, createSerenaHome, discoverCodexPath, inject, name, parseCodexVersion, resolveCodexCli, serenaArgsFor, serenaCommandLine };
+export { BUNDLED_CODEX_PACKAGE, CODEX_PERMISSION_MODES, CODEX_SANDBOX_MODES, CodexCliError, Config, DEFAULT_CODEX_PERMISSION_MODE, DEFAULT_DISPOSE_GRACE_MS, apply, bundledCodexInfo, codexAppServerArgs, codexLoginCommand, codexSpawnPlan, codexSubagentStatus, codexTargetTriple, discoverCodexPath, inject, name, parseCodexVersion, resolveCodexCli };
 

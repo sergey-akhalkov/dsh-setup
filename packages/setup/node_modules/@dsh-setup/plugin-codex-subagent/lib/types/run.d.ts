@@ -5,7 +5,7 @@
  * whole-range quiescence.
  *
  * Vendored from `@deepseek-ai/dsh-subagent-codex` 0.2.1-rc.3 and patched for
- * bundled/installed-CLI resolution, Serena overrides, and target options; the
+ * bundled/installed-CLI resolution and target options; the
  * lifecycle itself is retained upstream code.
  *
  * @module @dsh-setup/plugin-codex-subagent/run
@@ -38,15 +38,10 @@ export declare const DEFAULT_CODEX_PERMISSION_MODE: CodexPermissionMode
  */
 export declare function codexStartupFailure(cause: unknown, codexVersion?: string): Error
 /**
- * Fixed app-server argument list for one run, including the fixed Serena MCP
- * `-c` overrides, the run-cwd and `SERENA_HOME` pins, and the
- * mutating/activation Serena tool disable list applied to both provider
- * instances.
- * @param cwd - run working directory, also pinned as the Serena server cwd.
- * @param serenaHome - per-run throwaway Serena home for the MCP child.
+ * Fixed app-server argument list for one run: `codex app-server --stdio`.
  * @returns the `codex app-server --stdio` argument list.
  */
-export declare function codexAppServerArgs(cwd: string, serenaHome: string): string[]
+export declare function codexAppServerArgs(): string[]
 /** Fully resolved inputs for one Codex app-server run. */
 export interface CodexRunSpec {
   /** Selected child working directory, also supplied to `thread/start`. */

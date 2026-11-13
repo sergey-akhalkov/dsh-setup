@@ -10,7 +10,7 @@ upstream license text is the `LICENSE` file beside this notice.
 
 ## Bundled Codex dependency
 
-The package declares the pinned npm release `@openai/codex` `0.164.0`
+The package declares the pinned npm release `@openai/codex` `0.169.0`
 (Apache-2.0, Copyright OpenAI) as a runtime dependency. A profile install
 fetches that package and its platform-specific optional dependency, whose
 `vendor/<target-triple>/bin/codex` executable the fork runs. The repository
@@ -20,17 +20,16 @@ commits no Codex binary or platform executable.
 
 - `lib/index.js` — the upstream Host module with the package-local binary
   resolution replaced by: `codexPath`, then the pinned bundled `@openai/codex`
-  platform binary, then `codex` on `PATH`; `codex --version` validation; fixed
-  `-c mcp_servers.serena...` overrides, `--project=<run cwd>`, the per-run Serena
-  `cwd` and `SERENA_HOME` pins, a run-scoped Serena data folder under a throwaway
-  home with empty trusted-path patterns, Serena's mutating and activation tools
-  disabled for both provider instances, and the user's `~/.codex` login; target
-  `model`/`reasoningEffort` mapped to `thread/start`; Windows `ComSpec` handling
-  for `.cmd`/`.bat` shims; the two provider instances; and the
-  `codex_subagent_status` tool. The app-server protocol adapter, subprocess
-  lifecycle, cancellation, and teardown code are retained from upstream.
+  platform binary, then `codex` on `PATH`; `codex --version` validation; the
+  user's `~/.codex` login and configuration used as-is (the provider passes no
+  MCP override); target `model`/`reasoningEffort` mapped to `thread/start`;
+  Windows `ComSpec` handling for `.cmd`/`.bat` shims; the two provider
+  instances; the `codex_subagent_status` tool; and the visible `codex_subagent`
+  tool that starts a parent-delivered activation on the read-only provider. The
+  app-server protocol adapter, subprocess lifecycle, cancellation, and teardown
+  code are retained from upstream.
 - `lib/types/index.d.ts`, `lib/types/run.d.ts`, `lib/types/wire.d.ts` — upstream
-  declarations, updated for the local config, resolution, Serena, option, and
+  declarations, updated for the local config, resolution, option, and
   path/import changes.
 - `lib/index.d.ts` — local re-export of the vendored declarations.
 

@@ -1,6 +1,6 @@
 /**
  * Minimal Codex app-server protocol adapter, retained from upstream: written
- * against Codex 0.153.4 and verified against the bundled 0.164.0 during this
+ * against Codex 0.153.4 and verified against the bundled 0.169.0 during this
  * fork's acceptance, including a completed authenticated turn. The shared
  * JSON-RPC transport owns framing and request correlation; this module owns
  * only the product methods, current thread/turn association, unattended

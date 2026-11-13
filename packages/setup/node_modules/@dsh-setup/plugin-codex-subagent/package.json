@@ -47,7 +47,7 @@
     "@deepseek-ai/dsh-brand": "0.2.2-rc.2",
     "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.2",
     "@deepseek-ai/schemastery": "~3.18.5",
-    "@openai/codex": "0.164.0"
+    "@openai/codex": "0.169.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",

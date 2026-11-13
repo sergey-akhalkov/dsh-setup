@@ -4,9 +4,9 @@
  * Vendored from `@deepseek-ai/dsh-subagent-codex` 0.2.1-rc.3 (MIT, Copyright
  * (c) 2026 DeepSeek) and patched locally: resolution from `codexPath`, then the
  * pinned bundled `@openai/codex` platform binary, then PATH; `codex --version`
- * validation; fixed Serena MCP `-c` overrides; target model/reasoning-effort
- * mapping; Windows shim handling; read-only/workspace-write provider instances;
- * and the status tool. See `NOTICE` and `README.md` in this package.
+ * validation; target model/reasoning-effort mapping; Windows shim handling;
+ * read-only/workspace-write provider instances; the status tool; and the
+ * visible `codex_subagent` tool. See `NOTICE` and `README.md` in this package.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
@@ -64,8 +64,6 @@ export interface CodexSubagentStatus {
   readonly version?: string
   readonly source?: CodexDiscoverySource
   readonly bundledVersion?: string
-  /** Fixed Serena MCP command line passed to the app-server. */
-  readonly serena: string
   /** Paste-ready login command for the resolved CLI (or `codex login`). */
   readonly loginCommand: string
   /** Codex home used as-is; never rewritten. */
@@ -73,24 +71,6 @@ export interface CodexSubagentStatus {
   readonly snippet: string
   readonly error?: string
 }
-/** Pinned Serena MCP command and base arguments from the Serena adapter row. */
-export declare const SERENA_MCP_COMMAND: string
-export declare const SERENA_MCP_ARGS: readonly string[]
-/** Per-run Serena arguments with `--project` set to the exact run cwd. */
-export declare function serenaArgsFor(cwd: string): string[]
-/** Fixed `-c` overrides appended to the app-server argv. */
-export declare const SERENA_CONFIG_OVERRIDES: readonly string[]
-/** Serena tools disabled for both provider instances (mutation + activation). */
-export declare const SERENA_DISABLED_TOOLS: readonly string[]
-/** Fixed `-c` override that removes those tools from the child. */
-export declare const SERENA_DISABLED_TOOLS_OVERRIDES: readonly string[]
-/** Throwaway per-run Serena home config file name. */
-export declare const SERENA_CONFIG_FILENAME: string
-/**
- * Create a throwaway Serena home for one run, precreating the configured
- * project data folder for the run's working directory.
- */
-export declare function createSerenaHome(cwd: string): string
 /** Pinned bundled npm package name. */
 export declare const BUNDLED_CODEX_PACKAGE: string
 export declare function codexTargetTriple(platform: string, arch: string): string | undefined
@@ -116,17 +96,15 @@ export declare function codexSpawnPlan(
   cleanup: () => void
 }
 /** Fixed `codex app-server --stdio` argument list (without the executable). */
-export declare function codexAppServerArgs(cwd: string, serenaHome: string): string[]
+export declare function codexAppServerArgs(): string[]
 /** Paste-ready `<cli> login` command for a resolved executable. */
 export declare function codexLoginCommand(executable?: string): string
-/** Render the fixed Serena MCP command line. */
-export declare function serenaCommandLine(): string
 export declare function resolveCodexCli(options: CodexResolveOptions): Promise<CodexCliInfo>
 export declare function codexSubagentStatus(
   options: CodexResolveOptions,
 ): Promise<CodexSubagentStatus>
 /**
- * Register both Codex provider instances and the status tool.
+ * Register both Codex provider instances, the status tool, and the visible-subagent tool.
  * @param ctx - context carrying shared subagent, subprocess, and tools services.
  * @param config - optional CLI path, model, effort, child environment, and disposal grace.
  */

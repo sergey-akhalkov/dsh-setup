@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Codex subagent (bundled CLI)",
-    "description": "MIT fork of the Codex subagent provider that runs the pinned bundled @openai/codex 0.164.0 binary (codexPath and PATH overrides), with a fixed Serena MCP config, the existing ~/.codex login, model/reasoning-effort targets, read-only and workspace-write providers, and codex_subagent_status"
+    "description": "MIT fork of the Codex subagent provider that runs the pinned bundled @openai/codex 0.169.0 binary (codexPath and PATH overrides) with the existing ~/.codex login, model/reasoning-effort targets, read-only and workspace-write providers, codex_subagent_status, and the visible codex_subagent tool"
   }
 }

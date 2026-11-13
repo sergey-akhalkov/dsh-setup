@@ -36,7 +36,7 @@
     "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.2",
     "@deepseek-ai/schemastery": "~3.18.5",
     "@modelcontextprotocol/client": "2.2.0",
-    "@openai/codex": "0.164.0",
+    "@openai/codex": "0.169.0",
     "@vectorize-io/hindsight-coding-agents": "0.8.2",
     "fflate": "0.8.3"
   },

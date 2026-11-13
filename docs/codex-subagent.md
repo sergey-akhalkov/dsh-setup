@@ -2,7 +2,7 @@
 
 `@dsh-setup/plugin-codex-subagent` adds Codex as a DeepSeek Harness subagent
 target backed by a **pinned bundled Codex CLI**: the npm dependency
-`@openai/codex` `0.164.0` and its platform binary. The repository commits no
+`@openai/codex` `0.169.0` and its platform binary. The repository commits no
 binary; the profile's package install fetches it. `codexPath` and `PATH` remain
 overrides. The provider is an MIT-attributed fork of the official
 `@deepseek-ai/dsh-subagent-codex` provider with its app-server protocol adapter
@@ -12,7 +12,7 @@ Use it when you want the delegation rules from
 [delegation-rules](delegation-rules.md) to call Codex for whole-spec reviews,
 per-task reviews, blockers, research, or isolated bug-fix patches.
 
-## Prerequisite: log in once and have uvx for Serena
+## Prerequisite: log in once
 
 The bundle runs `codex app-server --stdio` with **your** Codex configuration and
 authentication. The fork does not sign in or copy credentials, and it makes no
@@ -30,12 +30,10 @@ may refresh its own auth tokens during a run.
    `codex_subagent_status` prints the exact command. The login writes the usual
    `~/.codex/auth.json`, which the provider reuses as-is.
 
-3. For the Serena MCP tools, make `uvx` available and allow
-   `serena-agent==1.7.0` to be fetched on first use. Serena is a required MCP
-   server for every run, so a missing runtime fails the run with that next
-   action instead of silently dropping the tools.
-
-The fork verifies the resolved CLI with `codex --version` before every run.
+The fork verifies the resolved CLI with `codex --version` before every run. The
+provider sends no `mcp_servers.*` app-server override: an MCP server configured
+in `~/.codex` runs with its own approvals outside the Codex sandbox, and the
+worktree-confinement guarantee covers only Codex-sandboxed operations.
 
 ## Review thread reuse
 
@@ -45,7 +43,7 @@ parses as the thread key; an optional `agentOptions.reviewKey` overrides it only
 must match the prompt line when both exist. The provider starts a persistent Codex thread on the
 first review of that key and persists `{threadId, cwd, sandbox}` in
 `.dsh/delegation/codex-review-threads.json`; later reviews of the same key call `thread/resume` with
-the run's cwd, sandbox, model/effort, and the same Serena/MCP restrictions instead of rebuilding the
+the run's cwd, sandbox, model/effort, and the same fixed sandbox policy instead of rebuilding the
 context from scratch. A different key never resumes another key's thread; a missing or mismatched
 entry starts a fresh persistent thread. The review result reports `threadReuse: created | resumed`
 and the thread id. The thread state is local scratch under `.dsh/delegation`; the user's Codex
@@ -79,7 +77,6 @@ new pinned version.
 - whether a CLI was found, with its resolved path, `codex --version`, and source
   (`config`, `bundled`, or `PATH`);
 - the installed bundled `@openai/codex` version;
-- the fixed Serena MCP command;
 - the exact login command and the Codex home (`~/.codex`, used as-is);
 - a paste-ready row override for pinning a CLI.
 
@@ -97,62 +94,19 @@ A patch row replaces the whole `config` object, so a `codexPath`-only override i
 enough. A 401 from the app-server is reported as a non-completed run whose
 diagnostic carries the same login command as the next action.
 
-## Serena MCP configuration
+## Visible subagent tool
 
-Every app-server starts with fixed `-c` overrides that configure the Serena MCP
-server, mirroring the setup's lazy `serena` entry (plus the run's project path):
+`codex_subagent` starts a Codex delegation that appears in the delegating
+Session's subagent list as an **external** entry. It is the explicit-request
+path: the `delegate` engine keeps its own runs caller-delivered and invisible,
+so review verdicts never arrive as conversation messages.
 
-```text
--c mcp_servers.serena.command=uvx
--c mcp_servers.serena.args=["--from","serena-agent==1.7.0","serena","start-mcp-server","--context=vscode","--enable-web-dashboard=false","--enable-gui-log-window=false","--project","<run working directory>"]
--c mcp_servers.serena.enabled=true
--c mcp_servers.serena.required=true
--c mcp_servers.serena.cwd=<run working directory>
--c mcp_servers.serena.env.SERENA_HOME=<throwaway Serena home>
--c mcp_servers.serena.startup_timeout_sec=120
--c mcp_servers.serena.tool_timeout_sec=120
-```
-
-`--project=<run working directory>` activates the run's exact working directory
-as the Serena project. It is used instead of `--project-from-cwd`, which resolves
-the nearest ancestor with `.git`/`.serena`: a nested run would activate the
-ancestor repo and could rewrite its checkout `.serena`. With the exact project,
-a nested run keeps its own run-scoped data folder and leaves the ancestor
-checkout untouched. The server `cwd` is pinned to the same exact directory so an
-inherited cwd cannot win. Each run gets a throwaway `SERENA_HOME` (pinned through
-the per-server `env`, because Codex starts MCP children with its own environment)
-containing a minimal `serena_config.yml`:
-
-```text
-projects: []
-trusted_project_path_patterns: []
-project_serena_folder_location: "<home>/projects/$projectFolderName"
-```
-
-The resolved `<home>/projects/<basename(cwd)>` directory is created before
-spawn, so Serena uses the run-scoped data folder instead of falling back to and
-rewriting a checkout `.serena/project.yml`. The user's `~/.serena` config is
-never read or rewritten, and an inherited trusted activation hook cannot run.
-The GUI log window is disabled so a fatal does not open a window in the Harness
-process, and the home is removed when the run is disposed.
-
-The child unsets `CODEX_HOME`, so the existing `~/.codex` login and config apply.
-The overrides contain no credentials and never rewrite the user's config file.
-`enabled=true` wins over an inherited `mcp_servers.serena.enabled=false`, and
-`required=true` makes a missing Serena runtime fail the run with the fixed next
-action (`uvx` + `serena-agent==1.7.0`) instead of silently dropping its tools.
-
-Both provider instances add one more fixed override:
-
-```text
--c mcp_servers.serena.disabled_tools=["replace_content","replace_in_files","replace_symbol_body","insert_after_symbol","insert_before_symbol","rename_symbol","safe_delete_symbol","write_memory","edit_memory","delete_memory","rename_memory","activate_project"]
-```
-
-Serena's MCP tools run outside the Codex sandbox, so the fixed disable list and
-the throwaway Serena home together stop inherited approvals or activation hooks:
-a review stays read-only, and a patch run cannot leave its isolated worktree
-through Serena. Writes then go only through the Codex sandbox in that worktree.
-The override replaces any inherited `disabled_tools` list.
+The tool accepts `prompt` (required), `description` (required, the task label in
+the list), `name` (optional child name), and `cwd` (optional). It returns the
+child name immediately; the answer arrives as a settlement notice that starts a
+new turn. The entry is a leaf — not openable, no token or duration metrics, no
+follow-up messages — and it uses the read-only `codex-subagent` provider; write
+work stays on the `delegate` patch rule in an isolated worktree.
 
 ## Providers and target options
 
@@ -235,7 +189,7 @@ bundled CLI and the user's Codex home.
 ## App-server compatibility
 
 The retained adapter was written against Codex app-server 0.153.4 and was
-verified against the bundled `@openai/codex` 0.164.0, including a completed
+verified against the bundled `@openai/codex` 0.169.0, including a completed
 authenticated turn on the owner's `~/.codex` login:
 
 - `initialize`/`initialized` and `thread/start` (ephemeral thread, approval
@@ -243,17 +197,25 @@ authenticated turn on the owner's `~/.codex` login:
 - `turn/start` accepted the prompt over stdin;
 - the `agentMessage` `final_answer` notification and `turn/completed` completed
   the run, returning the model's answer;
-- the fixed Serena `-c` overrides were accepted by the app-server.
+- the fixed `app-server --stdio` argument list contained no MCP override.
 
 The earlier not-signed-in behavior remains covered: a 401 becomes a
 non-completed run with the login next action. If a future bundled Codex version
 changes the protocol, patch the fork's adapter and re-run its tests and the live
 acceptance. Do not fall back to another Codex version silently.
 
+The live acceptance is the manual harness
+[`packages/plugin-codex-subagent/test/live-acceptance.manual.ts`](../packages/plugin-codex-subagent/test/live-acceptance.manual.ts),
+run with `pnpm exec vitest run --config scripts/manual/vitest.config.ts`. It drives
+the shipped provider and status tool against the real bundled binary with the owner's
+login, plus a signed-out case on an isolated `CODEX_HOME`; it is not part of
+`pnpm test` or CI.
+
 ## Cost
 
-Every delegation starts one app-server, creates one ephemeral thread, and runs
-one turn on your Codex account: it costs a Codex request and tokens, and reviews
+Every delegation starts one app-server and runs one turn on a fresh ephemeral
+thread, or resumes the persisted thread when a review key is reused; it costs a
+Codex request and tokens, and reviews
 are slow by nature. Per-task reviews multiply the runs. The shipped delegation
 targets select `gpt-6-astra` at `xhigh`, so every default Codex rule pays the
 strong-model rate; override `codex`/`codex-write` for routine reviews and keep
@@ -265,7 +227,7 @@ model and is the cheap way to close a turn while a task is still in progress.
 The package vendors MIT-licensed `@deepseek-ai/dsh-subagent-codex` 0.2.1-rc.3
 code (Copyright (c) 2026 DeepSeek). The complete MIT text is the package
 `LICENSE`; `NOTICE` records the upstream version, the local patch, and the
-bundled `@openai/codex` 0.164.0 dependency (Apache-2.0, Copyright OpenAI). The
+bundled `@openai/codex` 0.169.0 dependency (Apache-2.0, Copyright OpenAI). The
 package [README](../packages/plugin-codex-subagent/README.md) records the rebase
 procedure.
 
@@ -275,11 +237,10 @@ Only the fork package's vendored code changes, not the generic rules engine.
 
 ## Troubleshooting
 
-| Symptom                                        | Next action                                                                                                               |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `Codex CLI not found` / `codexPath` error      | Reinstall dependencies for the bundled binary, set `codexPath`, or put `codex` on `PATH`; re-run `codex_subagent_status`. |
-| `--version` failed or printed no version       | Run that command in the Harness environment; fix or pin `codexPath`.                                                      |
-| Turn fails with HTTP 401                       | Run the reported `<resolved codex> login`, then retry. The provider writes no credentials.                                |
-| Serena MCP tools missing / MCP startup failure | Install `uvx`, allow `serena-agent==1.7.0`, and re-run; the user's Codex config was not modified.                         |
-| Turn fails with unsupported target option      | Use only `model` and `reasoningEffort`; other `agentOptions` entries are rejected before a run.                           |
-| Patch target rejected by the rules engine      | Point the rule at `codex-subagent-write`; a read-only target is never silently escalated.                                 |
+| Symptom                                   | Next action                                                                                                               |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `Codex CLI not found` / `codexPath` error | Reinstall dependencies for the bundled binary, set `codexPath`, or put `codex` on `PATH`; re-run `codex_subagent_status`. |
+| `--version` failed or printed no version  | Run that command in the Harness environment; fix or pin `codexPath`.                                                      |
+| Turn fails with HTTP 401                  | Run the reported `<resolved codex> login`, then retry. The provider writes no credentials.                                |
+| Turn fails with unsupported target option | Use only `model` and `reasoningEffort`; other `agentOptions` entries are rejected before a run.                           |
+| Patch target rejected by the rules engine | Point the rule at `codex-subagent-write`; a read-only target is never silently escalated.                                 |
