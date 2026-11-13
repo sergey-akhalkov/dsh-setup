@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "widen-answer-page-policy",
+  "scope": "task",
+  "taskId": "3308a227bf8bf9ec",
+  "digest": "47cef061dec5facf6937540a3cf7657c8f0b0df0e4e059e8b3ccf413afc7e134",
+  "worktreeDigest": "b4faa51a82c2a743c5cea33d2784c9c16034a69af8897b98d2f5fbc0173cbb51",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-13T15:17:32.227Z"
+}
