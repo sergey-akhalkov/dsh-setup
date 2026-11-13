@@ -226,6 +226,7 @@ was written (2026-11-10). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-09-add-workflow-editor`                         | 24/27          |
 | `2026-11-10-retire-legacy-gates`                         | 17/21          |
 | `2026-11-13-simplify-codex-subagent`                     | 13/13          |
+| `2026-11-13-widen-answer-page-policy`                    | 8/8            |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -848,3 +849,17 @@ home still reported the login next action. The owner installed the regenerated s
 profile and confirmed the visible `codex_subagent` row, which closed the last task. It shipped in
 v0.37.0 (tag on commit `1c9678f`; the published index lists the setup and plugin bundles at 0.37.0
 pinned to it).
+
+On 2026-11-13 `widen-answer-page-policy` archived with 8 of 8 tasks and 8/8 portable task approvals.
+It widened the `answer-pages` policy: the catalog description now prefers a page proactively for a
+complex explanation (a flow, comparison, hierarchy, ranked list, or state machine) while keeping the
+simple-answer exclusions and disabling the upstream always-on reminder, and the adapter text makes the
+deployment's workspace render flow authoritative over the vendored body's stdin and default-home flow.
+The provider test pins the full exclusion clause and the new description; `docs/answer-pages.md`,
+`docs/plugins.md`, `README.md`, and `locale/en.json` follow. The gate was green before archiving:
+`pnpm build && git diff --exit-code`, `pnpm gen:check` (430 files), `pnpm validate:repo`, `pnpm
+validate:composition`, `pnpm validate:installer`, `openspec validate --strict`, the release workflow
+on both DSH versions (a known real-timer flake needed one rerun), 8/8 task reviews, and an
+integration-review PASS. It shipped in v0.38.0 (tag on commit `44825ec`); the owner installed it, the
+catalog showed the proactive description, and an unrequested complex explanation rendered a
+140580-byte page under `.tmp/answers/` with no home-directory writes.
