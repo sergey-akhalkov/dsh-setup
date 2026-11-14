@@ -5,7 +5,7 @@
 - [x] 1.1 Add the `review` executor: resolve `reviewers.<target>`, start the reviewer through the registered provider with the profile's model/effort, render the bundled instruction with the change name, task id and text, and the prepared digest, accept exactly one fenced JSON verdict that echoes the digest, validate the severity set, write the record, settle the step from its own evidence, and time the run out with an `ERROR`. Verify `pnpm exec vitest run packages/plugin-workflows/test` covers a PASS, a FINDINGS, an invalid verdict, a digest mismatch, and a missing provider.
 - [x] 1.2 Add the trigger `condition`: a bounded JSONLogic predicate over the event, the change's checked and unchecked tasks and lanes, the current whole-spec and task records with their digests, the current spec and worktree digests, and the session's involvement; evaluate it at every turn close and refuse an unknown field, a non-JSONLogic predicate, or a path in the context. Verify tests cover each context field, a true and a false predicate, and a malformed predicate that fails load with the field.
 - [x] 1.3 Add the record store `.dsh/workflows/records/<definition>/<change>/<phase>.json` and `.../tasks/<taskId>.json`, keep the committed `openspec/changes/<change>/reviews/<taskId>.json` byte-compatible, write it before the local record, and turn a failed committed write into an `ERROR` record. Verify `pnpm exec vitest run packages/plugin-workflows/test` covers the write order, the sanitized field set, and the failed-publication case, and that `pnpm reviews:check --all` is unchanged.
-- [ ] 1.4 Move the review queue and the task-scope snapshot into the engine: concurrency, `maxQueued`, `maxAttempts`, backoff, `waitTimeoutMs`, dedupe by rule plus change plus task plus digest plus reviewer, a frozen `.dsh/workflows/snapshots/<runId>` checkout, the live-input guard for whole scope, and the stale-snapshot sweep. Verify the queue and snapshot tests move with the code and pass.
+- [x] 1.4 Move the review queue and the task-scope snapshot into the engine: concurrency, `maxQueued`, `maxAttempts`, backoff, `waitTimeoutMs`, dedupe by rule plus change plus task plus digest plus reviewer, a frozen `.dsh/workflows/snapshots/<runId>` checkout, the live-input guard for whole scope, and the stale-snapshot sweep. Verify the queue and snapshot tests move with the code and pass.
 - [x] 1.5 Add `reviewers`, `reviewQueue`, and `timeouts.review` to the row config with fail-loud validation; reject `model`/`reasoningEffort` for a provider without `agentOptions` support, and report a missing provider at run time instead of at load. Verify a config test covers each default, each range, and the unsupported-option rejection.
 - [ ] 1.6 Add the engine-owned gates: the `note` action and the work-progress gate (digest-bound, stale note refused, task-review evidence read from the active review owner's record store), the lane-assignment gate with the tagged worker and serial-note satisfaction, and the goal-complete guard moved from the delegation listener to the workflows gate listener. Each engine-owned gate SHALL resolve ownership per signal: it is active only while its legacy switch (`gates.taskProgress`, `gates.laneFanout`) is false, and re-enabling that switch disables its workflow counterpart with a refused split state. Verify tests cover an unassigned lane, a tagged worker start, a serial note, a stale note, a refused goal completion, a native PASS read by the legacy progress gate when only `taskProgress` is enabled, and a composed-profile rollback of each engine gate with every unrelated gate still active.
 - [ ] 1.7 Keep `delegate`, `task_progress`, and `delegation_status` as deprecated aliases for one release and route them by effective owner: while a signal is owned, `delegate` starts the matching definition run and `task_progress` calls `note`; while its legacy signal is enabled, `delegate` runs the legacy rule and `task_progress` writes the legacy note path. A `task_progress` or `note` call SHALL also update the active lane owner's serial state, so a mixed ownership combination satisfies both gates. `delegation_status` returns the workflows status summary with a deprecation line. Verify a test asserts both routing modes, the legacy state paths, the mixed-ownership note, and that the deprecation line prints once.
@@ -22,32 +22,32 @@
 
 ## 3. Contract surface in the client (lane 3, owns `packages/plugin-workflows/src/client/**`)
 
-- [ ] 3.1 Render a review step's contract in the inspector: the instruction id and prompt summary, the scope and phase, the digest scope, the verdict schema, the reuse policy, and the record path; keep the canvas read-only and the ordered step table as the accessible fallback. Verify the client test asserts the card for a review step and the absence of an editable verdict field.
-- [ ] 3.2 Render each engine-owned gate as a read-only contract card (trigger condition, evidence, record path, steer payload) in the Workflows surface, and never as a definition node. Verify the test asserts a card per gate and that no gate appears in the definition rail.
-- [ ] 3.3 Update the locale strings, the screen-reader summary, and the bundle budget record for the added card text. Verify `pnpm exec vitest run packages/plugin-workflows/test` passes and the canvas budget test still passes.
+- [x] 3.1 Render a review step's contract in the inspector: the instruction id and prompt summary, the scope and phase, the digest scope, the verdict schema, the reuse policy, and the record path; keep the canvas read-only and the ordered step table as the accessible fallback. Verify the client test asserts the card for a review step and the absence of an editable verdict field.
+- [x] 3.2 Render each engine-owned gate as a read-only contract card (trigger condition, evidence, record path, steer payload) in the Workflows surface, and never as a definition node. Verify the test asserts a card per gate and that no gate appears in the definition rail.
+- [x] 3.3 Update the locale strings, the screen-reader summary, and the bundle budget record for the added card text. Verify `pnpm exec vitest run packages/plugin-workflows/test` passes and the canvas budget test still passes.
 
 ## 4. Legacy switches and the retained-gate steers (lane 4, owns `packages/plugin-delegation-rules/src/host/**`, `packages/plugin-delegation-rules/test/**`)
 
-- [ ] 4.1 Replace `gates.workflowOwned` with the per-signal map
+- [x] 4.1 Replace `gates.workflowOwned` with the per-signal map
   `{ workflowOwned, specReview, integrationReview, taskProgress, laneFanout }`, defaulting each to
   `true` for an existing profile, and keep an unknown key a load error naming the accepted keys.
   Verify a config test covers the defaults, each false value, and the unknown-key rejection.
-- [ ] 4.2 Make each false switch disable exactly its steer: `specReview` the whole-spec rule,
+- [x] 4.2 Make each false switch disable exactly its steer: `specReview` the whole-spec rule,
   `integrationReview` the `implementation-complete` rule, `taskProgress` the progress gate plus its
   dormant `implementation-work` rule, `laneFanout` the lane triggers, and `workflowOwned` the
   task-review rule and the archive gate; keep the tools, records, queue, and notes readable in every
   combination. When the review signal is owned, the legacy progress branch SHALL read task-review
   evidence from the active review owner's record store. Verify a gate test asserts one disabled steer
   and every other steer still active per switch, and the native-record read.
-- [ ] 4.3 Extend the per-signal ownership check in both engines: the shipped definitions resolve
+- [x] 4.3 Extend the per-signal ownership check in both engines: the shipped definitions resolve
   their effective ownership from the switch (legacy signal enabled means effective `defer`), an
   explicit local override that contradicts the switch is refused, and a `defer` beside a disabled
   signal or an `own` beside an enabled one is refused with the switch name and the remedy. Verify the
   split-state and contradiction tests cover all five signals in both directions.
-- [ ] 4.4 Update the delegation tests to the dormant shipped set and the five switches, keeping every
+- [x] 4.4 Update the delegation tests to the dormant shipped set and the five switches, keeping every
   queue, record, approval, and snapshot case that moved. Verify
   `pnpm exec vitest run packages/plugin-delegation-rules/test` passes.
-- [ ] 4.5 Add rollback tests from the exact shipped Release A configuration: flip one switch, run the
+- [x] 4.5 Add rollback tests from the exact shipped Release A configuration: flip one switch, run the
   call the restored steer prints (`delegate` or `task_progress`), and prove the restored gate is
   satisfied through the legacy runtime and its state; cover the mixed ownership combinations
   (progress owned with a legacy lane gate and the converse) through the printed serial-note
