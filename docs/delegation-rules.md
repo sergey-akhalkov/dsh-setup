@@ -14,7 +14,7 @@ system-prompt section.
 
 Disabling or removing the `dsh-setup-delegation-rules` row removes the tools, the gate, and the
 skill, and stops all enforcement. Delegation records (`.dsh/delegation/`), session involvement
-files, progress notes, worktrees, and change artifacts remain on disk. There is no in-session
+files, progress notes, and change artifacts remain on disk. There is no in-session
 bypass: the only opt-out is disabling the row. Records are a process-integrity check, not
 anti-forgery — a model with full filesystem access could write a record-shaped file.
 
@@ -35,21 +35,20 @@ rules:
 ```
 
 - `id` — unique kebab-case; the record directory and the `delegate` tool's enum value.
-- `when` — one of the eight trigger primitives below.
+- `when` — one of the seven trigger primitives below.
 - `to` — a configured target id (absent only for the `note` contract).
 - `instruction` — `bundled:<asset>` for a shipped prompt, or inline text.
-- `contract` — `review`, `answer`, `patch`, or `note`.
+- `contract` — `review` or `note`.
 - `gate` — `strict`, `soft`, or `none`.
 - `phase` — record key for a whole-scope review (required for `scope: whole`).
 - `scope` — `whole` or `task` for the review contract.
-- `isolation` — `worktree` for the patch contract.
-- `threshold` — optional per-rule failure-streak threshold.
 
 Validation rejects an unknown trigger, contract, gate, field, or target; a missing instruction;
 a non-kebab id; a duplicate id; a whole review without a phase; a task review with a phase; a
-note rule with a target; a patch rule without `isolation: worktree`; a patch target that is not
-declared `write: true`; a strict gate on an answer rule; a gated manual rule; and two strict
-rules for the same trigger/scope/phase. Errors name the rule/target and the next action. A
+note rule with a target or on any trigger other than `implementation-work`, `lane-assignment`, or
+`lane-boundary`; a manual rule that is not `gate: none`; and two strict rules for the same
+trigger/scope/phase. A profile that still declares a removed contract, trigger, or target field
+fails validation with the replacement named. Errors name the rule/target and the next action. A
 missing **provider** is deliberately not a validation error: the profile still composes, and the
 tools and `delegation_status` report the missing target.
 
@@ -76,14 +75,11 @@ result contract is a code extension.
   lane. Accepted for existing profiles; new rules use `lane-assignment`.
 - `implementation-complete` — this session completed the change's task list and the optional
   integration review has no matching `PASS`/`ERROR` record for the current worktree digest.
-- `failure-streak` — the configured number of consecutive failed tool calls with no intervening
-  success and no consultation attempt for that streak.
 
-The trigger vocabulary is fixed. `manual` rules must use `gate: none`; `failure-streak` rules
-must not be strict (an answer writes no record). `lane-boundary` is deprecated and kept only for
-existing profiles; the shipped defaults include the strict `lane-fanout`, `task-progress`, and
-`lane-boundary` rules, and the `implementation-work` and `lane-assignment` triggers remain
-overridable.
+The trigger vocabulary is fixed. `manual` rules must use `gate: none`; `lane-boundary` is
+deprecated and kept only for existing profiles. The shipped defaults configure the strict
+`lane-fanout` rule on `lane-assignment`; the `implementation-work` and `lane-assignment` triggers
+remain available to profile rules, and no shipped rule uses the deprecated `lane-boundary` trigger.
 
 The change-scoped triggers evaluate only for changes attributed to the current session. A session
 is involved in a change when it created or modified it in this workspace; observation, a
@@ -91,9 +87,9 @@ is involved in a change when it created or modified it in this workspace; observ
 when the session created the change or changed its spec artifacts, `spec-task-ready` only to the
 tasks the session checked, `implementation-work` only to an involved change, and
 `implementation-complete` only when the session completed the task list. Another session's ticks
-are not imported into a creator's scope. `task_progress` notes, `answer` runs, and `patch` runs
-remain available in every session; an explicit `task_progress` or review/patch `delegate` also
-attributes the change.
+are not imported into a creator's scope. `task_progress` notes and explicit review runs remain
+available in every session; an explicit `task_progress` or review `delegate` also attributes the
+change.
 
 ### Session involvement
 
@@ -134,8 +130,8 @@ Attribution comes only from session-attributable write evidence captured from a 
 
 A read, `grep`, `glob`, `delegation_status`, `openspec list/show/status/validate`, or any
 unrecognized tool is not write evidence. A write through an unrecognized tool or an unparsed
-shell form under-gates: the session can call `task_progress` or a review/patch `delegate` to opt
-in. There is deliberately no attribution from the workspace diff, file mtimes, or a change
+shell form under-gates: the session can call `task_progress` or a review `delegate` to opt in.
+There is deliberately no attribution from the workspace diff, file mtimes, or a change
 directory timestamp, because those identify content but not the writer.
 
 At turn-stopping, the pre-step baseline and the turn-end snapshot are compared only for changes
@@ -178,19 +174,20 @@ satisfies the task or rule.
 A review runs **asynchronously**: `delegate` validates the rule/target/change (and task), waits for
 the target to start, and returns a run id, state, and record path while the verdict is produced in
 the background. Use `delegation_status` (or the record path) for completion; the gate points a
-pending review at its run instead of starting another. Answer and patch stay synchronous.
+pending review at its run instead of starting another. A `note` rule starts no target, so it has no
+run and no record.
 
 A review started on an **external** provider is also cataloged in the Session's subagent list as an
 external child labelled `delegation:<rule>`; the service assigns the child name. The entry is a leaf
 — not openable, no token or duration metrics, no follow-up input — and the verdict arrives as a
-settlement notice that starts a new turn. The record, the gates, and the queue are unchanged. Answer
-and patch stay caller-delivered, so an external answer/patch run is neither cataloged nor announced;
-in-process providers keep the service's existing local-child catalog behavior (their local children
-are always cataloged and continuable where supported).
+settlement notice that starts a new turn. The record, the gates, and the queue are unchanged.
+In-process providers keep the service's existing local-child catalog behavior: their local children
+are always cataloged and continuable where supported, and the engine's delivery choice only decides
+whether the settlement notice is delivered.
 
-A target run is bounded by the per-contract timeout: 20 minutes for `review`, 5 minutes for
-`answer`, and 30 minutes for `patch`. A profile overrides them through `timeouts`; a timed-out
-review writes an `ERROR` record and the error names the contract to widen.
+A review run is bounded by the per-contract timeout: 20 minutes for `review`. A profile overrides it
+through `timeouts`; a timed-out review writes an `ERROR` record and the error names the contract to
+widen.
 
 Several reviews can run at once. A duplicate request is identified by rule + change + task/phase plus
 the prepared digest and the resolved reviewer: a second call while that identity is pending returns
@@ -301,17 +298,8 @@ turn the queue off, set `reviewQueue: { enabled: false }`: deduplication and sam
 while the global concurrency/shape limits, the acceptance deadline, and automatic retries are
 bypassed.
 
-**`answer`** is the read-only blocker/research/advisor contract. It returns the answer with evidence
-and, for research, sources and dates, and, for an advisor, a recommendation, the strongest
-counterargument, risks, a next action, and confidence. It writes no gate record; a failed answer is
-reported and counts as a consultation attempt so a soft `failure-streak` rule does not loop.
-
-**`patch`** runs a write-capable target in an isolated git worktree under
-`.dsh/delegation/worktrees/` and returns the changed files, diff, and the target's test report.
-It never applies the diff to the session worktree, and a patch run is never a review `PASS`.
-The owner or agent reviews and merges manually.
-
-**`note`** is written by `task_progress` and explained below.
+**`note`** starts no target and writes no review record: `task_progress` writes the progress note,
+and a gated note rule such as `lane-fanout` is settled by a tagged worker start or a serial note.
 
 ### Portable task approvals
 
@@ -444,57 +432,15 @@ unreviewed. A profile that declares no strict `spec-task-ready` task-scope revie
 obligation, and a change without a checked task is not part of the check; an unreadable `tasks.md`
 fails closed. The way out is the review itself, or archiving the change, which keeps its own gate.
 
-### Review learning
+### Finding classification
 
 Every review finding carries a `class` from a fixed vocabulary: `spec-ambiguity`,
 `missing-test`, `path-boundary`, `state-persistence`, `stale-input`, `api-contract`,
 `plan-shape`, `docs-drift`, `security`, `other`. The review instructions request it, the verdict
 parser stores a valid class, and an absent or unknown class is stored as `other` — a malformed
-class never rejects a verdict. A PASS record carries no findings, so the portable approval is
-unchanged.
-
-The plugin keeps learning state under `.dsh/review-learning/` (local scratch, never tracked):
-
-- `<workspaceKey>.history.jsonl` — one bounded, sanitized entry per settled review
-  (`FINDINGS`/`PASS`, rule, change, task id, digest, findings, time), or a `gap` marker when the
-  append failed. The default window and history cap are 50 settled reviews; the maximum is 200.
-  A reused record appends nothing, and a later PASS never erases the earlier findings.
-- `<workspaceKey>.jsonl` — the lesson store, bounded to 200 lessons or 1 MB per workspace by
-  default. A lesson has a class, title, body, `appliesTo` rules/capabilities, source evidence,
-  and a state: `proposed`, `accepted`, `rejected`, or `applied`. The dedupe key is the normalized
-  class plus title; a duplicate of a proposed lesson updates it, and a duplicate of an accepted or
-  applied lesson creates a new proposed revision with a `supersedes` link while the accepted
-  content stays immutable. When the store is at its cap the oldest non-applied lesson is evicted
-  first; an applied-only full store refuses the write with `capacity` and changes nothing. Two
-  hosts writing the same workspace use a `<workspaceKey>.jsonl.lock` directory: a write waits
-  briefly, then fails with the lock path and asks you to remove it only when no other host is
-  writing.
-
-Only a direct user answer moves a lesson: a model may call `review_lesson` with `propose`, but
-`decide` (accept/reject) and `apply` go through the host user-questions service and the answer is
-bound to the exact lesson revision — an answer for a revision that changed while the question was
-open is refused and the current revision is named. `apply` requires a target: a change, spec,
-file, or test, recorded with the time; it is readable through `review_lesson` `list`.
-
-`review_retro` reads the finding history deterministically (no model call): counts per class, the
-top class, up to three bounded examples with their source records, the repeat count and rate per
-class, and the gap and malformed-line counts. A finding is repeated when the same normalized class
-and title hash appeared in an earlier entry in the window; the rate is the repeats divided by the
-class's findings. Its `propose` action stores at most one draft lesson (deduped by the store key);
-its output is bounded to 4000 characters. `/review-retro` prints the report and never accepts a
-lesson.
-
-At review start, up to three `accepted` or `applied` lessons whose `appliesTo` matches the rule
-and the change's delta capability names are injected as a `## Lessons from prior reviews` section
-before the output contract. The section is bounded to 1200 characters, is sanitized as data, and
-says to apply judgment — a lesson never changes the P0/P1 rule, the review contract, or the
-approval gate. No matching lesson means no section and a byte-identical prompt.
-
-Opt out with `reviewLearning.enabled: false`: the `review_retro` and `review_lesson` tools and the
-`/review-retro` command are not registered, no lesson is injected, and existing records stay
-readable. `reviewLearning.window` (default 50, 1–200) and `reviewLearning.maxLessons` (default
-200, 1–1000) are validated at plugin load; an invalid value fails the row with its range. The
-lesson store keeps its 1 MB cap regardless.
+class never rejects a verdict. A `PASS` record carries no findings, so the portable approval is
+unchanged. The finding history is gone; read the review records in `.dsh/delegation/<rule>/<change>/`
+for the findings, and use Hindsight for durable lessons.
 
 ### Targets
 
@@ -507,46 +453,16 @@ targets:
     provider: codex-subagent
     model: gpt-6-astra
     reasoningEffort: xhigh
-  codex-write:
-    provider: codex-subagent-write
-    write: true
-    model: gpt-6-astra
-    reasoningEffort: xhigh
-  codex-astra:
-    provider: codex-subagent
-    model: gpt-6-astra
-    reasoningEffort: xhigh
 ```
 
-The shipped `codex` and `codex-write` targets select `gpt-6-astra` at `xhigh`. `codex-astra` keeps
-the same values as the explicit strong target the advisor uses, so a profile can make
-`codex`/`codex-write` cheaper without weakening the advisor:
+The shipped `codex` target selects `gpt-6-astra` at `xhigh`. Override the target in the profile
+patch to change a rule's model or effort; a target that sets neither keeps the provider's own
+default:
 
 ```yaml
 targets:
   codex:
     provider: codex-subagent
-  codex-write:
-    provider: codex-subagent-write
-    write: true
-  codex-astra:
-    provider: codex-subagent
-    model: gpt-6-astra
-    reasoningEffort: xhigh
-```
-
-Point a rule at `codex-astra` only when it must stay strong under such an override:
-
-```yaml
-rules:
-  - id: spec-review
-    when: spec-ready
-    to: codex-astra
-    contract: review
-    phase: spec
-    scope: whole
-    gate: strict
-    instruction: "bundled:review-spec"
 ```
 
 The engine resolves the target at use time, passes `model`/`reasoningEffort`/`agentOptions` in the
@@ -554,15 +470,14 @@ DSH subagent start request, and lets the provider map them to its model and effo
 Codex fork maps them to the app-server thread/config). A target with no options sends none, so the
 provider applies its own default model/effort. Options are forwarded only when the provider declares
 `agentOptions` support; otherwise the run is rejected before starting with the target id, provider
-name, and the unsupported capability instead of silently dropping the option. `write: true` is a
-declaration for the `patch` contract; the engine never silently escalates a target's permissions.
-The provider owns its sandbox.
+name, and the unsupported capability instead of silently dropping the option. The provider owns its
+sandbox.
 
-The engine keeps no provider slug vocabulary: the delta spec's `astra` is illustrative and any
-string is passed through. The shipped example uses the model id verified live against the bundled
-Codex (`docs/codex-subagent.md` records the current one). An unknown model or effort is rejected by
-the provider at run time and recorded as an `ERROR` target failure, not silently replaced, and the
-Codex provider rejects unsupported `agentOptions` keys before a process starts.
+The engine keeps no provider slug vocabulary: any model id string is passed through. The shipped
+example uses the model id verified live against the bundled Codex (`docs/codex-subagent.md` records
+the current one). An unknown model or effort is rejected by the provider at run time and recorded as
+an `ERROR` target failure, not silently replaced, and the Codex provider rejects unsupported
+`agentOptions` keys before a process starts.
 
 A non-Codex target uses the same rule shape:
 
@@ -573,41 +488,20 @@ targets:
     model: deepseek-flash
     reasoningEffort: max
 rules:
-  - id: research
-    when: manual
+  - id: spec-review
+    when: spec-ready
     to: dsh
-    contract: answer
-    gate: none
-    instruction: "bundled:research"
+    contract: review
+    phase: spec
+    scope: whole
+    gate: strict
+    instruction: "bundled:review-spec"
 ```
 
 The shipped defaults target the installed-Codex provider with `gpt-6-astra` at `xhigh`. They are
 data; one target can select a different model/effort and the same rule contract and gate apply. The
 engine has no Codex dependency, so a standalone install composes with any provider and reports
 Codex-targeted rules as unavailable until a target is configured.
-
-The shipped defaults also add two in-process worker targets on the DSH `spawn` provider. They set
-only `reasoningEffort`, so both inherit the profile's `agent-default-model`; only the effort differs:
-
-```yaml
-targets:
-  worker-fast:
-    provider: spawn
-    reasoningEffort: high
-  worker-deep:
-    provider: spawn
-    reasoningEffort: max
-```
-
-Their manual `answer` rules are also named `worker-fast` and `worker-deep`, so `delegate` offers
-the choice. Pick the tier by the task: `worker-fast` for mechanical inspection, call-site sweeps,
-routine summaries, and bounded lookups; `worker-deep` for ambiguous analysis, root-cause work, and
-anything that gates a decision. The main loop keeps its own effort (`max` in the shipped setup).
-The DeepSeek route has three effective levels — `minimal`/`low` map to `low`,
-`medium`/`high`/`xhigh` map to `high`, and `max` is distinct — so ask for the tier, not a
-five-value effort name. A profile can override either target; the engine reports the target it
-ran, and a missing provider or unsupported option fails the run with the target next action rather
-than satisfying a gate.
 
 ## Default rules
 
@@ -616,30 +510,15 @@ The shipped defaults live in this package's composition fragment:
 | Rule                 | Trigger                   | Contract                           | Gate   |
 | -------------------- | ------------------------- | ---------------------------------- | ------ |
 | `spec-review`        | `spec-ready`              | review, whole, phase `spec`        | strict |
-| `task-review`        | `spec-task-ready`         | review, task                       | strict |
-| `blocker`            | `failure-streak`          | answer                             | soft   |
-| `research`           | `manual`                  | answer                             | none   |
-| `advisor`            | `manual`                  | answer                             | none   |
-| `worker-fast`        | `manual`                  | answer                             | none   |
-| `worker-deep`        | `manual`                  | answer                             | none   |
-| `bug-fix`            | `manual`                  | patch                              | none   |
+| `task-review`        | `spec-task-ready`         | review, task, section supported    | strict |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft   |
 | `lane-fanout`        | `lane-assignment`         | note                               | strict |
-| `task-progress`      | `implementation-work`     | note                               | strict |
-| `lane-boundary`      | `lane-boundary`           | note                               | strict |
 
-The shipped set includes the strict `lane-fanout`, `task-progress`, and `lane-boundary` rules: a
-multi-lane change must start one tagged worker per unassigned lane or record a per-lane serial note
-before the turn closes, and a code-changing turn must show a newly checked-and-reviewed task or a
-progress note matching the current worktree. The triggers and the `note` contract remain
-overridable; the goal-continuity `work-checkpoints` capability still owns the pause-time progress
-and parallel decision and requires a `work_checkpoint` call at each substantial pause.
-
-`advisor` is a manual, read-only second opinion. Use it only when the decision is expensive to
-reverse, security or data integrity is at stake, the design spans modules, or two attempts have
-failed and the next step is unclear. Do not use it for routine edits, syntax, lookups, or facts you
-can verify locally. One well-framed question per call, with constraints and decisive evidence; at
-most three advisor calls per session. It writes no gate record and never satisfies a review.
+The shipped set includes the strict `lane-fanout` rule: a multi-lane change must start one tagged
+worker per unassigned lane or record a per-lane serial note before the turn closes. It ships no
+rule on the `implementation-work` or deprecated `lane-boundary` triggers; the goal-continuity
+`work-checkpoints` capability still owns the pause-time progress and parallel decision and requires
+a `work_checkpoint` call at each substantial pause.
 
 Override `targets`/`rules` in the profile's `cordis.patch.yml`; a patch replaces the whole config
 object, so restate every target and rule the session needs. Do not edit the fragment for
@@ -704,8 +583,8 @@ names the change and the session, points at the unreadable file, and does not re
 
 There is no livelock escape inside a session other than satisfying the rule, disabling or removing
 its row, or making the change part of this session's work through an edit, `task_progress`, or an
-explicit review/patch `delegate`. Legacy `.dsh/delegation/owners/` files from the previous
-ownership model are ignored and may be deleted.
+explicit review `delegate`. Legacy `.dsh/delegation/owners/` files from the previous ownership
+model are ignored and may be deleted.
 
 ### The task progress note
 
@@ -736,8 +615,9 @@ digest, so decide ownership before the work starts:
   consumes the other's output, then review and merge the results.
 - **Serialize overlapping writers in one checkout** (one finishes before the next starts), or isolate
   each in its own worktree as above.
-- **The patch contract already isolates itself:** a `bug-fix` run executes in its own worktree. This
-  section governs agents and teammates you start directly.
+- **Create the isolated checkout explicitly:** `create_worktree` gives a write-capable subagent its
+  own branch and worktree, and the delegation engine no longer provides worktree isolation. This
+  section governs agents and teammates you start yourself.
 - **A single writer doing sequential work needs no worktree.** Isolation is for concurrency, not a
   default ceremony.
 
@@ -870,43 +750,40 @@ task-lane plan fails open. The goal-continuity owner rule still applies independ
   `.dsh/delegation/owners/` files are ignored and have no effect; no migration imports them,
   because the first observer was often not the session that did the work.
 
-## Manual delegation
+## Migration from removed delegation paths
 
-```text
-delegate(rule: "research", objective: "Which helper owns file locking?", context: "failing test in packages/fs")
-delegate(rule: "worker-fast", objective: "List every caller of parseTasksText")
-delegate(rule: "worker-deep", objective: "Why does the lane ledger miss an assignment across turns?", context: "<observed gate steer and relevant files>")
-delegate(rule: "advisor", context: "Question: keep the approval gate in this plugin? Constraints: standalone install, DSH 0.2.1-rc.3. Evidence: packages/plugin-delegation-rules/src/shared/approval.ts")
-delegate(rule: "blocker", context: "three failed attempts: <commands and output>; current plan: <plan>")
-delegate(rule: "bug-fix", objective: "fix the stale-cache crash", context: "repro: <command>")
-```
-
-`research` answers with evidence and sources; `worker-fast` and `worker-deep` answer the same way at
-their configured effort; `advisor` gives a bounded recommendation, the strongest counterargument,
-risks, a next action, and confidence; `blocker` recommends a next action with evidence; `bug-fix`
-returns an isolated worktree, diff, and test report for manual review. A failing target is reported;
-for the soft `failure-streak` rule it marks the consultation attempt and does not repeat.
+The `answer` and `patch` result contracts are gone, and with them the shipped `research`, `advisor`,
+`blocker`, `worker-fast`, `worker-deep`, and `bug-fix` rules and the `worker-fast`, `worker-deep`,
+`codex-astra`, and `codex-write` targets; review learning is retired as well, so its lesson tools,
+the `/review-retro` command, the lesson store, the finding history, and its config block no longer
+exist. Each removed delegation path has one documented replacement: call `subagent`
+when the provider, model, reasoning effort, or prompt must be chosen
+(`high` effort for mechanical work, `max` for ambiguous analysis); call `codex_subagent` for an
+ad-hoc second opinion on the registered Codex provider, which takes only a prompt and uses its
+provider row's model and effort; and use `create_worktree` for an isolated checkout that a
+write-capable `subagent` then edits, reviewing the returned diff and tests before applying it. A
+profile that still declares a removed contract, trigger, target, or target field fails validation
+with the replacement named. Use Hindsight for durable lessons; review findings stay in the review
+records.
 
 ## Model-facing cost and security
 
 The plugin adds no always-on prompt text. Its model-facing policy is the three tool descriptions
 plus the skill catalog line, and the full workflow is loaded only when the skill is invoked.
 
-- Measured: three tool descriptions plus the skill catalog description are 2750 + 285 = 3035 UTF-8
-  bytes (~759 estimated tokens at bytes / 4), against the 900 estimated tokens budget. The
-  `delegate` description may append at most 400 bytes of discovered section labels; the total
-  stays inside the same budget.
-- Measured: the skill body is 21347 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
-- Reviews and answers consume the target's tokens/subscription; the progress note is free.
-  Per-task reviews multiply runs, so keep tasks sized for one review; a section review covers a
-  related group in one run; set the optional integration review to `soft` or `none` if it adds
-  noise. The shipped `codex` and `codex-write` targets select `gpt-6-astra` at `xhigh`, so every
-  default Codex rule pays for the strong model; override those targets for cheaper routine reviews
-  and leave `advisor` on `codex-astra`.
-- The engine validates rule ids, change names, task ids, and record paths before effects; git is
-  invoked with fixed arguments; target output is untrusted data, parsed for the declared contract
-  and never executed. Patch results stay isolated until a human or agent reviews and applies
-  them.
+- The model-facing budget is 900 estimated tokens for the three tool descriptions plus the skill
+  catalog description, and 24,000 UTF-8 bytes for the skill body. The `delegate` description may
+  append at most 400 bytes of discovered section labels; the total stays inside the same budget.
+- A review consumes the target's tokens/subscription; the progress note is free. Per-task reviews
+  multiply runs, so keep tasks sized for one review; a section review covers a related group in one
+  run; set the optional integration review to `soft` or `none` if it adds noise. The shipped
+  `codex` target selects `gpt-6-astra` at `xhigh`, so every default Codex review pays for the
+  strong model; override the target for cheaper routine reviews.
+- The engine validates rule ids, change names, task ids, worktree paths, and git arguments before
+  effects; git is invoked with fixed arguments; records and progress notes keep no credentials,
+  secrets, or machine paths; target output is untrusted data, parsed for the declared contract and
+  never executed. A write-capable subagent's worktree diff stays isolated until a human or agent
+  reviews and applies it.
 
 ## Troubleshooting
 
@@ -937,7 +814,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
   the exact `delegate` call in the steer message (it names the task id for a task review), or
   inspect the record path it names with `delegation_status`.
 - **A change is not involved** — the session did not write to it and made no explicit change-scoped
-  call. Edit the change, call `task_progress`, or run a review/patch `delegate` to opt in. A write
+  call. Edit the change, call `task_progress`, or run a review `delegate` to opt in. A write
   through an unrecognized tool or an unparsed shell form does not attribute. Legacy
   `.dsh/delegation/owners/` files are ignored; delete them if a clean status is wanted.
 - **A note is stale** — the worktree changed after the note; refresh the note or tick the task

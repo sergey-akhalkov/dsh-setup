@@ -8,9 +8,10 @@ overrides. The provider is an MIT-attributed fork of the official
 `@deepseek-ai/dsh-subagent-codex` provider with its app-server protocol adapter
 retained.
 
-Use it when you want the delegation rules from
-[delegation-rules](delegation-rules.md) to call Codex for whole-spec reviews,
-per-task reviews, blockers, research, or isolated bug-fix patches.
+Use it when you want the delegation review rules from
+[delegation-rules](delegation-rules.md) to call Codex for whole-spec, per-task, section, and
+integration reviews, or when you want an ad-hoc Codex second opinion through the `codex_subagent`
+tool.
 
 ## Prerequisite: log in once
 
@@ -106,17 +107,18 @@ The tool accepts `prompt` (required), `description` (required, the task label in
 the list), `name` (optional child name), and `cwd` (optional). It returns the
 child name immediately; the answer arrives as a settlement notice that starts a
 new turn. The entry is a leaf — not openable, no token or duration metrics, no
-follow-up messages — and it uses the read-only `codex-subagent` provider; write
-work stays on the `delegate` patch rule in an isolated worktree.
+follow-up messages — and it uses the read-only `codex-subagent` provider. Write
+work goes through a write-capable `subagent` in an isolated `create_worktree`
+checkout; no shipped delegation contract runs the write provider.
 
 ## Providers and target options
 
 One row registers two instances with fixed names and permissions:
 
-| Provider               | Sandbox           | Used for                                  |
-| ---------------------- | ----------------- | ----------------------------------------- |
-| `codex-subagent`       | `read-only`       | `review` and `answer` contracts           |
-| `codex-subagent-write` | `workspace-write` | `patch` contracts in an isolated worktree |
+| Provider               | Sandbox           | Used for                                                                                             |
+| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `codex-subagent`       | `read-only`       | The delegation `review` contract and the visible `codex_subagent` tool                               |
+| `codex-subagent-write` | `workspace-write` | No shipped delegation contract; selectable through the first-party `subagent` tool for isolated work |
 
 Both use Codex's non-interactive approval policy (`never`); the sandbox fixes the
 permission boundary, so a read-only rule cannot silently escalate itself. The
@@ -131,15 +133,6 @@ targets:
     provider: codex-subagent
     model: gpt-6-astra
     reasoningEffort: xhigh
-  codex-write:
-    provider: codex-subagent-write
-    write: true
-    model: gpt-6-astra
-    reasoningEffort: xhigh
-  codex-astra:
-    provider: codex-subagent
-    model: gpt-6-astra
-    reasoningEffort: xhigh
 ```
 
 - `model` maps to Codex `thread/start` `model`.
@@ -149,19 +142,18 @@ targets:
 - Any other `agentOptions` entry is rejected before a process starts with a
   `subagent-codex:` diagnostic naming the unsupported option.
 
-The setup's delegation rules use these values by default: `codex` and `codex-write` select
-`gpt-6-astra` at `xhigh`, and `codex-astra` is the explicit strong target the manual advisor uses.
-Override the target in the delegation config (not the provider row) to change a rule's model; keep
-`codex-astra` strong if `codex` is made cheaper. The provider row's `model`/`reasoningEffort` remain
-fallbacks for targets that set neither.
+The setup's delegation rules use the `codex` target with `gpt-6-astra` at `xhigh` by default.
+Override the target in the delegation config (not the provider row) to change a rule's model or
+effort; a target that sets neither falls back to the provider row's `model`/`reasoningEffort` or the
+user's Codex route.
 
 Invalid model or effort strings are passed to Codex and surface as a normal
 non-completed run, which the delegation engine records as an ERROR for that
 target.
 
-A patch rule runs in the isolated worktree the rules engine creates; the fork
-passes the sandbox and merges nothing. Review the returned diff and tests before
-applying them.
+The write provider stays registered and selectable through the first-party `subagent` tool; no
+shipped delegation contract or rule uses it. Give it an isolated `create_worktree` checkout and
+review the returned diff and tests before applying them; the engine merges nothing.
 
 ## Configuration
 
@@ -218,10 +210,10 @@ Every delegation starts one app-server and runs one turn on a fresh ephemeral
 thread, or resumes the persisted thread when a review key is reused; it costs a
 Codex request and tokens, and reviews
 are slow by nature. Per-task reviews multiply the runs. The shipped delegation
-targets select `gpt-6-astra` at `xhigh`, so every default Codex rule pays the
-strong-model rate; override `codex`/`codex-write` for routine reviews and keep
-`codex-astra` for the advisor. The rules engine's `task_progress` note runs no
-model and is the cheap way to close a turn while a task is still in progress.
+target selects `gpt-6-astra` at `xhigh`, so every default Codex review pays the
+strong-model rate; override `codex` for routine reviews. The rules engine's
+`task_progress` note runs no model and is the cheap way to close a turn while a
+task is still in progress.
 
 ## License and maintenance
 
@@ -244,4 +236,4 @@ Only the fork package's vendored code changes, not the generic rules engine.
 | `--version` failed or printed no version  | Run that command in the Harness environment; fix or pin `codexPath`.                                                      |
 | Turn fails with HTTP 401                  | Run the reported `<resolved codex> login`, then retry. The provider writes no credentials.                                |
 | Turn fails with unsupported target option | Use only `model` and `reasoningEffort`; other `agentOptions` entries are rejected before a run.                           |
-| Patch target rejected by the rules engine | Point the rule at `codex-subagent-write`; a read-only target is never silently escalated.                                 |
+| Write work needed                         | Start a write-capable `subagent` on `codex-subagent-write` in a `create_worktree` checkout; no shipped rule writes.       |
