@@ -85,15 +85,44 @@ describe('configuration validation', () => {
     ).toMatchObject({ enabled: true, concurrency: 4, maxAttempts: 5 })
   })
 
-  it('accepts the gate-only gates.workflowOwned switch and defaults it true', () => {
-    expect(validateConfig({}).gates).toEqual({ workflowOwned: true })
-    expect(validateConfig({ gates: { workflowOwned: false } }).gates).toEqual({
+  it('defaults every per-signal gate switch true, accepts each false value, and rejects an unknown key', () => {
+    const defaults = {
+      workflowOwned: true,
+      specReview: true,
+      integrationReview: true,
+      taskProgress: true,
+      laneFanout: true,
+    }
+    expect(validateConfig({}).gates).toEqual(defaults)
+    for (const name of Object.keys(defaults)) {
+      expect(validateConfig({ gates: { [name]: false } }).gates).toEqual({
+        ...defaults,
+        [name]: false,
+      })
+    }
+    expect(
+      validateConfig({
+        gates: {
+          workflowOwned: false,
+          specReview: false,
+          integrationReview: false,
+          taskProgress: false,
+          laneFanout: false,
+        },
+      }).gates,
+    ).toEqual({
       workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: false,
     })
     expect(() => validateConfig({ gates: { workflowOwned: 'off' } })).toThrow(
-      /gates\.workflowOwned/u,
+      /gates\.workflowOwned must be a boolean/u,
     )
-    expect(() => validateConfig({ gates: { unknown: true } })).toThrow(/gates: unknown field/u)
+    expect(() => validateConfig({ gates: { unknown: true } })).toThrow(
+      /gates: unknown field "unknown"; accepted keys: workflowOwned, specReview, integrationReview, taskProgress, laneFanout/u,
+    )
     expect(() => validateConfig({ gates: false })).toThrow(/gates must be a mapping/u)
   })
 
@@ -108,13 +137,22 @@ describe('configuration validation', () => {
     const row = fragment.rows[0]
     expect(row?.id).toBe('dsh-setup-delegation-rules')
     const config = validateConfig(row?.config)
-    expect(config.rules.map((rule) => rule.id)).toEqual([
-      'spec-review',
-      'task-review',
-      'integration-review',
-      'lane-fanout',
+    // Release A keeps the shipped rules dormant behind the five switches; the
+    // dormant implementation-work note rule rides along when the fragment adds it.
+    const shipped = ['spec-review', 'task-review', 'integration-review', 'lane-fanout']
+    expect(config.rules.map((rule) => rule.id)).toEqual(expect.arrayContaining(shipped))
+    expect(
+      config.rules
+        .map((rule) => rule.id)
+        .filter((id) => ![...shipped, 'implementation-work'].includes(id)),
+    ).toEqual([])
+    expect(Object.keys(config.gates).sort()).toEqual([
+      'integrationReview',
+      'laneFanout',
+      'specReview',
+      'taskProgress',
+      'workflowOwned',
     ])
-    expect(config.rules.map((rule) => rule.when)).not.toContain('implementation-work')
     expect(config.rules.find((rule) => rule.id === 'lane-fanout')).toMatchObject({
       when: 'lane-assignment',
       contract: 'note',

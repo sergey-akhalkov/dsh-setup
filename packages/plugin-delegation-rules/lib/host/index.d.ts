@@ -84,14 +84,22 @@ export interface BundleConfig {
     rules?: RuleConfig[];
     timeouts?: Partial<TimeoutConfig>;
     reviewQueue?: Partial<ReviewQueueConfig>;
-    /** Gate-only retirement switch (default `workflowOwned: true`). */
-    gates?: {
-        workflowOwned?: boolean;
-    };
+    /** Per-signal gate-only switches; every value defaults to true (the legacy steer runs). */
+    gates?: Partial<GatesConfig>;
 }
-/** Resolved gate ownership: false moves the task-review and archive gates to the workflow. */
+/**
+ * Resolved per-signal gate ownership. A false value moves exactly one legacy
+ * signal to the workflow: `workflowOwned` the task-review rule and the archive
+ * gate, `specReview` the whole-spec rule, `integrationReview` the
+ * implementation-complete rule, `taskProgress` the task-progress gate, and
+ * `laneFanout` the lane-assignment and lane-boundary triggers.
+ */
 export interface GatesConfig {
     readonly workflowOwned: boolean;
+    readonly specReview: boolean;
+    readonly integrationReview: boolean;
+    readonly taskProgress: boolean;
+    readonly laneFanout: boolean;
 }
 /** Test seams; production uses the filesystem, git, and the wall clock. */
 export interface ApplyOptions {
@@ -139,8 +147,15 @@ interface EngineConfig {
  * validation error, so the profile composes without the target installed.
  */
 export declare function validateConfig(raw: unknown): EngineConfig;
-/** Validate the gate-only retirement switch fail-loud with its field and shape. */
+/** Validate the per-signal switches fail-loud; every omitted signal stays enabled. */
 export declare function validateGates(raw: unknown): GatesConfig;
+/**
+ * Which legacy signals would actually steer under one row config: a switch is
+ * on and a rule that enforces it is configured. The workflow loader resolves
+ * each shipped definition's effective ownership from this state, so a signal
+ * that cannot steer never keeps a `defer` definition alive.
+ */
+export declare function resolveLegacySignals(config: EngineConfig): GatesConfig;
 /**
  * Validate the review queue block. An omitted block enables the documented
  * defaults; an invalid field fails plugin load with the field and its range.
@@ -258,6 +273,29 @@ interface ParsedVerdict {
 }
 /** Accept exactly one fenced JSON verdict that echoes the requested digest. */
 export declare function parseVerdict(text: string, expectedDigest: string): ParsedVerdict;
+/**
+ * The workflows-side compatibility service for the one-release coexistence
+ * window. The delegation tools route a signal to it only while its legacy
+ * switch is false; without the service they keep their legacy behavior.
+ */
+export interface WorkflowsReviewCompat {
+    delegate(input: {
+        rule: string;
+        change: string;
+        task?: string;
+        section?: string;
+    }): Promise<string>;
+    note(input: {
+        change: string;
+        task: string;
+        status: ProgressStatus;
+        reason?: string;
+    }): Promise<{
+        text: string;
+        lane?: string;
+    }>;
+    status(): Promise<string>;
+}
 /** Export for the prompt-budget tests; the engine is the only production caller. */
 export declare function reviewPrompt(rule: RuleConfig, change: ChangeInfo, digest: string, task: TaskInfo | undefined, context: string | undefined, objective: string | undefined, snapshot?: boolean, section?: SectionInfo): string;
 /**

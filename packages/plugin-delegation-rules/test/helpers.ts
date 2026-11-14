@@ -15,7 +15,13 @@ import type {
 } from '@deepseek-ai/dsh-subagent'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { expect, vi } from 'vitest'
-import { apply, type BundleConfig, type SettledRunState } from '../src/index.js'
+import {
+  apply,
+  type BundleConfig,
+  type GatesConfig,
+  type SettledRunState,
+  type WorkflowsReviewCompat,
+} from '../src/index.js'
 
 export type GitRunner = (
   args: readonly string[],
@@ -199,6 +205,48 @@ export interface FakeAgent {
   steer: ReturnType<typeof vi.fn>
 }
 
+/** One recorded workflows-compat delegate call. */
+export interface CompatDelegateCall {
+  rule: string
+  change: string
+  task?: string
+  section?: string
+}
+
+/** One recorded workflows-compat note call. */
+export interface CompatNoteCall {
+  change: string
+  task: string
+  status: 'in-progress' | 'blocked'
+  reason?: string
+}
+
+/** The workflows `workflowsReviewCompat` service, recorded and programmable. */
+export class FakeReviewCompat implements WorkflowsReviewCompat {
+  readonly delegateCalls: CompatDelegateCall[] = []
+  readonly noteCalls: CompatNoteCall[] = []
+  statusText = 'Workflows status: the native review runtime owns the signal.'
+  /** The lane a note returns; undefined keeps the call lane-neutral. */
+  lane?: string
+
+  async delegate(input: CompatDelegateCall): Promise<string> {
+    this.delegateCalls.push({ ...input })
+    return `workflow definition run started for rule ${input.rule}`
+  }
+
+  async note(input: CompatNoteCall): Promise<{ text: string; lane?: string }> {
+    this.noteCalls.push({ ...input })
+    return {
+      text: `workflow note written for ${input.task}`,
+      ...(this.lane === undefined ? {} : { lane: this.lane }),
+    }
+  }
+
+  async status(): Promise<string> {
+    return this.statusText
+  }
+}
+
 /** One `tools/pre-execute` decision, for the archive gate tests. */
 export interface PreExecuteResult {
   kind: string
@@ -245,6 +293,8 @@ export interface HarnessOptions {
   runGit?: GitRunner
   agents?: FakeSubagents
   now?: () => Date
+  /** Host services a test provides, such as `workflowsReviewCompat`. */
+  services?: Record<string, unknown>
   /** Set false to exercise the engine path with no settlement observer. */
   observeSettlements?: boolean
   /** Throws before admission to exercise the queue-internal-error fallback. */
@@ -340,7 +390,7 @@ export class Harness {
             },
           }
         }
-        return undefined
+        return options.services?.[name]
       },
       effect: (work: () => unknown) => work(),
       on: (name: string, handler: ContextEvent) => {
@@ -612,6 +662,72 @@ export function defaultTestConfig(overrides: Partial<BundleConfig> = {}): Bundle
       },
       { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },
     ],
+    ...overrides,
+  }
+}
+
+/** Every legacy signal enabled: the switch defaults for an existing profile. */
+export const ALL_GATES: GatesConfig = {
+  workflowOwned: true,
+  specReview: true,
+  integrationReview: true,
+  taskProgress: true,
+  laneFanout: true,
+}
+
+/**
+ * The Release A shipped rules: all configured so one switch flip restores that
+ * steer, and dormant while its switch is false. Mirrors the composition
+ * fragment plus the dormant implementation-work note rule the progress gate needs.
+ */
+export function releaseARules(): NonNullable<BundleConfig['rules']> {
+  return [
+    {
+      id: 'spec-review',
+      when: 'spec-ready',
+      to: 'codex',
+      contract: 'review',
+      phase: 'spec',
+      scope: 'whole',
+      gate: 'strict',
+      instruction: 'bundled:review-spec',
+    },
+    {
+      id: 'task-review',
+      when: 'spec-task-ready',
+      to: 'codex',
+      contract: 'review',
+      scope: 'task',
+      gate: 'strict',
+      instruction: 'bundled:review-task',
+    },
+    {
+      id: 'integration-review',
+      when: 'implementation-complete',
+      to: 'codex',
+      contract: 'review',
+      phase: 'integration',
+      scope: 'whole',
+      gate: 'soft',
+      instruction: 'bundled:review-integration',
+    },
+    { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },
+    { id: 'lane-fanout', when: 'lane-assignment', contract: 'note', gate: 'strict' },
+  ]
+}
+
+/** The exact shipped Release A configuration: rules and target kept, all five switches off. */
+export function releaseAConfig(overrides: Partial<BundleConfig> = {}): BundleConfig {
+  return {
+    targets: { codex: { provider: 'codex-subagent' } },
+    rules: releaseARules(),
+    gates: {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: false,
+    },
     ...overrides,
   }
 }

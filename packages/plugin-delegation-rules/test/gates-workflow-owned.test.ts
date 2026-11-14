@@ -101,6 +101,9 @@ describe('delegation.gates.workflowOwned: false', () => {
     expect(harness.provided.get('delegationRulesStatus')).toEqual({
       workflowOwned: false,
       specReview: true,
+      integrationReview: false,
+      taskProgress: true,
+      laneFanout: true,
       taskReview: true,
     })
     await mkdir(join(root, 'src'), { recursive: true })
