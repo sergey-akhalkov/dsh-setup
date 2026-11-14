@@ -748,7 +748,7 @@ describe('review evidence contract', () => {
           },
         ],
       }),
-    ).toThrow(/record store/u)
+    ).toThrow(/stay under|record store/u)
   })
 
   it('binds task evidence to the run task and change placeholders', () => {

@@ -916,11 +916,21 @@ export function validateDefinition(raw, source = 'definition') {
         if (reviewEvidence.rule !== reviewRule) {
             fail(definition, `${reviewField}.rule`, `must be "${reviewRule}" so the step cannot point at another record`);
         }
-        if (reviewEvidence.path === undefined ||
-            !reviewEvidence.path.replaceAll('\\', '/').startsWith('.dsh/workflows/records/')) {
-            fail(definition, `${reviewField}.path`, 'must name the workflows review record store (.dsh/workflows/records/...), never another file');
-        }
         const scope = reviewStep.review?.scope;
+        if (reviewEvidence.path === undefined) {
+            fail(definition, `${reviewField}.path`, 'must declare the review record path');
+        }
+        const normalizedPath = reviewEvidence.path.replaceAll('\\', '/');
+        if (!normalizedPath.startsWith(`.dsh/workflows/records/${reviewRule}/`)) {
+            fail(definition, `${reviewField}.path`, `must stay under .dsh/workflows/records/${reviewRule}/; another definition's record never satisfies this review`);
+        }
+        if (scope === 'task' && !normalizedPath.includes('/tasks/')) {
+            fail(definition, `${reviewField}.path`, 'must use the tasks/ record directory');
+        }
+        if (scope === 'whole' &&
+            !normalizedPath.endsWith(`/${reviewStep.review?.phase ?? 'spec'}.json`)) {
+            fail(definition, `${reviewField}.path`, 'must use the review phase record file');
+        }
         if (scope !== undefined && reviewEvidence.scope !== scope) {
             fail(definition, `${reviewField}.scope`, `must match the review scope "${scope}"`);
         }
