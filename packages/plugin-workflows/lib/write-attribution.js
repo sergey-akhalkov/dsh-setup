@@ -63,6 +63,12 @@ function unquoted(text) {
     }
     return output;
 }
+/** Whether a directory is the workspace root or one of its descendants. */
+export function isWorkspaceDirectory(workspace, directory) {
+    const root = resolve(workspace);
+    const rel = relative(root, resolve(directory)).replaceAll('\\', '/');
+    return rel === '' || (rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel));
+}
 /**
  * The change this turn made, from a successful write/edit of its artifacts or
  * the documented successful `openspec new change <name>` creation command. A
@@ -87,18 +93,18 @@ export function attributedChangeName(workspace, calls, turn) {
             : typeof call.arguments.cwd === 'string'
                 ? call.arguments.cwd
                 : undefined;
-        if (workdir !== undefined && normalizedWorkspacePath(workspace, workdir) === undefined) {
+        if (workdir !== undefined && !isWorkspaceDirectory(workspace, workdir)) {
             continue;
         }
         const creation = CHANGE_CREATION.exec(normalized);
         if (creation !== null)
             return creation[1];
         const bare = unquoted(normalized);
-        const redirect = SHELL_REDIRECT.exec(bare);
-        // A print-only command is not a write unless it redirects into a file.
-        if (PRINT_ONLY.test(bare) && redirect === null)
+        // A print-only command is not a write unless it redirects into a file. The
+        // destination is matched on the original text so a quoted path is kept.
+        if (PRINT_ONLY.test(bare) && !/(?:^|[\s;&|])>{1,2}/u.test(bare))
             continue;
-        const shellWrite = SHELL_WRITE.exec(bare) ?? redirect;
+        const shellWrite = SHELL_WRITE.exec(normalized) ?? SHELL_REDIRECT.exec(normalized);
         if (shellWrite !== null) {
             const raw = shellWrite[2] ?? '';
             const candidate = isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)

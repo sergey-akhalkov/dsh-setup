@@ -213,3 +213,54 @@ describe('shell attribution boundaries', () => {
     ).toBe('auth')
   })
 })
+
+describe('quoted destinations and root workdir', () => {
+  function call(
+    args: Record<string, unknown>,
+    ok = true,
+  ): {
+    readonly callId: string
+    readonly name: string
+    readonly arguments: Readonly<Record<string, unknown>>
+    readonly ok: boolean
+  } {
+    return { callId: 'c', name: 'pwsh', arguments: args, ok }
+  }
+
+  it('accepts the workspace root as the working directory', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: 'openspec new change auth', workdir: 'C:/repo' })],
+        1,
+      ),
+    ).toBe('auth')
+  })
+
+  it('keeps a quoted write destination', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: 'Set-Content -Path "openspec/changes/auth/design.md" -Value x' })],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: 'echo x > "openspec/changes/auth/design.md"' })],
+        1,
+      ),
+    ).toBe('auth')
+  })
+
+  it('still ignores a printed quoted command', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: 'Write-Output "Set-Content openspec/changes/auth/design.md"' })],
+        1,
+      ),
+    ).toBeUndefined()
+  })
+})
