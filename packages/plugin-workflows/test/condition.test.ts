@@ -111,14 +111,41 @@ describe('condition context', () => {
     expect(digest).toBeDefined()
     const specDir = join(root, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
     await mkdir(specDir, { recursive: true })
-    await writeFile(join(specDir, 'spec.json'), JSON.stringify({ verdict: 'PASS', digest }), 'utf8')
+    await writeFile(
+      join(specDir, 'spec.json'),
+      JSON.stringify({
+        rule: 'spec-review',
+        change: 'auth',
+        phase: 'spec',
+        scope: 'whole',
+        digest,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        session: 'session-1',
+        runId: 'run-1',
+        time: '2026-11-14T00:00:00.000Z',
+      }),
+      'utf8',
+    )
     const taskDir = join(root, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks')
     await mkdir(taskDir, { recursive: true })
     const { taskIdOf } = await import('../src/host/tasks.ts')
     const taskId = taskIdOf('Add the engine')
     await writeFile(
       join(taskDir, `${taskId}.json`),
-      JSON.stringify({ verdict: 'PASS', digest: 'b'.repeat(64) }),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        digest: 'b'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T00:00:00.000Z',
+      }),
       'utf8',
     )
     const context = await buildConditionContext({
@@ -259,7 +286,19 @@ describe('condition truthiness and session fields', () => {
     })
     await writeFile(
       join(root, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json'),
-      JSON.stringify({ verdict: 'PASS', digest }),
+      JSON.stringify({
+        rule: 'spec-review',
+        change: 'auth',
+        phase: 'spec',
+        scope: 'whole',
+        digest,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        session: 'session-1',
+        runId: 'run-1',
+        time: '2026-11-14T00:00:00.000Z',
+      }),
       'utf8',
     )
     const runGit = async (args: readonly string[]): Promise<Buffer> => {

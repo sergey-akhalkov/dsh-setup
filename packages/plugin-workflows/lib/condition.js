@@ -4,6 +4,7 @@ import { CHANGE_NAME } from './command-parse.js';
 import { currentSpecDigest } from './evidence.js';
 import { evaluateJsonLogic } from './executors.js';
 import { worktreeDigest } from './git.js';
+import { localRecordError } from './projection.js';
 import { numberedTasks, taskLanes } from './tasks.js';
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -17,7 +18,7 @@ async function readRecord(workspace, path) {
         return undefined;
     }
 }
-async function readTaskRecords(workspace, directories) {
+async function readTaskRecords(workspace, change, directories) {
     const records = {};
     for (const directory of directories) {
         let names;
@@ -35,11 +36,14 @@ async function readTaskRecords(workspace, directories) {
                 continue;
             const record = await readRecord(workspace, `${directory}/${name}`);
             if (record === undefined ||
-                typeof record.verdict !== 'string' ||
-                typeof record.digest !== 'string') {
+                localRecordError(record) !== undefined ||
+                record.rule !== 'task-review' ||
+                record.change !== change ||
+                record.scope !== 'task' ||
+                record.taskId !== taskId) {
                 continue;
             }
-            records[taskId] = { verdict: record.verdict, digest: record.digest };
+            records[taskId] = { verdict: String(record.verdict), digest: String(record.digest) };
         }
     }
     return records;
@@ -71,16 +75,19 @@ export async function buildConditionContext(input) {
             : undefined;
         const record = workflowSpec ?? legacySpec;
         if (record !== undefined &&
-            typeof record.verdict === 'string' &&
-            typeof record.digest === 'string') {
+            localRecordError(record) === undefined &&
+            record.rule === 'spec-review' &&
+            record.change === change &&
+            record.phase === 'spec' &&
+            record.scope === 'whole') {
             specRecord = {
-                verdict: record.verdict,
-                digest: record.digest,
+                verdict: String(record.verdict),
+                digest: String(record.digest),
                 current: record.digest === specDigest,
                 pass: record.verdict === 'PASS',
             };
         }
-        Object.assign(tasksRecords, await readTaskRecords(input.workspace, [
+        Object.assign(tasksRecords, await readTaskRecords(input.workspace, change, [
             `.dsh/workflows/records/task-review/${change}/tasks`,
             `.dsh/delegation/task-review/${change}/tasks`,
         ]));

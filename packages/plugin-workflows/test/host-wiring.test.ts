@@ -6570,3 +6570,101 @@ it('denies casing and tab variants of the archive command without evidence', asy
     expect(nextCalled, command).toBe(false)
   }
 })
+
+describe('turn-close condition wiring', () => {
+  async function conditionRows(workspace: string): Promise<Array<Record<string, unknown>>> {
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    return (await readFile(file, 'utf8').catch(() => ''))
+      .trim()
+      .split('\n')
+      .filter((line) => line !== '')
+      .flatMap((line) => {
+        try {
+          const entry = JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }
+          return entry.triggers ?? []
+        } catch {
+          return []
+        }
+      })
+      .filter((row) => row.id === 'definition:conditional-review')
+  }
+
+  it("starts a run only after the session's own write establishes involvement", async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    await mkdir(join(workspace, 'openspec', 'changes', 'auth'), { recursive: true })
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'proposal.md'),
+      '# Proposal\n',
+      'utf8',
+    )
+    const dispose = definitionsRegistry.register({
+      source: '@acme/conditional',
+      definitions: [
+        {
+          v: 1,
+          id: 'conditional-review',
+          name: 'Conditional review',
+          version: 1,
+          trigger: {
+            kind: 'turn.stopping',
+            match: {},
+            mode: 'active',
+            dedupe: 'turn',
+            condition: { '==': [{ var: 'session.involved' }, true] },
+          },
+          settings: {
+            allowModelStart: true,
+            risk: 'low',
+            gateOwnership: 'own',
+            maxBlocks: 3,
+            allowIntent: false,
+          },
+          steps: [
+            {
+              id: 'confirm',
+              title: 'Confirm the change',
+              executor: 'main',
+              prompt: 'Confirm the change artifacts.',
+              evidence: {
+                kind: 'file',
+                path: 'openspec/changes/{name}/proposal.md',
+              },
+              next: 'end',
+              blockTurnClose: true,
+            },
+          ],
+        },
+      ],
+      triggers: [],
+    })
+    try {
+      const host = fakeHost(workspace)
+      apply(host.ctx as never)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(async () =>
+        (await conditionRows(workspace)).some((row) => row.reason === 'condition-false'),
+      )
+      expect((await conditionRows(workspace)).some((row) => row.reason === 'run-created')).toBe(
+        false,
+      )
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: 'spec-write',
+          name: 'write',
+          arguments: { file_path: 'openspec/changes/auth/design.md' },
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      await waitFor(async () =>
+        (await conditionRows(workspace)).some((row) => row.reason === 'run-created'),
+      )
+    } finally {
+      dispose?.()
+    }
+  })
+})

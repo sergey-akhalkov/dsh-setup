@@ -4,6 +4,7 @@ import { CHANGE_NAME } from './command-parse.js'
 import { currentSpecDigest } from './evidence.js'
 import { evaluateJsonLogic } from './executors.js'
 import { type GitRunner, worktreeDigest } from './git.js'
+import { localRecordError } from './projection.js'
 import { numberedTasks, taskLanes } from './tasks.js'
 
 /**
@@ -97,6 +98,7 @@ async function readRecord(
 
 async function readTaskRecords(
   workspace: string,
+  change: string,
   directories: readonly string[],
 ): Promise<Record<string, { verdict: string; digest: string }>> {
   const records: Record<string, { verdict: string; digest: string }> = {}
@@ -114,12 +116,15 @@ async function readTaskRecords(
       const record = await readRecord(workspace, `${directory}/${name}`)
       if (
         record === undefined ||
-        typeof record.verdict !== 'string' ||
-        typeof record.digest !== 'string'
+        localRecordError(record) !== undefined ||
+        record.rule !== 'task-review' ||
+        record.change !== change ||
+        record.scope !== 'task' ||
+        record.taskId !== taskId
       ) {
         continue
       }
-      records[taskId] = { verdict: record.verdict, digest: record.digest }
+      records[taskId] = { verdict: String(record.verdict), digest: String(record.digest) }
     }
   }
   return records
@@ -162,19 +167,22 @@ export async function buildConditionContext(
     const record = workflowSpec ?? legacySpec
     if (
       record !== undefined &&
-      typeof record.verdict === 'string' &&
-      typeof record.digest === 'string'
+      localRecordError(record) === undefined &&
+      record.rule === 'spec-review' &&
+      record.change === change &&
+      record.phase === 'spec' &&
+      record.scope === 'whole'
     ) {
       specRecord = {
-        verdict: record.verdict,
-        digest: record.digest,
+        verdict: String(record.verdict),
+        digest: String(record.digest),
         current: record.digest === specDigest,
         pass: record.verdict === 'PASS',
       }
     }
     Object.assign(
       tasksRecords,
-      await readTaskRecords(input.workspace, [
+      await readTaskRecords(input.workspace, change, [
         `.dsh/workflows/records/task-review/${change}/tasks`,
         `.dsh/delegation/task-review/${change}/tasks`,
       ]),

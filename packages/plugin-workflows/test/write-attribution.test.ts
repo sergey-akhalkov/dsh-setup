@@ -121,3 +121,54 @@ describe('attributedChangeName', () => {
     )
   })
 })
+
+describe('shell write attribution', () => {
+  function shell(
+    command: string,
+    ok = true,
+  ): {
+    readonly callId: string
+    readonly name: string
+    readonly arguments: Readonly<Record<string, unknown>>
+    readonly ok: boolean
+  } {
+    return { callId: 'c', name: 'pwsh', arguments: { command }, ok }
+  }
+
+  it('attributes supported successful shell writes to the change', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [shell('Set-Content -Path openspec/changes/auth/design.md -Value x')],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [shell('"# x" | Out-File openspec/changes/auth/design.md')],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(WORKSPACE, [shell('echo x > openspec/changes/auth/design.md')], 1),
+    ).toBe('auth')
+  })
+
+  it('ignores a failed shell write and a review target', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [shell('Set-Content -Path openspec/changes/auth/design.md -Value x', false)],
+        1,
+      ),
+    ).toBeUndefined()
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [shell('echo x > openspec/changes/auth/reviews/0123456789abcdef.json')],
+        1,
+      ),
+    ).toBeUndefined()
+  })
+})

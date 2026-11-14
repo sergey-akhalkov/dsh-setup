@@ -44,6 +44,10 @@ export function attributedSpecWrite(
 
 const CHANGE_CREATION =
   /(?:^|[;&|]\s*)openspec(?:\.cmd|\.exe)?\s+new\s+change\s+([a-z0-9][a-z0-9-]*)/u
+const SHELL_WRITE =
+  /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b[^;&|]*?(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu
+const SHELL_REDIRECT =
+  /(?:^|[\s;&|])>{1,2}\s*(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu
 
 /**
  * The change this turn made, from a successful write/edit of its artifacts or
@@ -65,8 +69,32 @@ export function attributedChangeName(
     const command = call.arguments.command
     if (typeof command !== 'string') continue
     const normalized = command.replace(/\b(?:rtk|pnpm exec)\s+/gu, '').trim()
-    const match = CHANGE_CREATION.exec(normalized)
-    if (match !== null) return match[1]
+    const creation = CHANGE_CREATION.exec(normalized)
+    if (creation !== null) return creation[1]
+    const shellWrite = SHELL_WRITE.exec(normalized) ?? SHELL_REDIRECT.exec(normalized)
+    if (shellWrite !== null) {
+      const raw = shellWrite[2] ?? ''
+      const workdir =
+        typeof call.arguments.workdir === 'string'
+          ? call.arguments.workdir
+          : typeof call.arguments.cwd === 'string'
+            ? call.arguments.cwd
+            : undefined
+      const candidate =
+        isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
+          ? raw
+          : workdir === undefined
+            ? raw
+            : resolve(workdir, raw)
+      const rel = normalizedWorkspacePath(workspace, candidate)
+      if (
+        rel !== undefined &&
+        /^openspec\/changes\/[^/]+\//u.test(rel) &&
+        !/\/reviews\//u.test(rel)
+      ) {
+        return /^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1]
+      }
+    }
   }
   return undefined
 }
