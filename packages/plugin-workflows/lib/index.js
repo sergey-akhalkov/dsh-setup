@@ -2152,12 +2152,6 @@ export function apply(ctx, config = {}) {
                 if (spec === undefined)
                     return undefined;
                 const resolved = resolveReviewer(reviewers, spec.target);
-                if (!resolved.ok) {
-                    return settleStep(reviewRun, step.id, 'failed', {
-                        at: journal.time(),
-                        reason: resolved.error,
-                    });
-                }
                 const reviewRunner = hostSubagentRunner(agent);
                 const change = reviewRun.context.name;
                 if (typeof change !== 'string' || !CHANGE_NAME.test(change))
@@ -2173,12 +2167,34 @@ export function apply(ctx, config = {}) {
                 const task = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
                     ? taskOf(workspace, change, taskId)
                     : undefined;
-                if (reviewRunner === undefined) {
-                    // The unavailable service is a review failure, not a silent wait: it
-                    // writes an ERROR record and settles the step from that evidence.
+                const failurePrepared = async () => {
                     const liveTree = spec.scope === 'task'
                         ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
                         : undefined;
+                    return { specDigest, ...(liveTree === undefined ? {} : { tree: liveTree }) };
+                };
+                if (!resolved.ok) {
+                    // A missing reviewer target is a review failure too: it writes an
+                    // ERROR record with the target diagnostic instead of failing silently.
+                    const failure = await recordReviewFailure({
+                        run: reviewRun,
+                        definition: reviewDefinition,
+                        step,
+                        reviewer: { id: spec.target, provider: 'unconfigured' },
+                        context,
+                        change,
+                        ...(task === undefined ? {} : { task }),
+                        prepared: await failurePrepared(),
+                        session: sessionId,
+                        error: resolved.error,
+                        failureClass: 'config',
+                        now: journal.time(),
+                    });
+                    return failure.run;
+                }
+                if (reviewRunner === undefined) {
+                    // The unavailable service is a review failure, not a silent wait: it
+                    // writes an ERROR record and settles the step from that evidence.
                     const failure = await recordReviewFailure({
                         run: reviewRun,
                         definition: reviewDefinition,
@@ -2187,10 +2203,7 @@ export function apply(ctx, config = {}) {
                         context,
                         change,
                         ...(task === undefined ? {} : { task }),
-                        prepared: {
-                            specDigest,
-                            ...(liveTree === undefined ? {} : { tree: liveTree }),
-                        },
+                        prepared: await failurePrepared(),
                         session: sessionId,
                         error: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
                         failureClass: 'provider-not-started',
