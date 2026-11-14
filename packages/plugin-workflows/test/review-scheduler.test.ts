@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
+import { currentSpecDigest } from '../src/host/evidence.ts'
 import type { SubagentRunner } from '../src/host/executors.ts'
 import { defaultGit } from '../src/host/git.ts'
 import { type ReviewRecord, resolveReviewers } from '../src/host/review.ts'
@@ -11,7 +12,6 @@ import { ReviewScheduler } from '../src/host/review-scheduler.ts'
 import { createReviewSnapshot, discardReviewSnapshot } from '../src/host/review-snapshot.ts'
 import { createRun, type WorkflowRun } from '../src/host/runs.ts'
 
-const DIGEST = 'a'.repeat(64)
 const roots: string[] = []
 
 async function workspace(): Promise<string> {
@@ -54,6 +54,7 @@ function definition(): Definition {
           scope: 'whole',
           phase: 'spec',
           verdicts: ['PASS', 'ERROR'],
+          digest: 'current',
           path: '.dsh/workflows/records/spec-review/{name}/spec.json',
         },
         next: 'end',
@@ -70,8 +71,19 @@ function reviewers() {
   return { id: 'codex', ...found }
 }
 
-function fencedPASS(): string {
-  return `Review.\n\n\`\`\`json\n${JSON.stringify({ digest: DIGEST, verdict: 'PASS', findings: [] })}\n\`\`\``
+function fencedPASS(digest: string): string {
+  return `Review.\n\n\`\`\`json\n${JSON.stringify({ digest, verdict: 'PASS', findings: [] })}\n\`\`\``
+}
+
+/** A workspace with one change, plus its current whole-spec digest. */
+async function reviewWorkspace(): Promise<{ root: string; digest: string }> {
+  const root = await workspace()
+  const changeDir = join(root, 'openspec', 'changes', 'auth')
+  await mkdir(changeDir, { recursive: true })
+  await writeFile(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8')
+  const digest = await currentSpecDigest(root, 'auth')
+  if (digest === undefined) throw new Error('test change digest missing')
+  return { root, digest }
 }
 
 function runFor(def: Definition): WorkflowRun {
@@ -97,7 +109,7 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs = 5_000): Promis
 
 describe('review scheduler', () => {
   it('admits a review, settles the run in the background, and writes the record', async () => {
-    const root = await workspace()
+    const { root, digest } = await reviewWorkspace()
     await mkdir(join(root, '.dsh'), { recursive: true })
     const def = definition()
     const persisted: WorkflowRun[] = []
@@ -120,7 +132,7 @@ describe('review scheduler', () => {
       },
     )
     const runner: SubagentRunner = {
-      run: async () => ({ childId: 'child-1', completed: true, text: fencedPASS() }),
+      run: async () => ({ childId: 'child-1', completed: true, text: fencedPASS(digest) }),
     }
     const run = runFor(def)
     const request = {
@@ -131,7 +143,7 @@ describe('review scheduler', () => {
       runner,
       context: { workspace: root, values: { name: 'auth' } },
       change: 'auth',
-      prepared: { specDigest: DIGEST },
+      prepared: { specDigest: digest },
       timeoutMs: 5_000,
       session: 'session-1',
     }
@@ -141,7 +153,7 @@ describe('review scheduler', () => {
       request,
       rule: 'spec-review',
       change: 'auth',
-      digest: DIGEST,
+      digest,
     })
     expect(admission.kind).toBe('accepted')
     await waitFor(async () => persisted.length === 1)
@@ -154,7 +166,7 @@ describe('review scheduler', () => {
   })
 
   it('reports a duplicate while the same identity is live and full when the queue is full', async () => {
-    const root = await workspace()
+    const { root, digest } = await reviewWorkspace()
     const def = definition()
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => {
@@ -178,7 +190,7 @@ describe('review scheduler', () => {
     const runner: SubagentRunner = {
       run: async () => {
         await gate
-        return { childId: 'child-1', completed: true, text: fencedPASS() }
+        return { childId: 'child-1', completed: true, text: fencedPASS(digest) }
       },
     }
     const run = runFor(def)
@@ -190,7 +202,7 @@ describe('review scheduler', () => {
       runner,
       context: { workspace: root, values: { name: 'auth' } },
       change: 'auth',
-      prepared: { specDigest: DIGEST },
+      prepared: { specDigest: digest },
       timeoutMs: 5_000,
       session: 'session-1',
     }
@@ -200,7 +212,7 @@ describe('review scheduler', () => {
       request,
       rule: 'spec-review',
       change: 'auth',
-      digest: DIGEST,
+      digest,
     })
     expect(first.kind).toBe('accepted')
     const duplicate = await scheduler.enqueue({
@@ -209,7 +221,7 @@ describe('review scheduler', () => {
       request,
       rule: 'spec-review',
       change: 'auth',
-      digest: DIGEST,
+      digest,
     })
     expect(duplicate.kind).toBe('duplicate')
     const secondRun = createRun({
@@ -231,7 +243,7 @@ describe('review scheduler', () => {
       },
       rule: 'spec-review',
       change: 'other',
-      digest: DIGEST,
+      digest,
     })
     expect(queued.kind).toBe('accepted')
     const thirdRun = createRun({
@@ -253,7 +265,7 @@ describe('review scheduler', () => {
       },
       rule: 'spec-review',
       change: 'third',
-      digest: DIGEST,
+      digest,
     })
     expect(full.kind).toBe('full')
     release?.()

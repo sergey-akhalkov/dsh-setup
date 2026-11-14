@@ -710,3 +710,60 @@ describe('record path identity and portable target boundary', () => {
     expect(portableRecordError(approval)).toBeUndefined()
   })
 })
+
+describe('review evidence contract', () => {
+  it('refuses a review step that does not declare its matching record evidence', () => {
+    const def = taskDefinition()
+    const step = def.steps[0] as Definition['steps'][number]
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [{ ...step, evidence: { kind: 'file', path: 'README.md' } }],
+      }),
+    ).toThrow(/must be "record"/u)
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [
+          {
+            ...step,
+            evidence: {
+              ...(step.evidence as unknown as Record<string, unknown>),
+              rule: 'other-rule',
+            },
+          },
+        ],
+      }),
+    ).toThrow(/gate identity/u)
+  })
+
+  it('does not call the reviewer when the step evidence is unrelated', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0] as Definition['steps'][number]
+    let started = 0
+    const result = await runReviewStep({
+      run: baseRun(definition),
+      definition,
+      step: { ...step, evidence: { kind: 'file', path: 'README.md' } },
+      reviewer: reviewer(),
+      runner: {
+        run: async () => {
+          started += 1
+          return { childId: 'child-1', completed: true, text: PASS_TEXT }
+        },
+      },
+      context: { workspace: root, values: { name: 'auth', taskId: TASK_ID } },
+      change: 'auth',
+      task: { id: TASK_ID, number: '1.1', text: 'Do the thing' },
+      prepared: { specDigest: DIGEST },
+      timeoutMs: 5_000,
+      session: 'session-1',
+      renderPrompt: () => 'test prompt',
+    })
+    expect(started).toBe(0)
+    expect(result.run.steps[0]?.state).toBe('failed')
+    expect(result.error).toContain('record')
+  })
+})

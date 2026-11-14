@@ -106,3 +106,13 @@ describe('host subagent adapter', () => {
     expect(captured.disposed).toBe(1)
   })
 })
+
+describe('missing provider diagnostic', () => {
+  it('names the reviewer, provider, and the config to change', async () => {
+    const runtime = { getProvider: () => undefined } as unknown as SubagentRuntime
+    const runner = hostSubagentRunner(runtime, agent)
+    await expect(
+      runner.run({ provider: 'absent', prompt: 'prompt', reviewer: 'codex' }),
+    ).rejects.toThrow(/review target "codex" \(provider "absent"\).*reviewers\.codex\.provider/u)
+  })
+})

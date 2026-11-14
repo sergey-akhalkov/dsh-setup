@@ -94,6 +94,10 @@ describe('review queue config', () => {
       maxDelayMs: 3_600_000,
       waitTimeoutMs: 1_000,
     })
+    expect(resolveReviewQueue({ baseDelayMs: 3_600_000, maxDelayMs: 0 }).baseDelayMs).toBe(
+      3_600_000,
+    )
+    expect(resolveReviewQueue({ waitTimeoutMs: 3_600_000 }).waitTimeoutMs).toBe(3_600_000)
     for (const bad of [
       { concurrency: 0 },
       { concurrency: 5 },
@@ -104,6 +108,9 @@ describe('review queue config', () => {
       { baseDelayMs: -1 },
       { maxDelayMs: 3_600_001 },
       { waitTimeoutMs: 999 },
+      { waitTimeoutMs: 3_600_001 },
+      { baseDelayMs: 3_600_001 },
+      { maxDelayMs: -1 },
       { enabled: 'yes' },
       { unknown: true },
     ]) {

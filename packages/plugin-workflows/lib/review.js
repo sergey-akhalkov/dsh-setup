@@ -621,6 +621,15 @@ export async function runReviewStep(input) {
             error: 'a task review needs the run context task id',
         };
     }
+    const rule = input.definition.settings.gateIdentity ?? input.definition.id;
+    const declared = input.step.evidence;
+    if (declared === undefined || declared.kind !== 'record' || declared.rule !== rule) {
+        const reason = `the review step must declare a "record" evidence contract for rule "${rule}"; a review never settles from unrelated evidence`;
+        return {
+            run: settleStep(input.run, input.step.id, 'failed', { at: now, reason }),
+            error: reason,
+        };
+    }
     const record = baseRecord(input, now);
     const promptInput = {
         instruction: spec.instruction,

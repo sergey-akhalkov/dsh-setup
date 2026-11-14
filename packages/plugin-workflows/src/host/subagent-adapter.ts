@@ -12,6 +12,21 @@ export function hostSubagentRunner(runtime: SubagentRuntime, agent: Agent): Suba
   return {
     run: async (request, signal) => {
       const controller = signal ?? new AbortController().signal
+      // A missing provider is a run-time review failure with the target id and
+      // the recovery action, not the provider's bare "no provider" message.
+      const provider =
+        typeof runtime.getProvider === 'function'
+          ? runtime.getProvider(request.provider)
+          : undefined
+      if (provider === undefined) {
+        const subject =
+          request.reviewer === undefined
+            ? `provider "${request.provider}"`
+            : `review target "${request.reviewer}" (provider "${request.provider}")`
+        throw new Error(
+          `${subject} is not registered; install or enable that provider, or set reviewers.${request.reviewer ?? '<target>'}.provider in the workflows row, then re-run`,
+        )
+      }
       const options = {
         ...(request.agentOptions ?? {}),
         ...(request.model === undefined ? {} : { model: request.model }),

@@ -23,7 +23,6 @@ import { advanceIntake } from './intake.js';
 import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
 import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifySettings, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
 import { registerActiveRunsContext } from './prompt.js';
-import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
@@ -31,6 +30,7 @@ import { recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQu
 import { ReviewScheduler } from './review-scheduler.js';
 import { createReviewSnapshot, discardReviewSnapshot } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
+import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, taskOf } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, obligationDedupeKey, } from './triggers.js';
@@ -2147,13 +2147,6 @@ export function apply(ctx, config = {}) {
                     });
                 }
                 const reviewRunner = hostSubagentRunner(agent);
-                if (reviewRunner === undefined) {
-                    return settleStep(reviewRun, step.id, 'failed', {
-                        at: journal.time(),
-                        reason: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
-                        failureClass: 'provider-not-started',
-                    });
-                }
                 const change = reviewRun.context.name;
                 if (typeof change !== 'string' || !CHANGE_NAME.test(change))
                     return undefined;
@@ -2168,6 +2161,31 @@ export function apply(ctx, config = {}) {
                 const task = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
                     ? taskOf(workspace, change, taskId)
                     : undefined;
+                if (reviewRunner === undefined) {
+                    // The unavailable service is a review failure, not a silent wait: it
+                    // writes an ERROR record and settles the step from that evidence.
+                    const liveTree = spec.scope === 'task'
+                        ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+                        : undefined;
+                    const failure = await recordReviewFailure({
+                        run: reviewRun,
+                        definition: reviewDefinition,
+                        step,
+                        reviewer: resolved.reviewer,
+                        context,
+                        change,
+                        ...(task === undefined ? {} : { task }),
+                        prepared: {
+                            specDigest,
+                            ...(liveTree === undefined ? {} : { tree: liveTree }),
+                        },
+                        session: sessionId,
+                        error: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
+                        failureClass: 'provider-not-started',
+                        now: journal.time(),
+                    });
+                    return failure.run;
+                }
                 const prepared = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
                     ? await (async () => {
                         // The snapshot freezes the reviewed tree; when it cannot be
@@ -2246,7 +2264,8 @@ export function apply(ctx, config = {}) {
                 // The review is admitted (or a duplicate is already live): the step
                 // stays open and the background settlement writes the record.
                 return undefined;
-            }, readRecord: (step, owner) => verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
+            },
+            readRecord: (step, owner) => verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
                 workspace,
                 values: run.context,
                 reviewOwner: owner,

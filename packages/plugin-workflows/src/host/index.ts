@@ -78,18 +78,17 @@ import {
   withVerifySettings,
 } from './parity.js'
 import { registerActiveRunsContext } from './prompt.js'
-import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js'
 import { issueCompletionReceipt, listReceipts } from './receipts.js'
 import { definitionsRegistry, type WorkflowsDefinitionsService } from './registry.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
   type ReviewerMap,
+  type ReviewRunInput,
   recordReviewFailure,
   resolveReviewer,
   resolveReviewers,
   resolveReviewQueue,
   resolveReviewTimeout,
-  type ReviewRunInput,
   reviewDigest,
   runReviewStep,
   TASK_ID_PATTERN,
@@ -116,6 +115,7 @@ import {
   writeRun,
   writeRunSync,
 } from './runs.js'
+import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js'
 import { checkedTaskIds, taskOf } from './tasks.js'
 import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
 import {
@@ -2611,13 +2611,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           })
         }
         const reviewRunner = hostSubagentRunner(agent)
-        if (reviewRunner === undefined) {
-          return settleStep(reviewRun, step.id, 'failed', {
-            at: journal.time(),
-            reason: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
-            failureClass: 'provider-not-started',
-          })
-        }
         const change = reviewRun.context.name
         if (typeof change !== 'string' || !CHANGE_NAME.test(change)) return undefined
         const specDigest = await currentSpecDigest(workspace, change)
@@ -2632,6 +2625,32 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
             ? taskOf(workspace, change, taskId)
             : undefined
+        if (reviewRunner === undefined) {
+          // The unavailable service is a review failure, not a silent wait: it
+          // writes an ERROR record and settles the step from that evidence.
+          const liveTree =
+            spec.scope === 'task'
+              ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+              : undefined
+          const failure = await recordReviewFailure({
+            run: reviewRun,
+            definition: reviewDefinition,
+            step,
+            reviewer: resolved.reviewer,
+            context,
+            change,
+            ...(task === undefined ? {} : { task }),
+            prepared: {
+              specDigest,
+              ...(liveTree === undefined ? {} : { tree: liveTree }),
+            },
+            session: sessionId,
+            error: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
+            failureClass: 'provider-not-started',
+            now: journal.time(),
+          })
+          return failure.run
+        }
         const prepared: ReviewRunInput['prepared'] =
           spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
             ? await (async () => {
@@ -2661,8 +2680,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               })()
             : {
                 specDigest,
-                liveGuard: async () =>
-                  (await currentSpecDigest(workspace, change)) === specDigest,
+                liveGuard: async () => (await currentSpecDigest(workspace, change)) === specDigest,
               }
         const request: ReviewRunInput = {
           run: reviewRun,
@@ -2719,7 +2737,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // The review is admitted (or a duplicate is already live): the step
         // stays open and the background settlement writes the record.
         return undefined
-      },      readRecord: (step, owner) =>
+      },
+      readRecord: (step, owner) =>
         verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
           workspace,
           values: run.context,

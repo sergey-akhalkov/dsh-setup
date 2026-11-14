@@ -908,6 +908,28 @@ export function validateDefinition(raw, source = 'definition') {
         if (reviewStep?.blockTurnClose !== true) {
             fail(definition, 'steps', 'the "review" step must set blockTurnClose: true; the gate is never a non-blocking step');
         }
+        // The step settles only from the review record it just wrote: any other
+        // contract would let the workflow complete without a matching verdict.
+        const reviewSpecValue = reviewStep.review;
+        const reviewEvidence = reviewStep.evidence;
+        const reviewIndex = steps.indexOf(reviewStep);
+        const reviewField = `steps[${String(reviewIndex)}].evidence`;
+        if (reviewEvidence === undefined || reviewEvidence.kind !== 'record') {
+            fail(definition, `${reviewField}.kind`, 'must be "record"; a review step settles only from its matching verdict record');
+        }
+        const gateIdentity = settingsValue.gateIdentity;
+        if (gateIdentity !== undefined && reviewEvidence.rule !== gateIdentity) {
+            fail(definition, `${reviewField}.rule`, `must be the gate identity "${gateIdentity}" so a copy cannot point at another record`);
+        }
+        if (reviewSpecValue !== undefined && reviewEvidence.scope !== reviewSpecValue.scope) {
+            fail(definition, `${reviewField}.scope`, `must match the review scope "${reviewSpecValue.scope}"`);
+        }
+        if (reviewSpecValue?.scope === 'whole' && reviewEvidence.digest !== 'current') {
+            fail(definition, `${reviewField}.digest`, 'must be "current" so a whole-spec verdict is bound to the current artifacts');
+        }
+        if (reviewSpecValue?.scope === 'task' && reviewEvidence.task === undefined) {
+            fail(definition, `${reviewField}.task`, 'must name the task placeholder for a task-scoped review record');
+        }
     }
     assertAcyclic(definition, steps);
     return {
