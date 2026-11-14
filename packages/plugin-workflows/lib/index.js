@@ -34,6 +34,7 @@ import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js
 import { checkedTaskIds, taskOf } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, obligationDedupeKey, } from './triggers.js';
+import { attributedSpecWrite } from './write-attribution.js';
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows';
 /**
@@ -1038,15 +1039,7 @@ export function apply(ctx, config = {}) {
             // turn is attributed immediately: the fs watcher debounces and its event
             // would arrive after the close. OpenSpec writes are tracked from the
             // observed write/edit calls because the code-write metrics exclude them.
-            const turnWritePaths = (sessionToolCalls.get(input.session) ?? [])
-                .filter((call) => (call.turn === undefined || call.turn === input.turn) &&
-                (call.name === 'write' || call.name === 'edit'))
-                .map((call) => {
-                const value = call.arguments.file_path ?? call.arguments.path;
-                return typeof value === 'string' ? value.replaceAll('\\', '/') : undefined;
-            })
-                .filter((value) => value !== undefined);
-            const pendingSpecWrite = turnWritePaths.find((value) => /^openspec\/changes\/[^/]+\//u.test(value));
+            const pendingSpecWrite = attributedSpecWrite(workspace, sessionToolCalls.get(input.session) ?? [], input.turn);
             const pendingWritePath = pendingSpecWrite ??
                 (metrics !== undefined && metrics.turn === input.turn ? metrics.lastWritePath : undefined);
             const pendingChange = pendingWritePath === undefined

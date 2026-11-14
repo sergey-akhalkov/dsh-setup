@@ -131,6 +131,7 @@ import {
   type StartRunOutcome,
   type Trigger,
 } from './triggers.js'
+import { attributedSpecWrite } from './write-attribution.js'
 
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows'
@@ -1346,19 +1347,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // turn is attributed immediately: the fs watcher debounces and its event
       // would arrive after the close. OpenSpec writes are tracked from the
       // observed write/edit calls because the code-write metrics exclude them.
-      const turnWritePaths = (sessionToolCalls.get(input.session) ?? [])
-        .filter(
-          (call) =>
-            (call.turn === undefined || call.turn === input.turn) &&
-            (call.name === 'write' || call.name === 'edit'),
-        )
-        .map((call) => {
-          const value = call.arguments.file_path ?? call.arguments.path
-          return typeof value === 'string' ? value.replaceAll('\\', '/') : undefined
-        })
-        .filter((value): value is string => value !== undefined)
-      const pendingSpecWrite = turnWritePaths.find((value) =>
-        /^openspec\/changes\/[^/]+\//u.test(value),
+      const pendingSpecWrite = attributedSpecWrite(
+        workspace,
+        sessionToolCalls.get(input.session) ?? [],
+        input.turn,
       )
       const pendingWritePath =
         pendingSpecWrite ??
