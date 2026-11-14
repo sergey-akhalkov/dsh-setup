@@ -55,7 +55,7 @@ import {
 } from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
 import { authorizationWriteDecision, evaluateIntakeGate, evaluateTurnClose } from './gates.js'
-import { defaultGit } from './git.js'
+import { defaultGit, worktreeDigest } from './git.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
 import { advanceIntake } from './intake.js'
@@ -83,13 +83,18 @@ import { definitionsRegistry, type WorkflowsDefinitionsService } from './registr
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
   type ReviewerMap,
+  recordReviewFailure,
   resolveReviewer,
   resolveReviewers,
   resolveReviewQueue,
   resolveReviewTimeout,
+  type ReviewRunInput,
+  reviewDigest,
   runReviewStep,
   TASK_ID_PATTERN,
 } from './review.js'
+import { ReviewScheduler } from './review-scheduler.js'
+import { createReviewSnapshot, discardReviewSnapshot } from './review-snapshot.js'
 import {
   addViolation,
   completeNotApplicable,
@@ -110,7 +115,7 @@ import {
   writeRun,
   writeRunSync,
 } from './runs.js'
-import { checkedTaskIds } from './tasks.js'
+import { checkedTaskIds, taskOf } from './tasks.js'
 import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
 import {
   checkpointRequired,
@@ -607,8 +612,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const reviewers: ReviewerMap = resolveReviewers(config.reviewers, providerOptionsSupport)
   const reviewTimeoutMs = resolveReviewTimeout(config.timeouts)
   // Resolve the queue now so an invalid range fails the load; admission is
-  // wired by the engine's review scheduler.
-  resolveReviewQueue(config.reviewQueue)
+  // wired after the guarded run writer exists.
+  const reviewQueue = resolveReviewQueue(config.reviewQueue)
   // A malformed shipped trigger or definition refuses the plugin load, naming
   // the field. The registry then holds one merged installed catalog.
   definitionsRegistry.seedShipped()
@@ -2491,6 +2496,36 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return run
     })
   /** Advance one run through its verified evidence; a deferred step never steers. */
+  const reviewScheduler = new ReviewScheduler(
+    {
+      enabled: reviewQueue.enabled,
+      concurrency: reviewQueue.concurrency,
+      maxQueued: reviewQueue.maxQueued,
+      maxAttempts: reviewQueue.maxAttempts,
+      baseDelayMs: reviewQueue.baseDelayMs,
+      maxDelayMs: reviewQueue.maxDelayMs,
+      waitTimeoutMs: reviewQueue.waitTimeoutMs,
+    },
+    {
+      persistRun: async (targetWorkspace, settledRun) => {
+        const auth = storedAuth
+        if (auth === undefined) return settledRun
+        return await persistRun(
+          targetWorkspace,
+          settledRun,
+          auth,
+          runGeneration(settledRun.id),
+          undefined,
+          settledRun.updatedAt,
+        )
+      },
+      discardSnapshot: (targetWorkspace, runId) =>
+        discardReviewSnapshot(targetWorkspace, runId, defaultGit),
+    },
+  )
+  ctx.effect(() => () => {
+    reviewScheduler.dispose()
+  })
   const advanceRun = async (
     workspace: string,
     run: WorkflowRun,
@@ -2609,14 +2644,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         const change = reviewRun.context.name
         if (typeof change !== 'string' || !CHANGE_NAME.test(change)) return undefined
-        if (spec.scope === 'task') {
-          // A task scope reviews a frozen snapshot; the queue admission writes
-          // it before this executor is admitted. Without a snapshot the live
-          // fallback is not yet admissible, so the step stays blocked.
-          const taskId = reviewRun.context.taskId
-          if (typeof taskId !== 'string' || !TASK_ID_PATTERN.test(taskId)) return undefined
-          return undefined
-        }
         const specDigest = await currentSpecDigest(workspace, change)
         if (specDigest === undefined) {
           return settleStep(reviewRun, step.id, 'failed', {
@@ -2624,7 +2651,44 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             reason: `the change artifacts for "${change}" are unreadable; fix openspec/changes/${change}/ and re-run`,
           })
         }
-        const result = await runReviewStep({
+        const taskId = reviewRun.context.taskId
+        const task =
+          spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
+            ? taskOf(workspace, change, taskId)
+            : undefined
+        const prepared: ReviewRunInput['prepared'] =
+          spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
+            ? await (async () => {
+                // The snapshot freezes the reviewed tree; when it cannot be
+                // built, the live worktree is reviewed under a digest guard.
+                const snapshot = await createReviewSnapshot(
+                  workspace,
+                  { dir: join(workspace, 'openspec', 'changes', change) },
+                  reviewRun.id,
+                  defaultGit,
+                  AbortSignal.timeout(reviewTimeoutMs),
+                ).catch(() => undefined)
+                if (snapshot !== undefined) {
+                  return {
+                    specDigest,
+                    tree: snapshot.tree,
+                    reviewCwd: snapshot.worktree,
+                  }
+                }
+                const live = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+                return {
+                  specDigest,
+                  ...(live === undefined ? {} : { tree: live }),
+                  liveGuard: async () =>
+                    (await worktreeDigest(workspace, defaultGit).catch(() => undefined)) === live,
+                }
+              })()
+            : {
+                specDigest,
+                liveGuard: async () =>
+                  (await currentSpecDigest(workspace, change)) === specDigest,
+              }
+        const request: ReviewRunInput = {
           run: reviewRun,
           definition: reviewDefinition,
           step,
@@ -2632,17 +2696,54 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           runner: subagentRunner,
           context,
           change,
-          prepared: {
-            specDigest,
-            liveGuard: async () => (await currentSpecDigest(workspace, change)) === specDigest,
-          },
+          ...(task === undefined ? {} : { task }),
+          prepared,
           timeoutMs: reviewTimeoutMs,
           session: sessionId,
           now: journal.time(),
+        }
+        const rule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id
+        if (!reviewQueue.enabled) {
+          const result = await runReviewStep(request)
+          return result.run
+        }
+        const admission = await reviewScheduler.enqueue({
+          workspace,
+          run: reviewRun,
+          request,
+          rule,
+          change,
+          ...(task === undefined ? {} : { taskId: task.id }),
+          digest: reviewDigest({
+            scope: spec.scope,
+            specDigest,
+            ...(prepared.tree === undefined ? {} : { tree: prepared.tree }),
+          }),
         })
-        return result.run
-      },
-      readRecord: (step, owner) =>
+        if (admission.kind === 'full') {
+          if (prepared.reviewCwd !== undefined) {
+            await discardReviewSnapshot(workspace, reviewRun.id, defaultGit)
+          }
+          const failure = await recordReviewFailure({
+            run: reviewRun,
+            definition: reviewDefinition,
+            step,
+            reviewer: resolved.reviewer,
+            context,
+            change,
+            ...(task === undefined ? {} : { task }),
+            prepared,
+            session: sessionId,
+            error: `review queue full (${String(admission.depth)} queued, ${String(admission.maxQueued)} maximum); wait for a settled record, then start the review again`,
+            failureClass: 'queue-full',
+            now: journal.time(),
+          })
+          return failure.run
+        }
+        // The review is admitted (or a duplicate is already live): the step
+        // stays open and the background settlement writes the record.
+        return undefined
+      },      readRecord: (step, owner) =>
         verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
           workspace,
           values: run.context,

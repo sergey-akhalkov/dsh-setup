@@ -1,12 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { lstat, mkdir, realpath, rename, unlink, writeFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CHANGE_NAME } from './command-parse.js'
 import type { Definition, Step } from './definitions.js'
 import { type EvidenceContext, verifyEvidence } from './evidence.js'
 import type { SubagentRunner } from './executors.js'
+import { isInside } from './fs-change.js'
 import { settleStep, type WorkflowRun } from './runs.js'
 
 /**
@@ -352,7 +353,8 @@ export type ParsedVerdict =
 /** Accept exactly one fenced JSON verdict that echoes the requested digest. */
 export function parseReviewVerdict(text: string, expectedDigest: string): ParsedVerdict {
   const blocks: string[] = []
-  const fence = /```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)```/g
+  // Every fenced block counts, whatever its language: one verdict, no extras.
+  const fence = /```[^\n]*\r?\n([\s\S]*?)```/g
   for (const match of text.matchAll(fence)) blocks.push(match[1] ?? '')
   if (blocks.length === 0) {
     return {
@@ -531,6 +533,36 @@ export async function writeReviewFileAtomic(file: string, bytes: string): Promis
   }
 }
 
+/**
+ * Resolve a workspace-relative record path and prove every existing ancestor
+ * stays inside the canonical workspace. A linked store would otherwise publish
+ * outside the workspace, which evidence validation cannot undo after the write.
+ */
+async function containedRecordTarget(workspace: string, relative: string): Promise<string> {
+  if (isAbsolute(relative) || relative.split('/').includes('..')) {
+    throw new Error(`the record path "${relative}" escapes the workspace`)
+  }
+  const root = await realpath(workspace)
+  const segments = relative.split('/')
+  if (segments.some((segment) => segment === '' || segment === '.')) {
+    throw new Error(`the record path "${relative}" is not a normalized path`)
+  }
+  let current = root
+  for (const segment of segments.slice(0, -1)) {
+    current = join(current, segment)
+    const info = await lstat(current).catch(() => undefined)
+    if (info === undefined) break
+    if (info.isSymbolicLink()) {
+      throw new Error(`the record directory "${relative}" passes through a link; remove the link`)
+    }
+    const real = await realpath(current).catch(() => undefined)
+    if (real === undefined || !isInside(root, real)) {
+      throw new Error(`the record directory "${relative}" escapes the workspace`)
+    }
+  }
+  return join(root, ...segments)
+}
+
 const jsonText = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`
 
 /** The committed approval subset; the field set and order are the stable format. */
@@ -560,7 +592,7 @@ export async function writeLocalReviewRecord(
 ): Promise<ReviewWrite> {
   try {
     const path = localReviewRecordPath(record)
-    await writeReviewFileAtomic(join(workspace, path), jsonText(record))
+    await writeReviewFileAtomic(await containedRecordTarget(workspace, path), jsonText(record))
     return { ok: true, path }
   } catch (error) {
     return {
@@ -583,7 +615,10 @@ export async function writePortableApproval(
   }
   try {
     const path = portableApprovalPath(record.change, record.taskId)
-    await writeReviewFileAtomic(join(workspace, path), jsonText(portableApprovalOf(record)))
+    await writeReviewFileAtomic(
+      await containedRecordTarget(workspace, path),
+      jsonText(portableApprovalOf(record)),
+    )
     return { ok: true, path }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -626,13 +661,40 @@ export interface ReviewRunResult {
   readonly error?: string
 }
 
+/** Record an engine-side failure (queue full, timeout) as an ERROR review record. */
+export async function recordReviewFailure(input: {
+  readonly run: WorkflowRun
+  readonly definition: Definition
+  readonly step: Step
+  readonly reviewer: ResolvedReviewer
+  readonly context: EvidenceContext
+  readonly change: string
+  readonly task?: { readonly id: string; readonly number?: string; readonly text: string }
+  readonly prepared: ReviewRunInput['prepared']
+  readonly session: string
+  readonly error: string
+  readonly failureClass: string
+  readonly now?: number
+  readonly writeLocal?: typeof writeLocalReviewRecord
+}): Promise<ReviewRunResult> {
+  const now = input.now ?? Date.now()
+  const request: ReviewRunInput = { ...input, runner: {} as SubagentRunner, timeoutMs: 0 }
+  const record = baseRecord(request, now)
+  return writeErrorRecord(request, record, input.error, input.failureClass, now)
+}
+
 function targetIdentity(reviewer: ResolvedReviewer): ReviewRecord['target'] {
+  // The record carries the effective selection, including options supplied
+  // through agentOptions; the reviewer binding compares these exact values.
+  const options = reviewer.agentOptions ?? {}
+  const model = reviewer.model ?? (typeof options.model === 'string' ? options.model : undefined)
+  const reasoningEffort =
+    reviewer.reasoningEffort ??
+    (typeof options.reasoningEffort === 'string' ? options.reasoningEffort : undefined)
   return {
     provider: reviewer.provider,
-    ...(reviewer.model === undefined ? {} : { model: reviewer.model }),
-    ...(reviewer.reasoningEffort === undefined
-      ? {}
-      : { reasoningEffort: reviewer.reasoningEffort }),
+    ...(model === undefined ? {} : { model }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   }
 }
 

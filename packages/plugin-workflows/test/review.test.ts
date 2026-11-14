@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -364,6 +364,50 @@ describe('parseReviewVerdict', () => {
     expect(parseReviewVerdict(bad, DIGEST).ok).toBe(false)
   })
 
+  it('records the effective model and effort supplied through agentOptions', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const map = resolveReviewers({
+      codex: {
+        provider: 'codex-subagent',
+        agentOptions: { model: 'gpt-alt', reasoningEffort: 'high' },
+      },
+    })
+    const reviewer = { id: 'codex', ...(map.codex as NonNullable<typeof map.codex>) }
+    const received: Array<Readonly<Record<string, unknown>> | undefined> = []
+    const result = await invoke(
+      root,
+      {
+        run: async (request) => {
+          received.push(request.agentOptions)
+          return { childId: 'child-1', completed: true, text: PASS_TEXT }
+        },
+      },
+      { reviewer },
+    )
+    expect(result.error).toBeUndefined()
+    expect(received[0]).toEqual({ model: 'gpt-alt', reasoningEffort: 'high' })
+    const local = JSON.parse(
+      await readFile(
+        join(
+          root,
+          localReviewRecordPath({
+            rule: 'task-review',
+            change: 'auth',
+            scope: 'task',
+            taskId: TASK_ID,
+          }),
+        ),
+        'utf8',
+      ),
+    ) as ReviewRecord
+    expect(local.target).toEqual({
+      provider: 'codex-subagent',
+      model: 'gpt-alt',
+      reasoningEffort: 'high',
+    })
+  })
+
   it('accepts one fenced block and normalizes an unknown class', () => {
     const text = fenced({
       digest: DIGEST,
@@ -528,5 +572,51 @@ describe('review routing and prompt', () => {
     const found = resolveReviewer(reviewers, 'codex')
     expect(found.ok).toBe(true)
     if (found.ok) expect(found.reviewer.provider).toBe('codex-subagent')
+  })
+})
+
+describe('record write boundary', () => {
+  const boundaryRecord: ReviewRecord = {
+    definition: 'task-review',
+    rule: 'task-review',
+    change: 'auth',
+    phase: 'task',
+    scope: 'task',
+    taskId: TASK_ID,
+    digest: DIGEST,
+    verdict: 'PASS',
+    findings: [],
+    target: { provider: 'codex-subagent' },
+    reviewer: 'codex',
+    session: 'session-1',
+    runId: 'run-1',
+    time: '2026-11-14T00:00:00.000Z',
+  }
+
+  it('refuses a linked local record store and publishes nothing outside', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const outside = await mkdtemp(join(tmpdir(), 'workflows-review-outside-'))
+    roots.push(outside)
+    await mkdir(join(root, '.dsh', 'workflows'), { recursive: true })
+    await symlink(outside, join(root, '.dsh', 'workflows', 'records'), 'junction')
+    const written = await writeLocalReviewRecord(root, boundaryRecord)
+    expect(written.ok).toBe(false)
+    if (!written.ok) expect(written.error).toContain('link')
+    expect(await readdir(outside)).toEqual([])
+  })
+
+  it('refuses a linked committed approval directory and publishes nothing outside', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const outside = await mkdtemp(join(tmpdir(), 'workflows-approval-outside-'))
+    roots.push(outside)
+    const changeDir = join(root, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await symlink(outside, join(changeDir, 'reviews'), 'junction')
+    const written = await writePortableApproval(root, boundaryRecord)
+    expect(written.ok).toBe(false)
+    if (!written.ok) expect(written.error).toContain('link')
+    expect(await readdir(outside)).toEqual([])
   })
 })

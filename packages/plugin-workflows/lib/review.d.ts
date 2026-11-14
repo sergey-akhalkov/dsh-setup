@@ -194,6 +194,26 @@ export interface ReviewRunResult {
     readonly recordPath?: string;
     readonly error?: string;
 }
+/** Record an engine-side failure (queue full, timeout) as an ERROR review record. */
+export declare function recordReviewFailure(input: {
+    readonly run: WorkflowRun;
+    readonly definition: Definition;
+    readonly step: Step;
+    readonly reviewer: ResolvedReviewer;
+    readonly context: EvidenceContext;
+    readonly change: string;
+    readonly task?: {
+        readonly id: string;
+        readonly number?: string;
+        readonly text: string;
+    };
+    readonly prepared: ReviewRunInput['prepared'];
+    readonly session: string;
+    readonly error: string;
+    readonly failureClass: string;
+    readonly now?: number;
+    readonly writeLocal?: typeof writeLocalReviewRecord;
+}): Promise<ReviewRunResult>;
 /**
  * Run one review step. It awaits the reviewer (the queue and asynchronous
  * admission wrap this function), writes the record, and settles the step from

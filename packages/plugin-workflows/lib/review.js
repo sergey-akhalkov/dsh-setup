@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { lstat, mkdir, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHANGE_NAME } from './command-parse.js';
 import { verifyEvidence } from './evidence.js';
+import { isInside } from './fs-change.js';
 import { settleStep } from './runs.js';
 /**
  * The native review executor. It resolves a reviewer from the row's
@@ -239,7 +240,8 @@ export function sanitizeReviewText(text, maximum = MAX_FIELD_CHARS) {
 /** Accept exactly one fenced JSON verdict that echoes the requested digest. */
 export function parseReviewVerdict(text, expectedDigest) {
     const blocks = [];
-    const fence = /```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)```/g;
+    // Every fenced block counts, whatever its language: one verdict, no extras.
+    const fence = /```[^\n]*\r?\n([\s\S]*?)```/g;
     for (const match of text.matchAll(fence))
         blocks.push(match[1] ?? '');
     if (blocks.length === 0) {
@@ -395,6 +397,36 @@ export async function writeReviewFileAtomic(file, bytes) {
         throw error;
     }
 }
+/**
+ * Resolve a workspace-relative record path and prove every existing ancestor
+ * stays inside the canonical workspace. A linked store would otherwise publish
+ * outside the workspace, which evidence validation cannot undo after the write.
+ */
+async function containedRecordTarget(workspace, relative) {
+    if (isAbsolute(relative) || relative.split('/').includes('..')) {
+        throw new Error(`the record path "${relative}" escapes the workspace`);
+    }
+    const root = await realpath(workspace);
+    const segments = relative.split('/');
+    if (segments.some((segment) => segment === '' || segment === '.')) {
+        throw new Error(`the record path "${relative}" is not a normalized path`);
+    }
+    let current = root;
+    for (const segment of segments.slice(0, -1)) {
+        current = join(current, segment);
+        const info = await lstat(current).catch(() => undefined);
+        if (info === undefined)
+            break;
+        if (info.isSymbolicLink()) {
+            throw new Error(`the record directory "${relative}" passes through a link; remove the link`);
+        }
+        const real = await realpath(current).catch(() => undefined);
+        if (real === undefined || !isInside(root, real)) {
+            throw new Error(`the record directory "${relative}" escapes the workspace`);
+        }
+    }
+    return join(root, ...segments);
+}
 const jsonText = (value) => `${JSON.stringify(value, null, 2)}\n`;
 /** The committed approval subset; the field set and order are the stable format. */
 export function portableApprovalOf(record) {
@@ -415,7 +447,7 @@ export function portableApprovalOf(record) {
 export async function writeLocalReviewRecord(workspace, record) {
     try {
         const path = localReviewRecordPath(record);
-        await writeReviewFileAtomic(join(workspace, path), jsonText(record));
+        await writeReviewFileAtomic(await containedRecordTarget(workspace, path), jsonText(record));
         return { ok: true, path };
     }
     catch (error) {
@@ -435,20 +467,31 @@ export async function writePortableApproval(workspace, record) {
     }
     try {
         const path = portableApprovalPath(record.change, record.taskId);
-        await writeReviewFileAtomic(join(workspace, path), jsonText(portableApprovalOf(record)));
+        await writeReviewFileAtomic(await containedRecordTarget(workspace, path), jsonText(portableApprovalOf(record)));
         return { ok: true, path };
     }
     catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
 }
+/** Record an engine-side failure (queue full, timeout) as an ERROR review record. */
+export async function recordReviewFailure(input) {
+    const now = input.now ?? Date.now();
+    const request = { ...input, runner: {}, timeoutMs: 0 };
+    const record = baseRecord(request, now);
+    return writeErrorRecord(request, record, input.error, input.failureClass, now);
+}
 function targetIdentity(reviewer) {
+    // The record carries the effective selection, including options supplied
+    // through agentOptions; the reviewer binding compares these exact values.
+    const options = reviewer.agentOptions ?? {};
+    const model = reviewer.model ?? (typeof options.model === 'string' ? options.model : undefined);
+    const reasoningEffort = reviewer.reasoningEffort ??
+        (typeof options.reasoningEffort === 'string' ? options.reasoningEffort : undefined);
     return {
         provider: reviewer.provider,
-        ...(reviewer.model === undefined ? {} : { model: reviewer.model }),
-        ...(reviewer.reasoningEffort === undefined
-            ? {}
-            : { reasoningEffort: reviewer.reasoningEffort }),
+        ...(model === undefined ? {} : { model }),
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     };
 }
 function baseRecord(input, now) {
