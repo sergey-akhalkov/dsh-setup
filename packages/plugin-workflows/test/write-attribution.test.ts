@@ -295,3 +295,35 @@ describe('unexecuted shell text', () => {
     ).toBeUndefined()
   })
 })
+
+describe('shell destination arguments', () => {
+  function call(command: string): {
+    readonly callId: string
+    readonly name: string
+    readonly arguments: Readonly<Record<string, unknown>>
+    readonly ok: boolean
+  } {
+    return { callId: 'c', name: 'pwsh', arguments: { command }, ok: true }
+  }
+
+  it('uses -Path over a -Value argument and keeps a positional destination', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          call(
+            'Set-Content -Value "openspec/changes/fake/design.md" -Path openspec/changes/real/design.md',
+          ),
+        ],
+        1,
+      ),
+    ).toBe('real')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call('Set-Content "openspec/changes/real/design.md" -Value openspec/changes/fake/x.md')],
+        1,
+      ),
+    ).toBe('real')
+  })
+})

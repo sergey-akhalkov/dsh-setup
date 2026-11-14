@@ -44,10 +44,40 @@ export function attributedSpecWrite(
 
 const CHANGE_CREATION =
   /(?:^|[;&|]\s*)openspec(?:\.cmd|\.exe)?\s+new\s+change\s+([a-z0-9][a-z0-9-]*)/u
-const SHELL_WRITE =
-  /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b[^;&|]*?(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu
 const SHELL_REDIRECT =
   /(?:^|[\s;&|])>{1,2}\s*(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu
+
+/**
+ * The destination a write command acts on, never a value argument or a printed
+ * example. `-Path`/`-LiteralPath` wins; otherwise the first positional token
+ * that is not an option or a `-Value` argument.
+ */
+function shellDestination(command: string): string | undefined {
+  const redirect = SHELL_REDIRECT.exec(command)
+  if (redirect !== null) return redirect[2]
+  const write = /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(command)
+  if (write === null) return undefined
+  const rest = write[1] ?? ''
+  const named = /-(?:Path|LiteralPath)\s+(?:"([^"]+)"|'([^']+)'|(\S+))/iu.exec(rest)
+  if (named !== null) return named[1] ?? named[2] ?? named[3]
+  const tokens = rest.match(/"[^"]*"|'[^']*'|\S+/gu) ?? []
+  let skipValue = false
+  for (const token of tokens) {
+    if (skipValue) {
+      skipValue = false
+      continue
+    }
+    if (
+      /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType)\b/iu.test(token)
+    ) {
+      skipValue = /^-(?:Value|Credential)\b/iu.test(token)
+      continue
+    }
+    if (token.startsWith('-')) continue
+    return token.replace(/^["']|["']$/gu, '')
+  }
+  return undefined
+}
 
 /** Drop quotes and unquoted comments so only executed text is inspected. */
 function executedText(text: string): string {
@@ -117,10 +147,9 @@ export function attributedChangeName(
     const startsWrite = WRITE_COMMAND.test(executed)
     const hasRedirect = REDIRECT.test(executed)
     if (!startsWrite && !hasRedirect) continue
-    // The destination is matched on the original text so a quoted path is kept.
-    const shellWrite = startsWrite ? SHELL_WRITE.exec(normalized) : SHELL_REDIRECT.exec(normalized)
-    if (shellWrite !== null) {
-      const raw = shellWrite[2] ?? ''
+    // The destination is parsed from the original text so a quoted path is kept.
+    const raw = shellDestination(normalized)
+    if (raw !== undefined) {
       const candidate =
         isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
           ? raw
