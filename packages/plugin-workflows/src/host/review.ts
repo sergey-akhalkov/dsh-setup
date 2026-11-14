@@ -705,24 +705,20 @@ async function writeErrorRecord(
   const writeLocal = input.writeLocal ?? writeLocalReviewRecord
   const written = await writeLocal(input.context.workspace, failed)
   const reason = `${error}${written.ok ? `; an ERROR record was written at ${written.path}` : `; the ERROR record could not be written: ${written.error}`}`
-  const settled = settleStep(input.run, input.step.id, 'failed', {
-    at: now,
-    reason,
-    failureClass,
-    evidence: {
-      kind: 'record',
-      ...(written.ok ? { path: written.path } : {}),
-      digest: failed.digest,
-    },
-  })
-  return {
-    run: settled,
-    record: failed,
-    ...(written.ok ? { recordPath: written.path } : {}),
-    error,
+  if (!written.ok) {
+    const settled = settleStep(input.run, input.step.id, 'failed', {
+      at: now,
+      reason,
+      failureClass,
+    })
+    return { run: settled, record: failed, error }
   }
+  // An accepted ERROR is usable evidence for an intermediate close: settle the
+  // step from the record and let the gate refuse a PASS-dependent close. The
+  // run names the failure and the next action; it never approves.
+  const run = await settleFromRecord(input, failed, written.path, now)
+  return { run, record: failed, recordPath: written.path, error }
 }
-
 /**
  * Run one review step. It awaits the reviewer (the queue and asynchronous
  * admission wrap this function), writes the record, and settles the step from

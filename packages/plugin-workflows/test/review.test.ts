@@ -1,14 +1,17 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
+import { verifyEvidence } from '../src/host/evidence.ts'
 import type { SubagentRunner, SubagentRunResult } from '../src/host/executors.ts'
 import {
   localReviewRecordPath,
   parseReviewVerdict,
   portableApprovalPath,
   type ReviewRecord,
+  renderReviewPrompt,
+  resolveReviewer,
   resolveReviewers,
   reviewDigest,
   runReviewStep,
@@ -236,7 +239,7 @@ describe('runReviewStep', () => {
     roots.push(root)
     const result = await invoke(root, runnerFor('Prose only; no fenced block.'))
     expect(result.error).toContain('fenced JSON verdict')
-    expect(result.run.steps[0]?.state).toBe('failed')
+    expect(result.run.steps[0]?.state).toBe('done')
     const record = JSON.parse(
       await readFile(
         join(
@@ -261,7 +264,7 @@ describe('runReviewStep', () => {
     const text = fenced({ digest: 'b'.repeat(64), verdict: 'PASS', findings: [] })
     const result = await invoke(root, runnerFor(text))
     expect(result.error).toContain('digest does not match')
-    expect(result.run.steps[0]?.state).toBe('failed')
+    expect(result.run.steps[0]?.state).toBe('done')
   })
 
   it('writes an ERROR when the provider cannot start', async () => {
@@ -274,8 +277,23 @@ describe('runReviewStep', () => {
       }),
     )
     expect(result.error).toContain('not registered')
-    expect(result.run.steps[0]?.state).toBe('failed')
-    expect(result.run.steps[0]?.failureClass).toBe('provider-not-started')
+    expect(result.run.steps[0]?.state).toBe('done')
+    const record = JSON.parse(
+      await readFile(
+        join(
+          root,
+          localReviewRecordPath({
+            rule: 'task-review',
+            change: 'auth',
+            scope: 'task',
+            taskId: TASK_ID,
+          }),
+        ),
+        'utf8',
+      ),
+    ) as ReviewRecord
+    expect(record.verdict).toBe('ERROR')
+    expect(record.failureClass).toBe('provider-not-started')
   })
 
   it('times out with an ERROR record', async () => {
@@ -287,8 +305,23 @@ describe('runReviewStep', () => {
       { timeoutMs: 10 },
     )
     expect(result.error).toContain('timed out')
-    expect(result.run.steps[0]?.state).toBe('failed')
-    expect(result.run.steps[0]?.failureClass).toBe('timeout')
+    expect(result.run.steps[0]?.state).toBe('done')
+    const record = JSON.parse(
+      await readFile(
+        join(
+          root,
+          localReviewRecordPath({
+            rule: 'task-review',
+            change: 'auth',
+            scope: 'task',
+            taskId: TASK_ID,
+          }),
+        ),
+        'utf8',
+      ),
+    ) as ReviewRecord
+    expect(record.verdict).toBe('ERROR')
+    expect(record.failureClass).toBe('timeout')
   })
 
   it('publishes no PASS when the committed approval cannot be written', async () => {
@@ -298,7 +331,7 @@ describe('runReviewStep', () => {
       writePortable: async () => ({ ok: false, error: 'disk full' }),
     })
     expect(result.error).toContain('disk full')
-    expect(result.run.steps[0]?.state).toBe('failed')
+    expect(result.run.steps[0]?.state).toBe('done')
     const local = JSON.parse(
       await readFile(
         join(
@@ -340,5 +373,160 @@ describe('parseReviewVerdict', () => {
     const parsed = parseReviewVerdict(text, DIGEST)
     expect(parsed.ok).toBe(true)
     if (parsed.ok) expect(parsed.findings[0]?.class).toBe('other')
+  })
+})
+
+describe('review record store', () => {
+  const record: ReviewRecord = {
+    definition: 'task-review',
+    rule: 'task-review',
+    change: 'auth',
+    phase: 'task',
+    scope: 'task',
+    taskId: TASK_ID,
+    digest: DIGEST,
+    verdict: 'PASS',
+    findings: [],
+    target: { provider: 'codex-subagent' },
+    reviewer: 'codex',
+    session: 'session-1',
+    runId: 'run-1',
+    time: '2026-11-14T00:00:00.000Z',
+  }
+
+  it('derives the whole and task record paths', () => {
+    expect(
+      localReviewRecordPath({ rule: 'spec-review', change: 'auth', scope: 'whole', phase: 'spec' }),
+    ).toBe('.dsh/workflows/records/spec-review/auth/spec.json')
+    expect(
+      localReviewRecordPath({
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: TASK_ID,
+      }),
+    ).toBe(`.dsh/workflows/records/task-review/auth/tasks/${TASK_ID}.json`)
+    expect(portableApprovalPath('auth', TASK_ID)).toBe(
+      `openspec/changes/auth/reviews/${TASK_ID}.json`,
+    )
+  })
+
+  it('keeps the committed approval to the sanitized field set', async () => {
+    const root = await workspace()
+    roots.push(root)
+    expect((await writePortableApproval(root, record)).ok).toBe(true)
+    const approval = JSON.parse(
+      await readFile(join(root, portableApprovalPath('auth', TASK_ID)), 'utf8'),
+    ) as Record<string, unknown>
+    expect(Object.keys(approval)).toEqual([
+      'rule',
+      'change',
+      'scope',
+      'taskId',
+      'digest',
+      'verdict',
+      'findings',
+      'target',
+      'time',
+    ])
+    expect(approval.session).toBeUndefined()
+    expect(approval.runId).toBeUndefined()
+    expect(approval.definition).toBeUndefined()
+    expect((await writeLocalReviewRecord(root, record)).ok).toBe(true)
+    const local = JSON.parse(
+      await readFile(join(root, localReviewRecordPath(record)), 'utf8'),
+    ) as Record<string, unknown>
+    expect(local.definition).toBe('task-review')
+    expect(local.runId).toBe('run-1')
+  })
+
+  it('reads the path its ownership selects', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const legacyDir = join(root, '.dsh', 'delegation', 'task-review', 'auth', 'tasks')
+    await mkdir(legacyDir, { recursive: true })
+    await writeFile(
+      join(legacyDir, `${TASK_ID}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId: TASK_ID,
+        digest: DIGEST,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    const evidence = {
+      kind: 'record' as const,
+      rule: 'task-review',
+      change: '{name}',
+      scope: 'task',
+      task: '{taskId}',
+      verdicts: ['PASS', 'ERROR'],
+      path: `.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json`,
+    }
+    const context = { workspace: root, values: { name: 'auth', taskId: TASK_ID } }
+    expect((await verifyEvidence(evidence, { ...context, reviewOwner: 'legacy' })).ok).toBe(true)
+    expect((await verifyEvidence(evidence, context)).ok).toBe(false)
+    expect((await verifyEvidence(evidence, { ...context, reviewOwner: 'workflows' })).ok).toBe(
+      false,
+    )
+  })
+})
+
+describe('review routing and prompt', () => {
+  it('forwards the reviewer provider, model, effort, and catalog label', async () => {
+    const root = await workspace()
+    roots.push(root)
+    let seen: Parameters<SubagentRunner['run']>[0] | undefined
+    const result = await invoke(root, {
+      run: async (request) => {
+        seen = request
+        return { childId: 'child-1', completed: true, text: PASS_TEXT }
+      },
+    })
+    expect(result.error).toBeUndefined()
+    expect(seen?.provider).toBe('codex-subagent')
+    expect(seen?.model).toBe('gpt-6-astra')
+    expect(seen?.reasoningEffort).toBe('xhigh')
+    expect(seen?.reviewer).toBe('codex')
+    expect(seen?.delivery).toBe('parent')
+    expect(seen?.label).toBe('delegation:task-review')
+  })
+
+  it('renders the bundled instruction with the change, task, and digest', async () => {
+    const root = await workspace()
+    roots.push(root)
+    let prompt = ''
+    await invoke(
+      root,
+      {
+        run: async (request) => {
+          prompt = request.prompt
+          return { childId: 'child-1', completed: true, text: PASS_TEXT }
+        },
+      },
+      { renderPrompt: renderReviewPrompt },
+    )
+    expect(prompt).toContain('# Task-scoped review')
+    expect(prompt).toContain('- Rule: task-review')
+    expect(prompt).toContain('- Change: auth')
+    expect(prompt).toContain('1.1 Do the thing')
+    expect(prompt).toContain(TASK_ID)
+    expect(prompt).toContain(TASK_DIGEST)
+  })
+
+  it('names the missing reviewer and its config remedy', () => {
+    const missing = resolveReviewer({}, 'codex')
+    expect(missing.ok).toBe(false)
+    if (!missing.ok) expect(missing.error).toContain('reviewers.codex')
+    const found = resolveReviewer(reviewers, 'codex')
+    expect(found.ok).toBe(true)
+    if (found.ok) expect(found.reviewer.provider).toBe('codex-subagent')
   })
 })
