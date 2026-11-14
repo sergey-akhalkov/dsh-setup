@@ -209,9 +209,11 @@ describe('condition schema completeness', () => {
       { missing: [{ var: 'records.spec.pass' }] },
       { '==': [{ var: 'title' }, 'Engine'] },
       { '==': [{ var: 'change.lanes.title' }, 'Engine'] },
+      { '==': [{ var: 'change.lanes.unchecked' }, []] },
+      { missing: [42] },
     ]) {
       expect(() => validateCondition(condition)).toThrow(
-        /unknown context field|must not name a path|literal field names/u,
+        /unknown context field|must not name a path|literal field names|literal field names, not numbers/u,
       )
     }
   })

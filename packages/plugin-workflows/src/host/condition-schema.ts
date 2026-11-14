@@ -21,9 +21,6 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   'change.tasks.unchecked',
   'change.tasks.items',
   'change.lanes',
-  'change.lanes.n',
-  'change.lanes.owned',
-  'change.lanes.unchecked',
   'records.spec',
   'records.spec.verdict',
   'records.spec.digest',
@@ -129,11 +126,17 @@ function varPath(rule: unknown, field: string, depth = 0, itemScope = false): vo
     const operands = Array.isArray(record[operator])
       ? (record[operator] as unknown[])
       : [record[operator]]
-    for (const operand of operands) {
+    for (const [operandIndex, operand] of operands.entries()) {
       const names = Array.isArray(operand) ? operand : [operand]
       for (const name of names) {
         // A missing reference is a lookup name, never a computed expression.
-        if (typeof name === 'number') continue
+        // Only missing_some's first operand is its numeric threshold.
+        if (typeof name === 'number') {
+          if (operator === 'missing_some' && operandIndex === 0) continue
+          throw new Error(
+            `condition.${field} "${operator}" names must be literal field names, not numbers`,
+          )
+        }
         if (typeof name !== 'string' || /^\d+$/u.test(name)) {
           throw new Error(
             `condition.${field} "${operator}" names must be literal field names, not computed expressions`,

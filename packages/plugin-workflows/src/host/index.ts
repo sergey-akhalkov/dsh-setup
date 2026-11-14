@@ -1342,8 +1342,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         (definition) => definition.trigger.condition !== undefined,
       )
       // The session's latest change, shared by the condition context and the
-      // run context a conditional turn-close run records.
-      const conditionChangeCandidate = changedName ?? lastChangeBySession.get(input.session)
+      // run context a conditional turn-close run records. A write made in this
+      // turn is attributed immediately: the fs watcher debounces and its event
+      // would arrive after the close.
+      const pendingWritePath =
+        metrics !== undefined && metrics.turn === input.turn ? metrics.lastWritePath : undefined
+      const pendingChange =
+        pendingWritePath === undefined
+          ? undefined
+          : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1]
+      const pendingSpec =
+        pendingChange !== undefined && !/\/reviews\//u.test(pendingWritePath ?? '')
+      const conditionChangeCandidate =
+        changedName ?? pendingChange ?? lastChangeBySession.get(input.session)
       const conditionsFor = async (
         definitionEvent: DefinitionEvent,
       ): Promise<ReadonlyMap<string, boolean> | undefined> => {
@@ -1361,6 +1372,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           runGit: defaultGit,
           involved: conditionChange !== undefined,
           changedSpec:
+            pendingSpec ||
             lastSpecChangeTurn.get(input.session) === (input.turn ?? -1) ||
             (definitionEvent.kind === 'fs.change' &&
               /^openspec\/changes\/[^/]+\//u.test(definitionEvent.subject) &&
