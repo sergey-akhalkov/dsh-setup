@@ -253,6 +253,11 @@ export function ListEditor(props: ListEditorProps): ReactNode {
             const values = listRowModel(props.state, step)
             const graphId = graphIdOfStep(props.state, step.id)
             const selected = props.selected === graphId
+            const executor = values.executor ?? 'main'
+            // The closed list plus a newer executor such as `review` keeps its value.
+            const executors = (EXECUTORS as readonly string[]).includes(executor)
+              ? EXECUTORS
+              : [...EXECUTORS, executor]
             return (
               <tr
                 key={step.id}
@@ -294,7 +299,7 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                 </td>
                 <td>
                   <select
-                    value={values.executor ?? 'main'}
+                    value={executor}
                     aria-label={`Executor of ${step.id}`}
                     onChange={(event) =>
                       patchListField(
@@ -306,9 +311,9 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                       )
                     }
                   >
-                    {EXECUTORS.map((executor) => (
-                      <option key={executor} value={executor}>
-                        {executor}
+                    {executors.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
                       </option>
                     ))}
                   </select>

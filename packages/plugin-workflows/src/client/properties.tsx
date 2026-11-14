@@ -4,6 +4,8 @@ import { connectChoices, currentTarget, EDGE_LABELS, outputKinds } from './edges
 import type { EditorState } from './editor.ts'
 import { brickGlyph, executorIcon } from './glyphs.tsx'
 import type { DiagramNode, EdgeKind, GraphStep } from './graph.ts'
+import { fallbackTranslate, type Translate } from './locale.ts'
+import { promptSummary, type ReviewContractView, reviewContract } from './review-contract.ts'
 
 /**
  * The inspector. It edits the same definition the canvas and the list editor
@@ -77,9 +79,16 @@ function JsonField(props: {
 const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
 const EVIDENCE_KINDS = ['file', 'record', 'tool', 'check', 'human', 'all', 'declaration'] as const
 
+/** The executor choices; a newer executor such as `review` keeps its own value. */
+function executorOptions(current: string): readonly string[] {
+  return (EXECUTORS as readonly string[]).includes(current) ? EXECUTORS : [...EXECUTORS, current]
+}
+
 export interface PropertiesProps {
   readonly state: EditorState
   readonly selected?: string
+  /** The client locale; absent falls back to the English dictionary. */
+  readonly t?: Translate
   readonly onDefinitionPatch: (patch: Readonly<Record<string, unknown>>) => void
   readonly onPatch: (stepId: string, patch: Readonly<Record<string, unknown>>) => void
   readonly onConnect: (source: string, target: string, kind: EdgeKind) => void
@@ -215,6 +224,13 @@ function settingsFields(props: PropertiesProps): ReactNode {
             }}
           />
         </Field>
+        {typeof settings.gate === 'string' ? (
+          <Field label="Gate identity">
+            <span className="dsh-wf-mono" data-gate-identity={settings.gate}>
+              {settings.gate}
+            </span>
+          </Field>
+        ) : null}
       </div>
       <div className="dsh-wf-check-list">
         <Checkbox
@@ -292,10 +308,49 @@ function workflowDetails(props: PropertiesProps): ReactNode {
   )
 }
 
+/** The review contract as a display-only card: no field edits a verdict. */
+function ReviewContractCard(props: {
+  readonly contract: ReviewContractView
+  readonly t: Translate
+}): ReactNode {
+  const { contract, t } = props
+  return (
+    <Card id="review-contract" title={t('review.contract')} hint={t('review.hint')}>
+      <Field label={t('review.instruction')}>
+        <span className="dsh-wf-mono">{contract.instruction}</span>
+      </Field>
+      <Field label={t('review.prompt')}>
+        <span className="dsh-wf-hint">{promptSummary(contract, t)}</span>
+      </Field>
+      <Field label={t('review.scope')}>
+        <span>{contract.scope}</span>
+      </Field>
+      <Field label={t('review.phase')}>
+        <span>{contract.phase ?? '—'}</span>
+      </Field>
+      <Field label={t('review.digestScope')}>
+        <span>
+          {contract.scope === 'task' ? t('review.digest.task') : t('review.digest.whole')}
+        </span>
+      </Field>
+      <Field label={t('review.verdictSchema')}>
+        <span className="dsh-wf-hint">{t('review.verdictSchema.text')}</span>
+      </Field>
+      <Field label={t('review.reuse')}>
+        <span className="dsh-wf-hint">{t('review.reuse.text')}</span>
+      </Field>
+      <Field label={t('review.record')}>
+        <span className="dsh-wf-mono">{contract.recordPath}</span>
+      </Field>
+    </Card>
+  )
+}
+
 function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep): ReactNode {
   const branch = step.branch
   const loop = step.loop
   const regularConnections = branch === undefined && loop === undefined
+  const contract = reviewContract(props.state.document.definition.id, step)
   return (
     <>
       <Card id="step" title="Step" hint="What it does">
@@ -312,7 +367,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
             aria-label="Executor"
             onChange={(event) => props.onPatch(node.id, { executor: event.currentTarget.value })}
           >
-            {EXECUTORS.map((executor) => (
+            {executorOptions(step.executor).map((executor) => (
               <option key={executor} value={executor}>
                 {executor}
               </option>
@@ -342,6 +397,9 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           />
         </Field>
       </Card>
+      {contract === undefined ? null : (
+        <ReviewContractCard contract={contract} t={props.t ?? fallbackTranslate} />
+      )}
       <Card id="behavior" title="Behavior" hint="Ownership and flags">
         <Field label="Ownership">
           <select

@@ -176,12 +176,24 @@ export interface DefinitionLoopView {
   readonly list?: string
 }
 
+/** The read-only review contract a `review` step declares. */
+export interface DefinitionReviewView {
+  readonly target?: string
+  readonly instruction?: string
+  readonly scope?: string
+  readonly phase?: string
+}
+
 export interface DefinitionStepView {
   readonly id: string
   readonly title: string
   readonly executor: string
   readonly ownership?: string
   readonly blockTurnClose?: boolean
+  readonly prompt?: string
+  readonly review?: DefinitionReviewView
+  /** The declared evidence; only a record path is read for the contract card. */
+  readonly evidence?: { readonly kind?: string; readonly path?: string }
   readonly next?: string
   readonly branch?: DefinitionBranchView
   readonly loop?: DefinitionLoopView

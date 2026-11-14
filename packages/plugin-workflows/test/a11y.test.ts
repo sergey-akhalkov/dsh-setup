@@ -187,6 +187,25 @@ describe('summary and keyboard', () => {
     expect(summaryText(DEFINITION)).toContain('no run selected')
   })
 
+  it('announces a selected review step’s contract', () => {
+    const review = {
+      id: 'review',
+      title: 'Spec review',
+      executor: 'review',
+      review: { instruction: 'review-spec', scope: 'whole', phase: 'spec' },
+    }
+    const summary = summaryText(DEFINITION, 'Spec review', undefined, review)
+    expect(summary).toContain('Selected: Spec review')
+    expect(summary).toContain('Review contract: review-spec')
+    expect(summary).toContain('whole scope')
+    expect(summary).toContain('phase spec')
+    expect(summary).toContain('.dsh/workflows/records/change-intake/{name}/spec.json')
+    // A selection without a review contract keeps the original summary.
+    expect(summaryText(DEFINITION, 'Requirements', undefined, { executor: 'main' })).not.toContain(
+      'Review contract',
+    )
+  })
+
   it('recognises the keyboard add and connect keys', () => {
     expect(isAddKey('Enter')).toBe(true)
     expect(isAddKey(' ')).toBe(true)

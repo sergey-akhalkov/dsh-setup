@@ -1,5 +1,6 @@
 import type { GraphDefinition } from './graph.ts'
 import type { Overlay } from './overlay.ts'
+import { type ReviewStepLike, reviewContract } from './review-contract.ts'
 
 /**
  * Accessibility helpers for the canvas: the mode fallback, the screen-reader
@@ -104,6 +105,7 @@ export function summaryText(
   definition: GraphDefinition,
   selectedTitle?: string,
   overlay?: Overlay,
+  selectedStep?: ReviewStepLike,
 ): string {
   const steps = definition.steps.length
   const trigger = String(definition.trigger.kind ?? 'unknown')
@@ -113,7 +115,13 @@ export function summaryText(
       ? 'no run selected'
       : `run ${run.status}${overlay?.versionsDiffer === true ? ' on another version' : ''}`
   const selected = selectedTitle === undefined ? '' : ` Selected: ${selectedTitle}.`
-  return `Trigger ${trigger}. ${String(steps)} step${steps === 1 ? '' : 's'}. ${runText}.${selected}`
+  const contract =
+    selectedStep === undefined ? undefined : reviewContract(definition.id, selectedStep)
+  const review =
+    contract === undefined
+      ? ''
+      : ` Review contract: ${contract.instruction} (${contract.scope} scope${contract.phase === undefined ? '' : `, phase ${contract.phase}`}); record ${contract.recordPath}.`
+  return `Trigger ${trigger}. ${String(steps)} step${steps === 1 ? '' : 's'}. ${runText}.${selected}${review}`
 }
 
 /** Enter and Space add the focused palette entry; native buttons click on both. */

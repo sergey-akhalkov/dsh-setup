@@ -87,6 +87,11 @@ export const VIEW_CSS = `
 .dsh-wf-unbound { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
 .dsh-wf-unbound-list { display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0; }
 .dsh-wf-unbound-row { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; font: var(--dsw-font-xxs-12); }
+.dsh-wf-gate-card { display: flex; flex-direction: column; gap: 6px; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+.dsh-wf-gate-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font: var(--dsw-font-xxs-12); }
+.dsh-wf-gate-facts dt { color: var(--dsw-alias-label-tertiary); }
+.dsh-wf-gate-facts dd { margin: 0; overflow-wrap: anywhere; }
+.dsh-wf-review-contract { display: flex; flex-direction: column; gap: 8px; }
 .dsh-wf-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .dsh-wf-event-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .dsh-wf-evaluations { list-style: none; margin: 2px 0 0; padding: 0 0 0 12px; display: flex; flex-direction: column; gap: 2px; }

@@ -2,6 +2,7 @@ import { Button, relativeTime, StateDot, Tag, Tooltip } from '@deepseek-ai/dsh-c
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { CanvasBoundary, DesignCanvas } from './canvas.tsx'
+import { ENGINE_GATES, type EngineGateContract } from './gates.ts'
 import { type Diagram, definitionToGraph, type GraphDefinition } from './graph.ts'
 import { withLayout } from './layout.ts'
 import { type Overlay, overlayFor, withOverlay } from './overlay.ts'
@@ -27,6 +28,7 @@ import {
   type TriggerEvaluation,
   type TriggerView,
 } from './panel.tsx'
+import { promptSummary, reviewContract } from './review-contract.ts'
 import { RunList, relativeLabel, runDot } from './run-history.tsx'
 import { FLOW_CSS } from './styles.ts'
 
@@ -420,9 +422,12 @@ export function WorkflowOverview(props: {
   const { t } = props
   if (props.definitions.length === 0) {
     return (
-      <p className="dsh-wf-muted" data-section="workflow-overview" data-state="empty">
-        {t('overview.empty')}
-      </p>
+      <div className="dsh-wf-overview" data-section="workflow-overview">
+        <p className="dsh-wf-muted" data-state="empty">
+          {t('overview.empty')}
+        </p>
+        <EngineGateCards t={t} />
+      </div>
     )
   }
   const now = props.now ?? Date.now()
@@ -489,6 +494,7 @@ export function WorkflowOverview(props: {
           </div>
         </section>
       )}
+      <EngineGateCards t={t} />
     </div>
   )
 }
@@ -499,6 +505,96 @@ function Fact(props: { readonly label: string; readonly value: ReactNode }): Rea
       <dt>{props.label}</dt>
       <dd>{props.value}</dd>
     </>
+  )
+}
+
+/** One engine-owned gate as a read-only contract card, never a definition. */
+function EngineGateCard(props: {
+  readonly gate: EngineGateContract
+  readonly t: Translate
+}): ReactNode {
+  const { gate, t } = props
+  return (
+    <li className="dsh-wf-row" data-gate={gate.gate}>
+      <div className="dsh-wf-gate-card">
+        <div className="dsh-wf-card-head">
+          <span className="dsh-wf-run-title">{t(gate.titleKey)}</span>
+          <Tag tone="quiet">{gate.gate}</Tag>
+          <Tag tone="quiet">{t('gates.readOnly')}</Tag>
+        </div>
+        <dl className="dsh-wf-gate-facts">
+          <Fact label={t('gates.trigger')} value={t(gate.triggerKey)} />
+          <Fact label={t('gates.evidence')} value={t(gate.evidenceKey)} />
+          <Fact label={t('gates.record')} value={t(gate.recordKey)} />
+          <Fact label={t('gates.steer')} value={t(gate.steerKey)} />
+        </dl>
+      </div>
+    </li>
+  )
+}
+
+/** The closed engine-owned gates of the workflows listener. */
+function EngineGateCards(props: { readonly t: Translate }): ReactNode {
+  return (
+    <section className="dsh-wf-group" data-section="engine-gates">
+      <div className="dsh-wf-group-head">
+        <h3 className="dsh-wf-group-title">{props.t('gates.heading')}</h3>
+      </div>
+      <p className="dsh-wf-muted">{props.t('gates.intro')}</p>
+      <ul className="dsh-wf-rows">
+        {ENGINE_GATES.map((gate) => (
+          <EngineGateCard key={gate.gate} gate={gate} t={props.t} />
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+/** One review step's contract as a read-only card on the workflow page. */
+function ReviewContractCards(props: {
+  readonly definitionId: string
+  readonly steps: readonly DefinitionStepView[]
+  readonly t: Translate
+}): ReactNode {
+  const { t } = props
+  const items = props.steps.flatMap((step) => {
+    const contract = reviewContract(props.definitionId, step)
+    return contract === undefined ? [] : [{ step, contract }]
+  })
+  if (items.length === 0) return null
+  return (
+    <section className="dsh-wf-section" data-section="review-contracts">
+      <h3 className="dsh-wf-heading">{t('review.contracts')}</h3>
+      {items.map(({ step, contract }) => (
+        <div
+          key={step.id}
+          className="dsh-wf-review-contract"
+          data-contract="review"
+          data-review-step={step.id}
+        >
+          <div className="dsh-wf-row-head">
+            <span className="dsh-wf-subject">{step.title}</span>
+            <span className="dsh-wf-chip">{step.executor}</span>
+            <Tag tone="quiet">{contract.instruction}</Tag>
+            <Tag tone="quiet">{contract.scope}</Tag>
+          </div>
+          <dl className="dsh-wf-facts">
+            <Fact label={t('review.prompt')} value={promptSummary(contract, t)} />
+            <Fact label={t('review.phase')} value={contract.phase ?? '—'} />
+            <Fact
+              label={t('review.digestScope')}
+              value={contract.scope === 'task' ? t('review.digest.task') : t('review.digest.whole')}
+            />
+            <Fact label={t('review.verdictSchema')} value={t('review.verdictSchema.text')} />
+            <Fact label={t('review.reuse')} value={t('review.reuse.text')} />
+            <Fact
+              label={t('review.record')}
+              value={<span className="dsh-wf-mono">{contract.recordPath}</span>}
+            />
+          </dl>
+        </div>
+      ))}
+    </section>
   )
 }
 
@@ -690,6 +786,7 @@ export function WorkflowPage(props: {
               </table>
             )}
           </section>
+          <ReviewContractCards definitionId={definitionId} steps={document.steps ?? []} t={t} />
           <section className="dsh-wf-section" data-section="workflow-runs">
             <h3 className="dsh-wf-heading">{t('workflow.runs')}</h3>
             {props.runs === undefined ? (
