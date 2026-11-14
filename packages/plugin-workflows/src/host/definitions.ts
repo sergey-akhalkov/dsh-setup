@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validateJsonLogic } from './jsonlogic.js'
+import { validateCondition } from './condition-schema.js'
 
 /**
  * Workflow definitions are closed-schema JSON data. Every field is validated
@@ -506,7 +506,7 @@ function trigger(raw: unknown, definition: string): DefinitionTrigger {
     if (!isRecord(raw.condition))
       fail(definition, 'trigger.condition', 'must be a JSONLogic object')
     try {
-      validateJsonLogic(raw.condition)
+      validateCondition(raw.condition, 'trigger.condition')
     } catch (error) {
       fail(definition, 'trigger.condition', error instanceof Error ? error.message : String(error))
     }

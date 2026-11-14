@@ -8,6 +8,7 @@ import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
 import { authorizeUserArchive, decideArchiveAuthorization, } from './archive-authorization.js';
 import { CHANGE_NAME, parseArchiveCommand } from './command-parse.js';
 import { runWorkflowCommand } from './commands.js';
+import { buildConditionContext, evaluateConditions } from './condition.js';
 import { KNOWN_LEGACY_SOURCES, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
 import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
 import { evaluateEvent } from './evaluate.js';
@@ -15,6 +16,7 @@ import { commandMatches, currentSpecDigest, ignoredWrite, lastCodeWriteAt, sameC
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
 import { startFsChangeWatcher } from './fs-change.js';
 import { authorizationWriteDecision, evaluateIntakeGate, evaluateTurnClose } from './gates.js';
+import { defaultGit } from './git.js';
 import { WorkflowHealth } from './health.js';
 import { HostAuth } from './host-auth.js';
 import { advanceIntake } from './intake.js';
@@ -442,6 +444,8 @@ export function apply(ctx, config = {}) {
     let pluginDisposed = false;
     /** The session most recently observed in each workspace. */
     const activeSession = new Map();
+    /** The latest change a session observed, for a turn-close condition context. */
+    const lastChangeBySession = new Map();
     /** Whether a session is a root agent; the legacy gates exclude children. */
     const rootSessions = new Map();
     /** One change-tree watcher per workspace, started on its first event. */
@@ -1010,110 +1014,141 @@ export function apply(ctx, config = {}) {
             const changedName = event.kind === 'fs.change'
                 ? /^openspec\/changes\/([^/]+)\//u.exec(event.subject)?.[1]
                 : undefined;
+            if (changedName !== undefined)
+                lastChangeBySession.set(input.session, changedName);
             const taskReviewTaskIds = changedName !== undefined && /(?:^|\/)tasks\.md$/u.test(event.subject)
                 ? checkedTaskDelta(workspace, input.session, changedName, event.subject)
                 : [];
-            const definitionRows = definitionEventsOf(input, event, workspace).flatMap((definitionEvent) => evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
-                // A newly checked task must reach the per-task live-run guard even
-                // when the whole-file content key was already seen for another
-                // task's run; the guard below still prevents duplicates.
-                isDuplicate: (key, definition) => definition?.id === 'task-review' && taskReviewTaskIds.length > 0
-                    ? false
-                    : sessionSeen.has(key),
-                markKey: (key) => sessionSeen.set(key, input.at),
-                startRun: (definition, matched, capture) => {
-                    const limited = () => storedAuth !== undefined &&
-                        (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns);
-                    if (definition.id === 'task-review') {
-                        // The watcher coalesces writes, so every newly checked task
-                        // gets its own observational run.
-                        if (taskReviewTaskIds.length === 0) {
-                            return { ok: false, reason: 'no newly checked task in this tasks.md change' };
-                        }
-                        if (capture === undefined) {
-                            return { ok: false, reason: 'the change name was not captured from the path' };
-                        }
-                        let first;
-                        let suppressed;
-                        // Task identity hashes only the text, so two checked tasks with
-                        // the same text share an id and must not start two runs.
-                        for (const taskId of new Set(taskReviewTaskIds)) {
-                            // A live run for the same change and task already owns the
-                            // obligation; a dead-session run must not block the new one.
-                            const duplicate = knownRuns.find((run) => run.definition.id === 'task-review' &&
-                                run.context.name === capture &&
-                                run.context.taskId === taskId &&
-                                isOpenRun(run) &&
-                                services.agents.get(run.session) !== undefined);
-                            if (duplicate !== undefined) {
-                                suppressed ??= {
-                                    ok: false,
-                                    reason: `a live run "${duplicate.id}" already covers task "${taskId}"`,
-                                };
-                                continue;
+            const definitionRows = [];
+            const conditionalDefinitions = (definitionsByWorkspace.get(workspace) ?? []).filter((definition) => definition.trigger.condition !== undefined);
+            const conditionsFor = async (definitionEvent) => {
+                if (conditionalDefinitions.length === 0)
+                    return undefined;
+                const conditionChange = definitionEvent.name ?? changedName ?? lastChangeBySession.get(input.session);
+                const conditionContext = await buildConditionContext({
+                    workspace,
+                    ...(conditionChange === undefined ? {} : { change: conditionChange }),
+                    event: {
+                        kind: definitionEvent.kind,
+                        ...(definitionEvent.tool === undefined ? {} : { tool: definitionEvent.tool }),
+                        ...(definitionEvent.command === undefined ? {} : { command: definitionEvent.command }),
+                        ...(definitionEvent.path === undefined ? {} : { path: definitionEvent.path }),
+                    },
+                    runGit: defaultGit,
+                    involved: conditionChange !== undefined,
+                    changedSpec: definitionEvent.kind === 'fs.change' && /(?:^|\/)\.md$/u.test(definitionEvent.subject),
+                    completed: false,
+                });
+                return evaluateConditions(conditionalDefinitions, conditionContext);
+            };
+            for (const definitionEvent of definitionEventsOf(input, event, workspace)) {
+                const conditions = await conditionsFor(definitionEvent);
+                const rows = evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
+                    // A newly checked task must reach the per-task live-run guard even
+                    // when the whole-file content key was already seen for another
+                    // task's run; the guard below still prevents duplicates.
+                    ...(conditions === undefined ? {} : { conditions }),
+                    isDuplicate: (key, definition) => definition?.id === 'task-review' && taskReviewTaskIds.length > 0
+                        ? false
+                        : sessionSeen.has(key),
+                    markKey: (key) => sessionSeen.set(key, input.at),
+                    startRun: (definition, matched, capture) => {
+                        const limited = () => storedAuth !== undefined &&
+                            (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns);
+                        if (definition.id === 'task-review') {
+                            // The watcher coalesces writes, so every newly checked task
+                            // gets its own observational run.
+                            if (taskReviewTaskIds.length === 0) {
+                                return { ok: false, reason: 'no newly checked task in this tasks.md change' };
                             }
-                            const outcome = startDefinitionRun(workspace, definition, matched, limited(), {
-                                name: capture,
-                                taskId,
-                            });
-                            if (outcome.ok) {
-                                startedThisEvent += 1;
-                                first ??= outcome;
+                            if (capture === undefined) {
+                                return { ok: false, reason: 'the change name was not captured from the path' };
                             }
-                            else {
-                                suppressed ??= outcome;
+                            let first;
+                            let suppressed;
+                            // Task identity hashes only the text, so two checked tasks with
+                            // the same text share an id and must not start two runs.
+                            for (const taskId of new Set(taskReviewTaskIds)) {
+                                // A live run for the same change and task already owns the
+                                // obligation; a dead-session run must not block the new one.
+                                const duplicate = knownRuns.find((run) => run.definition.id === 'task-review' &&
+                                    run.context.name === capture &&
+                                    run.context.taskId === taskId &&
+                                    isOpenRun(run) &&
+                                    services.agents.get(run.session) !== undefined);
+                                if (duplicate !== undefined) {
+                                    suppressed ??= {
+                                        ok: false,
+                                        reason: `a live run "${duplicate.id}" already covers task "${taskId}"`,
+                                    };
+                                    continue;
+                                }
+                                const outcome = startDefinitionRun(workspace, definition, matched, limited(), {
+                                    name: capture,
+                                    taskId,
+                                });
+                                if (outcome.ok) {
+                                    startedThisEvent += 1;
+                                    first ??= outcome;
+                                }
+                                else {
+                                    suppressed ??= outcome;
+                                }
                             }
+                            return (first ??
+                                suppressed ?? { ok: false, reason: 'the observational run was not started' });
                         }
-                        return (first ??
-                            suppressed ?? { ok: false, reason: 'the observational run was not started' });
-                    }
-                    const extraContext = definition.id === 'retro' &&
-                        matched.turn !== undefined &&
-                        matched.session !== undefined
-                        ? {
-                            checkpoint: `.dsh/work-checkpoints/${sessionHash(String(matched.session))}/${String(matched.turn)}.json`,
+                        const extraContext = definition.id === 'retro' &&
+                            matched.turn !== undefined &&
+                            matched.session !== undefined
+                            ? {
+                                checkpoint: `.dsh/work-checkpoints/${sessionHash(String(matched.session))}/${String(matched.turn)}.json`,
+                            }
+                            : {};
+                        const outcome = startDefinitionRun(workspace, definition, matched, limited(), capture === undefined ? extraContext : { name: capture, ...extraContext });
+                        if (outcome.ok)
+                            startedThisEvent += 1;
+                        return outcome;
+                    },
+                    resolveApplicability: (definition) => {
+                        if (definition.trigger.applicability === 'code-write') {
+                            // The verify definition observes only a turn that wrote code.
+                            if (rootSessions.get(input.session) !== true)
+                                return false;
+                            const calls = (sessionToolCalls.get(input.session) ?? []).filter((call) => call.turn === undefined || call.turn === input.turn);
+                            return (lastCodeWriteAt(calls, workspace) !== undefined ||
+                                (metrics?.turn === input.turn && metrics?.lastWriteAt !== undefined));
                         }
-                        : {};
-                    const outcome = startDefinitionRun(workspace, definition, matched, limited(), capture === undefined ? extraContext : { name: capture, ...extraContext });
-                    if (outcome.ok)
-                        startedThisEvent += 1;
-                    return outcome;
-                },
-                resolveApplicability: (definition) => {
-                    if (definition.trigger.applicability === 'code-write') {
-                        // The verify definition observes only a turn that wrote code.
+                        if (definition.trigger.applicability !== 'checkpoint-required')
+                            return undefined;
+                        // The legacy checkpoint gate excludes subagent sessions.
                         if (rootSessions.get(input.session) !== true)
                             return false;
-                        const calls = (sessionToolCalls.get(input.session) ?? []).filter((call) => call.turn === undefined || call.turn === input.turn);
-                        return (lastCodeWriteAt(calls, workspace) !== undefined ||
-                            (metrics?.turn === input.turn && metrics?.lastWriteAt !== undefined));
-                    }
-                    if (definition.trigger.applicability !== 'checkpoint-required')
-                        return undefined;
-                    // The legacy checkpoint gate excludes subagent sessions.
-                    if (rootSessions.get(input.session) !== true)
-                        return false;
-                    const current = input.turn !== undefined && metrics !== undefined && metrics.turn === input.turn
-                        ? metrics
-                        : undefined;
-                    return checkpointRequired({
-                        toolCalls: current?.toolCalls ?? 0,
-                        ...(current?.lastTool === undefined ? {} : { lastTool: current.lastTool }),
-                        written: current?.written ?? 0,
-                        workers: current?.workers ?? 0,
-                        minToolCalls: checkpointApplicability.minToolCalls,
-                        requireWrite: checkpointApplicability.requireWrite,
+                        const current = input.turn !== undefined && metrics !== undefined && metrics.turn === input.turn
+                            ? metrics
+                            : undefined;
+                        return checkpointRequired({
+                            toolCalls: current?.toolCalls ?? 0,
+                            ...(current?.lastTool === undefined ? {} : { lastTool: current.lastTool }),
+                            written: current?.written ?? 0,
+                            workers: current?.workers ?? 0,
+                            minToolCalls: checkpointApplicability.minToolCalls,
+                            requireWrite: checkpointApplicability.requireWrite,
+                        });
+                    },
+                });
+                for (const row of rows) {
+                    definitionRows.push({
+                        id: `definition:${row.definition}`,
+                        matched: row.matched,
+                        reason: row.reason,
+                        ...(row.path === undefined ? {} : { path: row.path }),
+                        ...(row.filter === undefined ? {} : { filter: row.filter }),
+                        ...(row.detail === undefined ? {} : { detail: row.detail }),
+                        ...(row.runId === undefined ? {} : { runId: row.runId }),
                     });
-                },
-            }).map((row) => ({
-                id: `definition:${row.definition}`,
-                matched: row.matched,
-                reason: row.reason,
-                ...(row.path === undefined ? {} : { path: row.path }),
-                ...(row.filter === undefined ? {} : { filter: row.filter }),
-                ...(row.detail === undefined ? {} : { detail: row.detail }),
-                ...(row.runId === undefined ? {} : { runId: row.runId }),
-            })));
+                }
+            }
             const evaluations = [...records, ...definitionRows];
             // A deferred observational run whose trigger later evaluates as not
             // applicable is completed so retention can prune it, never left blocked.

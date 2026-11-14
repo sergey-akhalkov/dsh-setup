@@ -66,3 +66,78 @@ export function taskOf(
     return undefined
   }
 }
+
+/** One numbered task line with its checkbox state. */
+export interface NumberedTaskLine extends NumberedTask {
+  readonly checked: boolean
+}
+
+const TASK_LINE = /^\s*-\s*\[([ xX])\]\s+(\d+(?:\.\d+)*)\s+(\S.*?)\s*$/gmu
+
+/** Every numbered task in file order, checked or not. */
+export function numberedTasks(markdown: string): NumberedTaskLine[] {
+  const tasks: NumberedTaskLine[] = []
+  for (const match of markdown.matchAll(TASK_LINE)) {
+    const text = match[3] ?? ''
+    tasks.push({
+      id: taskIdOf(text),
+      number: match[2] ?? '',
+      text,
+      checked: match[1]?.toLowerCase() === 'x',
+    })
+  }
+  return tasks
+}
+
+/** One level-2 lane heading: its title, owned paths, and unchecked tasks. */
+export interface TaskLaneView {
+  readonly n: number
+  readonly title: string
+  readonly owned: readonly string[]
+  readonly unchecked: readonly string[]
+  readonly checked: readonly string[]
+  readonly serial: boolean
+}
+
+/**
+ * Parse the level-2 headings as lanes. A heading's backticked path-like tokens
+ * are its owned paths; the numbered tasks until the next level-2 heading belong
+ * to it. A title carrying "serial" is the plan's tail and never parallel work.
+ */
+export function taskLanes(markdown: string): TaskLaneView[] {
+  const lanes: TaskLaneView[] = []
+  let current:
+    | {
+        n: number
+        title: string
+        owned: string[]
+        unchecked: string[]
+        checked: string[]
+      }
+    | undefined
+  for (const line of markdown.split(/\r?\n/u)) {
+    if (line.startsWith('## ')) {
+      const title = line.slice(3).trim()
+      const owned = [...title.matchAll(/`([^`]+)`/gu)]
+        .map((match) => match[1]?.trim() ?? '')
+        .filter((entry) => /[\\/]|\*/u.test(entry))
+      current = { n: lanes.length + 1, title, owned, unchecked: [], checked: [] }
+      lanes.push({
+        n: current.n,
+        title,
+        owned,
+        unchecked: current.unchecked,
+        checked: current.checked,
+        serial: /serial/iu.test(title),
+      })
+      continue
+    }
+    if (current === undefined) continue
+    const task = TASK_LINE.exec(line)
+    TASK_LINE.lastIndex = 0
+    if (task === null) continue
+    if (task[1]?.toLowerCase() === 'x') current.checked.push(task[2] ?? '')
+    else current.unchecked.push(task[2] ?? '')
+  }
+  return lanes
+}

@@ -137,6 +137,7 @@ export const OBLIGATION_REASONS = [
     'not-applicable',
     'event-mismatch',
     'filter-mismatch',
+    'condition-false',
     'dedupe',
     'disabled',
     'not-ready',
@@ -243,6 +244,24 @@ export function evaluateDefinitionTrigger(definition, event, context) {
                 ...(mismatch.path === undefined ? {} : { path: mismatch.path }),
                 filter: mismatch.filter,
             };
+        }
+        if (trigger.condition !== undefined) {
+            if (context.conditions === undefined) {
+                return {
+                    ...base,
+                    matched: false,
+                    reason: 'not-ready',
+                    detail: 'the trigger condition context is unavailable for this event',
+                };
+            }
+            if (context.conditions.get(definition.id) !== true) {
+                return {
+                    ...base,
+                    matched: false,
+                    reason: 'condition-false',
+                    ...(matched.capture === undefined ? {} : { capture: matched.capture }),
+                };
+            }
         }
         const key = obligationDedupeKey(definition.id, trigger, event, matched.capture);
         if (key !== undefined && trigger.repeat !== true && context.isDuplicate(key, definition)) {

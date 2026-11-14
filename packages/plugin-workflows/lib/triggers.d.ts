@@ -43,7 +43,7 @@ export declare function loadCatalog(): Trigger[];
  * reason vocabulary extends the shadow catalog's with the run outcomes; the
  * two vocabularies share a journal table but not the same typed union.
  */
-export declare const OBLIGATION_REASONS: readonly ["would-fire", "run-created", "run-suppressed", "not-applicable", "event-mismatch", "filter-mismatch", "dedupe", "disabled", "not-ready", "error"];
+export declare const OBLIGATION_REASONS: readonly ["would-fire", "run-created", "run-suppressed", "not-applicable", "event-mismatch", "filter-mismatch", "condition-false", "dedupe", "disabled", "not-ready", "error"];
 export type ObligationReason = (typeof OBLIGATION_REASONS)[number];
 /** One normalized event an obligation trigger may observe. */
 export interface DefinitionEvent {
@@ -84,6 +84,12 @@ export interface DefinitionEvaluationContext {
     readonly ready?: boolean;
     /** The resolved applicability of a trigger that declares one. */
     readonly applicability?: boolean;
+    /**
+     * Each condition-bearing definition's evaluated predicate for this event. A
+     * definition with a condition but no entry records `not-ready` and starts no
+     * run, because the predicate is never assumed true.
+     */
+    readonly conditions?: ReadonlyMap<string, boolean>;
     readonly isDuplicate: (key: string, definition?: Definition) => boolean;
 }
 /**

@@ -174,6 +174,7 @@ export const OBLIGATION_REASONS = [
   'not-applicable',
   'event-mismatch',
   'filter-mismatch',
+  'condition-false',
   'dedupe',
   'disabled',
   'not-ready',
@@ -226,6 +227,12 @@ export interface DefinitionEvaluationContext {
   readonly ready?: boolean
   /** The resolved applicability of a trigger that declares one. */
   readonly applicability?: boolean
+  /**
+   * Each condition-bearing definition's evaluated predicate for this event. A
+   * definition with a condition but no entry records `not-ready` and starts no
+   * run, because the predicate is never assumed true.
+   */
+  readonly conditions?: ReadonlyMap<string, boolean>
   readonly isDuplicate: (key: string, definition?: Definition) => boolean
 }
 
@@ -347,6 +354,24 @@ export function evaluateDefinitionTrigger(
         reason: 'filter-mismatch',
         ...(mismatch.path === undefined ? {} : { path: mismatch.path }),
         filter: mismatch.filter,
+      }
+    }
+    if (trigger.condition !== undefined) {
+      if (context.conditions === undefined) {
+        return {
+          ...base,
+          matched: false,
+          reason: 'not-ready',
+          detail: 'the trigger condition context is unavailable for this event',
+        }
+      }
+      if (context.conditions.get(definition.id) !== true) {
+        return {
+          ...base,
+          matched: false,
+          reason: 'condition-false',
+          ...(matched.capture === undefined ? {} : { capture: matched.capture }),
+        }
       }
     }
     const key = obligationDedupeKey(definition.id, trigger, event, matched.capture)

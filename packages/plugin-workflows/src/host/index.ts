@@ -22,6 +22,7 @@ import {
 } from './archive-authorization.js'
 import { CHANGE_NAME, parseArchiveCommand } from './command-parse.js'
 import { runWorkflowCommand, type WorkflowCommandHost } from './commands.js'
+import { buildConditionContext, evaluateConditions } from './condition.js'
 import {
   type Definition,
   KNOWN_LEGACY_SOURCES,
@@ -54,6 +55,7 @@ import {
 } from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
 import { authorizationWriteDecision, evaluateIntakeGate, evaluateTurnClose } from './gates.js'
+import { defaultGit } from './git.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
 import { advanceIntake } from './intake.js'
@@ -118,6 +120,7 @@ import {
   evaluateDefinitionTrigger,
   evaluateIntents,
   intentDedupeKey,
+  type ObligationReason,
   obligationDedupeKey,
   type StartRunOutcome,
   type Trigger,
@@ -668,6 +671,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   let pluginDisposed = false
   /** The session most recently observed in each workspace. */
   const activeSession = new Map<string, string>()
+  /** The latest change a session observed, for a turn-close condition context. */
+  const lastChangeBySession = new Map<string, string>()
   /** Whether a session is a root agent; the legacy gates exclude children. */
   const rootSessions = new Map<string, boolean>()
   /** One change-tree watcher per workspace, started on its first event. */
@@ -1302,16 +1307,56 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         event.kind === 'fs.change'
           ? /^openspec\/changes\/([^/]+)\//u.exec(event.subject)?.[1]
           : undefined
+      if (changedName !== undefined) lastChangeBySession.set(input.session, changedName)
       const taskReviewTaskIds =
         changedName !== undefined && /(?:^|\/)tasks\.md$/u.test(event.subject)
           ? checkedTaskDelta(workspace, input.session, changedName, event.subject)
           : []
-      const definitionRows = definitionEventsOf(input, event, workspace).flatMap(
-        (definitionEvent) =>
-          evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
+      const definitionRows: Array<{
+        id: string
+        matched: boolean
+        reason: ObligationReason
+        path?: string
+        filter?: string
+        detail?: string
+        runId?: string
+      }> = []
+      const conditionalDefinitions = (definitionsByWorkspace.get(workspace) ?? []).filter(
+        (definition) => definition.trigger.condition !== undefined,
+      )
+      const conditionsFor = async (
+        definitionEvent: DefinitionEvent,
+      ): Promise<ReadonlyMap<string, boolean> | undefined> => {
+        if (conditionalDefinitions.length === 0) return undefined
+        const conditionChange =
+          definitionEvent.name ?? changedName ?? lastChangeBySession.get(input.session)
+        const conditionContext = await buildConditionContext({
+          workspace,
+          ...(conditionChange === undefined ? {} : { change: conditionChange }),
+          event: {
+            kind: definitionEvent.kind,
+            ...(definitionEvent.tool === undefined ? {} : { tool: definitionEvent.tool }),
+            ...(definitionEvent.command === undefined ? {} : { command: definitionEvent.command }),
+            ...(definitionEvent.path === undefined ? {} : { path: definitionEvent.path }),
+          },
+          runGit: defaultGit,
+          involved: conditionChange !== undefined,
+          changedSpec:
+            definitionEvent.kind === 'fs.change' && /(?:^|\/)\.md$/u.test(definitionEvent.subject),
+          completed: false,
+        })
+        return evaluateConditions(conditionalDefinitions, conditionContext)
+      }
+      for (const definitionEvent of definitionEventsOf(input, event, workspace)) {
+        const conditions = await conditionsFor(definitionEvent)
+        const rows = evaluateDefinitions(
+          definitionsByWorkspace.get(workspace) ?? [],
+          definitionEvent,
+          {
             // A newly checked task must reach the per-task live-run guard even
             // when the whole-file content key was already seen for another
             // task's run; the guard below still prevents duplicates.
+            ...(conditions === undefined ? {} : { conditions }),
             isDuplicate: (key, definition) =>
               definition?.id === 'task-review' && taskReviewTaskIds.length > 0
                 ? false
@@ -1414,7 +1459,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 requireWrite: checkpointApplicability.requireWrite,
               })
             },
-          }).map((row) => ({
+          },
+        )
+        for (const row of rows) {
+          definitionRows.push({
             id: `definition:${row.definition}`,
             matched: row.matched,
             reason: row.reason,
@@ -1422,8 +1470,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(row.filter === undefined ? {} : { filter: row.filter }),
             ...(row.detail === undefined ? {} : { detail: row.detail }),
             ...(row.runId === undefined ? {} : { runId: row.runId }),
-          })),
-      )
+          })
+        }
+      }
       const evaluations = [...records, ...definitionRows]
       // A deferred observational run whose trigger later evaluates as not
       // applicable is completed so retention can prune it, never left blocked.
