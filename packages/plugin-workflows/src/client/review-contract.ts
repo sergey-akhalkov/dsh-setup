@@ -13,7 +13,7 @@ export interface ReviewContractView {
   /** The step's own prompt, shown when the instruction has no summary copy. */
   readonly prompt?: string
   readonly scope: 'whole' | 'task'
-  readonly phase?: string
+  readonly phase: string
   readonly recordPath: string
 }
 
@@ -81,7 +81,9 @@ export function reviewContract(
   const config = record(step.review) ?? {}
   const instruction = text(config.instruction) ?? DASH
   const scope = config.scope === 'task' ? 'task' : 'whole'
-  const phase = text(config.phase)
+  // The engine's reviewPhase: a task review is always phase "task"; a whole
+  // review defaults to "spec" when the definition omits an explicit phase.
+  const phase = scope === 'task' ? 'task' : (text(config.phase) ?? 'spec')
   const prompt = text(step.prompt)
   const promptKey = reviewPromptKey(instruction)
   return {
@@ -89,7 +91,7 @@ export function reviewContract(
     ...(promptKey === undefined ? {} : { promptKey }),
     ...(prompt === undefined ? {} : { prompt }),
     scope,
-    ...(phase === undefined ? {} : { phase }),
+    phase,
     recordPath: recordPathOf(definitionId, scope, phase, step.evidence),
   }
 }

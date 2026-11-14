@@ -246,7 +246,7 @@ window.__ModuleLoader__.load({
       const config = record(step.review) ?? {};
       const instruction = text(config.instruction) ?? DASH;
       const scope = config.scope === "task" ? "task" : "whole";
-      const phase = text(config.phase);
+      const phase = scope === "task" ? "task" : text(config.phase) ?? "spec";
       const prompt = text(step.prompt);
       const promptKey = reviewPromptKey(instruction);
       return {
@@ -254,7 +254,7 @@ window.__ModuleLoader__.load({
         ...promptKey === void 0 ? {} : { promptKey },
         ...prompt === void 0 ? {} : { prompt },
         scope,
-        ...phase === void 0 ? {} : { phase },
+        phase,
         recordPath: recordPathOf(definitionId, scope, phase, step.evidence)
       };
     }
@@ -11678,7 +11678,7 @@ window.__ModuleLoader__.load({
       "review.record": "Record path",
       "review.digest.whole": "the live change-artifact digest",
       "review.digest.task": "a frozen worktree snapshot taken when the review starts",
-      "review.verdictSchema.text": "Exactly one fenced JSON verdict: verdict PASS | FINDINGS | ERROR, the prepared digest, and findings[] with severity P0 | P1 | P2 and class.",
+      "review.verdictSchema.text": "Exactly one fenced JSON verdict: verdict PASS | FINDINGS, the prepared digest, and findings[] with severity P0 | P1, title, evidence, fix, and class. A failed or timed-out review writes an engine-generated ERROR record instead.",
       "review.reuse.text": "A matching current PASS or ERROR record settles the step without a new run; FINDINGS keeps it open.",
       "review.prompt.reviewSpec": "Reviews the whole change (proposal, design, delta specs, and tasks) against the change requirements.",
       "review.prompt.reviewTask": "Reviews one checked task, its diff, and its verification against the task text and the change artifacts.",

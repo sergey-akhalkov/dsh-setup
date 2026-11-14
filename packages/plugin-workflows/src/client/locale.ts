@@ -211,7 +211,7 @@ export const EN: Record<string, string> = {
   'review.digest.whole': 'the live change-artifact digest',
   'review.digest.task': 'a frozen worktree snapshot taken when the review starts',
   'review.verdictSchema.text':
-    'Exactly one fenced JSON verdict: verdict PASS | FINDINGS | ERROR, the prepared digest, and findings[] with severity P0 | P1 | P2 and class.',
+    'Exactly one fenced JSON verdict: verdict PASS | FINDINGS, the prepared digest, and findings[] with severity P0 | P1, title, evidence, fix, and class. A failed or timed-out review writes an engine-generated ERROR record instead.',
   'review.reuse.text':
     'A matching current PASS or ERROR record settles the step without a new run; FINDINGS keeps it open.',
   'review.prompt.reviewSpec':

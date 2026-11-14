@@ -67,7 +67,7 @@ describe('review contract view', () => {
       phase: 'spec',
       recordPath: RECORD_PATH,
     })
-    // Task scope has no phase and uses the frozen-snapshot task path.
+    // Task scope is always phase task and uses the frozen-snapshot task path.
     const task = reviewContract('task-review', {
       executor: 'review',
       review: { instruction: 'review-task', scope: 'task' },
@@ -79,7 +79,15 @@ describe('review contract view', () => {
       scope: 'task',
       recordPath: '.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json',
     })
-    expect(task?.phase).toBeUndefined()
+    expect(task?.phase).toBe('task')
+    const defaults = reviewContract('spec-review', {
+      executor: 'review',
+      review: { target: 'codex', instruction: 'review-spec', scope: 'whole' },
+    })
+    expect(defaults?.phase).toBe('spec')
+    expect(EN['review.verdictSchema.text']).toContain('PASS | FINDINGS')
+    expect(EN['review.verdictSchema.text']).toContain('P0 | P1')
+    expect(EN['review.verdictSchema.text']).not.toContain('P2')
     // A non-review executor has no contract; a malformed one still displays the dash.
     expect(reviewContract('x', { executor: 'main' })).toBeUndefined()
     expect(reviewContract('x', { executor: 'review' })).toMatchObject({
