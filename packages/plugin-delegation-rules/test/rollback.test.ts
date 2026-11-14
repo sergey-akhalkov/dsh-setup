@@ -383,6 +383,7 @@ describe('rollback from the shipped Release A configuration', () => {
         definition: 'task-review',
         rule: 'task-review',
         change: 'change-a',
+        phase: 'task',
         scope: 'task',
         taskId,
         digest: 'a'.repeat(64),
@@ -412,6 +413,55 @@ describe('rollback from the shipped Release A configuration', () => {
 
     // Without the native record the same final tick needs its note.
     await rm(nativePath)
+    harness.agent.steer.mockClear()
+    await harness.turnStopping(1)
+    expect(steer(harness)).toContain('changed implementation files in change "change-a"')
+
+    // A malformed native record does not satisfy the gate either.
+    await writeFile(
+      nativePath,
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'change-a',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        verdict: 'PASS',
+      }),
+      'utf8',
+    )
+    harness.agent.steer.mockClear()
+    await harness.turnStopping(1)
+    expect(steer(harness)).toContain('changed implementation files in change "change-a"')
+
+    // A record from another reviewer does not satisfy it.
+    await mkdir(join(workspace.root, 'openspec'), { recursive: true })
+    await writeFile(
+      join(workspace.root, 'openspec', 'review-approval.json'),
+      JSON.stringify({
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        reviewerProvider: 'other',
+      }),
+      'utf8',
+    )
+    await writeFile(
+      nativePath,
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'change-a',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T10:00:00.000Z',
+      }),
+      'utf8',
+    )
     harness.agent.steer.mockClear()
     await harness.turnStopping(1)
     expect(steer(harness)).toContain('changed implementation files in change "change-a"')

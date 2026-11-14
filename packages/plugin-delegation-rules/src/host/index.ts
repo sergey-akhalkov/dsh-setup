@@ -3085,6 +3085,27 @@ async function ownedTaskReviewed(cwd: string, change: string, taskId: string): P
   try {
     const value: unknown = JSON.parse(raw)
     if (!isRecord(value)) return false
+    const reviewer = await readReviewerBinding(join(cwd, 'openspec'))
+    if (reviewer.error !== undefined) return false
+    if (
+      value.rule !== 'task-review' ||
+      value.change !== change ||
+      value.phase !== 'task' ||
+      value.scope !== 'task' ||
+      value.taskId !== taskId ||
+      value.verdict !== 'PASS' ||
+      typeof value.digest !== 'string' ||
+      !DIGEST_PATTERN.test(value.digest) ||
+      !Array.isArray(value.findings) ||
+      value.findings.length !== 0 ||
+      !isRecord(value.target) ||
+      typeof value.target.provider !== 'string' ||
+      typeof value.time !== 'string'
+    ) {
+      return false
+    }
+    if (!reviewerMatches(value.target as { provider: string; model?: string }, reviewer.reviewer))
+      return false
     return legacyRecordSatisfies(
       {
         change: typeof value.change === 'string' ? value.change : '',
@@ -6018,6 +6039,9 @@ async function evaluateGate(
   // The per-signal ownership check: a false switch disables exactly its own
   // steer, and the remaining signals keep acting.
   const signals = resolveLegacySignals(deps.config)
+  // A shared error steer belongs to the legacy gate; with every switch off the
+  // dormant row must stay silent.
+  const anyLegacySignal = Object.values(signals).some((value) => value === true)
 
   if (openspecRoot !== undefined) {
     const reviewer = await readReviewerBinding(openspecRoot)
@@ -6026,7 +6050,7 @@ async function evaluateGate(
       const changeSnapshot = current.changes.find((entry) => entry.name === change.name)
       const tasks = changeSnapshot?.tasks ?? []
       const changeSpecDigest = changeSnapshot?.specDigest
-      if (changeSnapshot?.error !== undefined) {
+      if (anyLegacySignal && changeSnapshot?.error !== undefined) {
         pushSoft(
           `change-artifacts:${change.name}`,
           'change-artifacts',
@@ -6574,7 +6598,12 @@ async function evaluateGate(
     }
   }
 
-  if (openspecRoot !== undefined && current.digestError !== undefined && involved.length > 0) {
+  if (
+    anyLegacySignal &&
+    openspecRoot !== undefined &&
+    current.digestError !== undefined &&
+    involved.length > 0
+  ) {
     pushStrict(
       'digest',
       `the worktree digest could not be computed (${current.digestError}); fix the git workspace failure so gated rules can be evaluated.`,

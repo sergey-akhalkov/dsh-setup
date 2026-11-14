@@ -2333,6 +2333,26 @@ async function ownedTaskReviewed(cwd, change, taskId) {
         const value = JSON.parse(raw);
         if (!isRecord(value))
             return false;
+        const reviewer = await readReviewerBinding(join(cwd, 'openspec'));
+        if (reviewer.error !== undefined)
+            return false;
+        if (value.rule !== 'task-review' ||
+            value.change !== change ||
+            value.phase !== 'task' ||
+            value.scope !== 'task' ||
+            value.taskId !== taskId ||
+            value.verdict !== 'PASS' ||
+            typeof value.digest !== 'string' ||
+            !DIGEST_PATTERN.test(value.digest) ||
+            !Array.isArray(value.findings) ||
+            value.findings.length !== 0 ||
+            !isRecord(value.target) ||
+            typeof value.target.provider !== 'string' ||
+            typeof value.time !== 'string') {
+            return false;
+        }
+        if (!reviewerMatches(value.target, reviewer.reviewer))
+            return false;
         return legacyRecordSatisfies({
             change: typeof value.change === 'string' ? value.change : '',
             scope: typeof value.scope === 'string' ? value.scope : '',
@@ -4686,6 +4706,9 @@ async function evaluateGate(deps, agent, turn, signal) {
     // The per-signal ownership check: a false switch disables exactly its own
     // steer, and the remaining signals keep acting.
     const signals = resolveLegacySignals(deps.config);
+    // A shared error steer belongs to the legacy gate; with every switch off the
+    // dormant row must stay silent.
+    const anyLegacySignal = Object.values(signals).some((value) => value === true);
     if (openspecRoot !== undefined) {
         const reviewer = await readReviewerBinding(openspecRoot);
         for (const change of involved) {
@@ -4693,7 +4716,7 @@ async function evaluateGate(deps, agent, turn, signal) {
             const changeSnapshot = current.changes.find((entry) => entry.name === change.name);
             const tasks = changeSnapshot?.tasks ?? [];
             const changeSpecDigest = changeSnapshot?.specDigest;
-            if (changeSnapshot?.error !== undefined) {
+            if (anyLegacySignal && changeSnapshot?.error !== undefined) {
                 pushSoft(`change-artifacts:${change.name}`, 'change-artifacts', `change "${change.name}" (session ${thread}) ${changeSnapshot.error}; repair that change's artifacts or archive the change so its gated reviews can be evaluated.`, `repair openspec/changes/${change.name} (or archive the change)`);
                 continue;
             }
@@ -5132,7 +5155,10 @@ async function evaluateGate(deps, agent, turn, signal) {
             }
         }
     }
-    if (openspecRoot !== undefined && current.digestError !== undefined && involved.length > 0) {
+    if (anyLegacySignal &&
+        openspecRoot !== undefined &&
+        current.digestError !== undefined &&
+        involved.length > 0) {
         pushStrict('digest', `the worktree digest could not be computed (${current.digestError}); fix the git workspace failure so gated rules can be evaluated.`, 'git status --porcelain=v1 -z --untracked-files=all');
     }
     deps.state.rememberSnapshot(agentId, current);

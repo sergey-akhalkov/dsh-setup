@@ -2,7 +2,12 @@ import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { type Definition, validateDefinition } from '../src/host/definitions.ts'
+import {
+  type Definition,
+  resolveOwnership,
+  validateDefinition,
+  withSource,
+} from '../src/host/definitions.ts'
 import { verifyEvidence } from '../src/host/evidence.ts'
 import type { SubagentRunner, SubagentRunResult } from '../src/host/executors.ts'
 import { portableRecordError } from '../src/host/projection.ts'
@@ -948,5 +953,68 @@ describe('review publication identity', () => {
       },
     })
     expect(result.run.steps[0]?.state).toBe('blocked')
+  })
+})
+
+describe('per-signal switch diagnostics', () => {
+  const SWITCHES: ReadonlyArray<readonly [string, string]> = [
+    ['spec-review', 'delegation.gates.specReview'],
+    ['task-review', 'delegation.gates.workflowOwned'],
+    ['integration-review', 'delegation.gates.integrationReview'],
+    ['task-progress', 'delegation.gates.taskProgress'],
+    ['lane-assignment', 'delegation.gates.laneFanout'],
+  ]
+
+  function localDefinition(signal: string): Definition {
+    return validateDefinition({
+      v: 1,
+      id: 'local-legacy',
+      name: 'Local legacy',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        legacy: { plugin: 'delegation-rules', signal },
+      },
+      steps: [
+        {
+          id: 's',
+          title: 'Step',
+          executor: 'main',
+          prompt: 'Do it.',
+          evidence: { kind: 'file', path: 'README.md' },
+          next: 'end',
+        },
+      ],
+    })
+  }
+
+  it('names the exact switch for every signal', () => {
+    for (const [signal, switchName] of SWITCHES) {
+      const issues = resolveOwnership(
+        localDefinition(signal),
+        new Set(['delegation-rules']),
+        new Set([`delegation-rules/${signal}`]),
+      ).issues.join('\n')
+      expect(issues).toContain(switchName)
+    }
+  })
+
+  it('resolves a shipped review definition from its switch', () => {
+    const shipped = withSource(taskDefinition(), 'shipped')
+    const enabled = resolveOwnership(
+      shipped,
+      new Set(['delegation-rules']),
+      new Set(['delegation-rules/task-review']),
+    )
+    expect(enabled.issues).toEqual([])
+    expect(enabled.steps.every((step) => step.ownership === 'defer')).toBe(true)
+    const disabled = resolveOwnership(shipped, new Set(['delegation-rules']), new Set())
+    expect(disabled.issues).toEqual([])
+    expect(disabled.steps.every((step) => step.ownership === 'own')).toBe(true)
   })
 })

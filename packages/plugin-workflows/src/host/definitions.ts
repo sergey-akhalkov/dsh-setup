@@ -1386,17 +1386,31 @@ export interface LegacySignalState {
   readonly enabled: ReadonlySet<string>
 }
 
+/** The exact profile switch that owns each legacy signal. */
+const SWITCH_BY_SIGNAL: Readonly<Record<string, string>> = {
+  'spec-review': 'delegation.gates.specReview',
+  'task-review': 'delegation.gates.workflowOwned',
+  archive: 'delegation.gates.workflowOwned',
+  'integration-review': 'delegation.gates.integrationReview',
+  'task-progress': 'delegation.gates.taskProgress',
+  'lane-assignment': 'delegation.gates.laneFanout',
+  'lane-boundary': 'delegation.gates.laneFanout',
+  work_checkpoint: 'checkpoint.automation',
+  'verification-gate': 'the verification-gate row',
+}
+
 function retirementRemedy(
   plugin: string,
   signal: string,
   state: 'not-installed' | 'disabled' | 'enabled',
 ): string {
   const key = `"${plugin}/${signal}"`
+  const switchName = SWITCH_BY_SIGNAL[signal] ?? 'its gate-only switch'
   if (state === 'enabled') {
-    return `${key} is still enabled in the profile; flip its gate-only switch (checkpoint.automation, delegation.gates.workflowOwned, or the verification row) in the same retire-legacy-gates config change`
+    return `${key} is still enabled via ${switchName}; set ${switchName} to false or declare the definition defer in the same change`
   }
   if (state === 'disabled') {
-    return `${key} is installed but its gate-only switch is off; a deferred definition would have no enforcing legacy gate — enable the switch or move ownership in the "retire-legacy-gates" change`
+    return `${key} is installed but ${switchName} is off; a deferred definition would have no enforcing legacy gate — set ${switchName} to true or declare the definition own`
   }
   return `${key} is not installed; install it or move ownership in the "retire-legacy-gates" change`
 }

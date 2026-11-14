@@ -148,7 +148,7 @@ describe('shipped ownership after the retirement flip', () => {
     expect(loaded.definitions.map((entry) => entry.id)).not.toContain('task-review')
     expect(loaded.definitions.map((entry) => entry.id)).not.toContain('retro')
     expect(loaded.errors.join('\n')).toMatch(/still enabled/u)
-    expect(loaded.errors.join('\n')).toMatch(/retire-legacy-gates/u)
+    expect(loaded.errors.join('\n')).toMatch(/checkpoint\.automation/u)
   })
 })
 

@@ -167,6 +167,7 @@ describe('the active review owner supplies the progress evidence', () => {
       definition: 'task-review',
       rule: 'task-review',
       change: 'change-a',
+      phase: 'task',
       scope: 'task',
       taskId,
       digest: 'a'.repeat(64),
