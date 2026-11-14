@@ -236,7 +236,12 @@ export function evaluateConditions(
   const decisions = new Map<string, boolean>()
   for (const definition of definitions) {
     if (definition.trigger.condition === undefined) continue
-    decisions.set(definition.id, evaluateCondition(definition.trigger.condition, context))
+    try {
+      decisions.set(definition.id, evaluateCondition(definition.trigger.condition, context))
+    } catch {
+      // An over-budget or malformed predicate never starts a run.
+      decisions.set(definition.id, false)
+    }
   }
   return decisions
 }

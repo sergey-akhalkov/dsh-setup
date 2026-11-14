@@ -857,3 +857,63 @@ describe('review instruction failure', () => {
     expect(record.failureClass).toBe('config')
   })
 })
+
+describe('review publication identity', () => {
+  it('validates the evidence directory against the definition id, not the gate identity', () => {
+    const def = taskDefinition()
+    const step = def.steps[0] as Definition['steps'][number]
+    const ev = step.evidence as unknown as Record<string, unknown>
+    const copy = {
+      ...def,
+      id: 'task-review-copy',
+      settings: { ...def.settings, gateIdentity: 'task-review' },
+      steps: [
+        {
+          ...step,
+          evidence: {
+            ...ev,
+            path: '.dsh/workflows/records/task-review-copy/{name}/tasks/{taskId}.json',
+          },
+        },
+      ],
+    }
+    expect(() => validateDefinition(copy)).not.toThrow()
+    expect(() =>
+      validateDefinition({
+        ...copy,
+        steps: [
+          {
+            ...step,
+            evidence: {
+              ...ev,
+              path: '.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json',
+            },
+          },
+        ],
+      }),
+    ).toThrow(/task-review-copy/u)
+  })
+
+  it("does not settle FINDINGS from another run's concurrent PASS", async () => {
+    const root = await workspace()
+    roots.push(root)
+    const text = fenced({
+      digest: TASK_DIGEST,
+      verdict: 'FINDINGS',
+      findings: [{ severity: 'P1', title: 't', evidence: 'e', fix: 'f' }],
+    })
+    const result = await invoke(root, runnerFor(text), {
+      writeLocal: async (workspaceRoot, record) => {
+        const written = await writeLocalReviewRecord(workspaceRoot, record)
+        await writeLocalReviewRecord(workspaceRoot, {
+          ...record,
+          runId: 'other-run',
+          verdict: 'PASS',
+          findings: [],
+        })
+        return written
+      },
+    })
+    expect(result.run.steps[0]?.state).toBe('blocked')
+  })
+})

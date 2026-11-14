@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { lstat, mkdir, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHANGE_NAME } from './command-parse.js';
@@ -558,8 +558,24 @@ function baseRecord(input, now) {
 async function settleFromRecord(input, record, recordPath, now) {
     const check = await verifyEvidence(input.step.evidence ?? { kind: 'declaration' }, input.context);
     // The step settles only from the record this run just wrote, never from an
-    // older PASS the declared evidence happens to satisfy.
-    const bound = check.ok && check.evidence.path === recordPath && check.evidence.digest === record.digest;
+    // older PASS the declared evidence happens to satisfy. The published file
+    // must still be this run's own verdict: a concurrent review with the same
+    // digest can replace it between write and verification.
+    let persisted;
+    try {
+        persisted = JSON.parse(await readFile(join(input.context.workspace, recordPath), 'utf8'));
+    }
+    catch {
+        persisted = undefined;
+    }
+    const samePublication = persisted !== undefined &&
+        persisted.runId === input.run.id &&
+        persisted.verdict === record.verdict &&
+        persisted.digest === record.digest;
+    const bound = check.ok &&
+        check.evidence.path === recordPath &&
+        check.evidence.digest === record.digest &&
+        samePublication;
     if (bound) {
         return settleStep(input.run, input.step.id, 'done', { at: now, evidence: check.evidence });
     }

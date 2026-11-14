@@ -398,3 +398,24 @@ describe('collection item scopes', () => {
     ).toThrow(/unknown context field/u)
   })
 })
+
+describe('condition evaluation budget', () => {
+  it('stops an exponentially nested predicate instead of freezing the host', async () => {
+    const root = await workspace()
+    const context = await buildConditionContext({
+      workspace: root,
+      change: 'auth',
+      event: { kind: 'turn.stopping' },
+    })
+    let condition: Record<string, unknown> = { '==': [1, 1] }
+    for (let level = 0; level < 5; level += 1) {
+      condition = {
+        some: [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], condition],
+      }
+    }
+    expect(() => evaluateCondition(condition, context)).toThrow(/budget/u)
+    expect(
+      evaluateConditions([{ id: 'gated', trigger: { condition } }], context).get('gated'),
+    ).toBe(false)
+  })
+})

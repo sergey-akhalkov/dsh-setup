@@ -83,7 +83,10 @@ export interface JsonLogicData {
     readonly iteration?: number;
     readonly item?: unknown;
 }
-export declare function evaluateJsonLogic(rule: unknown, data: unknown, depth?: number): unknown;
+export declare const MAX_LOGIC_EVALUATIONS = 10000;
+export declare function evaluateJsonLogic(rule: unknown, data: unknown, depth?: number, budget?: {
+    used: number;
+}): unknown;
 export interface BranchStepInput {
     readonly run: WorkflowRun;
     readonly definition: Definition;

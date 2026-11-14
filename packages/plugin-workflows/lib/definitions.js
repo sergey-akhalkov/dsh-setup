@@ -921,8 +921,8 @@ export function validateDefinition(raw, source = 'definition') {
             fail(definition, `${reviewField}.path`, 'must declare the review record path');
         }
         const normalizedPath = reviewEvidence.path.replaceAll('\\', '/');
-        if (!normalizedPath.startsWith(`.dsh/workflows/records/${reviewRule}/`)) {
-            fail(definition, `${reviewField}.path`, `must stay under .dsh/workflows/records/${reviewRule}/; another definition's record never satisfies this review`);
+        if (!normalizedPath.startsWith(`.dsh/workflows/records/${definition}/`)) {
+            fail(definition, `${reviewField}.path`, `must stay under .dsh/workflows/records/${definition}/; another definition's record never satisfies this review`);
         }
         if (scope === 'task' && !normalizedPath.includes('/tasks/')) {
             fail(definition, `${reviewField}.path`, 'must use the tasks/ record directory');

@@ -1020,8 +1020,8 @@ export function apply(ctx, config = {}) {
             const changedName = event.kind === 'fs.change'
                 ? /^openspec\/changes\/([^/]+)\//u.exec(event.subject)?.[1]
                 : undefined;
-            if (changedName !== undefined)
-                lastChangeBySession.set(input.session, changedName);
+            // A watcher notification is attributed to whichever session is active at
+            // delivery time; it is content, not proof this session made the edit.
             // A change artifact edit marks the session's turn as spec-changing, so a
             // turn-close condition can see it after the fs.change event is gone.
             if (event.kind === 'fs.change' &&
@@ -1046,7 +1046,9 @@ export function apply(ctx, config = {}) {
                 ? undefined
                 : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1];
             const pendingSpec = pendingChange !== undefined && !/\/reviews\//u.test(pendingWritePath ?? '');
-            const conditionChangeCandidate = changedName ?? pendingChange ?? lastChangeBySession.get(input.session);
+            if (pendingChange !== undefined)
+                lastChangeBySession.set(input.session, pendingChange);
+            const conditionChangeCandidate = pendingChange ?? lastChangeBySession.get(input.session);
             const conditionsFor = async (definitionEvent) => {
                 if (conditionalDefinitions.length === 0)
                     return undefined;

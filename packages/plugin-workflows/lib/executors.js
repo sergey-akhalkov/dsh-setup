@@ -171,7 +171,12 @@ function truthy(value) {
 function operands(args) {
     return Array.isArray(args) ? args : [args];
 }
-export function evaluateJsonLogic(rule, data, depth = 0) {
+export const MAX_LOGIC_EVALUATIONS = 10_000;
+export function evaluateJsonLogic(rule, data, depth = 0, budget = { used: 0 }) {
+    budget.used += 1;
+    if (budget.used > MAX_LOGIC_EVALUATIONS) {
+        throw new Error('invalid JSONLogic: evaluation budget exceeded');
+    }
     if (depth > 32)
         throw new Error('invalid JSONLogic: nesting is too deep');
     if (depth === 0)
@@ -179,14 +184,14 @@ export function evaluateJsonLogic(rule, data, depth = 0) {
     if (rule === null || typeof rule !== 'object')
         return rule;
     if (Array.isArray(rule))
-        return rule.map((entry) => evaluateJsonLogic(entry, data, depth + 1));
+        return rule.map((entry) => evaluateJsonLogic(entry, data, depth + 1, budget));
     const keys = Object.keys(rule);
     if (keys.length !== 1)
         throw new Error('invalid JSONLogic: an operator object has one key');
     const operator = keys[0] ?? '';
     const raw = rule[operator];
     const args = operands(raw);
-    const value = (entry) => evaluateJsonLogic(entry, data, depth + 1);
+    const value = (entry) => evaluateJsonLogic(entry, data, depth + 1, budget);
     switch (operator) {
         case 'var': {
             const rawPath = typeof args[0] === 'string' || typeof args[0] === 'number'
@@ -316,7 +321,7 @@ export function evaluateJsonLogic(rule, data, depth = 0) {
             const collection = value(args[0]);
             const items = Array.isArray(collection) ? collection : [];
             const predicate = args[1];
-            const results = items.map((entry) => truthy(evaluateJsonLogic(predicate, entry, depth + 1)));
+            const results = items.map((entry) => truthy(evaluateJsonLogic(predicate, entry, depth + 1, budget)));
             if (operator === 'some')
                 return results.some(Boolean);
             if (operator === 'all')
@@ -335,17 +340,17 @@ export function evaluateJsonLogic(rule, data, depth = 0) {
         }
         case 'map': {
             const collection = value(args[0]);
-            return (Array.isArray(collection) ? collection : []).map((entry) => evaluateJsonLogic(args[1], entry, depth + 1));
+            return (Array.isArray(collection) ? collection : []).map((entry) => evaluateJsonLogic(args[1], entry, depth + 1, budget));
         }
         case 'filter': {
             const collection = value(args[0]);
-            return (Array.isArray(collection) ? collection : []).filter((entry) => truthy(evaluateJsonLogic(args[1], entry, depth + 1)));
+            return (Array.isArray(collection) ? collection : []).filter((entry) => truthy(evaluateJsonLogic(args[1], entry, depth + 1, budget)));
         }
         case 'reduce': {
             const collection = value(args[0]);
             let accumulator = args.length >= 3 ? value(args[2]) : undefined;
             for (const entry of Array.isArray(collection) ? collection : []) {
-                accumulator = evaluateJsonLogic(args[1], { current: entry, accumulator }, depth + 1);
+                accumulator = evaluateJsonLogic(args[1], { current: entry, accumulator }, depth + 1, budget);
             }
             return accumulator;
         }
