@@ -1249,6 +1249,16 @@ export function validateDefinition(raw: unknown, source = 'definition'): Definit
       )
     }
     const gateIdentity = settingsValue.gateIdentity
+    if (
+      reviewEvidence.path === undefined ||
+      !reviewEvidence.path.replaceAll('\\', '/').startsWith('.dsh/workflows/records/')
+    ) {
+      fail(
+        definition,
+        `${reviewField}.path`,
+        'must name the workflows review record store (.dsh/workflows/records/...), never another file',
+      )
+    }
     if (gateIdentity !== undefined && reviewEvidence.rule !== gateIdentity) {
       fail(
         definition,

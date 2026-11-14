@@ -918,6 +918,10 @@ export function validateDefinition(raw, source = 'definition') {
             fail(definition, `${reviewField}.kind`, 'must be "record"; a review step settles only from its matching verdict record');
         }
         const gateIdentity = settingsValue.gateIdentity;
+        if (reviewEvidence.path === undefined ||
+            !reviewEvidence.path.replaceAll('\\', '/').startsWith('.dsh/workflows/records/')) {
+            fail(definition, `${reviewField}.path`, 'must name the workflows review record store (.dsh/workflows/records/...), never another file');
+        }
         if (gateIdentity !== undefined && reviewEvidence.rule !== gateIdentity) {
             fail(definition, `${reviewField}.rule`, `must be the gate identity "${gateIdentity}" so a copy cannot point at another record`);
         }

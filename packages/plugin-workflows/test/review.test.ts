@@ -735,6 +735,20 @@ describe('review evidence contract', () => {
         ],
       }),
     ).toThrow(/gate identity/u)
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [
+          {
+            ...step,
+            evidence: {
+              ...(step.evidence as unknown as Record<string, unknown>),
+              path: 'test/fixtures/delegation-record.json',
+            },
+          },
+        ],
+      }),
+    ).toThrow(/record store/u)
   })
 
   it('does not call the reviewer when the step evidence is unrelated', async () => {

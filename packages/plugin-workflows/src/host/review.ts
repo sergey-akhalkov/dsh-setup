@@ -779,13 +779,18 @@ async function settleFromRecord(
   now: number,
 ): Promise<WorkflowRun> {
   const check = await verifyEvidence(input.step.evidence ?? { kind: 'declaration' }, input.context)
-  if (check.ok) {
+  // The step settles only from the record this run just wrote, never from an
+  // older PASS the declared evidence happens to satisfy.
+  const bound =
+    check.ok && check.evidence.path === recordPath && check.evidence.digest === record.digest
+  if (bound) {
     return settleStep(input.run, input.step.id, 'done', { at: now, evidence: check.evidence })
   }
-  const reason =
-    record.verdict === 'FINDINGS'
+  const reason = !check.ok
+    ? record.verdict === 'FINDINGS'
       ? `the review returned FINDINGS (${String(record.findings.length)} P0/P1); fix them and re-run the review`
       : `the review record at ${recordPath} does not satisfy the step: ${check.failure.detail}`
+    : `the verified evidence is not the record this review wrote at ${recordPath}; the step stays open`
   return settleStep(input.run, input.step.id, 'blocked', {
     at: now,
     reason,
