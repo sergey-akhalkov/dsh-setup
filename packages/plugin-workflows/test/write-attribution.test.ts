@@ -264,3 +264,34 @@ describe('quoted destinations and root workdir', () => {
     ).toBeUndefined()
   })
 })
+
+describe('unexecuted shell text', () => {
+  function call(
+    args: Record<string, unknown>,
+    ok = true,
+  ): {
+    readonly callId: string
+    readonly name: string
+    readonly arguments: Readonly<Record<string, unknown>>
+    readonly ok: boolean
+  } {
+    return { callId: 'c', name: 'pwsh', arguments: args, ok }
+  }
+
+  it('ignores a comment-only command and a quoted assignment', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: '# Set-Content openspec/changes/auth/design.md -Value x' })],
+        1,
+      ),
+    ).toBeUndefined()
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: "$x = 'Set-Content openspec/changes/auth/design.md'" })],
+        1,
+      ),
+    ).toBeUndefined()
+  })
+})

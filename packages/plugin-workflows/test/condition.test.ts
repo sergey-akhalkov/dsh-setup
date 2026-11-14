@@ -425,17 +425,25 @@ describe('collection item scopes', () => {
     ).not.toThrow()
   })
 
+  it('rejects a root field inside a collection predicate', () => {
+    expect(() =>
+      validateCondition({
+        some: [{ var: 'change.lanes' }, { var: 'session.involved' }],
+      }),
+    ).toThrow(/unknown item field/u)
+  })
+
   it('rejects a task field on a lane and a lane field on a task', () => {
     expect(() =>
       validateCondition({
         some: [{ var: 'change.lanes' }, { '==': [{ var: 'text' }, null] }],
       }),
-    ).toThrow(/unknown context field/u)
+    ).toThrow(/unknown (context|item) field/u)
     expect(() =>
       validateCondition({
         some: [{ var: 'change.tasks.items' }, { '==': [{ var: 'title' }, null] }],
       }),
-    ).toThrow(/unknown context field/u)
+    ).toThrow(/unknown (context|item) field/u)
   })
 })
 

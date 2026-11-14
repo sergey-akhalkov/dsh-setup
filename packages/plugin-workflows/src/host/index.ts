@@ -59,6 +59,7 @@ import { defaultGit, worktreeDigest } from './git.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
 import { advanceIntake } from './intake.js'
+import { readInvolvement, writeInvolvement } from './involvement.js'
 import {
   Journal,
   type JournalInput,
@@ -1349,8 +1350,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ? undefined
           : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1])
       const pendingSpec = pendingChange !== undefined
-      if (pendingChange !== undefined) lastChangeBySession.set(input.session, pendingChange)
-      const conditionChangeCandidate = pendingChange ?? lastChangeBySession.get(input.session)
+      if (pendingChange !== undefined) {
+        lastChangeBySession.set(input.session, pendingChange)
+        await writeInvolvement(workspace, input.session, pendingChange)
+      }
+      const restoredInvolvement =
+        pendingChange === undefined && conditionalDefinitions.length > 0
+          ? await readInvolvement(workspace, input.session)
+          : undefined
+      const conditionChangeCandidate =
+        pendingChange ?? lastChangeBySession.get(input.session) ?? restoredInvolvement
       const conditionsFor = async (
         definitionEvent: DefinitionEvent,
       ): Promise<ReadonlyMap<string, boolean> | undefined> => {

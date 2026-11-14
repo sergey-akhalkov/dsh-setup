@@ -44,12 +44,12 @@ export function attributedSpecWrite(workspace, calls, turn) {
 const CHANGE_CREATION = /(?:^|[;&|]\s*)openspec(?:\.cmd|\.exe)?\s+new\s+change\s+([a-z0-9][a-z0-9-]*)/u;
 const SHELL_WRITE = /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b[^;&|]*?(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu;
 const SHELL_REDIRECT = /(?:^|[\s;&|])>{1,2}\s*(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu;
-const PRINT_ONLY = /^\s*(?:Write-Output|Write-Host|Write-Debug|Write-Verbose|echo)\b/iu;
-/** Drop quoted spans so a printed example is not read as an executed command. */
-function unquoted(text) {
+/** Drop quotes and unquoted comments so only executed text is inspected. */
+function executedText(text) {
     let output = '';
     let quote;
-    for (const char of text) {
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index] ?? '';
         if (quote !== undefined) {
             if (char === quote)
                 quote = undefined;
@@ -59,10 +59,15 @@ function unquoted(text) {
             quote = char;
             continue;
         }
+        if (char === '#' && (index === 0 || /[\s;&|]/u.test(text[index - 1] ?? ''))) {
+            break;
+        }
         output += char;
     }
     return output;
 }
+const WRITE_COMMAND = /(?:^|[;&|]|\|)\s*(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b/iu;
+const REDIRECT = /(?:^|[\s;&|])>{1,2}/u;
 /** Whether a directory is the workspace root or one of its descendants. */
 export function isWorkspaceDirectory(workspace, directory) {
     const root = resolve(workspace);
@@ -96,15 +101,18 @@ export function attributedChangeName(workspace, calls, turn) {
         if (workdir !== undefined && !isWorkspaceDirectory(workspace, workdir)) {
             continue;
         }
-        const creation = CHANGE_CREATION.exec(normalized);
+        const executed = executedText(normalized).trim();
+        if (executed === '')
+            continue;
+        const creation = CHANGE_CREATION.exec(executed);
         if (creation !== null)
             return creation[1];
-        const bare = unquoted(normalized);
-        // A print-only command is not a write unless it redirects into a file. The
-        // destination is matched on the original text so a quoted path is kept.
-        if (PRINT_ONLY.test(bare) && !/(?:^|[\s;&|])>{1,2}/u.test(bare))
+        const startsWrite = WRITE_COMMAND.test(executed);
+        const hasRedirect = REDIRECT.test(executed);
+        if (!startsWrite && !hasRedirect)
             continue;
-        const shellWrite = SHELL_WRITE.exec(normalized) ?? SHELL_REDIRECT.exec(normalized);
+        // The destination is matched on the original text so a quoted path is kept.
+        const shellWrite = startsWrite ? SHELL_WRITE.exec(normalized) : SHELL_REDIRECT.exec(normalized);
         if (shellWrite !== null) {
             const raw = shellWrite[2] ?? '';
             const candidate = isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)

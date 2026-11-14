@@ -78,8 +78,11 @@ function checkPath(raw, field, itemScope) {
     if (segments.length > 8) {
         throw new Error(`condition.${field} "var" path "${raw}" nests too deeply`);
     }
-    if (itemScope?.has(raw))
-        return;
+    if (itemScope !== undefined) {
+        if (itemScope.has(raw))
+            return;
+        throw new Error(`condition.${field} "var" path "${raw}" names an unknown item field; only the selected collection's fields are visible inside its predicate`);
+    }
     const root = segments[0] ?? '';
     if (!ROOT_SET.has(root)) {
         throw new Error(`condition.${field} "var" path "${raw}" names an unknown context field; use one of: ${CONDITION_ROOTS.join(', ')}`);
