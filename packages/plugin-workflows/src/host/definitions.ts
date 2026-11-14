@@ -1267,12 +1267,25 @@ export function validateDefinition(raw: unknown, source = 'definition'): Definit
         'must be "current" so a whole-spec verdict is bound to the current artifacts',
       )
     }
-    if (scope === 'task' && reviewEvidence.task === undefined) {
-      fail(
-        definition,
-        `${reviewField}.task`,
-        'must name the task placeholder for a task-scoped review record',
-      )
+    // The contract is bound to the run's own change and task: a literal id
+    // would let the intake reuse another task's PASS before any review starts.
+    if (reviewEvidence.change !== '{name}') {
+      fail(definition, `${reviewField}.change`, 'must be the {name} placeholder')
+    }
+    if (!reviewEvidence.path.includes('{name}')) {
+      fail(definition, `${reviewField}.path`, 'must carry the {name} placeholder')
+    }
+    if (scope === 'task') {
+      if (reviewEvidence.task !== '{taskId}') {
+        fail(
+          definition,
+          `${reviewField}.task`,
+          'must be the {taskId} placeholder for a task-scoped review record',
+        )
+      }
+      if (!reviewEvidence.path.includes('{taskId}')) {
+        fail(definition, `${reviewField}.path`, 'must carry the {taskId} placeholder')
+      }
     }
   }
   if (settingsValue.gate === 'review') {

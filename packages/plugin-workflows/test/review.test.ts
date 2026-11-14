@@ -751,6 +751,32 @@ describe('review evidence contract', () => {
     ).toThrow(/record store/u)
   })
 
+  it('binds task evidence to the run task and change placeholders', () => {
+    const def = taskDefinition()
+    const step = def.steps[0] as Definition['steps'][number]
+    const ev = step.evidence as unknown as Record<string, unknown>
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [{ ...step, evidence: { ...ev, task: '0123456789abcdef' } }],
+      }),
+    ).toThrow(/placeholder/u)
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [
+          {
+            ...step,
+            evidence: {
+              ...ev,
+              path: '.dsh/workflows/records/task-review/{name}/tasks/fixed.json',
+            },
+          },
+        ],
+      }),
+    ).toThrow(/placeholder/u)
+  })
+
   it('requires the same record contract even without the review gate', () => {
     const def = taskDefinition()
     const step = def.steps[0] as Definition['steps'][number]
