@@ -489,3 +489,16 @@ describe('scalar item references', () => {
     ).toBe(true)
   })
 })
+
+describe('collection var default form', () => {
+  it('derives item scope from the var default-value form and missing item fields', () => {
+    expect(() =>
+      validateCondition({
+        and: [
+          { some: [{ var: ['change.lanes', []] }, { '==': [{ var: 'title' }, 'Engine'] }] },
+          { some: [{ var: ['change.lanes', []] }, { missing: ['title'] }] },
+        ],
+      }),
+    ).not.toThrow()
+  })
+})

@@ -172,3 +172,44 @@ describe('shell write attribution', () => {
     ).toBeUndefined()
   })
 })
+
+describe('shell attribution boundaries', () => {
+  function call(
+    args: Record<string, unknown>,
+    ok = true,
+  ): {
+    readonly callId: string
+    readonly name: string
+    readonly arguments: Readonly<Record<string, unknown>>
+    readonly ok: boolean
+  } {
+    return { callId: 'c', name: 'pwsh', arguments: args, ok }
+  }
+
+  it('does not attribute a printed command example', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: "Write-Output 'Set-Content openspec/changes/auth/design.md -Value x'" })],
+        1,
+      ),
+    ).toBeUndefined()
+  })
+
+  it('attributes a creation only from an in-workspace working directory', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: 'openspec new change auth', workdir: 'C:/other' })],
+        1,
+      ),
+    ).toBeUndefined()
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [call({ command: 'openspec new change auth', workdir: 'C:/repo/packages' })],
+        1,
+      ),
+    ).toBe('auth')
+  })
+})

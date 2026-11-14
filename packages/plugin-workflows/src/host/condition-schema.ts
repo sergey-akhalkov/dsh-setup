@@ -52,9 +52,10 @@ function itemScopeOf(collection: unknown): ItemScope {
   const keys = Object.keys(collection)
   if (keys.length !== 1 || keys[0] !== 'var') return undefined
   const raw = (collection as { var?: unknown }).var
-  if (typeof raw !== 'string') return undefined
-  if (raw === 'change.lanes') return LANE_FIELDS
-  if (raw === 'change.tasks.items') return TASK_FIELDS
+  const path = Array.isArray(raw) ? raw[0] : raw
+  if (typeof path !== 'string') return undefined
+  if (path === 'change.lanes') return LANE_FIELDS
+  if (path === 'change.tasks.items') return TASK_FIELDS
   return undefined
 }
 
@@ -152,7 +153,7 @@ function varPath(rule: unknown, field: string, depth = 0, itemScope: ItemScope =
             `condition.${field} "${operator}" names must be literal field names, not computed expressions`,
           )
         }
-        checkPath(name, field, undefined)
+        checkPath(name, field, itemScope)
       }
     }
     return

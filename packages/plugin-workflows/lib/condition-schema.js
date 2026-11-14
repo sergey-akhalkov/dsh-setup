@@ -43,11 +43,12 @@ function itemScopeOf(collection) {
     if (keys.length !== 1 || keys[0] !== 'var')
         return undefined;
     const raw = collection.var;
-    if (typeof raw !== 'string')
+    const path = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof path !== 'string')
         return undefined;
-    if (raw === 'change.lanes')
+    if (path === 'change.lanes')
         return LANE_FIELDS;
-    if (raw === 'change.tasks.items')
+    if (path === 'change.tasks.items')
         return TASK_FIELDS;
     return undefined;
 }
@@ -144,7 +145,7 @@ function varPath(rule, field, depth = 0, itemScope = undefined) {
                 if (typeof name !== 'string' || /^\d+$/u.test(name)) {
                     throw new Error(`condition.${field} "${operator}" names must be literal field names, not computed expressions`);
                 }
-                checkPath(name, field, undefined);
+                checkPath(name, field, itemScope);
             }
         }
         return;

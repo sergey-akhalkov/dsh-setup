@@ -48,6 +48,25 @@ const SHELL_WRITE =
   /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b[^;&|]*?(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu
 const SHELL_REDIRECT =
   /(?:^|[\s;&|])>{1,2}\s*(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu
+const PRINT_ONLY = /^\s*(?:Write-Output|Write-Host|Write-Debug|Write-Verbose|echo)\b/iu
+
+/** Drop quoted spans so a printed example is not read as an executed command. */
+function unquoted(text: string): string {
+  let output = ''
+  let quote: string | undefined
+  for (const char of text) {
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    output += char
+  }
+  return output
+}
 
 /**
  * The change this turn made, from a successful write/edit of its artifacts or
@@ -69,17 +88,24 @@ export function attributedChangeName(
     const command = call.arguments.command
     if (typeof command !== 'string') continue
     const normalized = command.replace(/\b(?:rtk|pnpm exec)\s+/gu, '').trim()
+    const workdir =
+      typeof call.arguments.workdir === 'string'
+        ? call.arguments.workdir
+        : typeof call.arguments.cwd === 'string'
+          ? call.arguments.cwd
+          : undefined
+    if (workdir !== undefined && normalizedWorkspacePath(workspace, workdir) === undefined) {
+      continue
+    }
     const creation = CHANGE_CREATION.exec(normalized)
     if (creation !== null) return creation[1]
-    const shellWrite = SHELL_WRITE.exec(normalized) ?? SHELL_REDIRECT.exec(normalized)
+    const bare = unquoted(normalized)
+    const redirect = SHELL_REDIRECT.exec(bare)
+    // A print-only command is not a write unless it redirects into a file.
+    if (PRINT_ONLY.test(bare) && redirect === null) continue
+    const shellWrite = SHELL_WRITE.exec(bare) ?? redirect
     if (shellWrite !== null) {
       const raw = shellWrite[2] ?? ''
-      const workdir =
-        typeof call.arguments.workdir === 'string'
-          ? call.arguments.workdir
-          : typeof call.arguments.cwd === 'string'
-            ? call.arguments.cwd
-            : undefined
       const candidate =
         isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
           ? raw
