@@ -94,6 +94,24 @@ describe('host subagent adapter', () => {
     expect(result.completed).toBe(false)
   })
 
+  it('waits for the disposed child before releasing teardown', async () => {
+    const captured: Captured = { spec: {}, disposed: 0 }
+    const runner = hostSubagentRunner(
+      fakeRuntime(
+        captured,
+        new Promise(() => {
+          // A cancelled child never completes; disposal is the only cleanup.
+        }),
+      ),
+      agent,
+    )
+    const controller = new AbortController()
+    void runner.run({ provider: 'codex-subagent', prompt: 'prompt' }, controller.signal)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    controller.abort()
+    await runner.waitForTeardown?.()
+    expect(captured.disposed).toBe(1)
+  })
   it('disposes an activation published after the abort already fired', async () => {
     const captured: Captured = { spec: {}, disposed: 0 }
     const runner = hostSubagentRunner(

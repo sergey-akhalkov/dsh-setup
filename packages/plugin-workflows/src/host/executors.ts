@@ -1011,6 +1011,8 @@ export interface SubagentRunner {
     },
     signal?: AbortSignal,
   ): Promise<SubagentRunResult>
+  /** Await every started child's teardown before releasing the review slot. */
+  waitForTeardown?(): Promise<void>
 }
 
 export interface SubagentStepInput {

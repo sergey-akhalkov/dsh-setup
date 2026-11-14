@@ -156,6 +156,9 @@ export class ReviewScheduler {
         ...(result.record?.verdict === undefined ? {} : { verdict: result.record.verdict }),
       })
     } finally {
+      // Keep the capacity slot and snapshot until the reviewer is torn down; a
+      // timed-out review must not overlap the next admitted reviewer.
+      await entry.request.runner.waitForTeardown?.().catch(() => undefined)
       await this.queue.complete(entry, result.record?.verdict === 'PASS' ? 'completed' : 'failed')
     }
   }

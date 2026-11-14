@@ -197,6 +197,8 @@ export interface SubagentRunner {
         readonly delivery?: 'parent' | 'caller';
         readonly agentOptions?: Readonly<Record<string, unknown>>;
     }, signal?: AbortSignal): Promise<SubagentRunResult>;
+    /** Await every started child's teardown before releasing the review slot. */
+    waitForTeardown?(): Promise<void>;
 }
 export interface SubagentStepInput {
     readonly run: WorkflowRun;

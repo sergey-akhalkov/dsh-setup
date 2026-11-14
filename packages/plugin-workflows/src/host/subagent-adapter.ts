@@ -9,7 +9,13 @@ import type { SubagentRunner } from './executors.js'
  * start signal no longer governs a published activation.
  */
 export function hostSubagentRunner(runtime: SubagentRuntime, agent: Agent): SubagentRunner {
+  const pendingTeardowns: Promise<void>[] = []
   return {
+    waitForTeardown: async () => {
+      while (pendingTeardowns.length > 0) {
+        await Promise.all(pendingTeardowns.splice(0))
+      }
+    },
     run: async (request, signal) => {
       const controller = signal ?? new AbortController().signal
       // A missing provider is a run-time review failure with the target id and
@@ -51,7 +57,7 @@ export function hostSubagentRunner(runtime: SubagentRuntime, agent: Agent): Suba
       // after publication. Teardown is fire-and-forget and never masks the
       // result or leaks an unhandled rejection.
       const stop = (): void => {
-        void activation.dispose().catch(() => undefined)
+        pendingTeardowns.push(activation.dispose().catch(() => undefined))
       }
       if (controller.aborted) stop()
       else controller.addEventListener('abort', stop, { once: true })
