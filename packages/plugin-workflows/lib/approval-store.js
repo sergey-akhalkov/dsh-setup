@@ -346,6 +346,34 @@ function applyLoadRules(definitions, userConfirmed, installedLegacy, enabledLega
  * exactly: the same pre-execute trigger kind and match, and an active mode.
  * Changing any of these would silently bypass the installed gate.
  */
+function sameLegacyBinding(installed, local) {
+    const installedLegacy = installed.settings.legacy;
+    const localLegacy = local.settings.legacy;
+    if (installedLegacy === undefined || localLegacy === undefined) {
+        if (installedLegacy !== localLegacy)
+            return false;
+    }
+    else if (installedLegacy.plugin !== localLegacy.plugin ||
+        installedLegacy.signal !== localLegacy.signal) {
+        return false;
+    }
+    for (const step of installed.steps) {
+        const localStep = local.steps.find((entry) => entry.id === step.id);
+        if (localStep === undefined)
+            return false;
+        const installedStepLegacy = step.legacy;
+        const localStepLegacy = localStep.legacy;
+        if (installedStepLegacy === undefined || localStepLegacy === undefined) {
+            if (installedStepLegacy !== localStepLegacy)
+                return false;
+        }
+        else if (installedStepLegacy.plugin !== localStepLegacy.plugin ||
+            installedStepLegacy.signal !== localStepLegacy.signal) {
+            return false;
+        }
+    }
+    return true;
+}
 function preservesGate(installed, local) {
     if (installed.trigger.kind !== local.trigger.kind)
         return false;
@@ -466,6 +494,12 @@ export async function loadApprovedDefinitions(workspace, options) {
             if (installed?.settings.gate !== undefined) {
                 if (parsed.settings.gate !== installed.settings.gate || !preservesGate(installed, parsed)) {
                     errors.push(`definition "${id}" is refused: the approved local copy drops or weakens the installed definition's declared "${installed.settings.gate}" gate (it must keep the active trigger, its exact match, settings.gate, and the {name} capture), so the installed definition remains effective; re-save a copy from the installed template and approve it (the retired <name> token cannot be used)`);
+                    continue;
+                }
+                // The copy may not drop or swap the installed legacy binding: ownership
+                // is resolved from that binding, so editing it bypasses the switch.
+                if (!sameLegacyBinding(installed, parsed)) {
+                    errors.push(`definition "${id}" is refused: the approved local copy removes or replaces the installed definition's legacy ownership binding, so the installed definition remains effective; re-save a copy from the installed template and approve it`);
                     continue;
                 }
                 // The override must itself load under the profile's ownership rules;

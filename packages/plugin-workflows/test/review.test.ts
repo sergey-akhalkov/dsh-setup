@@ -1014,6 +1014,18 @@ describe('per-signal switch diagnostics', () => {
     }
   })
 
+  it('refuses a deferred shipped copy beside a disabled switch', () => {
+    for (const [signal, switchName] of SWITCHES) {
+      const base = withSource(localDefinition(signal), 'shipped')
+      const deferred = {
+        ...base,
+        settings: { ...base.settings, gateOwnership: 'defer' as const },
+      }
+      const issues = resolveOwnership(deferred, new Set(['delegation-rules']), new Set()).issues
+      expect(issues.join('\n')).toContain(switchName)
+      expect(issues.join('\n')).toContain('off')
+    }
+  })
   it('resolves a shipped review definition from its switch', () => {
     const shipped = withSource(taskDefinition(), 'shipped')
     const enabled = resolveOwnership(
