@@ -142,6 +142,16 @@ afterEach(async () => {
 })
 
 describe('runReviewStep', () => {
+  it('fails a changed live input even when the verdict itself is a PASS', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const result = await invoke(root, runnerFor(PASS_TEXT), {
+      prepared: { specDigest: DIGEST, liveGuard: async () => false },
+    })
+    expect(result.record?.verdict).toBe('ERROR')
+    expect(result.record?.failureClass).toBe('reviewed-inputs-changed')
+    expect(result.run.steps[0]?.state).not.toBe('done')
+  })
   it('writes the local record and the committed approval for a task PASS', async () => {
     const root = await workspace()
     roots.push(root)

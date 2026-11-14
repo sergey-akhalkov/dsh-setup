@@ -686,6 +686,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   /** One change-tree watcher per workspace, started on its first event. */
   const watchers = new Map<string, FsChangeWatcher>()
   const watching = new Set<string>()
+  /** A per-workspace mutation counter that makes a restored edit detectable. */
+  const mutationEpochs = new Map<string, number>()
   /** Whether a workspace's change source started successfully. */
   const watchHealthy = new Map<string, boolean>()
   let listenerCount = 0
@@ -1580,6 +1582,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       fs: services.fs,
       onChange: (event) => {
         if (pluginDisposed) return
+        // A live review must see any file mutation, including one restored
+        // before settle; the per-workspace epoch is its cheap proof.
+        mutationEpochs.set(workspace, (mutationEpochs.get(workspace) ?? 0) + 1)
         const session = activeSession.get(workspace)
         if (session === undefined) return
         const summary = `${event.change} ${event.path}`
@@ -2702,6 +2707,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           })
           return failure.run
         }
+        const startEpoch = mutationEpochs.get(workspace) ?? 0
         const prepared: ReviewRunInput['prepared'] =
           spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
             ? await (async () => {
@@ -2728,13 +2734,24 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   artifactDigest: specDigest,
                   ...(live === undefined ? {} : { tree: live }),
                   liveGuard: async () =>
+                    (mutationEpochs.get(workspace) ?? 0) === startEpoch &&
                     (await worktreeDigest(workspace, defaultGit).catch(() => undefined)) === live,
                 }
               })()
-            : {
-                specDigest,
-                liveGuard: async () => (await currentSpecDigest(workspace, change)) === specDigest,
-              }
+            : await (async () => {
+                const tree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+                return {
+                  specDigest,
+                  ...(tree === undefined ? {} : { tree }),
+                  liveGuard: async () =>
+                    (mutationEpochs.get(workspace) ?? 0) === startEpoch &&
+                    (await currentSpecDigest(workspace, change)) === specDigest &&
+                    (tree === undefined
+                      ? true
+                      : (await worktreeDigest(workspace, defaultGit).catch(() => undefined)) ===
+                        tree),
+                }
+              })()
         const request: ReviewRunInput = {
           run: reviewRun,
           definition: reviewDefinition,
