@@ -1036,8 +1036,19 @@ export function apply(ctx, config = {}) {
             // The session's latest change, shared by the condition context and the
             // run context a conditional turn-close run records. A write made in this
             // turn is attributed immediately: the fs watcher debounces and its event
-            // would arrive after the close.
-            const pendingWritePath = metrics !== undefined && metrics.turn === input.turn ? metrics.lastWritePath : undefined;
+            // would arrive after the close. OpenSpec writes are tracked from the
+            // observed write/edit calls because the code-write metrics exclude them.
+            const turnWritePaths = (sessionToolCalls.get(input.session) ?? [])
+                .filter((call) => (call.turn === undefined || call.turn === input.turn) &&
+                (call.name === 'write' || call.name === 'edit'))
+                .map((call) => {
+                const value = call.arguments.file_path ?? call.arguments.path;
+                return typeof value === 'string' ? value.replaceAll('\\', '/') : undefined;
+            })
+                .filter((value) => value !== undefined);
+            const pendingSpecWrite = turnWritePaths.find((value) => /^openspec\/changes\/[^/]+\//u.test(value));
+            const pendingWritePath = pendingSpecWrite ??
+                (metrics !== undefined && metrics.turn === input.turn ? metrics.lastWritePath : undefined);
             const pendingChange = pendingWritePath === undefined
                 ? undefined
                 : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1];

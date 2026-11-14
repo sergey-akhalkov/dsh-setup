@@ -30,17 +30,27 @@ const STATIC_PATHS = new Set([
     'session.completed',
 ]);
 const ROOT_SET = new Set(CONDITION_ROOTS);
-/** The fields of one collection item, valid only inside an item predicate. */
-const ITEM_FIELDS = new Set([
-    'id',
-    'number',
-    'text',
-    'checked',
-    'n',
-    'title',
-    'owned',
-    'unchecked',
-]);
+/** The fields of one lane item, valid only inside a lanes item predicate. */
+const LANE_FIELDS = new Set(['n', 'title', 'owned', 'unchecked']);
+/** The fields of one task item, valid only inside a tasks item predicate. */
+const TASK_FIELDS = new Set(['id', 'number', 'text', 'checked']);
+/** The item field set a collection expression selects, if it is known. */
+function itemScopeOf(collection) {
+    if (typeof collection !== 'object' || collection === null || Array.isArray(collection)) {
+        return undefined;
+    }
+    const keys = Object.keys(collection);
+    if (keys.length !== 1 || keys[0] !== 'var')
+        return undefined;
+    const raw = collection.var;
+    if (typeof raw !== 'string')
+        return undefined;
+    if (raw === 'change.lanes')
+        return LANE_FIELDS;
+    if (raw === 'change.tasks.items')
+        return TASK_FIELDS;
+    return undefined;
+}
 function indexedPath(segments) {
     if (segments[0] !== 'change')
         return false;
@@ -65,7 +75,7 @@ function checkPath(raw, field, itemScope) {
     if (segments.length > 8) {
         throw new Error(`condition.${field} "var" path "${raw}" nests too deeply`);
     }
-    if (itemScope && ITEM_FIELDS.has(raw))
+    if (itemScope?.has(raw))
         return;
     if (raw === '')
         return;
@@ -89,7 +99,7 @@ function checkPath(raw, field, itemScope) {
     throw new Error(`condition.${field} "var" path "${raw}" names an unknown context field; use one of the documented fields`);
 }
 const ITEM_OPERATORS = new Set(['some', 'all', 'none', 'map', 'filter']);
-function varPath(rule, field, depth = 0, itemScope = false) {
+function varPath(rule, field, depth = 0, itemScope = undefined) {
     if (depth > 32)
         throw new Error(`condition.${field} nests too deeply`);
     if (rule === null || typeof rule !== 'object')
@@ -134,7 +144,7 @@ function varPath(rule, field, depth = 0, itemScope = false) {
                 if (typeof name !== 'string' || /^\d+$/u.test(name)) {
                     throw new Error(`condition.${field} "${operator}" names must be literal field names, not computed expressions`);
                 }
-                checkPath(name, field, false);
+                checkPath(name, field, undefined);
             }
         }
         return;
@@ -143,14 +153,15 @@ function varPath(rule, field, depth = 0, itemScope = false) {
         ? record[operator]
         : [record[operator]];
     if (ITEM_OPERATORS.has(operator)) {
+        const innerScope = itemScopeOf(args[0]);
         for (const [index, arg] of args.entries()) {
-            varPath(arg, field, depth + 1, index > 0);
+            varPath(arg, field, depth + 1, index > 0 ? innerScope : itemScope);
         }
         return;
     }
     if (operator === 'reduce') {
         for (const [index, arg] of args.entries()) {
-            varPath(arg, field, depth + 1, index > 0);
+            varPath(arg, field, depth + 1, index > 0 ? undefined : itemScope);
         }
         return;
     }

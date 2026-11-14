@@ -372,3 +372,29 @@ describe('condition route and item scopes', () => {
     expect(complete.session.completed).toBe(true)
   })
 })
+
+describe('collection item scopes', () => {
+  it('accepts the fields of the selected collection', () => {
+    expect(() =>
+      validateCondition({
+        and: [
+          { some: [{ var: 'change.lanes' }, { '==': [{ var: 'title' }, 'Engine'] }] },
+          { some: [{ var: 'change.tasks.items' }, { '==': [{ var: 'checked' }, false] }] },
+        ],
+      }),
+    ).not.toThrow()
+  })
+
+  it('rejects a task field on a lane and a lane field on a task', () => {
+    expect(() =>
+      validateCondition({
+        some: [{ var: 'change.lanes' }, { '==': [{ var: 'text' }, null] }],
+      }),
+    ).toThrow(/unknown context field/u)
+    expect(() =>
+      validateCondition({
+        some: [{ var: 'change.tasks.items' }, { '==': [{ var: 'title' }, null] }],
+      }),
+    ).toThrow(/unknown context field/u)
+  })
+})
