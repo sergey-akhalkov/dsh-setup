@@ -42,6 +42,7 @@ export type ReviewAdmission = {
 };
 export declare class ReviewScheduler {
     private readonly host;
+    private readonly maxAttempts;
     private readonly queue;
     /** The last settled result per run id, for a status read. */
     private readonly lastSettled;

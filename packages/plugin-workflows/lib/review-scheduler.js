@@ -11,11 +11,13 @@ function queueFile(input) {
 }
 export class ReviewScheduler {
     host;
+    maxAttempts;
     queue;
     /** The last settled result per run id, for a status read. */
     lastSettled = new Map();
     constructor(limits, host) {
         this.host = host;
+        this.maxAttempts = limits.maxAttempts;
         this.queue = new ReviewQueue(limits, {
             start: (entry) => {
                 // The admission handshake must return before the reviewer starts: a
@@ -72,6 +74,17 @@ export class ReviewScheduler {
                 error: error instanceof Error ? error.message : String(error),
                 failureClass: 'unknown',
             });
+        }
+        const transientFailures = new Set(['child-limit', 'provider-not-started', 'timeout']);
+        const failureClass = result.record?.failureClass;
+        if (failureClass !== undefined &&
+            transientFailures.has(failureClass) &&
+            this.queue.attemptsOf(entry.run.id) < this.maxAttempts) {
+            await this.queue.scheduleRetry(entry, {
+                failureClass: failureClass,
+                transient: true,
+            });
+            return;
         }
         try {
             await this.host.persistRun(entry.workspace, result.run);

@@ -274,6 +274,62 @@ describe('review scheduler', () => {
   })
 })
 
+it('retries a transient review start before settling', async () => {
+  const { root, digest } = await reviewWorkspace()
+  const def = definition()
+  let calls = 0
+  const persisted: WorkflowRun[] = []
+  const scheduler = new ReviewScheduler(
+    {
+      enabled: true,
+      concurrency: 1,
+      maxQueued: 2,
+      maxAttempts: 2,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      waitTimeoutMs: 10_000,
+    },
+    {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async () => undefined,
+    },
+  )
+  const runner: SubagentRunner = {
+    run: async () => {
+      calls += 1
+      if (calls === 1) throw new Error('active child limit reached')
+      return { childId: 'child-1', completed: true, text: fencedPASS(digest) }
+    },
+  }
+  const run = runFor(def)
+  const request = {
+    run,
+    definition: def,
+    step: def.steps[0] as Definition['steps'][number],
+    reviewer: reviewers(),
+    runner,
+    context: { workspace: root, values: { name: 'auth' } },
+    change: 'auth',
+    prepared: { specDigest: digest },
+    timeoutMs: 5_000,
+    session: 'session-1',
+  }
+  await scheduler.enqueue({
+    workspace: root,
+    run,
+    request,
+    rule: 'spec-review',
+    change: 'auth',
+    digest,
+  })
+  await waitFor(async () => persisted.length === 1)
+  expect(calls).toBe(2)
+  expect(persisted[0]?.steps[0]?.state).toBe('done')
+  scheduler.dispose()
+})
 describe('review snapshot', () => {
   it('builds a frozen checkout, copies the change, and discards it', async () => {
     const root = await workspace()
