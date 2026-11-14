@@ -35,22 +35,26 @@ const LANE_FIELDS = new Set(['n', 'title', 'owned', 'unchecked']);
 /** The fields of one task item, valid only inside a tasks item predicate. */
 const TASK_FIELDS = new Set(['id', 'number', 'text', 'checked']);
 /** The item field set a collection expression selects, if it is known. */
+const EMPTY_ITEM_SCOPE = new Set();
+// Every collection predicate runs against its items alone; a collection whose
+// item fields are unknown (scalar ids or a computed expression) exposes no root
+// field either, so an unavailable field fails load instead of silently false.
 function itemScopeOf(collection) {
     if (typeof collection !== 'object' || collection === null || Array.isArray(collection)) {
-        return undefined;
+        return EMPTY_ITEM_SCOPE;
     }
     const keys = Object.keys(collection);
     if (keys.length !== 1 || keys[0] !== 'var')
-        return undefined;
+        return EMPTY_ITEM_SCOPE;
     const raw = collection.var;
     const path = Array.isArray(raw) ? raw[0] : raw;
     if (typeof path !== 'string')
-        return undefined;
+        return EMPTY_ITEM_SCOPE;
     if (path === 'change.lanes')
         return LANE_FIELDS;
     if (path === 'change.tasks.items')
         return TASK_FIELDS;
-    return undefined;
+    return EMPTY_ITEM_SCOPE;
 }
 function indexedPath(segments) {
     if (segments[0] !== 'change')

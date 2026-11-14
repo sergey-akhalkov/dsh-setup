@@ -425,6 +425,13 @@ describe('collection item scopes', () => {
     ).not.toThrow()
   })
 
+  it('rejects a root field inside a scalar collection predicate', () => {
+    expect(() =>
+      validateCondition({
+        some: [{ var: 'change.tasks.unchecked' }, { var: 'session.involved' }],
+      }),
+    ).toThrow(/unknown item field/u)
+  })
   it('rejects a root field inside a collection predicate', () => {
     expect(() =>
       validateCondition({

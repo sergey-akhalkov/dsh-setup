@@ -681,6 +681,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const activeSession = new Map<string, string>()
   /** The latest change a session observed, for a turn-close condition context. */
   const lastChangeBySession = new Map<string, string>()
+  /**
+   * This turn's change-artifact write, kept per session beyond the bounded tool
+   * observation buffer so a long turn cannot lose its changedSpec attribution.
+   */
+  const lastSpecWriteBySession = new Map<
+    string,
+    { readonly turn: number | undefined; readonly change: string }
+  >()
   /** Whether a session is a root agent; the legacy gates exclude children. */
   const rootSessions = new Map<string, boolean>()
   /** One change-tree watcher per workspace, started on its first event. */
@@ -1364,16 +1372,27 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ? undefined
           : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1])
       const pendingSpec = pendingChange !== undefined
+      const sessionKey = `${workspace}\0${input.session}`
       if (pendingChange !== undefined) {
         lastChangeBySession.set(input.session, pendingChange)
+        lastSpecWriteBySession.set(sessionKey, { turn: input.turn, change: pendingChange })
         await writeInvolvement(workspace, input.session, pendingChange)
       }
+      const retainedSpecWrite = lastSpecWriteBySession.get(sessionKey)
+      const retainedSpecChange =
+        retainedSpecWrite !== undefined && retainedSpecWrite.turn === input.turn
+          ? retainedSpecWrite.change
+          : undefined
       const restoredInvolvement =
         pendingChange === undefined && conditionalDefinitions.length > 0
           ? await readInvolvement(workspace, input.session)
           : undefined
       const conditionChangeCandidate =
-        pendingChange ?? lastChangeBySession.get(input.session) ?? restoredInvolvement
+        pendingChange ??
+        retainedSpecChange ??
+        lastChangeBySession.get(input.session) ??
+        restoredInvolvement
+      const changedSpecThisTurn = pendingSpec || retainedSpecChange !== undefined
       const conditionsFor = async (
         definitionEvent: DefinitionEvent,
       ): Promise<ReadonlyMap<string, boolean> | undefined> => {
@@ -1392,7 +1411,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // Involvement is retained by session and change: a review condition
           // must still fire on a later turn that writes nothing new.
           involved: conditionChange !== undefined,
-          changedSpec: pendingSpec,
+          changedSpec: changedSpecThisTurn,
         })
         return evaluateConditions(conditionalDefinitions, conditionContext)
       }

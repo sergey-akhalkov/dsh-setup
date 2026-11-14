@@ -45,18 +45,23 @@ const TASK_FIELDS: ReadonlySet<string> = new Set(['id', 'number', 'text', 'check
 type ItemScope = ReadonlySet<string> | undefined
 
 /** The item field set a collection expression selects, if it is known. */
-function itemScopeOf(collection: unknown): ItemScope {
+const EMPTY_ITEM_SCOPE: ReadonlySet<string> = new Set()
+
+// Every collection predicate runs against its items alone; a collection whose
+// item fields are unknown (scalar ids or a computed expression) exposes no root
+// field either, so an unavailable field fails load instead of silently false.
+function itemScopeOf(collection: unknown): ReadonlySet<string> {
   if (typeof collection !== 'object' || collection === null || Array.isArray(collection)) {
-    return undefined
+    return EMPTY_ITEM_SCOPE
   }
   const keys = Object.keys(collection)
-  if (keys.length !== 1 || keys[0] !== 'var') return undefined
+  if (keys.length !== 1 || keys[0] !== 'var') return EMPTY_ITEM_SCOPE
   const raw = (collection as { var?: unknown }).var
   const path = Array.isArray(raw) ? raw[0] : raw
-  if (typeof path !== 'string') return undefined
+  if (typeof path !== 'string') return EMPTY_ITEM_SCOPE
   if (path === 'change.lanes') return LANE_FIELDS
   if (path === 'change.tasks.items') return TASK_FIELDS
-  return undefined
+  return EMPTY_ITEM_SCOPE
 }
 
 function indexedPath(segments: readonly string[]): boolean {
