@@ -1057,7 +1057,7 @@ export function apply(ctx, config = {}) {
                         ...(definitionEvent.path === undefined ? {} : { path: definitionEvent.path }),
                     },
                     runGit: defaultGit,
-                    involved: pendingChange !== undefined,
+                    // Involvement is retained by session and change: a review condition\n          // must still fire on a later turn that writes nothing new.\n          involved: conditionChange !== undefined,
                     changedSpec: pendingSpec,
                 });
                 return evaluateConditions(conditionalDefinitions, conditionContext);
