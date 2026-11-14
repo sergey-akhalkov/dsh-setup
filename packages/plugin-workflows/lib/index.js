@@ -1760,12 +1760,14 @@ export function apply(ctx, config = {}) {
             return undefined;
         }
     };
-    const subagentRuntime = optionalService('subagents');
     /** The host subagent runner for the subagent executor; absent without the seam. */
     /** The host subagent runner for the subagent and review executors. */
-    const hostSubagentRunner = (agent) => subagentRuntime === undefined
-        ? undefined
-        : buildSubagentRunner(subagentRuntime, agent);
+    const hostSubagentRunner = (agent) => {
+        // Resolve lazily: a service registered after the plugin loads must still
+        // start a review, and the absent case must name the reviewer at run time.
+        const runtime = optionalService('subagents');
+        return runtime === undefined ? undefined : buildSubagentRunner(runtime, agent);
+    };
     const rawUserQuestions = optionalService('userQuestions');
     /** The live agent is the answerer scope, so the adapter is built per agent. */
     const questionsFor = (agent) => rawUserQuestions === undefined ? undefined : adaptUserQuestions(rawUserQuestions, agent);
@@ -2135,13 +2137,21 @@ export function apply(ctx, config = {}) {
             ...(questions === undefined ? {} : { questions }),
             reviewStep: async ({ run: reviewRun, definition: reviewDefinition, step, context }) => {
                 const spec = step.review;
-                if (spec === undefined || subagentRunner === undefined)
+                if (spec === undefined)
                     return undefined;
                 const resolved = resolveReviewer(reviewers, spec.target);
                 if (!resolved.ok) {
                     return settleStep(reviewRun, step.id, 'failed', {
                         at: journal.time(),
                         reason: resolved.error,
+                    });
+                }
+                const reviewRunner = hostSubagentRunner(agent);
+                if (reviewRunner === undefined) {
+                    return settleStep(reviewRun, step.id, 'failed', {
+                        at: journal.time(),
+                        reason: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
+                        failureClass: 'provider-not-started',
                     });
                 }
                 const change = reviewRun.context.name;
@@ -2186,7 +2196,7 @@ export function apply(ctx, config = {}) {
                     definition: reviewDefinition,
                     step,
                     reviewer: resolved.reviewer,
-                    runner: subagentRunner,
+                    runner: reviewRunner,
                     context,
                     change,
                     ...(task === undefined ? {} : { task }),

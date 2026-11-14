@@ -2156,13 +2156,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return undefined
     }
   }
-  const subagentRuntime = optionalService<SubagentRuntime>('subagents')
   /** The host subagent runner for the subagent executor; absent without the seam. */
   /** The host subagent runner for the subagent and review executors. */
-  const hostSubagentRunner = (agent: Agent): SubagentRunner | undefined =>
-    subagentRuntime === undefined
-      ? undefined
-      : buildSubagentRunner(subagentRuntime, agent)
+  const hostSubagentRunner = (agent: Agent): SubagentRunner | undefined => {
+    // Resolve lazily: a service registered after the plugin loads must still
+    // start a review, and the absent case must name the reviewer at run time.
+    const runtime = optionalService<SubagentRuntime>('subagents')
+    return runtime === undefined ? undefined : buildSubagentRunner(runtime, agent)
+  }
   const rawUserQuestions = optionalService<DshUserQuestions>('userQuestions')
   /** The live agent is the answerer scope, so the adapter is built per agent. */
   const questionsFor = (agent: Agent) =>
@@ -2601,12 +2602,20 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       ...(questions === undefined ? {} : { questions }),
       reviewStep: async ({ run: reviewRun, definition: reviewDefinition, step, context }) => {
         const spec = step.review
-        if (spec === undefined || subagentRunner === undefined) return undefined
+        if (spec === undefined) return undefined
         const resolved = resolveReviewer(reviewers, spec.target)
         if (!resolved.ok) {
           return settleStep(reviewRun, step.id, 'failed', {
             at: journal.time(),
             reason: resolved.error,
+          })
+        }
+        const reviewRunner = hostSubagentRunner(agent)
+        if (reviewRunner === undefined) {
+          return settleStep(reviewRun, step.id, 'failed', {
+            at: journal.time(),
+            reason: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
+            failureClass: 'provider-not-started',
           })
         }
         const change = reviewRun.context.name
@@ -2660,7 +2669,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           definition: reviewDefinition,
           step,
           reviewer: resolved.reviewer,
-          runner: subagentRunner,
+          runner: reviewRunner,
           context,
           change,
           ...(task === undefined ? {} : { task }),

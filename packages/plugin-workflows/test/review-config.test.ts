@@ -123,3 +123,24 @@ describe('review timeout config', () => {
     expect(() => resolveReviewTimeout({ other: 1 })).toThrow(/unknown field/u)
   })
 })
+
+describe('nested reviewer options', () => {
+  it('rejects an invalid nested agent option value with its full field', () => {
+    for (const agentOptions of [
+      { model: 42 },
+      { reasoningEffort: [] },
+      { provider: '' },
+      { maxTokens: -1 },
+      { maxTokens: 0 },
+      { maxTokens: 1.5 },
+    ]) {
+      expect(() => resolveReviewers({ codex: { provider: 'p', agentOptions } })).toThrow(
+        /reviewers\.codex\.agentOptions\./u,
+      )
+    }
+    expect(
+      resolveReviewers({ codex: { provider: 'p', agentOptions: { maxTokens: 10 } } }).codex
+        ?.agentOptions,
+    ).toEqual({ maxTokens: 10 })
+  })
+})

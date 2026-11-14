@@ -86,6 +86,17 @@ export function resolveReviewers(raw, providerSupportsOptions) {
                     throw new Error(`workflows reviewers.${id}.agentOptions has an unknown field "${key}"`);
                 }
             }
+            for (const field of ['provider', 'model', 'reasoningEffort']) {
+                const nested = value.agentOptions[field];
+                if (nested !== undefined) {
+                    nonEmpty(nested, `reviewers.${id}.agentOptions.${field}`);
+                }
+            }
+            const maxTokens = value.agentOptions.maxTokens;
+            if (maxTokens !== undefined &&
+                (typeof maxTokens !== 'number' || !Number.isSafeInteger(maxTokens) || maxTokens < 1)) {
+                throw new Error(`workflows reviewers.${id}.agentOptions.maxTokens must be a positive safe integer`);
+            }
             agentOptions = value.agentOptions;
         }
         for (const value of [model, reasoningEffort]) {
