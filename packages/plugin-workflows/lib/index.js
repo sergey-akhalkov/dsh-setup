@@ -23,6 +23,7 @@ import { advanceIntake } from './intake.js';
 import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
 import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifySettings, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
 import { registerActiveRunsContext } from './prompt.js';
+import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
@@ -1761,46 +1762,10 @@ export function apply(ctx, config = {}) {
     };
     const subagentRuntime = optionalService('subagents');
     /** The host subagent runner for the subagent executor; absent without the seam. */
-    const hostSubagentRunner = (agent) => {
-        if (subagentRuntime === undefined)
-            return undefined;
-        return {
-            run: async (request, signal) => {
-                const controller = signal ?? new AbortController().signal;
-                const options = {
-                    ...(request.agentOptions ?? {}),
-                    ...(request.model === undefined ? {} : { model: request.model }),
-                    ...(request.reasoningEffort === undefined
-                        ? {}
-                        : { reasoningEffort: request.reasoningEffort }),
-                };
-                const activation = await subagentRuntime.startActivation({
-                    provider: request.provider,
-                    label: (request.label ?? `workflows ${request.provider}`).slice(0, 120),
-                    parent: agent,
-                    prompt: [{ type: 'text', text: request.prompt }],
-                    ...(request.schema === undefined ? {} : { outputSchema: request.schema }),
-                    ...(Object.keys(options).length === 0 ? {} : { agentOptions: options }),
-                    ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
-                    signal: controller,
-                    delivery: request.delivery ?? 'caller',
-                });
-                const result = await activation.result;
-                const text = result.output
-                    .filter((block) => block.type === 'text')
-                    .map((block) => block.text)
-                    .join('\n')
-                    .trim();
-                return {
-                    childId: String(activation.childId),
-                    completed: result.stopReason === 'completed',
-                    ...(text === '' ? {} : { text }),
-                    ...(result.structured === undefined ? {} : { result: result.structured }),
-                    ...(result.diagnostic === undefined ? {} : { error: result.diagnostic }),
-                };
-            },
-        };
-    };
+    /** The host subagent runner for the subagent and review executors. */
+    const hostSubagentRunner = (agent) => subagentRuntime === undefined
+        ? undefined
+        : buildSubagentRunner(subagentRuntime, agent);
     const rawUserQuestions = optionalService('userQuestions');
     /** The live agent is the answerer scope, so the adapter is built per agent. */
     const questionsFor = (agent) => rawUserQuestions === undefined ? undefined : adaptUserQuestions(rawUserQuestions, agent);

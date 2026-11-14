@@ -71,7 +71,7 @@ export declare function resolveReviewTimeout(raw: unknown): number;
 export declare function reviewPhase(scope: 'whole' | 'task', phase: string | undefined): string;
 /** The workspace-relative local record path for one review. */
 export declare function localReviewRecordPath(input: {
-    readonly rule: string;
+    readonly definition: string;
     readonly change: string;
     readonly scope: 'whole' | 'task';
     readonly phase?: string;

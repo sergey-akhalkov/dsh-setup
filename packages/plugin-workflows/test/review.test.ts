@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { verifyEvidence } from '../src/host/evidence.ts'
 import type { SubagentRunner, SubagentRunResult } from '../src/host/executors.ts'
+import { portableRecordError } from '../src/host/projection.ts'
 import {
   localReviewRecordPath,
   parseReviewVerdict,
@@ -146,7 +147,7 @@ describe('runReviewStep', () => {
       join(
         root,
         localReviewRecordPath({
-          rule: 'task-review',
+          definition: 'task-review',
           change: 'auth',
           scope: 'task',
           taskId: TASK_ID,
@@ -219,7 +220,7 @@ describe('runReviewStep', () => {
         join(
           root,
           localReviewRecordPath({
-            rule: 'task-review',
+            definition: 'task-review',
             change: 'auth',
             scope: 'task',
             taskId: TASK_ID,
@@ -245,7 +246,7 @@ describe('runReviewStep', () => {
         join(
           root,
           localReviewRecordPath({
-            rule: 'task-review',
+            definition: 'task-review',
             change: 'auth',
             scope: 'task',
             taskId: TASK_ID,
@@ -283,7 +284,7 @@ describe('runReviewStep', () => {
         join(
           root,
           localReviewRecordPath({
-            rule: 'task-review',
+            definition: 'task-review',
             change: 'auth',
             scope: 'task',
             taskId: TASK_ID,
@@ -311,7 +312,7 @@ describe('runReviewStep', () => {
         join(
           root,
           localReviewRecordPath({
-            rule: 'task-review',
+            definition: 'task-review',
             change: 'auth',
             scope: 'task',
             taskId: TASK_ID,
@@ -337,7 +338,7 @@ describe('runReviewStep', () => {
         join(
           root,
           localReviewRecordPath({
-            rule: 'task-review',
+            definition: 'task-review',
             change: 'auth',
             scope: 'task',
             taskId: TASK_ID,
@@ -392,7 +393,7 @@ describe('parseReviewVerdict', () => {
         join(
           root,
           localReviewRecordPath({
-            rule: 'task-review',
+            definition: 'task-review',
             change: 'auth',
             scope: 'task',
             taskId: TASK_ID,
@@ -440,11 +441,16 @@ describe('review record store', () => {
 
   it('derives the whole and task record paths', () => {
     expect(
-      localReviewRecordPath({ rule: 'spec-review', change: 'auth', scope: 'whole', phase: 'spec' }),
+      localReviewRecordPath({
+        definition: 'spec-review',
+        change: 'auth',
+        scope: 'whole',
+        phase: 'spec',
+      }),
     ).toBe('.dsh/workflows/records/spec-review/auth/spec.json')
     expect(
       localReviewRecordPath({
-        rule: 'task-review',
+        definition: 'task-review',
         change: 'auth',
         scope: 'task',
         taskId: TASK_ID,
@@ -618,5 +624,89 @@ describe('record write boundary', () => {
     expect(written.ok).toBe(false)
     if (!written.ok) expect(written.error).toContain('link')
     expect(await readdir(outside)).toEqual([])
+  })
+})
+
+describe('record path identity and portable target boundary', () => {
+  it('uses the definition id for the local directory, not the rule', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const first = localReviewRecordPath({
+      definition: 'task-review-copy',
+      change: 'auth',
+      scope: 'task',
+      taskId: TASK_ID,
+    })
+    expect(first).toContain('/task-review-copy/')
+    const record: ReviewRecord = {
+      definition: 'task-review-copy',
+      rule: 'task-review',
+      change: 'auth',
+      phase: 'task',
+      scope: 'task',
+      taskId: TASK_ID,
+      digest: DIGEST,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      reviewer: 'codex',
+      time: '2026-11-14T00:00:00.000Z',
+    }
+    expect((await writeLocalReviewRecord(root, record)).ok).toBe(true)
+    const written = JSON.parse(await readFile(join(root, first), 'utf8')) as ReviewRecord
+    expect(written.rule).toBe('task-review')
+    expect(written.definition).toBe('task-review-copy')
+  })
+
+  it('rejects a reviewer machine path at load and an unsafe approval target at publication', async () => {
+    expect(() => resolveReviewers({ codex: { provider: 'p', model: '/models/x.gguf' } })).toThrow(
+      /machine path/u,
+    )
+    expect(() =>
+      resolveReviewers({ codex: { provider: 'p', agentOptions: { model: 'C:\\models\\x' } } }),
+    ).toThrow(/machine path/u)
+    const root = await workspace()
+    roots.push(root)
+    const unsafe: ReviewRecord = {
+      definition: 'task-review',
+      rule: 'task-review',
+      change: 'auth',
+      phase: 'task',
+      scope: 'task',
+      taskId: TASK_ID,
+      digest: DIGEST,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent', model: '/models/x.gguf' },
+      reviewer: 'codex',
+      time: '2026-11-14T00:00:00.000Z',
+    }
+    const written = await writePortableApproval(root, unsafe)
+    expect(written.ok).toBe(false)
+    if (!written.ok) expect(written.error).toContain('machine path')
+  })
+
+  it('writes an approval the unchanged portable parser accepts', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const record: ReviewRecord = {
+      definition: 'task-review',
+      rule: 'task-review',
+      change: 'auth',
+      phase: 'task',
+      scope: 'task',
+      taskId: TASK_ID,
+      digest: DIGEST,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
+      reviewer: 'codex',
+      time: '2026-11-14T00:00:00.000Z',
+    }
+    expect((await writePortableApproval(root, record)).ok).toBe(true)
+    const approval = JSON.parse(
+      await readFile(join(root, portableApprovalPath('auth', TASK_ID)), 'utf8'),
+    ) as Record<string, unknown>
+    expect(portableRecordError(approval)).toBeUndefined()
   })
 })

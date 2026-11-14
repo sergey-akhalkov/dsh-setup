@@ -1,0 +1,61 @@
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
+import type { SubagentRunner } from './executors.js'
+
+/**
+ * Adapt the DSH subagent runtime to the engine's runner. A caller-delivered
+ * review is cataloged for visibility; a `parent` delivery notifies the model.
+ * Cancellation after publication stops the child with `dispose()`, because the
+ * start signal no longer governs a published activation.
+ */
+export function hostSubagentRunner(runtime: SubagentRuntime, agent: Agent): SubagentRunner {
+  return {
+    run: async (request, signal) => {
+      const controller = signal ?? new AbortController().signal
+      const options = {
+        ...(request.agentOptions ?? {}),
+        ...(request.model === undefined ? {} : { model: request.model }),
+        ...(request.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: request.reasoningEffort }),
+      }
+      const activation = await runtime.startActivation({
+        provider: request.provider,
+        label: (request.label ?? `workflows ${request.provider}`).slice(0, 120),
+        parent: agent,
+        prompt: [{ type: 'text', text: request.prompt }],
+        ...(request.schema === undefined ? {} : { outputSchema: request.schema as never }),
+        ...(Object.keys(options).length === 0 ? {} : { agentOptions: options as never }),
+        ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+        signal: controller,
+        delivery: request.delivery ?? 'caller',
+      })
+      // A published activation outlives the start signal: cancellation must
+      // dispose the child explicitly, whether the abort arrived before or
+      // after publication. Teardown is fire-and-forget and never masks the
+      // result or leaks an unhandled rejection.
+      const stop = (): void => {
+        void activation.dispose().catch(() => undefined)
+      }
+      if (controller.aborted) stop()
+      else controller.addEventListener('abort', stop, { once: true })
+      try {
+        const result = await activation.result
+        const text = result.output
+          .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n')
+          .trim()
+        return {
+          childId: String(activation.childId),
+          completed: result.stopReason === 'completed',
+          ...(text === '' ? {} : { text }),
+          ...(result.structured === undefined ? {} : { result: result.structured }),
+          ...(result.diagnostic === undefined ? {} : { error: result.diagnostic }),
+        }
+      } finally {
+        controller.removeEventListener('abort', stop)
+      }
+    },
+  }
+}

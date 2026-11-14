@@ -36,6 +36,8 @@ export function normalizeFindingClass(value) {
         : 'other';
 }
 const REVIEWER_ID = /^[a-z][a-z0-9-]*$/u;
+/** A value that could leak the reviewing machine into a committed approval. */
+const MACHINE_PATH = /[A-Za-z]:[\\/]|\\\\|file:\/\/|(?:^|[\s"'=([{<`])\/[^\s"'`)\]}>]+|(?:^|[\s"'=([{<`])~[/\\]/iu;
 const REVIEWER_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'agentOptions']);
 const AGENT_OPTION_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'maxTokens']);
 function isRecord(value) {
@@ -85,6 +87,16 @@ export function resolveReviewers(raw, providerSupportsOptions) {
                 }
             }
             agentOptions = value.agentOptions;
+        }
+        for (const value of [model, reasoningEffort]) {
+            if (value !== undefined && MACHINE_PATH.test(value)) {
+                throw new Error(`workflows reviewers.${id} must name a model or effort id, not a machine path`);
+            }
+        }
+        for (const value of Object.values(agentOptions ?? {})) {
+            if (typeof value === 'string' && MACHINE_PATH.test(value)) {
+                throw new Error(`workflows reviewers.${id}.agentOptions must not carry a machine path`);
+            }
         }
         if ((model !== undefined || reasoningEffort !== undefined || agentOptions !== undefined) &&
             providerSupportsOptions?.(provider) === false) {
@@ -202,7 +214,7 @@ export function reviewPhase(scope, phase) {
 export function localReviewRecordPath(input) {
     if (!CHANGE_NAME.test(input.change))
         throw new Error(`"${input.change}" is not a change name`);
-    const root = `.dsh/workflows/records/${input.rule}/${input.change}`;
+    const root = `.dsh/workflows/records/${input.definition}/${input.change}`;
     if (input.scope === 'task') {
         if (input.taskId === undefined || !TASK_ID_PATTERN.test(input.taskId)) {
             throw new Error('a task-scoped review record needs a 16-hex task id');
@@ -464,6 +476,16 @@ export async function writePortableApproval(workspace, record) {
     }
     if (record.verdict !== 'PASS') {
         return { ok: false, error: 'a committed approval requires a PASS verdict' };
+    }
+    const target = record.target;
+    if (target.provider.trim() === '' ||
+        MACHINE_PATH.test(target.provider) ||
+        (target.model !== undefined && MACHINE_PATH.test(target.model)) ||
+        (target.reasoningEffort !== undefined && MACHINE_PATH.test(target.reasoningEffort))) {
+        return {
+            ok: false,
+            error: 'the approval target carries a machine path or empty provider; use a provider/model id, not a filesystem path',
+        };
     }
     try {
         const path = portableApprovalPath(record.change, record.taskId);
