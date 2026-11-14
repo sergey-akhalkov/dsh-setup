@@ -115,6 +115,27 @@ async function snapshot(workspace, onError) {
         dirs.add(relativePath(workspace, directory));
         for (const name of CHANGE_FILES)
             await addFile(join(directory, name));
+        // Delta specs live under specs/<capability>/spec.md; a change that edits
+        // only a delta spec must still reach the turn-close condition context.
+        const addSpecs = async (specDir, depth) => {
+            if (depth > 3)
+                return;
+            const entries = await listEntries(specDir);
+            if (!entries.exists)
+                return;
+            if ((await canonicalInside(workspaceReal, specDir)) === undefined) {
+                onError(new Error(`skipped a specs directory outside the workspace: ${relativePath(workspace, specDir)}`));
+                return;
+            }
+            dirs.add(relativePath(workspace, specDir));
+            for (const name of entries.directories)
+                await addSpecs(join(specDir, name), depth + 1);
+            for (const name of entries.files) {
+                if (name.endsWith('.md'))
+                    await addFile(join(specDir, name));
+            }
+        };
+        await addSpecs(join(directory, 'specs'), 0);
         const reviews = join(directory, 'reviews');
         const entries = await listEntries(reviews);
         if (!entries.exists)

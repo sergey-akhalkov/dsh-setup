@@ -456,6 +456,29 @@ describe('openspec change watcher', () => {
     }
   })
 
+  it('watches delta spec edits inside a change', async () => {
+    const workspace = await tempWorkspace()
+    const fs = fakeFs()
+    const events: FsChangeEvent[] = []
+    await startFsChangeWatcher({
+      workspace,
+      fs: fs.service,
+      onChange: (event) => events.push(event),
+      onError: vi.fn(),
+      debounceMs: 250,
+    })
+    await mkdir(join(workspace, 'openspec', 'changes', 'add-one', 'specs', 'auth'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'add-one', 'specs', 'auth', 'spec.md'),
+      '# Delta\n',
+      'utf8',
+    )
+    fs.firePath('add-one')
+    await waitFor(() => events.some((event) => event.path.endsWith('specs/auth/spec.md')))
+  })
+
   it('closes every watched directory on dispose and stops emitting', async () => {
     const workspace = await tempWorkspace()
     const fs = fakeFs()

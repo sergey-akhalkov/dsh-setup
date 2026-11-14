@@ -22,7 +22,6 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   'change.tasks.items',
   'change.lanes',
   'change.lanes.n',
-  'change.lanes.title',
   'change.lanes.owned',
   'change.lanes.unchecked',
   'records.spec',
@@ -40,7 +39,7 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
 
 const ROOT_SET: ReadonlySet<string> = new Set(CONDITION_ROOTS)
 
-/** Item-relative fields JSONLogic `some`/`all`/`none` bind as the data item. */
+/** The fields of one collection item, valid only inside an item predicate. */
 const ITEM_FIELDS: ReadonlySet<string> = new Set([
   'id',
   'number',
@@ -69,7 +68,7 @@ function indexedPath(segments: readonly string[]): boolean {
   return false
 }
 
-function checkPath(raw: string, field: string): void {
+function checkPath(raw: string, field: string, itemScope: boolean): void {
   if (/[\\/]|(?:^|\.)\.\.(?:\.|$)|:/u.test(raw)) {
     throw new Error(`condition.${field} "var" path "${raw}" must not name a path`)
   }
@@ -80,7 +79,8 @@ function checkPath(raw: string, field: string): void {
   if (segments.length > 8) {
     throw new Error(`condition.${field} "var" path "${raw}" nests too deeply`)
   }
-  if (raw !== '' && ITEM_FIELDS.has(raw)) return
+  if (itemScope && ITEM_FIELDS.has(raw)) return
+  if (raw === '') return
   const root = segments[0] ?? ''
   if (!ROOT_SET.has(root)) {
     throw new Error(
@@ -100,11 +100,13 @@ function checkPath(raw: string, field: string): void {
   )
 }
 
-function varPath(rule: unknown, field: string, depth = 0): void {
+const ITEM_OPERATORS: ReadonlySet<string> = new Set(['some', 'all', 'none', 'map', 'filter'])
+
+function varPath(rule: unknown, field: string, depth = 0, itemScope = false): void {
   if (depth > 32) throw new Error(`condition.${field} nests too deeply`)
   if (rule === null || typeof rule !== 'object') return
   if (Array.isArray(rule)) {
-    for (const entry of rule) varPath(entry, field, depth + 1)
+    for (const entry of rule) varPath(entry, field, depth + 1, itemScope)
     return
   }
   const record = rule as Record<string, unknown>
@@ -118,9 +120,9 @@ function varPath(rule: unknown, field: string, depth = 0): void {
       if (typeof raw !== 'string') {
         throw new Error(`condition.${field} "var" path must be a string`)
       }
-      if (raw !== '') checkPath(raw, field)
+      checkPath(raw, field, itemScope)
     }
-    for (const arg of args.slice(1)) varPath(arg, field, depth + 1)
+    for (const arg of args.slice(1)) varPath(arg, field, depth + 1, itemScope)
     return
   }
   if (operator === 'missing' || operator === 'missing_some') {
@@ -130,25 +132,14 @@ function varPath(rule: unknown, field: string, depth = 0): void {
     for (const operand of operands) {
       const names = Array.isArray(operand) ? operand : [operand]
       for (const name of names) {
-        if (typeof name === 'string') {
-          if (/^\d+$/u.test(name)) continue
-          checkPath(name, field)
-        } else if (typeof name === 'number') {
-        } else if (
-          typeof name === 'object' &&
-          name !== null &&
-          !Array.isArray(name) &&
-          Object.keys(name).length === 1 &&
-          typeof (name as { var?: unknown }).var === 'string'
-        ) {
-          // A literal `{ var: "field" }` reference is a static name; any other
-          // computed expression cannot be validated and is refused.
-          checkPath((name as { var: string }).var, field)
-        } else {
+        // A missing reference is a lookup name, never a computed expression.
+        if (typeof name === 'number') continue
+        if (typeof name !== 'string' || /^\d+$/u.test(name)) {
           throw new Error(
             `condition.${field} "${operator}" names must be literal field names, not computed expressions`,
           )
         }
+        checkPath(name, field, false)
       }
     }
     return
@@ -156,7 +147,19 @@ function varPath(rule: unknown, field: string, depth = 0): void {
   const args = Array.isArray(record[operator])
     ? (record[operator] as unknown[])
     : [record[operator]]
-  for (const arg of args) varPath(arg, field, depth + 1)
+  if (ITEM_OPERATORS.has(operator)) {
+    for (const [index, arg] of args.entries()) {
+      varPath(arg, field, depth + 1, index > 0)
+    }
+    return
+  }
+  if (operator === 'reduce') {
+    for (const [index, arg] of args.entries()) {
+      varPath(arg, field, depth + 1, index > 0)
+    }
+    return
+  }
+  for (const arg of args) varPath(arg, field, depth + 1, itemScope)
 }
 
 /** Validate a trigger condition at load: JSONLogic only, closed context paths. */

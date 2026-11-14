@@ -77,7 +77,7 @@ describe('condition schema', () => {
       validateCondition({
         and: [
           { '==': [{ var: 'session.changedSpec' }, true] },
-          { missing: [{ var: 'records.spec.pass' }] },
+          { missing: ['records.spec.pass'] },
           { '>': [{ var: 'change.tasks.unchecked' }, 0] },
           { in: [{ var: 'event.tool' }, ['pwsh', 'bash']] },
           { '==': [{ var: 'digests.spec' }, 'a'.repeat(64)] },
@@ -206,9 +206,12 @@ describe('condition schema completeness', () => {
       { missing: ['workspace.path'] },
       { missing: ['../secret'] },
       { missing_some: [1, ['../secret']] },
+      { missing: [{ var: 'records.spec.pass' }] },
+      { '==': [{ var: 'title' }, 'Engine'] },
+      { '==': [{ var: 'change.lanes.title' }, 'Engine'] },
     ]) {
       expect(() => validateCondition(condition)).toThrow(
-        /unknown context field|must not name a path/u,
+        /unknown context field|must not name a path|literal field names/u,
       )
     }
   })
@@ -219,7 +222,7 @@ describe('condition schema completeness', () => {
         and: [
           { '==': [{ var: 'records.spec.pass' }, true] },
           { '==': [{ var: 'records.tasks.0123456789abcdef.verdict' }, 'PASS'] },
-          { '==': [{ var: 'change.lanes.title' }, 'x'] },
+          { '==': [{ var: 'change.lanes.0.title' }, 'x'] },
           { '==': [{ var: 'digests.worktree' }, 'a'] },
           { missing: ['records.spec.digest'] },
         ],
