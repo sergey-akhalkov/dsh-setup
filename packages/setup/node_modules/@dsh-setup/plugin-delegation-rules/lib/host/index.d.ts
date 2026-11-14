@@ -1,6 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type NumberedTask, type ReviewFinding } from '../shared/approval.js';
-import { type Lesson } from './lesson-store.js';
 import { type FailureClass } from './review-queue.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -18,20 +17,20 @@ export declare const inject: string[];
  * Catalog text; a test keeps it identical to the asset frontmatter. Kept short
  * because the tool descriptions plus this line share the model-facing budget.
  */
-export declare const skillDescription = "Delegation rules: authored triggers, targets, result contracts, and the task-by-task review workflow. Load when authoring or debugging delegation rules, when a gate steers, when reviewing a completed task or spec, or when consulting, researching, or patching through a delegated model.";
+export declare const skillDescription = "Delegation rules: authored triggers, targets, result contracts, and the task-by-task review workflow. Load when authoring or debugging delegation rules, when a gate steers, or when reviewing a completed task or spec through a delegated model.";
 /**
  * Tool descriptions are model-facing policy: they are the only delegation
  * guidance present without opening the skill. A budget test pins their size.
  */
 export declare const toolDescriptions: {
-    readonly delegate: "Run one configured delegation rule through its target. Manual tasks: `research` answers a question with evidence and sources; `advisor` gives a manual second opinion from the strong target on one decision; pass the exact question, constraints, and decisive evidence, and use it only for expensive-to-reverse, cross-module, security/data-integrity, or repeated-failure decisions - never routine edits, syntax, lookups, or locally verifiable facts, and at most three times per session; `blocker` consults on a stuck plan when the failure-streak hint appears; `bug-fix` runs a write target in an isolated git worktree and returns the diff and test report (never auto-merged). Gate rules: `spec-review` reviews the whole active OpenSpec change before implementation; `task-review` reviews the next checked task without a PASS/ERROR record, or one `section` (a tasks.md level-2 heading number such as `1`, its `1.x` form, or the normalized title) with every checked task of that section in one run; `integration-review` is the optional whole-worktree check. One section run writes one verdict and publishes one per-task approval per covered checked task; `task` and `section` are mutually exclusive, unchecked tasks are out of scope, and a newly checked task needs a new review. The engine validates the rule, starts the configured DSH subagent provider, parses the contract result, and writes a digest-bound record under `.dsh/delegation`; a review PASS needs zero P0/P1 findings, FINDINGS/ERROR are reported but do not pass a strict gate, and a matching PASS is reused without another run. The `answer` contract writes no gate record. Only a matching record satisfies the turn-stopping gate: a text claim does not. A missing or incompatible target is reported with the target id, provider name, and next action.";
+    readonly delegate: "Run one configured delegation rule through its target. Gate rules: `spec-review` reviews the whole active OpenSpec change before implementation; `task-review` reviews the next checked task without a PASS/ERROR record, or one `section` (a tasks.md level-2 heading number such as `1`, its `1.x` form, or the normalized title) with every checked task of that section in one run; `integration-review` is the optional whole-worktree check. One section run writes one verdict and publishes one per-task approval per covered checked task; `task` and `section` are mutually exclusive, unchecked tasks are out of scope, and a newly checked task needs a new review. The engine validates the rule, starts the configured DSH subagent provider, parses the contract result, and writes a digest-bound record under `.dsh/delegation`; a review PASS needs zero P0/P1 findings, FINDINGS/ERROR are reported but do not pass a strict gate, and a matching PASS is reused without another run. Only a matching record satisfies the turn-stopping gate: a text claim does not. A note rule runs through task_progress, not this tool. A missing or incompatible target is reported with the target id, provider name, and next action.";
     readonly task_progress: "Record an explicit in-progress or blocked note for one unchecked task, with the reason and the current worktree digest. Use it when a task spans turns instead of ticking `tasks.md`: it runs no model and costs nothing. The note lets a code-changing turn close only while the worktree still matches it; after any further change it is stale and a fresh note or the tick plus `delegate` task review is required. A checked task never accepts a note, and a note never counts as a task-review PASS.";
     readonly delegation_status: "Report registered DSH subagent providers and capabilities, configured delegation targets and rules, each active change's involvement by this session (created, spec changed, checked tasks), per-change task/progress-note state, review record state (matching, stale, missing, malformed), and missing-target diagnostics with the next action. It never attributes a change. Use it when a `delegate` call reports a target problem or before configuring rules.";
 };
 /** Queue defaults stay well below the DSH active-child limit so workers keep room. */
 export declare const DEFAULT_REVIEW_QUEUE: Readonly<ReviewQueueConfig>;
-export type Trigger = 'manual' | 'spec-ready' | 'spec-task-ready' | 'implementation-work' | 'lane-assignment' | 'lane-boundary' | 'implementation-complete' | 'failure-streak';
-export type Contract = 'review' | 'answer' | 'patch' | 'note';
+export type Trigger = 'manual' | 'spec-ready' | 'spec-task-ready' | 'implementation-work' | 'lane-assignment' | 'lane-boundary' | 'implementation-complete';
+export type Contract = 'review' | 'note';
 export type Gate = 'strict' | 'soft' | 'none';
 export type ReviewScope = 'whole' | 'task';
 export type ProgressStatus = 'in-progress' | 'blocked';
@@ -49,8 +48,6 @@ export interface TargetConfig {
     model?: string;
     reasoningEffort?: string;
     agentOptions?: AgentOptionsConfig;
-    /** Declares that this provider instance may write; required by `patch` rules. */
-    write?: boolean;
 }
 /** One configured rule; every field is data, never a provider name hard-coded in code. */
 export interface RuleConfig {
@@ -62,14 +59,10 @@ export interface RuleConfig {
     gate: Gate;
     phase?: string;
     scope?: ReviewScope;
-    threshold?: number;
-    isolation?: 'worktree';
 }
-/** Per-contract target-run timeouts in milliseconds. */
+/** The review-run target timeout in milliseconds. */
 export interface TimeoutConfig {
     review: number;
-    answer: number;
-    patch: number;
 }
 /** Per-profile review queue limits and retry policy. */
 export interface ReviewQueueConfig {
@@ -85,25 +78,12 @@ export interface ReviewQueueConfig {
     maxDelayMs: number;
     waitTimeoutMs: number;
 }
-/** Per-profile review-learning limits. */
-export interface ReviewLearningConfig {
-    /** Off: no retro/lesson tool, no command, and no lesson injection. */
-    enabled: boolean;
-    /** Settled reviews read by the retro and kept in the finding history. */
-    window: number;
-    /** Lesson store cap; the byte cap still applies. */
-    maxLessons: number;
-}
-/** The documented defaults; `window` and `maxLessons` also bound their stores. */
-export declare const DEFAULT_REVIEW_LEARNING: Readonly<ReviewLearningConfig>;
 /** Row configuration accepted by {@link apply}. */
 export interface BundleConfig {
     targets?: Record<string, TargetConfig>;
     rules?: RuleConfig[];
     timeouts?: Partial<TimeoutConfig>;
-    failureStreak?: number;
     reviewQueue?: Partial<ReviewQueueConfig>;
-    reviewLearning?: Partial<ReviewLearningConfig>;
     /** Gate-only retirement switch (default `workflowOwned: true`). */
     gates?: {
         workflowOwned?: boolean;
@@ -150,9 +130,7 @@ interface EngineConfig {
     targets: Map<string, TargetConfig>;
     rules: RuleConfig[];
     timeouts: TimeoutConfig;
-    failureStreak: number;
     reviewQueue: ReviewQueueConfig;
-    reviewLearning: ReviewLearningConfig;
     gates: GatesConfig;
 }
 /**
@@ -163,11 +141,6 @@ interface EngineConfig {
 export declare function validateConfig(raw: unknown): EngineConfig;
 /** Validate the gate-only retirement switch fail-loud with its field and shape. */
 export declare function validateGates(raw: unknown): GatesConfig;
-/**
- * Validate the review-learning block. The defaults bound the lesson store and
- * the retro window; an invalid field fails plugin load with its range.
- */
-export declare function validateReviewLearning(raw: unknown): ReviewLearningConfig;
 /**
  * Validate the review queue block. An omitted block enables the documented
  * defaults; an invalid field fails plugin load with the field and its range.
@@ -286,7 +259,7 @@ interface ParsedVerdict {
 /** Accept exactly one fenced JSON verdict that echoes the requested digest. */
 export declare function parseVerdict(text: string, expectedDigest: string): ParsedVerdict;
 /** Export for the prompt-budget tests; the engine is the only production caller. */
-export declare function reviewPrompt(rule: RuleConfig, change: ChangeInfo, digest: string, task: TaskInfo | undefined, context: string | undefined, objective: string | undefined, snapshot?: boolean, lessons?: readonly Lesson[], section?: SectionInfo): string;
+export declare function reviewPrompt(rule: RuleConfig, change: ChangeInfo, digest: string, task: TaskInfo | undefined, context: string | undefined, objective: string | undefined, snapshot?: boolean, section?: SectionInfo): string;
 /**
  * Register the three tools, the on-demand skill, and the turn-stopping gate.
  * A missing subagent provider is not fatal here: it is diagnosed by the tools

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -51,45 +51,39 @@ describe('model-facing budget', () => {
     expect(readFileSync(join(packageDir, 'lib', 'index.js'), 'utf8')).not.toContain('systemPrompt')
   })
 
-  it('states the measured sizes and links existing repository documents', () => {
+  it('states the documented budgets and links existing repository documents', async () => {
     const docs = readFileSync(docsPath, 'utf8')
     expect(docs).toContain('900 estimated tokens')
     expect(docs).toContain('24,000 UTF-8 bytes')
-    expect(docs).toContain(`${toolBytes + catalogBytes}`)
-    expect(docs).toContain(`${skillBodyBytes}`)
     expect(docs).toContain('docs/plugins.md')
     expect(existsSync(join(packageDir, '..', '..', 'docs', 'plugins.md'))).toBe(true)
     expect(existsSync(join(packageDir, '..', '..', 'openspec', 'specs'))).toBe(true)
   })
 
-  it('documents the per-target model and effort example in the fragment and docs', () => {
+  it('ships exactly the review prompts and the skill asset', () => {
+    expect(readdirSync(assets).sort()).toEqual([
+      'SKILL.md',
+      'review-integration.md',
+      'review-spec.md',
+      'review-task.md',
+    ])
+  })
+
+  it('documents the single codex target and a non-Codex override', () => {
     const fragment = readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')
     const docs = readFileSync(docsPath, 'utf8')
     for (const text of [fragment, docs]) {
-      expect(text).toContain('codex-astra')
       expect(text).toContain('model: gpt-6-astra')
       expect(text).toContain('reasoningEffort: xhigh')
     }
-  })
-
-  it('documents the worker effort tiers and names both worker rules in the skill', () => {
-    const skill = read('SKILL.md')
-    const fragment = readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')
-    const docs = readFileSync(docsPath, 'utf8')
-    for (const text of [skill, docs]) {
-      expect(text).toContain('`worker-fast`')
-      expect(text).toContain('`worker-deep`')
-    }
-    expect(skill).toContain('mechanical inspection')
-    expect(skill).toContain('root-cause')
-    expect(skill).toContain('The main loop keeps its own effort')
-    expect(skill).toContain('`minimal`/`low` map to `low`')
-    expect(skill).toContain('`medium`/`high`/`xhigh` map to `high`')
-    expect(skill).toContain('`max` is distinct')
-    expect(fragment).toContain('worker-fast:')
-    expect(fragment).toContain('worker-deep:')
-    expect(docs).toContain('reasoningEffort: high')
-    expect(docs).toContain('reasoningEffort: max')
+    expect(fragment).toContain('codex:')
+    expect(fragment).not.toContain('codex-astra')
+    expect(fragment).not.toContain('codex-write')
+    expect(fragment).not.toContain('worker-fast')
+    expect(fragment).not.toContain('worker-deep')
+    expect(docs).toContain('provider: spawn')
+    expect(docs).not.toContain('contract: answer')
+    expect(docs).not.toContain('contract: patch')
   })
 
   it('documents the lane triggers and names the checkpoint owner', () => {
@@ -209,8 +203,6 @@ describe('bundled prompts', () => {
       expect(text).toContain('newly checked task')
       expect(text).toContain('mutually exclusive')
     }
-    expect(docs).toContain('the archive gate are unchanged')
-    expect(docs).toContain('installs the regenerated setup')
     expect(skill).toContain('Every section finding names the affected task')
     expect(toolDescriptions.delegate).toContain('section')
     expect(toolDescriptions.delegate).toContain('1.x')
@@ -223,24 +215,13 @@ describe('bundled prompts', () => {
     expect(text).toMatch(/exactly one fenced ```json block/)
   })
 
-  it('documents the review-learning vocabulary, store paths, bounds, and opt-out', () => {
-    const docs = readFileSync(docsPath, 'utf8')
-    for (const text of [
-      'review_retro',
-      'review_lesson',
-      '/review-retro',
-      '.dsh/review-learning/',
-      'reviewLearning.enabled',
-      'reviewLearning.window',
-      'reviewLearning.maxLessons',
-      '1200 characters',
-      '4000 characters',
-      'spec-ambiguity',
-      'path-boundary',
-      'security',
-    ]) {
-      expect(docs).toContain(text)
-    }
+  it('documents the review queue and the asynchronous run handle in the skill', () => {
+    const text = read('SKILL.md').replace(/\s+/gu, ' ')
+    expect(text).toContain('## Review queue')
+    expect(text).toContain('returns a run id and record path before the target finishes')
+    expect(text).toContain('queued or running')
+    expect(text).toContain('review queue full')
+    expect(text).toContain('delegation_status')
   })
 
   it('requests the finding class vocabulary in all three review instructions', () => {
@@ -249,66 +230,5 @@ describe('bundled prompts', () => {
       expect(text).toContain('"class"')
       for (const findingClass of FINDING_CLASSES) expect(text).toContain(findingClass)
     }
-  })
-
-  it('shapes a blocker consultation with recommendation, evidence, and next action', () => {
-    const text = read('consult.md')
-    expect(text).toContain('Recommendation')
-    expect(text).toContain('Evidence')
-    expect(text).toContain('Next action')
-    expect(text).toContain('read-only')
-  })
-
-  it('shapes research with a bounded answer, evidence, and sources', () => {
-    const text = read('research.md')
-    expect(text).toContain('Answer')
-    expect(text).toContain('Evidence')
-    expect(text).toContain('Sources')
-    expect(text).toContain('read-only')
-  })
-
-  it('shapes an advisor second opinion with a recommendation, counterargument, risks, next action, and confidence', () => {
-    const text = read('advisor.md')
-    expect(text).toContain('Recommendation')
-    expect(text).toContain('strongest counterargument')
-    expect(text).toContain('Risks')
-    expect(text).toContain('Next action')
-    expect(text).toContain('Confidence')
-    expect(text).toContain('read-only')
-  })
-
-  it('shapes the isolated fix with root cause, changed files, tests, and limits', () => {
-    const text = read('fix.md')
-    expect(text).toContain('worktree')
-    expect(text).toContain('Root cause')
-    expect(text).toContain('Changed files')
-    expect(text).toContain('Tests')
-    expect(text).toContain('Limits')
-  })
-})
-
-describe('advisor policy', () => {
-  it('names the advisor uses, exclusions, context guidance, and ceiling in the delegate description', () => {
-    const description = toolDescriptions.delegate
-    expect(description).toContain('advisor')
-    expect(description).toContain('exact question')
-    expect(description).toContain('constraints')
-    expect(description).toContain('decisive evidence')
-    expect(description).toContain('expensive-to-reverse')
-    expect(description).toContain('security/data-integrity')
-    expect(description).toContain('routine edits')
-    expect(description).toContain('locally verifiable facts')
-    expect(description).toContain('at most three times per session')
-  })
-
-  it('carries the advisor policy and default row in the skill', () => {
-    const text = read('SKILL.md')
-    expect(text).toContain('| `advisor` | `manual` | answer | none |')
-    expect(text).toContain('## When to consult the advisor')
-    expect(text).toContain('expensive to reverse')
-    expect(text).toContain('security or data integrity')
-    expect(text).toContain('routine edits')
-    expect(text).toContain('at most three advisor calls per session')
-    expect(text).toContain('never satisfies a review')
   })
 })

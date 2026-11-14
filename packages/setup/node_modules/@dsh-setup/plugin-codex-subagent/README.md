@@ -47,15 +47,19 @@ line: it reaches the app-server over stdin.
 
 One row registers two provider instances under fixed names:
 
-| Provider               | Sandbox           | Use                                     |
-| ---------------------- | ----------------- | --------------------------------------- |
-| `codex-subagent`       | `read-only`       | review and answer contracts             |
-| `codex-subagent-write` | `workspace-write` | patch contracts in an isolated worktree |
+| Provider               | Sandbox           | Use                                                                             |
+| ---------------------- | ----------------- | ------------------------------------------------------------------------------- |
+| `codex-subagent`       | `read-only`       | The delegation `review` contract and the visible `codex_subagent` tool          |
+| `codex-subagent-write` | `workspace-write` | No shipped delegation contract; selectable through `subagent` for isolated work |
 
 Both use Codex's non-interactive `approvalPolicy: never`; the sandbox fixes the
-permission boundary, so a read-only rule cannot silently escalate. The official
-`codex` provider (from `@deepseek-ai/dsh-subagent-codex`) may be registered in the
-same profile; the fork's names are distinct.
+permission boundary, so a read-only rule cannot silently escalate. The write
+provider stays available to the first-party `subagent` tool and to worktree
+flows, but no shipped delegation contract uses it: give it an isolated
+`create_worktree` checkout and review the returned diff and tests before
+applying them. The official `codex` provider (from
+`@deepseek-ai/dsh-subagent-codex`) may be registered in the same profile; the
+fork's names are distinct.
 
 ## Target model and reasoning effort
 
@@ -95,7 +99,8 @@ To turn the providers and tool off, disable the row or remove the bundle.
 
 `codex_subagent` starts a Codex run that is cataloged in the delegating
 Session's subagent list as an **external** child. It is the explicit-request
-path; the `delegate` engine keeps its own runs invisible by design.
+path; a rule-driven review on the same external provider is also cataloged
+(`delegation:<rule>`) and delivers its verdict as a settlement notice.
 
 Parameters: `prompt` (required, the complete self-contained task),
 `description` (required, the short task label shown in the list), `name`
@@ -105,9 +110,10 @@ notice that starts a new turn.
 
 Limits: the entry is a leaf — it cannot be opened, shows no token or duration
 metrics, and accepts no follow-up messages. It uses the read-only
-`codex-subagent` provider; write work stays on `delegate`'s patch rule in an
-isolated worktree. Both the `delegate` runs and the visible run use the same
-`@openai/codex` binary and the user's `~/.codex` configuration.
+`codex-subagent` provider; write work goes through a write-capable `subagent` in
+an isolated `create_worktree` checkout. The visible `codex_subagent` run and the
+rule-driven review runs use the same `@openai/codex` binary and the user's
+`~/.codex` configuration.
 
 ## Configuration
 

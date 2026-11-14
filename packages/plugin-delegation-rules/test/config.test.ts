@@ -2,30 +2,17 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { decideLesson, proposeLesson } from '../src/host/lesson-store.ts'
 import { apply, inject, validateConfig } from '../src/index.js'
-import { defaultTestConfig, FakeSubagents, Harness, makeWorkspace, writeChange } from './helpers.js'
+import { defaultTestConfig } from './helpers.js'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
-const cleanups: Array<() => Promise<void>> = []
-
-async function workspace(): Promise<string> {
-  const created = await makeWorkspace()
-  cleanups.push(created.cleanup)
-  return created.root
-}
-
 /** Load the plugin through a real Cordis root context with the injected services provided. */
-async function realCordisPlugin(options: { learning?: boolean } = {}): Promise<{
-  tools: string[]
-  commands: string[]
-}> {
+async function realCordisPlugin(): Promise<{ tools: string[] }> {
   const ctx = new Context()
   const tools: string[] = []
-  const commands: string[] = []
   ctx.provide('tools', {
     register: (definition: { name: string }) => {
       tools.push(definition.name)
@@ -41,25 +28,12 @@ async function realCordisPlugin(options: { learning?: boolean } = {}): Promise<{
   })
   ctx.provide('skills', { registerProvider: () => () => undefined })
   ctx.provide('workingDirectory', { get: () => process.cwd() })
-  if (options.learning === true) {
-    ctx.provide('userQuestions', { ask: async () => ({ answers: [] }) })
-    ctx.provide('commands', {
-      register: (definition: { name: string }) => {
-        commands.push(definition.name)
-        return () => undefined
-      },
-    })
-  }
   await (ctx.plugin as unknown as (plugin: unknown, config: unknown) => Promise<unknown>)(
     { apply, inject },
     {},
   )
-  return { tools, commands }
+  return { tools }
 }
-
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup()
-})
 
 const review = {
   id: 'spec-review',
@@ -74,10 +48,7 @@ const review = {
 
 function configWithRule(rule: Record<string, unknown>): Record<string, unknown> {
   return {
-    targets: {
-      codex: { provider: 'codex-subagent' },
-      'codex-write': { provider: 'codex-subagent-write', write: true },
-    },
+    targets: { codex: { provider: 'codex-subagent' } },
     rules: [rule],
   }
 }
@@ -87,8 +58,7 @@ describe('configuration validation', () => {
     const config = validateConfig({})
     expect(config.rules).toEqual([])
     expect(config.targets.size).toBe(0)
-    expect(config.failureStreak).toBe(3)
-    expect(config.timeouts).toEqual({ review: 1_200_000, answer: 300_000, patch: 1_800_000 })
+    expect(config.timeouts).toEqual({ review: 1_200_000 })
     expect(config.reviewQueue).toEqual({
       enabled: true,
       concurrency: 2,
@@ -131,7 +101,7 @@ describe('configuration validation', () => {
     expect(validateConfig({ rules: [] }).rules).toEqual([])
   })
 
-  it('accepts the shipped default rules and targets from the composition fragment', () => {
+  it('accepts the shipped review rules and the single codex target from the composition fragment', () => {
     const fragment = parse(readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')) as {
       rows: Array<{ id: string; config: Record<string, unknown> }>
     }
@@ -141,12 +111,6 @@ describe('configuration validation', () => {
     expect(config.rules.map((rule) => rule.id)).toEqual([
       'spec-review',
       'task-review',
-      'blocker',
-      'research',
-      'advisor',
-      'worker-fast',
-      'worker-deep',
-      'bug-fix',
       'integration-review',
       'lane-fanout',
     ])
@@ -156,56 +120,13 @@ describe('configuration validation', () => {
       contract: 'note',
       gate: 'strict',
     })
-    expect([...config.targets.keys()]).toEqual([
-      'codex',
-      'codex-write',
-      'codex-astra',
-      'worker-fast',
-      'worker-deep',
-    ])
-    expect(config.targets.get('codex-write')?.write).toBe(true)
-    // The shipped targets select the strong model; codex-astra stays the explicit strong advisor target.
+    expect([...config.targets.keys()]).toEqual(['codex'])
     expect(config.targets.get('codex')).toEqual({
       provider: 'codex-subagent',
       model: 'gpt-6-astra',
       reasoningEffort: 'xhigh',
     })
-    expect(config.targets.get('codex-write')).toEqual({
-      provider: 'codex-subagent-write',
-      write: true,
-      model: 'gpt-6-astra',
-      reasoningEffort: 'xhigh',
-    })
-    expect(config.targets.get('codex-astra')).toEqual({
-      provider: 'codex-subagent',
-      model: 'gpt-6-astra',
-      reasoningEffort: 'xhigh',
-    })
-    // The worker tiers set only effort, so both keep the profile's model.
-    expect(config.targets.get('worker-fast')).toEqual({
-      provider: 'spawn',
-      reasoningEffort: 'high',
-    })
-    expect(config.targets.get('worker-deep')).toEqual({
-      provider: 'spawn',
-      reasoningEffort: 'max',
-    })
-    for (const ruleId of ['worker-fast', 'worker-deep']) {
-      expect(config.rules.find((rule) => rule.id === ruleId)).toMatchObject({
-        when: 'manual',
-        to: ruleId,
-        contract: 'answer',
-        gate: 'none',
-      })
-    }
-    expect(config.rules.find((rule) => rule.id === 'advisor')).toMatchObject({
-      when: 'manual',
-      to: 'codex-astra',
-      contract: 'answer',
-      gate: 'none',
-      instruction: 'bundled:advisor',
-    })
-    expect(config.failureStreak).toBe(3)
+    expect(config.timeouts).toEqual({ review: 600_000 })
     const integration = config.rules.find((rule) => rule.id === 'integration-review')
     expect(integration).toMatchObject({
       when: 'implementation-complete',
@@ -303,9 +224,52 @@ describe('configuration validation', () => {
   const invalid: Array<[string, Record<string, unknown>, RegExp]> = [
     ['an unknown top-level field', { rules: [], bogus: true }, /unknown configuration field/],
     [
+      'a removed failure-streak field',
+      { rules: [], failureStreak: 3 },
+      /unknown configuration field\(s\) failureStreak.*removed/,
+    ],
+    [
       'an unknown trigger',
       configWithRule({ ...review, when: 'whenever' }),
       /rule "spec-review": unknown trigger/,
+    ],
+    [
+      'the removed failure-streak trigger',
+      configWithRule({ ...review, when: 'failure-streak', contract: 'note', gate: 'soft' }),
+      /the failure-streak trigger was removed.*subagent tool \(or codex_subagent .*use manual, spec-ready/,
+    ],
+    [
+      'a removed threshold field',
+      configWithRule({ ...review, threshold: 3 }),
+      /threshold belongs to the removed failure-streak trigger; remove it and consult with the subagent tool \(or codex_subagent/,
+    ],
+    [
+      'the removed answer contract',
+      configWithRule({ ...review, contract: 'answer' }),
+      /the answer contract was removed; use the subagent tool \(or codex_subagent/,
+    ],
+    [
+      'the removed patch contract',
+      configWithRule({ ...review, contract: 'patch' }),
+      /the patch contract was removed; use create_worktree/,
+    ],
+    [
+      'a removed isolation field',
+      configWithRule({ ...review, isolation: 'worktree' }),
+      /isolation was removed with the patch contract; use create_worktree/,
+    ],
+    [
+      'a removed target write flag',
+      {
+        targets: { 'codex-write': { provider: 'codex-subagent-write', write: true } },
+        rules: [],
+      },
+      /target "codex-write"\.write was removed with the patch contract; .*subagent tool with create_worktree/,
+    ],
+    [
+      'a removed answer timeout',
+      { rules: [], timeouts: { answer: 1 } },
+      /timeouts: unknown contract "answer"; use review \(answer and patch were removed/,
     ],
     [
       'an unknown contract',
@@ -366,37 +330,6 @@ describe('configuration validation', () => {
       /only the implementation-work trigger uses a note rule|manual rules cannot use the note contract/,
     ],
     [
-      'a patch rule without isolation',
-      configWithRule({
-        ...review,
-        id: 'bug-fix',
-        when: 'manual',
-        contract: 'patch',
-        gate: 'none',
-        to: 'codex-write',
-        scope: undefined,
-        phase: undefined,
-        instruction: 'bundled:fix',
-      }),
-      /must declare isolation: worktree/,
-    ],
-    [
-      'a patch rule on a read-only target',
-      configWithRule({
-        ...review,
-        id: 'bug-fix',
-        when: 'manual',
-        contract: 'patch',
-        gate: 'none',
-        to: 'codex',
-        scope: undefined,
-        phase: undefined,
-        instruction: 'bundled:fix',
-        isolation: 'worktree',
-      }),
-      /not declared write-capable/,
-    ],
-    [
       'a duplicate strict digest scope',
       {
         ...configWithRule(review),
@@ -405,61 +338,16 @@ describe('configuration validation', () => {
       /both gate the same digest scope as strict/,
     ],
     [
-      'a strict failure-streak rule',
-      configWithRule({
-        ...review,
-        id: 'blocker',
-        when: 'failure-streak',
-        contract: 'answer',
-        gate: 'strict',
-        scope: undefined,
-        phase: undefined,
-        instruction: 'bundled:consult',
-      }),
-      /writes no gate record/,
-    ],
-    [
       'a gated manual rule',
       configWithRule({
         ...review,
-        id: 'research',
+        id: 'manual-review',
         when: 'manual',
-        to: 'codex',
-        contract: 'answer',
         gate: 'soft',
-        scope: undefined,
+        scope: 'task',
         phase: undefined,
-        instruction: 'bundled:research',
       }),
       /manual rule has no automatic condition/,
-    ],
-    [
-      'an answer rule with a scope',
-      configWithRule({
-        ...review,
-        id: 'research',
-        when: 'manual',
-        to: 'codex',
-        contract: 'answer',
-        gate: 'none',
-        instruction: 'bundled:research',
-      }),
-      /only a review rule takes phase\/scope/,
-    ],
-    [
-      'a spec-ready answer rule',
-      configWithRule({
-        ...review,
-        id: 'research',
-        when: 'spec-ready',
-        to: 'codex',
-        contract: 'answer',
-        gate: 'none',
-        instruction: 'bundled:research',
-        scope: undefined,
-        phase: undefined,
-      }),
-      /spec-ready drives a whole-spec review/,
     ],
     [
       'an implementation-work review rule',
@@ -503,11 +391,6 @@ describe('configuration validation', () => {
       /timeouts.review must be a positive integer/,
     ],
     [
-      'an invalid failure streak',
-      { rules: [], failureStreak: 1.5 },
-      /failureStreak must be a positive integer/,
-    ],
-    [
       'a review queue concurrency below the range',
       { reviewQueue: { concurrency: 0 } },
       /reviewQueue\.concurrency must be a whole number from 1 to 4/,
@@ -547,116 +430,8 @@ describe('configuration validation', () => {
 })
 
 describe('real Cordis registration', () => {
-  it('loads without the optional learning services and registers the enabled tools', async () => {
-    const { tools, commands } = await realCordisPlugin()
-    expect(tools.sort()).toEqual([
-      'delegate',
-      'delegation_status',
-      'review_lesson',
-      'review_retro',
-      'task_progress',
-    ])
-    // No command registry: the learning tools load, the command is skipped.
-    expect(commands).toHaveLength(0)
-  })
-
-  it('registers the learning tools and command when both services are provided', async () => {
-    const { tools, commands } = await realCordisPlugin({ learning: true })
-    expect(tools.sort()).toEqual([
-      'delegate',
-      'delegation_status',
-      'review_lesson',
-      'review_retro',
-      'task_progress',
-    ])
-    expect(commands).toEqual(['review-retro'])
-  })
-})
-
-describe('review learning configuration', () => {
-  it('defaults enabled window 50 and maxLessons 200', () => {
-    expect(validateConfig({}).reviewLearning).toEqual({
-      enabled: true,
-      window: 50,
-      maxLessons: 200,
-    })
-  })
-
-  it('merges a partial block over the defaults', () => {
-    expect(validateConfig({ reviewLearning: { enabled: false } }).reviewLearning).toEqual({
-      enabled: false,
-      window: 50,
-      maxLessons: 200,
-    })
-    expect(
-      validateConfig({ reviewLearning: { window: 5, maxLessons: 10 } }).reviewLearning,
-    ).toEqual({ enabled: true, window: 5, maxLessons: 10 })
-  })
-
-  it('fails loud on an invalid window, maxLessons, or unknown field', () => {
-    expect(() => validateConfig({ reviewLearning: { window: 0 } })).toThrow(
-      /reviewLearning\.window must be a whole number from 1 to 200/,
-    )
-    expect(() => validateConfig({ reviewLearning: { window: 201 } })).toThrow(
-      /reviewLearning\.window must be a whole number from 1 to 200/,
-    )
-    expect(() => validateConfig({ reviewLearning: { window: 1.5 } })).toThrow(
-      /reviewLearning\.window must be a whole number from 1 to 200/,
-    )
-    expect(() => validateConfig({ reviewLearning: { maxLessons: 0 } })).toThrow(
-      /reviewLearning\.maxLessons must be a whole number from 1 to 1000/,
-    )
-    expect(() => validateConfig({ reviewLearning: { nope: true } })).toThrow(
-      /reviewLearning: unknown field\(s\) nope/,
-    )
-    expect(() => validateConfig({ reviewLearning: 'on' })).toThrow(
-      /reviewLearning must be a mapping/,
-    )
-  })
-
-  it('registers no learning tool or command when disabled and still injects nothing', async () => {
-    const root = await workspace()
-    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
-    const accepted = await proposeLesson(root, {
-      class: 'path-boundary',
-      title: 'Disabled lesson title',
-      body: 'Disabled lesson body.',
-      appliesTo: { rules: ['*'], capabilities: [] },
-      now: 1_000,
-    })
-    await decideLesson(root, accepted.lesson.id, 'accepted', 2_000)
-
-    const disabled = new Harness({
-      cwd: root,
-      config: { ...defaultTestConfig(), reviewLearning: { enabled: false } },
-      agents: new FakeSubagents(),
-    })
-    expect([...disabled.tools.keys()].sort()).toEqual([
-      'delegate',
-      'delegation_status',
-      'task_progress',
-    ])
-    expect(disabled.commands).toHaveLength(0)
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent')
-    const review = new Harness({
-      cwd: root,
-      config: { ...defaultTestConfig(), reviewLearning: { enabled: false } },
-      agents: subagents,
-    })
-    const runId = await review.startReview({ rule: 'task-review', change: 'change-a' })
-    await review.waitForRun(runId)
-    expect(subagents.runs[0]?.prompt ?? '').not.toContain('## Lessons from prior reviews')
-  })
-
-  it('names the user-approval rule in both learning tool descriptions when enabled', async () => {
-    const root = await workspace()
-    const harness = new Harness({ cwd: root, config: defaultTestConfig() })
-    const retro = harness.tools.get('review_retro')?.description ?? ''
-    const lesson = harness.tools.get('review_lesson')?.description ?? ''
-    expect(retro).toContain('user accepts')
-    expect(lesson).toContain('user-questions service')
-    expect(lesson).toContain('never change the P0/P1')
-    expect(harness.commands.map((command) => command.name)).toEqual(['review-retro'])
+  it('loads with the three delegation tools and no removed learning tool or command', async () => {
+    const { tools } = await realCordisPlugin()
+    expect(tools.sort()).toEqual(['delegate', 'delegation_status', 'task_progress'])
   })
 })

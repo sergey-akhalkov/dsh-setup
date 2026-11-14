@@ -12,13 +12,11 @@
 # the gate instead of failing profile composition, so a standalone install with
 # another provider still composes. No machine path belongs in this file.
 #
-# The shipped `codex` and `codex-write` targets select the documented strong
-# Codex model and `xhigh` reasoning effort. `codex-astra` keeps the same values
-# as the explicit strong target used by the advisor, so overriding `codex` does
-# not weaken the advisor. The model id is the one verified live against the
-# bundled Codex; a profile can override any target (a patch replaces the whole
-# config). An unavailable model fails the run with the target/model next
-# action; it does not change the default rules.
+# The single `codex` target selects the documented strong Codex model and
+# `xhigh` reasoning effort for the review rules. The model id is the one
+# verified live against the bundled Codex; a profile can override the target
+# (a patch replaces the whole config). An unavailable model fails the run with
+# the target/model next action; it does not change the default rules.
 rows:
   - id: dsh-setup-delegation-rules
     config:
@@ -27,23 +25,6 @@ rows:
           provider: codex-subagent
           model: gpt-6-astra
           reasoningEffort: xhigh
-        codex-write:
-          provider: codex-subagent-write
-          write: true
-          model: gpt-6-astra
-          reasoningEffort: xhigh
-        codex-astra:
-          provider: codex-subagent
-          model: gpt-6-astra
-          reasoningEffort: xhigh
-        # In-process worker tiers: effort only, so the model stays the profile's
-        # agent default. The skill's selection policy picks between them.
-        worker-fast:
-          provider: spawn
-          reasoningEffort: high
-        worker-deep:
-          provider: spawn
-          reasoningEffort: max
       rules:
         - id: spec-review
           when: spec-ready
@@ -60,43 +41,6 @@ rows:
           scope: task
           gate: strict
           instruction: "bundled:review-task"
-        - id: blocker
-          when: failure-streak
-          to: codex
-          contract: answer
-          gate: soft
-          instruction: "bundled:consult"
-        - id: research
-          when: manual
-          to: codex
-          contract: answer
-          gate: none
-          instruction: "bundled:research"
-        - id: advisor
-          when: manual
-          to: codex-astra
-          contract: answer
-          gate: none
-          instruction: "bundled:advisor"
-        - id: worker-fast
-          when: manual
-          to: worker-fast
-          contract: answer
-          gate: none
-          instruction: "bundled:research"
-        - id: worker-deep
-          when: manual
-          to: worker-deep
-          contract: answer
-          gate: none
-          instruction: "bundled:research"
-        - id: bug-fix
-          when: manual
-          to: codex-write
-          contract: patch
-          gate: none
-          instruction: "bundled:fix"
-          isolation: worktree
         - id: integration-review
           when: implementation-complete
           to: codex
@@ -113,14 +57,3 @@ rows:
           gate: strict
       timeouts:
         review: 600000
-        answer: 300000
-        patch: 1800000
-      failureStreak: 3
-      # Local review learning: classed findings, a bounded lesson store, and a
-      # deterministic retro. The defaults are restated here so a profile patch
-      # that replaces the whole config can copy them. `window` bounds the retro
-      # and the finding history; `maxLessons` bounds the lesson store.
-      reviewLearning:
-        enabled: true
-        window: 50
-        maxLessons: 200

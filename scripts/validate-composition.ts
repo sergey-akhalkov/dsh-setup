@@ -230,7 +230,7 @@ function main(): number {
           'dsh-setup-goal-continuity',
           'preset-goal-reviewer',
           'dsh-setup-verification-gate',
-          'reasoningEffort: high',
+          'reasoningEffort: xhigh',
           'preference: dark',
           'selectedDefault: cordis',
         ]) {
@@ -312,12 +312,14 @@ function main(): number {
         }
       })
 
-      step('ship the retained task-progress and lane-boundary gates', () => {
+      step('ship the four retained review rules and no removed rule', () => {
         const row = rowBlock(dump.stdout, 'dsh-setup-delegation-rules')
         if (row === '') throw new Error('delegation-rules row is missing')
         for (const [id, when] of [
-          ['task-progress', 'implementation-work'],
-          ['lane-boundary', 'lane-boundary'],
+          ['spec-review', 'spec-ready'],
+          ['task-review', 'spec-task-ready'],
+          ['integration-review', 'implementation-complete'],
+          ['lane-fanout', 'lane-assignment'],
         ] as const) {
           const index = row.indexOf(`id: ${id}`)
           if (index === -1) throw new Error(`delegation-rules row lacks the "${id}" rule`)
@@ -325,8 +327,21 @@ function main(): number {
           if (!window.includes(`when: ${when}`)) {
             throw new Error(`the "${id}" rule has the wrong trigger`)
           }
-          if (!window.includes('gate: strict')) {
-            throw new Error(`the "${id}" rule is not strict`)
+        }
+        for (const removed of [
+          'task-progress',
+          'lane-boundary',
+          'blocker',
+          'research',
+          'advisor',
+          'worker-fast',
+          'worker-deep',
+          'bug-fix',
+          'codex-write',
+          'codex-astra',
+        ]) {
+          if (row.includes(`${removed}:`) || row.includes(`id: ${removed}`)) {
+            throw new Error(`delegation-rules row still ships the removed "${removed}"`)
           }
         }
       })

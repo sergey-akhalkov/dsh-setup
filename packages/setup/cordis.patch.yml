@@ -20,21 +20,6 @@
             provider: codex-subagent
             model: gpt-6-astra
             reasoningEffort: xhigh
-          codex-write:
-            provider: codex-subagent-write
-            write: true
-            model: gpt-6-astra
-            reasoningEffort: xhigh
-          codex-astra:
-            provider: codex-subagent
-            model: gpt-6-astra
-            reasoningEffort: xhigh
-          worker-fast:
-            provider: spawn
-            reasoningEffort: high
-          worker-deep:
-            provider: spawn
-            reasoningEffort: max
         rules:
           - id: spec-review
             when: spec-ready
@@ -51,43 +36,6 @@
             scope: task
             gate: strict
             instruction: bundled:review-task
-          - id: blocker
-            when: failure-streak
-            to: codex
-            contract: answer
-            gate: soft
-            instruction: bundled:consult
-          - id: research
-            when: manual
-            to: codex
-            contract: answer
-            gate: none
-            instruction: bundled:research
-          - id: advisor
-            when: manual
-            to: codex-astra
-            contract: answer
-            gate: none
-            instruction: bundled:advisor
-          - id: worker-fast
-            when: manual
-            to: worker-fast
-            contract: answer
-            gate: none
-            instruction: bundled:research
-          - id: worker-deep
-            when: manual
-            to: worker-deep
-            contract: answer
-            gate: none
-            instruction: bundled:research
-          - id: bug-fix
-            when: manual
-            to: codex-write
-            contract: patch
-            gate: none
-            instruction: bundled:fix
-            isolation: worktree
           - id: integration-review
             when: implementation-complete
             to: codex
@@ -102,13 +50,6 @@
             gate: strict
         timeouts:
           review: 600000
-          answer: 300000
-          patch: 1800000
-        failureStreak: 3
-        reviewLearning:
-          enabled: true
-          window: 50
-          maxLessons: 200
     - id: dsh-setup-goal-continuity
       name: "@dsh-setup/plugin-goal-continuity"
       config:
@@ -487,21 +428,6 @@
         provider: codex-subagent
         model: gpt-6-astra
         reasoningEffort: xhigh
-      codex-write:
-        provider: codex-subagent-write
-        write: true
-        model: gpt-6-astra
-        reasoningEffort: xhigh
-      codex-astra:
-        provider: codex-subagent
-        model: gpt-6-astra
-        reasoningEffort: xhigh
-      worker-fast:
-        provider: spawn
-        reasoningEffort: high
-      worker-deep:
-        provider: spawn
-        reasoningEffort: max
     rules:
       - id: spec-review
         when: spec-ready
@@ -518,43 +444,6 @@
         scope: task
         gate: strict
         instruction: bundled:review-task
-      - id: blocker
-        when: failure-streak
-        to: codex
-        contract: answer
-        gate: soft
-        instruction: bundled:consult
-      - id: research
-        when: manual
-        to: codex
-        contract: answer
-        gate: none
-        instruction: bundled:research
-      - id: advisor
-        when: manual
-        to: codex-astra
-        contract: answer
-        gate: none
-        instruction: bundled:advisor
-      - id: worker-fast
-        when: manual
-        to: worker-fast
-        contract: answer
-        gate: none
-        instruction: bundled:research
-      - id: worker-deep
-        when: manual
-        to: worker-deep
-        contract: answer
-        gate: none
-        instruction: bundled:research
-      - id: bug-fix
-        when: manual
-        to: codex-write
-        contract: patch
-        gate: none
-        instruction: bundled:fix
-        isolation: worktree
       - id: integration-review
         when: implementation-complete
         to: codex
@@ -567,22 +456,7 @@
         when: lane-assignment
         contract: note
         gate: strict
-      - id: task-progress
-        when: implementation-work
-        contract: note
-        gate: strict
-      - id: lane-boundary
-        when: lane-boundary
-        contract: note
-        gate: strict
     timeouts:
       review: 600000
-      answer: 300000
-      patch: 1800000
-    failureStreak: 3
-    reviewLearning:
-      enabled: true
-      window: 50
-      maxLessons: 200
     gates:
       workflowOwned: false

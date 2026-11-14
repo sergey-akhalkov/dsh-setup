@@ -27,14 +27,6 @@
     "lib/host/index.d.ts",
     "lib/host/review-queue.js",
     "lib/host/review-queue.d.ts",
-    "lib/host/finding-history.js",
-    "lib/host/finding-history.d.ts",
-    "lib/host/learning-tools.js",
-    "lib/host/learning-tools.d.ts",
-    "lib/host/lesson-store.js",
-    "lib/host/lesson-store.d.ts",
-    "lib/host/retro.js",
-    "lib/host/retro.d.ts",
     "lib/shared/approval.js",
     "lib/shared/approval.d.ts",
     "cordis.patch.yml",
@@ -42,11 +34,7 @@
     "assets/delegation-rules/SKILL.md",
     "assets/delegation-rules/review-spec.md",
     "assets/delegation-rules/review-task.md",
-    "assets/delegation-rules/review-integration.md",
-    "assets/delegation-rules/consult.md",
-    "assets/delegation-rules/research.md",
-    "assets/delegation-rules/advisor.md",
-    "assets/delegation-rules/fix.md"
+    "assets/delegation-rules/review-integration.md"
   ],
   "engines": {
     "dsh": ">=0.2.2-rc.2 <0.3.0"

@@ -7,11 +7,6 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import {
-  appendFindingHistory,
-  findingHistoryPath,
-  type HistoryRunEntry,
-} from '../src/host/finding-history.ts'
-import {
   createReviewSnapshot,
   defaultGit,
   discardReviewSnapshot,
@@ -39,10 +34,6 @@ import {
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const cleanups: Array<() => Promise<void>> = []
-// Composed at runtime so the repository machine-path scan does not flag the fixtures.
-const WINDOWS_HOME = ['C:', 'Users', 'owner'].join('\\')
-const POSIX_HOME = ['', 'home', 'owner', 'private'].join('/')
-const TILDE_HOME = ['~', '.config', 'service', 'credentials.json'].join('/')
 
 async function workspace(): Promise<string> {
   const created = await makeWorkspace()
@@ -169,39 +160,34 @@ async function taskRecord(root: string): Promise<{ verdict: string; error?: stri
 }
 
 describe('target resolution', () => {
-  it('runs the same answer rule through a non-Codex DSH provider and model', async () => {
+  it('runs the same review rule through a non-Codex DSH provider and model', async () => {
     const root = await workspace()
-    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const subagents = new FakeSubagents()
-    subagents.addProvider('spawn', { agentOptions: true }, () => ({
-      output: [{ type: 'text', text: 'Use the shared helper; evidence: `src/engine.ts:10`.' }],
-      stopReason: 'completed',
-    }))
+    subagents.addProvider('spawn', { agentOptions: true })
     const harness = harnessFor(
       root,
       {
         targets: { dsh: { provider: 'spawn', model: 'deepseek-flash' } },
         rules: [
           {
-            id: 'research',
-            when: 'manual',
+            id: 'task-review',
+            when: 'spec-task-ready',
             to: 'dsh',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
           },
         ],
       },
       subagents,
     )
-    const answer = await harness.callTool('delegate', {
-      rule: 'research',
-      objective: 'Which helper?',
-    })
-    expect(text(answer)).toContain('Use the shared helper')
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
     expect(subagents.runs[0]?.provider).toBe('spawn')
     expect(subagents.runs[0]?.agentOptions).toEqual({ model: 'deepseek-flash' })
-    expect(subagents.runs[0]?.delivery).toBe('caller')
+    expect(subagents.runs[0]?.delivery).toBe('parent')
     expect(subagents.getProvider('codex-subagent')).toBeUndefined()
     const source = await readFile(join(packageDir, 'lib', 'index.js'), 'utf8')
     expect(source).not.toMatch(/codex/i)
@@ -220,6 +206,7 @@ describe('target resolution', () => {
 
   it('rejects model options a provider does not support instead of ignoring them', async () => {
     const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const subagents = new FakeSubagents()
     subagents.addProvider('spawn', { agentOptions: false })
     const harness = harnessFor(
@@ -228,25 +215,27 @@ describe('target resolution', () => {
         targets: { dsh: { provider: 'spawn', model: 'deepseek-flash' } },
         rules: [
           {
-            id: 'research',
-            when: 'manual',
+            id: 'task-review',
+            when: 'spec-task-ready',
             to: 'dsh',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
           },
         ],
       },
       subagents,
     )
-    await expect(harness.callTool('delegate', { rule: 'research' })).rejects.toThrow(
-      /does not support them; remove model\/reasoningEffort\/agentOptions/,
-    )
+    await expect(
+      harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
+    ).rejects.toThrow(/does not support them; remove model\/reasoningEffort\/agentOptions/)
     expect(subagents.startCalls).toBe(0)
   })
 
   it('passes the target model and reasoning effort in the subagent start request', async () => {
     const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', { agentOptions: true })
     const harness = harnessFor(
@@ -261,18 +250,20 @@ describe('target resolution', () => {
         },
         rules: [
           {
-            id: 'research',
-            when: 'manual',
+            id: 'task-review',
+            when: 'spec-task-ready',
             to: 'codex-astra',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
           },
         ],
       },
       subagents,
     )
-    await harness.callTool('delegate', { rule: 'research' })
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await harness.waitForRun(runId)
     expect(subagents.runs[0]?.agentOptions).toEqual({
       model: 'astra',
       reasoningEffort: 'xhigh',
@@ -281,6 +272,7 @@ describe('target resolution', () => {
 
   it('passes an effort-only target and leaves the model to the provider default', async () => {
     const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', { agentOptions: true })
     const harness = harnessFor(
@@ -289,24 +281,27 @@ describe('target resolution', () => {
         targets: { codex: { provider: 'codex-subagent', reasoningEffort: 'xhigh' } },
         rules: [
           {
-            id: 'research',
-            when: 'manual',
+            id: 'task-review',
+            when: 'spec-task-ready',
             to: 'codex',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
           },
         ],
       },
       subagents,
     )
-    await harness.callTool('delegate', { rule: 'research' })
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await harness.waitForRun(runId)
     expect(subagents.runs[0]?.agentOptions).toEqual({ reasoningEffort: 'xhigh' })
     expect(subagents.runs[0]?.agentOptions).not.toHaveProperty('model')
   })
 
   it('sends no agent options when the target selects none, even without the capability', async () => {
     const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', { agentOptions: false })
     const harness = harnessFor(
@@ -315,23 +310,26 @@ describe('target resolution', () => {
         targets: { codex: { provider: 'codex-subagent' } },
         rules: [
           {
-            id: 'research',
-            when: 'manual',
+            id: 'task-review',
+            when: 'spec-task-ready',
             to: 'codex',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
           },
         ],
       },
       subagents,
     )
-    await harness.callTool('delegate', { rule: 'research' })
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await harness.waitForRun(runId)
     expect(subagents.runs[0]?.agentOptions).toBeUndefined()
   })
 
   it('merges agentOptions under the explicit target model and effort', async () => {
     const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', { agentOptions: true })
     const harness = harnessFor(
@@ -347,18 +345,20 @@ describe('target resolution', () => {
         },
         rules: [
           {
-            id: 'research',
-            when: 'manual',
+            id: 'task-review',
+            when: 'spec-task-ready',
             to: 'codex',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
           },
         ],
       },
       subagents,
     )
-    await harness.callTool('delegate', { rule: 'research' })
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await harness.waitForRun(runId)
     expect(subagents.runs[0]?.agentOptions).toEqual({
       provider: 'codex-route',
       model: 'astra',
@@ -369,6 +369,7 @@ describe('target resolution', () => {
 
   it('rejects an unsupported reasoning effort with the capability diagnostic', async () => {
     const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const subagents = new FakeSubagents()
     subagents.addProvider('spawn', { agentOptions: false })
     const harness = harnessFor(
@@ -377,20 +378,21 @@ describe('target resolution', () => {
         targets: { dsh: { provider: 'spawn', reasoningEffort: 'xhigh' } },
         rules: [
           {
-            id: 'research',
-            when: 'manual',
+            id: 'task-review',
+            when: 'spec-task-ready',
             to: 'dsh',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
           },
         ],
       },
       subagents,
     )
-    await expect(harness.callTool('delegate', { rule: 'research' })).rejects.toThrow(
-      /target "dsh" requests model\/agent options.*does not support them/,
-    )
+    await expect(
+      harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
+    ).rejects.toThrow(/target "dsh" requests model\/agent options.*does not support them/)
     expect(subagents.startCalls).toBe(0)
   })
 
@@ -461,26 +463,6 @@ describe('target resolution', () => {
     expect(record.runId).toBe(runId)
   })
 
-  it('runs the shipped worker tiers on the in-process provider with their effort', async () => {
-    const root = await workspace()
-    const subagents = new FakeSubagents()
-    subagents.addProvider('spawn', { agentOptions: true }, () => ({
-      output: [{ type: 'text', text: 'Sweep result with evidence.' }],
-      stopReason: 'completed',
-    }))
-    const fragment = parse(readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')) as {
-      rows: Array<{ config: BundleConfigLike }>
-    }
-    const harness = harnessFor(root, fragment.rows[0]?.config, subagents)
-    expect(
-      await harness.toolText('delegate', { rule: 'worker-fast', objective: 'List callers' }),
-    ).toContain('Sweep result')
-    await harness.callTool('delegate', { rule: 'worker-deep', objective: 'Explain the bug' })
-    expect(subagents.runs.map((run) => run.provider)).toEqual(['spawn', 'spawn'])
-    expect(subagents.runs[0]?.agentOptions).toEqual({ reasoningEffort: 'high' })
-    expect(subagents.runs[1]?.agentOptions).toEqual({ reasoningEffort: 'max' })
-  })
-
   it('ships the strict lane rule and keeps the progress trigger available to profile rules', async () => {
     const root = await workspace()
     const dir = await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task' }])
@@ -515,33 +497,50 @@ describe('target resolution', () => {
     expect(steerTexts(harness.agent).join('\n')).toContain('changed implementation files')
   })
 
-  it('reports an unavailable worker provider with the target next action and no record', async () => {
+  it('writes an ERROR record and reports an unavailable provider without starting a target', async () => {
     const root = await workspace()
-    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', { agentOptions: false })
     const harness = harnessFor(
       root,
       {
-        targets: { 'worker-fast': { provider: 'spawn', reasoningEffort: 'high' } },
+        targets: { review: { provider: 'spawn' } },
         rules: [
           {
-            id: 'worker-fast',
-            when: 'manual',
-            to: 'worker-fast',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'review',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
           },
         ],
       },
       subagents,
     )
-    await expect(harness.callTool('delegate', { rule: 'worker-fast' })).rejects.toThrow(
-      /target "worker-fast" names provider "spawn", which is not registered.*install or enable that provider/,
+    await expect(
+      harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
+    ).rejects.toThrow(
+      /target "review" names provider "spawn", which is not registered.*install or enable that provider/,
     )
     expect(subagents.startCalls).toBe(0)
-    expect(await readdir(join(root, '.dsh', 'delegation')).catch(() => [] as string[])).toEqual([])
+    const record = JSON.parse(
+      await readFile(
+        join(
+          root,
+          '.dsh',
+          'delegation',
+          'task-review',
+          'change-a',
+          'tasks',
+          `${taskIdFor('First task')}.json`,
+        ),
+        'utf8',
+      ),
+    ) as { verdict: string }
+    expect(record.verdict).toBe('ERROR')
     const status = await harness.toolText('delegation_status', {})
     expect(status).toContain('MISSING provider "spawn"')
   })
@@ -629,6 +628,56 @@ describe('review records', () => {
     expect(rendered).toContain('P0 Missing failure path')
     expect(rendered).not.toContain('secret.ts')
     expect(rendered).not.toContain('ABCDEFGH12345678')
+    expect(subagents.startCalls).toBe(1)
+  })
+
+  it('stores the normalized finding class and renders it on the reused record', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, (run) => {
+      const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
+      const findings = [
+        {
+          severity: 'P1',
+          class: 'missing-test',
+          title: 'Missing failure path',
+          evidence: 'src/file.ts:1 no failure test',
+          fix: 'add a failure test',
+        },
+        {
+          severity: 'P1',
+          class: 'not-a-class',
+          title: 'Unclassified path boundary',
+          evidence: 'src/other.ts:2',
+          fix: 'use a relative path',
+        },
+      ]
+      return {
+        output: [
+          {
+            type: 'text' as const,
+            text: `\`\`\`json\n${JSON.stringify({ digest, verdict: 'FINDINGS', findings })}\n\`\`\``,
+          },
+        ],
+        stopReason: 'completed' as const,
+      }
+    })
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { findings: Array<{ class?: string }> }
+    expect(record.findings.map((finding) => finding.class)).toEqual(['missing-test', 'other'])
+    const rendered = text(
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    expect(rendered).toContain('class: missing-test')
+    expect(rendered).toContain('class: other')
     expect(subagents.startCalls).toBe(1)
   })
 
@@ -975,93 +1024,16 @@ describe('task progress notes', () => {
   })
 })
 
-describe('patch contract', () => {
-  it('runs a write target in an isolated worktree and returns the diff without merging', async () => {
-    const root = await workspace()
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent-write', { agentOptions: false }, () => ({
-      output: [{ type: 'text', text: 'Root cause fixed. Ran pnpm test: 12 passed.' }],
-      stopReason: 'completed',
-    }))
-    const harness = harnessFor(
-      root,
-      {
-        targets: { 'codex-write': { provider: 'codex-subagent-write', write: true } },
-        rules: [
-          {
-            id: 'bug-fix',
-            when: 'manual',
-            to: 'codex-write',
-            contract: 'patch',
-            gate: 'none',
-            instruction: 'bundled:fix',
-            isolation: 'worktree',
-          },
-        ],
-      },
-      subagents,
-    )
-    harness.git.status = ' M packages/engine.ts\0'
-    harness.git.diff = 'diff --git a/packages/engine.ts b/packages/engine.ts'
-    const result = text(
-      await harness.callTool('delegate', { rule: 'bug-fix', objective: 'fix the crash' }),
-    )
-    expect(subagents.runs[0]?.delivery).toBe('caller')
-    expect(result).toContain('isolated worktree .dsh/delegation/worktrees/')
-    expect(result).toContain('packages/engine.ts')
-    expect(result).toContain('12 passed')
-    expect(result).toContain('Nothing was applied to the session worktree')
-    const worktreeCall = harness.git.calls.find((call) => call[0] === 'worktree')
-    expect(worktreeCall?.slice(0, 3)).toEqual(['worktree', 'add', '--detach'])
-    expect(harness.subagents.runs[0]?.cwd).toContain(join('.dsh', 'delegation', 'worktrees'))
-    expect(
-      harness.git.calls.some((call) =>
-        ['merge', 'apply', 'checkout', 'reset'].includes(call[0] ?? ''),
-      ),
-    ).toBe(false)
-  })
-
-  it('requires an objective and a write-capable target before any run', async () => {
-    const root = await workspace()
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent-write')
-    const harness = harnessFor(
-      root,
-      {
-        targets: { 'codex-write': { provider: 'codex-subagent-write', write: true } },
-        rules: [
-          {
-            id: 'bug-fix',
-            when: 'manual',
-            to: 'codex-write',
-            contract: 'patch',
-            gate: 'none',
-            instruction: 'bundled:fix',
-            isolation: 'worktree',
-          },
-        ],
-      },
-      subagents,
-    )
-    await expect(harness.callTool('delegate', { rule: 'bug-fix' })).rejects.toThrow(
-      /needs objective:/,
-    )
-    expect(subagents.startCalls).toBe(0)
-  })
-})
-
 describe('tools and status', () => {
-  it('registers the five tools, the rule enum, and no always-on prompt section', async () => {
+  it('registers the three tools, the rule enum, and no always-on prompt section', async () => {
     const root = await workspace()
     const harness = harnessFor(root)
     expect([...harness.tools.keys()].sort()).toEqual([
       'delegate',
       'delegation_status',
-      'review_lesson',
-      'review_retro',
       'task_progress',
     ])
-    expect(harness.commands.map((command) => command.name)).toContain('review-retro')
+    expect(harness.commands).toHaveLength(0)
     const delegate = harness.tools.get('delegate')
     const parameters = delegate?.parameters as { properties: { rule: { enum: string[] } } }
     expect(parameters.properties.rule.enum).toEqual(['spec-review', 'task-review', 'task-progress'])
@@ -1166,48 +1138,6 @@ describe('tools and status', () => {
   })
 })
 
-describe('failures and replies', () => {
-  it('reports a failed answer, keeps the turn closable, and records the consultation attempt', async () => {
-    const root = await workspace()
-    const subagents = new FakeSubagents()
-    subagents.respond = () => ({
-      output: [],
-      stopReason: 'error',
-      diagnostic: 'target unavailable',
-    })
-    subagents.addProvider('codex-subagent')
-    const harness = harnessFor(
-      root,
-      {
-        targets: { codex: { provider: 'codex-subagent' } },
-        rules: [
-          {
-            id: 'blocker',
-            when: 'failure-streak',
-            to: 'codex',
-            contract: 'answer',
-            gate: 'soft',
-            instruction: 'bundled:consult',
-          },
-        ],
-        failureStreak: 2,
-      },
-      subagents,
-    )
-    await harness.preStep(1)
-    await harness.toolResult(true)
-    await harness.toolResult(true)
-    await harness.turnStopping(1)
-    expect(steerTexts(harness.agent).join('\n')).toContain('failed tool calls')
-    await expect(harness.callTool('delegate', { rule: 'blocker' })).rejects.toThrow(
-      /target unavailable/,
-    )
-    const steersBefore = steerTexts(harness.agent).length
-    await harness.turnStopping(1)
-    expect(steerTexts(harness.agent)).toHaveLength(steersBefore)
-  })
-})
-
 describe('session involvement', () => {
   const owner = (): ReturnType<typeof createAgent> => createAgent('thread-a')
   const foreign = (): ReturnType<typeof createAgent> => createAgent('thread-b')
@@ -1277,34 +1207,16 @@ describe('session involvement', () => {
     expect(await harness.readInvolvement('thread-a')).toBeUndefined()
   })
 
-  it('does not attribute an answer delegate with a change argument or a status poll', async () => {
+  it('does not attribute a rejected delegate with a change argument or a status poll', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent')
-    const config = defaultTestConfig({
-      rules: [
-        ...(defaultTestConfig().rules ?? []),
-        {
-          id: 'research',
-          when: 'manual',
-          to: 'codex',
-          contract: 'answer',
-          gate: 'none',
-          instruction: 'bundled:research',
-        },
-      ],
-    })
-    const harness = harnessFor(root, config, subagents)
+    const harness = harnessFor(root, defaultTestConfig())
     const agent = foreign()
     await harness.callTool('delegation_status', {}, agent)
     expect(await harness.readInvolvement('thread-b')).toBeUndefined()
-    const answer = await harness.toolText(
-      'delegate',
-      { rule: 'research', change: 'change-a' },
-      agent,
-    )
-    expect(answer).toContain('does not satisfy a strict review rule')
+    await expect(
+      harness.callTool('delegate', { rule: 'research', change: 'change-a' }, agent),
+    ).rejects.toThrow(/unknown rule "research"/)
     expect(await harness.readInvolvement('thread-b')).toBeUndefined()
   })
 
@@ -1393,72 +1305,27 @@ describe('session involvement', () => {
     expect(subagents.startCalls).toBe(1)
   })
 
-  it('keeps task_progress, answer, and patch runs available in any session', async () => {
+  it('keeps task_progress and review runs available in any session', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Open task' }])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
-    subagents.addProvider('codex-subagent-write', {}, () => ({
-      output: [{ type: 'text', text: 'Root cause fixed. Ran pnpm test: 12 passed.' }],
-      stopReason: 'completed',
-    }))
-    const harness = harnessFor(
-      root,
-      {
-        ...defaultTestConfig(),
-        rules: [
-          ...(defaultTestConfig().rules ?? []),
-          {
-            id: 'research',
-            when: 'manual',
-            to: 'codex',
-            contract: 'answer',
-            gate: 'none',
-            instruction: 'bundled:research',
-          },
-          {
-            id: 'bug-fix',
-            when: 'manual',
-            to: 'codex-write',
-            contract: 'patch',
-            gate: 'none',
-            instruction: 'bundled:fix',
-            isolation: 'worktree',
-          },
-        ],
-      },
-      subagents,
-    )
-    const patchAgent = owner()
-    const answerAgent = createAgent('thread-c')
-    await harness.preStep(1, patchAgent)
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const ownerAgent = owner()
+    const reviewer = createAgent('thread-c')
+    await harness.preStep(1, ownerAgent)
     const note = await harness.toolText(
       'task_progress',
       { task: '1.1 Open task', status: 'in-progress', reason: 'midway' },
-      patchAgent,
+      ownerAgent,
     )
     expect(note).toContain('progress note written')
     expect(await harness.readInvolvement('thread-a')).toBeDefined()
 
-    const answer = await harness.toolText(
-      'delegate',
-      { rule: 'research', change: 'change-a' },
-      answerAgent,
-    )
-    expect(answer).toContain('does not satisfy a strict review rule')
-    expect(await harness.readInvolvement('thread-c')).toBeUndefined()
-
-    harness.git.status = ' M packages/engine.ts\0'
-    harness.git.diff = 'diff --git a/packages/engine.ts b/packages/engine.ts'
-    const patch = await harness.toolText(
-      'delegate',
-      { rule: 'bug-fix', objective: 'fix the crash', change: 'change-a' },
-      patchAgent,
-    )
-    expect(patch).toContain('isolated worktree .dsh/delegation/worktrees/')
-    expect(patch).toContain('Nothing was applied to the session worktree')
-    expect(subagents.startCalls).toBe(2)
-    expect(await harness.readInvolvement('thread-a')).toBeDefined()
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' }, reviewer)
+    expect(await harness.waitForRun(runId, reviewer)).toContain('state=completed')
+    expect(subagents.startCalls).toBe(1)
+    expect(await harness.readInvolvement('thread-c')).toBeDefined()
   })
 })
 
@@ -2589,293 +2456,5 @@ describe('snapshot lifecycle', () => {
     expect(await readdir(join(dir, '.dsh', 'delegation', 'snapshots'))).toContain('run-locked')
     await sweepReviewSnapshots(dir, defaultGit, Date.now() + 11 * 60_000)
     await expect(readFile(join(snapshot.worktree, 'a.txt'))).rejects.toThrow()
-  })
-})
-describe('finding history', () => {
-  function classedFindings(): (run: RunRecord) => {
-    output: Array<{ type: 'text'; text: string }>
-    stopReason: 'completed'
-  } {
-    return (run) => {
-      const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
-      const body = {
-        digest,
-        verdict: 'FINDINGS',
-        findings: [
-          {
-            severity: 'P1',
-            class: 'missing-test',
-            title: 'Missing failure path',
-            evidence: 'src/file.ts:1 no failure test',
-            fix: 'add a failure test',
-          },
-        ],
-      }
-      return {
-        output: [{ type: 'text' as const, text: `\`\`\`json\n${JSON.stringify(body)}\n\`\`\`` }],
-        stopReason: 'completed' as const,
-      }
-    }
-  }
-
-  async function historyEntries(root: string): Promise<Array<Record<string, unknown>>> {
-    const raw = await readFile(findingHistoryPath(root), 'utf8')
-    return raw
-      .split('\n')
-      .filter((line) => line.trim() !== '')
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-  }
-
-  it('stores the normalized class with the finding and in the formatted text', async () => {
-    const root = await workspace()
-    await writeChange(root, 'change-a', [])
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent', {}, classedFindings())
-    const harness = harnessFor(root, defaultTestConfig(), subagents)
-    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
-    expect(await harness.waitForRun(runId)).toContain('state=completed')
-    const record = JSON.parse(
-      await readFile(
-        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
-        'utf8',
-      ),
-    ) as { findings: Array<{ class?: string }> }
-    expect(record.findings[0]?.class).toBe('missing-test')
-    const rendered = text(
-      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-    )
-    expect(rendered).toContain('P1 Missing failure path')
-    expect(rendered).toContain('class: missing-test')
-  })
-
-  it('retains earlier findings after a later PASS and adds one entry per run', async () => {
-    const root = await workspace()
-    const specPath = join(root, 'openspec', 'changes', 'change-a', 'specs', 'capability', 'spec.md')
-    await writeChange(root, 'change-a', [])
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent')
-    subagents.respond = classedFindings()
-    const harness = harnessFor(root, defaultTestConfig(), subagents)
-    const findingsRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
-    expect(await harness.waitForRun(findingsRun)).toContain('state=completed')
-
-    await writeFile(specPath, '# Spec\n\nChanged.\n', 'utf8')
-    subagents.respond = passResponder
-    const passRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
-    expect(await harness.waitForRun(passRun)).toContain('state=completed')
-
-    const entries = await historyEntries(root)
-    expect(entries.map((entry) => entry.verdict)).toEqual(['FINDINGS', 'PASS'])
-    const firstFindings = entries[0]?.findings as Array<{ class?: string }> | undefined
-    expect(firstFindings?.[0]?.class).toBe('missing-test')
-    expect(entries[1]?.findings).toEqual([])
-
-    const reused = text(
-      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-    )
-    expect(reused).toContain('reused record')
-    expect(await historyEntries(root)).toHaveLength(2)
-  })
-
-  it('keeps a machine path and a credential out of the history', async () => {
-    const root = await workspace()
-    await writeChange(root, 'change-a', [])
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent', {}, findingsResponder('FINDINGS', 'P1'))
-    const harness = harnessFor(root, defaultTestConfig(), subagents)
-    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
-    await harness.waitForRun(runId)
-    const raw = await readFile(findingHistoryPath(root), 'utf8')
-    expect(raw).not.toContain('secret.ts')
-    expect(raw).not.toContain('ABCDEFGH12345678')
-    expect(raw).not.toContain(root)
-    expect(raw).not.toContain('iVBOR')
-    expect(raw).not.toContain('You are an independent reviewer')
-  })
-
-  it('names the gap in the run detail when neither the entry nor its gap marker is writable', async () => {
-    const root = await workspace()
-    const taskText = 'First task'
-    const taskId = taskIdFor(taskText)
-    await writeChange(root, 'change-a', [{ number: '1.1', text: taskText, checked: true }])
-    await mkdir(join(root, '.dsh'), { recursive: true })
-    await writeFile(join(root, '.dsh', 'review-learning'), 'blocked', 'utf8')
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent')
-    const harness = harnessFor(root, taskReviewConfig(), subagents)
-    const runId = await harness.startReview({
-      rule: 'task-review',
-      change: 'change-a',
-      task: taskId,
-    })
-    expect(await harness.waitForRun(runId)).toContain('state=completed')
-
-    const record = JSON.parse(
-      await readFile(
-        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${taskId}.json`),
-        'utf8',
-      ),
-    ) as { verdict: string }
-    expect(record.verdict).toBe('PASS')
-    const portable = JSON.parse(
-      await readFile(
-        join(root, 'openspec', 'changes', 'change-a', 'reviews', `${taskId}.json`),
-        'utf8',
-      ),
-    ) as { verdict: string }
-    expect(portable.verdict).toBe('PASS')
-    const runFile = JSON.parse(
-      await readFile(join(root, '.dsh', 'delegation', 'runs', `${runId}.json`), 'utf8'),
-    ) as { state: string; detail?: string }
-    expect(runFile.state).toBe('completed')
-    expect(runFile.detail).toContain('history gap:')
-    expect(await harness.toolText('delegation_status', {})).toContain('task-review PASS 1/1')
-  })
-
-  it('leaves a FINDINGS record and its findings intact when the history cannot be written', async () => {
-    const root = await workspace()
-    const taskText = 'First task'
-    const taskId = taskIdFor(taskText)
-    await writeChange(root, 'change-a', [{ number: '1.1', text: taskText, checked: true }])
-    await mkdir(join(root, '.dsh'), { recursive: true })
-    await writeFile(join(root, '.dsh', 'review-learning'), 'blocked', 'utf8')
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent', {}, classedFindings())
-    const harness = harnessFor(root, taskReviewConfig(), subagents)
-    const runId = await harness.startReview({
-      rule: 'task-review',
-      change: 'change-a',
-      task: taskId,
-    })
-    expect(await harness.waitForRun(runId)).toContain('state=completed')
-
-    const record = JSON.parse(
-      await readFile(
-        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${taskId}.json`),
-        'utf8',
-      ),
-    ) as { verdict: string; findings: Array<{ class?: string }> }
-    expect(record.verdict).toBe('FINDINGS')
-    expect(record.findings[0]?.class).toBe('missing-test')
-    const runFile = JSON.parse(
-      await readFile(join(root, '.dsh', 'delegation', 'runs', `${runId}.json`), 'utf8'),
-    ) as { detail?: string }
-    expect(runFile.detail).toContain('history gap:')
-  })
-})
-
-describe('finding history writer', () => {
-  function runEntry(digest: string, time: string): HistoryRunEntry {
-    return {
-      v: 1,
-      kind: 'run',
-      rule: 'task-review',
-      change: 'change-a',
-      taskId: 'abc123',
-      verdict: 'PASS',
-      digest,
-      findings: [],
-      time,
-    }
-  }
-
-  async function entriesOf(root: string): Promise<Array<Record<string, unknown>>> {
-    const raw = await readFile(findingHistoryPath(root), 'utf8')
-    return raw
-      .split('\n')
-      .filter((line) => line.trim() !== '')
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-  }
-
-  it('serializes concurrent appends without losing an entry', async () => {
-    const root = await workspace()
-    const digests = ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)]
-    const results = await Promise.all(
-      digests.map((digest, index) =>
-        appendFindingHistory(root, runEntry(digest, `2026-11-0${index + 1}T00:00:00.000Z`)),
-      ),
-    )
-    expect(results.every((result) => result.appended)).toBe(true)
-    const entries = await entriesOf(root)
-    expect(entries).toHaveLength(3)
-    expect(new Set(entries.map((entry) => entry.digest))).toEqual(new Set(digests))
-  })
-
-  it('redacts a machine path and credentials from a gap marker reason', async () => {
-    const root = await workspace()
-    const failing = {
-      ...runEntry('a'.repeat(64), '2026-11-01T00:00:00.000Z'),
-      toJSON() {
-        throw new Error(
-          `EACCES: rename ${WINDOWS_HOME}\\secret.ts -> ${WINDOWS_HOME}\\target.ts; ` +
-            'Authorization: Bearer synthetic-review-token; password = "secret with spaces"',
-        )
-      },
-    } as unknown as HistoryRunEntry
-    const result = await appendFindingHistory(root, failing)
-    expect(result.appended).toBe(false)
-    expect(result.gapAppended).toBe(true)
-    expect(result.detail).toContain('[path]')
-    expect(result.detail).toContain('[secret]')
-    expect(result.detail).not.toContain(WINDOWS_HOME)
-    expect(result.detail).not.toContain('synthetic-review-token')
-    expect(result.detail).not.toContain('secret with spaces')
-    const raw = await readFile(findingHistoryPath(root), 'utf8')
-    expect(raw).toContain('"kind":"gap"')
-    expect(raw).not.toContain(WINDOWS_HOME)
-    expect(raw).not.toContain('synthetic-review-token')
-    expect(raw).not.toContain('secret with spaces')
-  })
-
-  it('redacts bracket-delimited and home-relative machine paths from findings', async () => {
-    const root = await workspace()
-    await writeChange(root, 'change-a', [])
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent')
-    subagents.respond = (run) => {
-      const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
-      const body = {
-        digest,
-        verdict: 'FINDINGS',
-        findings: [
-          {
-            severity: 'P1',
-            class: 'path-boundary',
-            title: 'Leaked location',
-            evidence:
-              `Config lives at [${POSIX_HOME}/config.json] and ${TILDE_HOME}, ` +
-              `see \`${POSIX_HOME}/other.json:12\`, file://${POSIX_HOME}/third.json, ` +
-              `<${POSIX_HOME}/fourth.json:3> and {${POSIX_HOME}/fifth.json}`,
-            fix: 'Use a relative path.',
-          },
-        ],
-      }
-      return {
-        output: [{ type: 'text' as const, text: `\`\`\`json\n${JSON.stringify(body)}\n\`\`\`` }],
-        stopReason: 'completed' as const,
-      }
-    }
-    const harness = harnessFor(root, defaultTestConfig(), subagents)
-    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
-    expect(await harness.waitForRun(runId)).toContain('state=completed')
-    const raw = await readFile(findingHistoryPath(root), 'utf8')
-    expect(raw).not.toContain(POSIX_HOME)
-    expect(raw).not.toContain(TILDE_HOME)
-    expect(raw).not.toContain(`file://${POSIX_HOME}`)
-    expect(raw).toContain('[path]')
-  })
-
-  it('prunes to a one-entry window instead of retaining every append', async () => {
-    const root = await workspace()
-    for (const index of [1, 2, 3]) {
-      await appendFindingHistory(
-        root,
-        runEntry(`${index}`.repeat(64), `2026-11-0${index}T00:00:00.000Z`),
-        { window: 1 },
-      )
-    }
-    const entries = await entriesOf(root)
-    expect(entries).toHaveLength(1)
-    expect(entries[0]?.digest).toBe(`${3}`.repeat(64))
   })
 })

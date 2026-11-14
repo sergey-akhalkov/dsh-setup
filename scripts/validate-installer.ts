@@ -805,7 +805,7 @@ function main(): number {
         ...shippedBundles,
         ...versions.installBundles.registry,
         'dsh-setup-ponytail',
-        'reasoningEffort: high',
+        'reasoningEffort: xhigh',
         'preference: dark',
         'selectedDefault: cordis',
       ]

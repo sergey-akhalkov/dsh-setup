@@ -15,7 +15,6 @@ import type {
 } from '@deepseek-ai/dsh-subagent'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { expect, vi } from 'vitest'
-import type { UserQuestionsService } from '../src/host/learning-tools.ts'
 import { apply, type BundleConfig, type SettledRunState } from '../src/index.js'
 
 export type GitRunner = (
@@ -256,8 +255,6 @@ export interface HarnessOptions {
   publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
   /** Holds a target startup after admission. */
   startHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
-  /** Fake direct-user-answer service for lesson decisions. */
-  userQuestions?: UserQuestionsService
 }
 
 type ContextEvent = (...args: unknown[]) => unknown
@@ -335,7 +332,6 @@ export class Harness {
         },
       },
       get: (name: string) => {
-        if (name === 'userQuestions') return options.userQuestions
         if (name === 'commands') {
           return {
             register: (definition: { definitionId?: string; name: string }) => {
@@ -347,7 +343,6 @@ export class Harness {
         return undefined
       },
       effect: (work: () => unknown) => work(),
-      ...(options.userQuestions === undefined ? {} : { userQuestions: options.userQuestions }),
       on: (name: string, handler: ContextEvent) => {
         const list = events.get(name) ?? []
         list.push(handler)
@@ -589,12 +584,11 @@ export function taskIdFor(text: string): string {
   return createHash('sha256').update(text.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 16)
 }
 
-/** A useful default config: two Codex targets, the shipped rule shapes. */
+/** A useful default config: the shipped rule shapes on one Codex target. */
 export function defaultTestConfig(overrides: Partial<BundleConfig> = {}): BundleConfig {
   return {
     targets: {
       codex: { provider: 'codex-subagent' },
-      'codex-write': { provider: 'codex-subagent-write', write: true },
     },
     rules: [
       {

@@ -5,10 +5,6 @@ import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, legacyRecordSatisfies, normalizeCheckboxes, normalizeFindingClass, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, reviewerBindingOf, reviewerMatches, sanitizeText, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
-import { appendFindingHistory, DEFAULT_HISTORY_WINDOW, MAX_HISTORY_WINDOW, } from './finding-history.js';
-import { executeReviewLesson, REVIEW_LESSON_DESCRIPTION } from './learning-tools.js';
-import { changeCapabilities, DEFAULT_MAX_LESSONS, matchingLessons, readLessons, } from './lesson-store.js';
-import { executeReviewRetro, REVIEW_RETRO_DESCRIPTION } from './retro.js';
 import { classifyFailure, QueueInternalError, ReviewQueue, } from './review-queue.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -36,13 +32,13 @@ const assetsDirectory = fileURLToPath(new URL('../../assets/delegation-rules', i
  * Catalog text; a test keeps it identical to the asset frontmatter. Kept short
  * because the tool descriptions plus this line share the model-facing budget.
  */
-export const skillDescription = 'Delegation rules: authored triggers, targets, result contracts, and the task-by-task review workflow. Load when authoring or debugging delegation rules, when a gate steers, when reviewing a completed task or spec, or when consulting, researching, or patching through a delegated model.';
+export const skillDescription = 'Delegation rules: authored triggers, targets, result contracts, and the task-by-task review workflow. Load when authoring or debugging delegation rules, when a gate steers, or when reviewing a completed task or spec through a delegated model.';
 /**
  * Tool descriptions are model-facing policy: they are the only delegation
  * guidance present without opening the skill. A budget test pins their size.
  */
 export const toolDescriptions = {
-    delegate: 'Run one configured delegation rule through its target. Manual tasks: `research` answers a question with evidence and sources; `advisor` gives a manual second opinion from the strong target on one decision; pass the exact question, constraints, and decisive evidence, and use it only for expensive-to-reverse, cross-module, security/data-integrity, or repeated-failure decisions - never routine edits, syntax, lookups, or locally verifiable facts, and at most three times per session; `blocker` consults on a stuck plan when the failure-streak hint appears; `bug-fix` runs a write target in an isolated git worktree and returns the diff and test report (never auto-merged). Gate rules: `spec-review` reviews the whole active OpenSpec change before implementation; `task-review` reviews the next checked task without a PASS/ERROR record, or one `section` (a tasks.md level-2 heading number such as `1`, its `1.x` form, or the normalized title) with every checked task of that section in one run; `integration-review` is the optional whole-worktree check. One section run writes one verdict and publishes one per-task approval per covered checked task; `task` and `section` are mutually exclusive, unchecked tasks are out of scope, and a newly checked task needs a new review. The engine validates the rule, starts the configured DSH subagent provider, parses the contract result, and writes a digest-bound record under `.dsh/delegation`; a review PASS needs zero P0/P1 findings, FINDINGS/ERROR are reported but do not pass a strict gate, and a matching PASS is reused without another run. The `answer` contract writes no gate record. Only a matching record satisfies the turn-stopping gate: a text claim does not. A missing or incompatible target is reported with the target id, provider name, and next action.',
+    delegate: 'Run one configured delegation rule through its target. Gate rules: `spec-review` reviews the whole active OpenSpec change before implementation; `task-review` reviews the next checked task without a PASS/ERROR record, or one `section` (a tasks.md level-2 heading number such as `1`, its `1.x` form, or the normalized title) with every checked task of that section in one run; `integration-review` is the optional whole-worktree check. One section run writes one verdict and publishes one per-task approval per covered checked task; `task` and `section` are mutually exclusive, unchecked tasks are out of scope, and a newly checked task needs a new review. The engine validates the rule, starts the configured DSH subagent provider, parses the contract result, and writes a digest-bound record under `.dsh/delegation`; a review PASS needs zero P0/P1 findings, FINDINGS/ERROR are reported but do not pass a strict gate, and a matching PASS is reused without another run. Only a matching record satisfies the turn-stopping gate: a text claim does not. A note rule runs through task_progress, not this tool. A missing or incompatible target is reported with the target id, provider name, and next action.',
     task_progress: 'Record an explicit in-progress or blocked note for one unchecked task, with the reason and the current worktree digest. Use it when a task spans turns instead of ticking `tasks.md`: it runs no model and costs nothing. The note lets a code-changing turn close only while the worktree still matches it; after any further change it is stale and a fresh note or the tick plus `delegate` task review is required. A checked task never accepts a note, and a note never counts as a task-review PASS.',
     delegation_status: "Report registered DSH subagent providers and capabilities, configured delegation targets and rules, each active change's involvement by this session (created, spec changed, checked tasks), per-change task/progress-note state, review record state (matching, stale, missing, malformed), and missing-target diagnostics with the next action. It never attributes a change. Use it when a `delegate` call reports a target problem or before configuring rules.",
 };
@@ -70,8 +66,7 @@ const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  * turn, while lane-assignment reads the `lane-tag` in the start's arguments.
  */
 const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
-const DEFAULT_TIMEOUTS = { review: 1_200_000, answer: 300_000, patch: 1_800_000 };
-const DEFAULT_FAILURE_STREAK = 3;
+const DEFAULT_TIMEOUTS = { review: 1_200_000 };
 /** Queue defaults stay well below the DSH active-child limit so workers keep room. */
 export const DEFAULT_REVIEW_QUEUE = {
     enabled: true,
@@ -91,15 +86,8 @@ const REVIEW_QUEUE_KEYS = new Set([
     'maxDelayMs',
     'waitTimeoutMs',
 ]);
-const MAX_ANSWER_CHARS = 12_000;
 const MAX_ERROR_CHARS = 4_000;
 const MAX_REASON_CHARS = 2_000;
-/** The documented defaults; `window` and `maxLessons` also bound their stores. */
-export const DEFAULT_REVIEW_LEARNING = {
-    enabled: true,
-    window: DEFAULT_HISTORY_WINDOW,
-    maxLessons: DEFAULT_MAX_LESSONS,
-};
 class DelegationError extends Error {
     constructor(message) {
         super(message);
@@ -183,26 +171,13 @@ const TRIGGERS = new Set([
     'lane-assignment',
     'lane-boundary',
     'implementation-complete',
-    'failure-streak',
 ]);
-const CONTRACTS = new Set(['review', 'answer', 'patch', 'note']);
+const CONTRACTS = new Set(['review', 'note']);
 const GATES = new Set(['strict', 'soft', 'none']);
-const RULE_KEYS = new Set([
-    'id',
-    'when',
-    'to',
-    'instruction',
-    'contract',
-    'gate',
-    'phase',
-    'scope',
-    'threshold',
-    'isolation',
-]);
-const TARGET_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'agentOptions', 'write']);
+const RULE_KEYS = new Set(['id', 'when', 'to', 'instruction', 'contract', 'gate', 'phase', 'scope']);
+const TARGET_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'agentOptions']);
 const AGENT_OPTION_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'maxTokens']);
-const TIMEOUT_KEYS = new Set(['review', 'answer', 'patch']);
-const REVIEW_LEARNING_KEYS = new Set(['enabled', 'window', 'maxLessons']);
+const TIMEOUT_KEYS = new Set(['review']);
 /**
  * Validate one row configuration. Configuration mistakes fail the row with the
  * rule/target id and a next action; a missing provider is deliberately not a
@@ -213,17 +188,9 @@ export function validateConfig(raw) {
         raw = {};
     if (!isRecord(raw))
         fail('configuration must be a mapping');
-    const unknownTop = unknownKeys(raw, new Set([
-        'targets',
-        'rules',
-        'timeouts',
-        'failureStreak',
-        'reviewQueue',
-        'reviewLearning',
-        'gates',
-    ]));
+    const unknownTop = unknownKeys(raw, new Set(['targets', 'rules', 'timeouts', 'reviewQueue', 'gates']));
     if (unknownTop.length > 0) {
-        fail(`unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning, or gates`);
+        fail(`unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, reviewQueue, or gates (the answer/patch contracts, failure-streak trigger, and review-learning block were removed)`);
     }
     const targetsRaw = raw.targets ?? {};
     if (!isRecord(targetsRaw))
@@ -235,6 +202,9 @@ export function validateConfig(raw) {
         }
         if (!isRecord(value))
             fail(`target "${id}" must be a mapping; add a provider (and optional model)`);
+        if (value.write !== undefined) {
+            fail(`target "${id}".write was removed with the patch contract; no delegation contract starts a write-capable target — use the subagent tool with create_worktree for an isolated checkout`);
+        }
         const unknown = unknownKeys(value, TARGET_KEYS);
         if (unknown.length > 0)
             fail(`target "${id}": unknown field(s) ${unknown.join(', ')}`);
@@ -244,11 +214,6 @@ export function validateConfig(raw) {
             target.model = requireNonEmpty(value.model, `target "${id}".model`);
         if (value.reasoningEffort !== undefined) {
             target.reasoningEffort = requireNonEmpty(value.reasoningEffort, `target "${id}".reasoningEffort`);
-        }
-        if (value.write !== undefined) {
-            if (typeof value.write !== 'boolean')
-                fail(`target "${id}".write must be true or false`);
-            target.write = value.write;
         }
         if (value.agentOptions !== undefined) {
             if (!isRecord(value.agentOptions))
@@ -308,31 +273,19 @@ export function validateConfig(raw) {
         if (!isRecord(timeoutsRaw))
             fail('timeouts must be a mapping of contract to milliseconds');
         for (const key of unknownKeys(timeoutsRaw, TIMEOUT_KEYS)) {
-            fail(`timeouts: unknown contract "${key}"; use review, answer, or patch`);
+            fail(`timeouts: unknown contract "${key}"; use review (answer and patch were removed with their contracts)`);
         }
-        for (const key of ['review', 'answer', 'patch']) {
-            const value = timeoutsRaw[key];
-            if (value === undefined)
-                continue;
+        const value = timeoutsRaw.review;
+        if (value !== undefined) {
             if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
-                fail(`timeouts.${key} must be a positive integer number of milliseconds`);
+                fail('timeouts.review must be a positive integer number of milliseconds');
             }
-            timeouts[key] = value;
+            timeouts.review = value;
         }
-    }
-    let failureStreak = DEFAULT_FAILURE_STREAK;
-    if (raw.failureStreak !== undefined) {
-        if (typeof raw.failureStreak !== 'number' ||
-            !Number.isSafeInteger(raw.failureStreak) ||
-            raw.failureStreak <= 0) {
-            fail('failureStreak must be a positive integer; use it as the default failure-streak threshold');
-        }
-        failureStreak = raw.failureStreak;
     }
     const reviewQueue = validateReviewQueue(raw.reviewQueue);
-    const reviewLearning = validateReviewLearning(raw.reviewLearning);
     const gates = validateGates(raw.gates);
-    return { targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning, gates };
+    return { targets, rules, timeouts, reviewQueue, gates };
 }
 /** Validate the gate-only retirement switch fail-loud with its field and shape. */
 export function validateGates(raw) {
@@ -351,47 +304,6 @@ export function validateGates(raw) {
         fail('gates.workflowOwned must be a boolean');
     }
     return { workflowOwned: workflowOwned ?? true };
-}
-/**
- * Validate the review-learning block. The defaults bound the lesson store and
- * the retro window; an invalid field fails plugin load with its range.
- */
-export function validateReviewLearning(raw) {
-    const learning = { ...DEFAULT_REVIEW_LEARNING };
-    if (raw === undefined)
-        return learning;
-    if (!isRecord(raw))
-        fail('reviewLearning must be a mapping');
-    const unknown = unknownKeys(raw, REVIEW_LEARNING_KEYS);
-    if (unknown.length > 0) {
-        fail(`reviewLearning: unknown field(s) ${unknown.join(', ')}; use enabled, window, or maxLessons`);
-    }
-    if (raw.enabled !== undefined) {
-        if (typeof raw.enabled !== 'boolean')
-            fail('reviewLearning.enabled must be true or false');
-        learning.enabled = raw.enabled;
-    }
-    const window = raw.window;
-    if (window !== undefined) {
-        if (typeof window !== 'number' ||
-            !Number.isSafeInteger(window) ||
-            window < 1 ||
-            window > MAX_HISTORY_WINDOW) {
-            fail(`reviewLearning.window must be a whole number from 1 to ${MAX_HISTORY_WINDOW}; it bounds the retro window and the finding history`);
-        }
-        learning.window = window;
-    }
-    const maxLessons = raw.maxLessons;
-    if (maxLessons !== undefined) {
-        if (typeof maxLessons !== 'number' ||
-            !Number.isSafeInteger(maxLessons) ||
-            maxLessons < 1 ||
-            maxLessons > 1_000) {
-            fail('reviewLearning.maxLessons must be a whole number from 1 to 1000');
-        }
-        learning.maxLessons = maxLessons;
-    }
-    return learning;
 }
 /**
  * Validate the review queue block. An omitted block enables the documented
@@ -437,6 +349,12 @@ function validateRule(raw, index, targets) {
     const at = `rule #${index + 1}`;
     if (!isRecord(raw))
         fail(`${at} must be a mapping`);
+    if (raw.isolation !== undefined) {
+        fail(`${at}: isolation was removed with the patch contract; use create_worktree for an isolated checkout and the subagent tool for the edit`);
+    }
+    if (raw.threshold !== undefined) {
+        fail(`${at}: threshold belongs to the removed failure-streak trigger; remove it and consult with the subagent tool (or codex_subagent for a Codex second opinion) when a turn is stuck`);
+    }
     const unknown = unknownKeys(raw, RULE_KEYS);
     if (unknown.length > 0)
         fail(`${at}: unknown field(s) ${unknown.join(', ')}`);
@@ -445,12 +363,21 @@ function validateRule(raw, index, targets) {
         fail(`rule "${id}" is not kebab-case; use lower-case letters, digits, and single dashes`);
     const where = `rule "${id}"`;
     const when = raw.when;
+    if (when === 'failure-streak') {
+        fail(`${where}: the failure-streak trigger was removed; the loop guard bounds a repeated loop and a stuck turn uses the subagent tool (or codex_subagent for a Codex second opinion) with a changed approach — use manual, spec-ready, spec-task-ready, implementation-work, lane-assignment, lane-boundary, or implementation-complete`);
+    }
     if (typeof when !== 'string' || !TRIGGERS.has(when)) {
-        fail(`${where}: unknown trigger ${JSON.stringify(when)}; use manual, spec-ready, spec-task-ready, implementation-work, lane-assignment, lane-boundary, implementation-complete, or failure-streak`);
+        fail(`${where}: unknown trigger ${JSON.stringify(when)}; use manual, spec-ready, spec-task-ready, implementation-work, lane-assignment, lane-boundary, or implementation-complete`);
     }
     const contract = raw.contract;
+    if (contract === 'answer') {
+        fail(`${where}: the answer contract was removed; use the subagent tool (or codex_subagent for a Codex second opinion) for an ad-hoc delegation`);
+    }
+    if (contract === 'patch') {
+        fail(`${where}: the patch contract was removed; use create_worktree for an isolated checkout and a write-capable subagent target for the edit`);
+    }
     if (typeof contract !== 'string' || !CONTRACTS.has(contract)) {
-        fail(`${where}: unknown contract ${JSON.stringify(contract)}; use review, answer, patch, or note`);
+        fail(`${where}: unknown contract ${JSON.stringify(contract)}; use review or note`);
     }
     const gate = raw.gate;
     if (typeof gate !== 'string' || !GATES.has(gate)) {
@@ -492,26 +419,11 @@ function validateRule(raw, index, targets) {
             fail(`${where}: implementation-complete drives a whole-worktree review; set contract: review and scope: whole`);
         }
     }
-    else if (when === 'failure-streak') {
-        if (contract !== 'answer' && contract !== 'patch') {
-            fail(`${where}: a failure streak needs a consultation; set contract: answer or patch`);
-        }
-        if (gate === 'strict') {
-            fail(`${where}: a ${contract} rule writes no gate record; use gate: soft or none`);
-        }
-    }
     else if (contract === 'note') {
         fail(`${where}: manual rules cannot use the note contract; use task_progress directly`);
     }
     if (contract === 'note') {
-        for (const forbidden of [
-            'to',
-            'instruction',
-            'phase',
-            'scope',
-            'isolation',
-            'threshold',
-        ]) {
+        for (const forbidden of ['to', 'instruction', 'phase', 'scope']) {
             if (raw[forbidden] !== undefined)
                 fail(`${where}: a note rule takes no "${forbidden}"`);
         }
@@ -527,17 +439,15 @@ function validateRule(raw, index, targets) {
             fail(`${where}: target "${to}" is not configured; add targets.${to} or point the rule at a configured target`);
         }
         rule.to = to;
-        if (contract === 'review' || contract === 'answer' || contract === 'patch') {
-            const instruction = requireNonEmpty(raw.instruction, `${where}.instruction (bundled:<name> or inline text)`);
-            rule.instruction = instruction;
-            if (instruction.startsWith('bundled:')) {
-                const asset = instruction.slice('bundled:'.length);
-                if (!ID_PATTERN.test(asset)) {
-                    fail(`${where}: bundled instruction "${asset}" is not kebab-case; use bundled:review-spec-style names`);
-                }
-                if (!existsSync(join(assetsDirectory, `${asset}.md`))) {
-                    fail(`${where}: bundled instruction "${asset}" does not exist; use one of the bundled assets`);
-                }
+        const instruction = requireNonEmpty(raw.instruction, `${where}.instruction (bundled:<name> or inline text)`);
+        rule.instruction = instruction;
+        if (instruction.startsWith('bundled:')) {
+            const asset = instruction.slice('bundled:'.length);
+            if (!ID_PATTERN.test(asset)) {
+                fail(`${where}: bundled instruction "${asset}" is not kebab-case; use bundled:review-spec-style names`);
+            }
+            if (!existsSync(join(assetsDirectory, `${asset}.md`))) {
+                fail(`${where}: bundled instruction "${asset}" does not exist; use one of the bundled assets`);
             }
         }
     }
@@ -559,29 +469,6 @@ function validateRule(raw, index, targets) {
     }
     else if (raw.scope !== undefined || raw.phase !== undefined) {
         fail(`${where}: only a review rule takes phase/scope`);
-    }
-    if (contract === 'patch') {
-        if (raw.isolation !== 'worktree') {
-            fail(`${where}: a patch rule must declare isolation: worktree so the diff is never auto-applied`);
-        }
-        rule.isolation = 'worktree';
-        const target = targets.get(rule.to ?? '');
-        if (target?.write !== true) {
-            fail(`${where}: target "${rule.to}" is not declared write-capable; set targets.${rule.to}.write: true only when that provider may modify files`);
-        }
-    }
-    else if (raw.isolation !== undefined) {
-        fail(`${where}: isolation belongs only to a patch rule`);
-    }
-    if (raw.threshold !== undefined) {
-        if (when !== 'failure-streak')
-            fail(`${where}: threshold belongs only to a failure-streak rule`);
-        if (typeof raw.threshold !== 'number' ||
-            !Number.isSafeInteger(raw.threshold) ||
-            raw.threshold <= 0) {
-            fail(`${where}: threshold must be a positive integer`);
-        }
-        rule.threshold = raw.threshold;
     }
     if (when === 'manual' && gate !== 'none') {
         fail(`${where}: a manual rule has no automatic condition; set gate: none`);
@@ -1568,7 +1455,7 @@ function shellWriteTargets(workspaceCwd, executionCwd, tokens) {
 // shortcut: shell evidence watches only one explicit simple command; quoted
 // examples, comments, argument text, control/compound syntax, quoted
 // operators, ambiguous option positions, and cross-workspace paths stay
-// unattributed and need task_progress or an explicit review/patch delegate.
+// unattributed and need task_progress or an explicit review delegate.
 function recordWriteEvidence(state, agentId, cwd, exec, result) {
     if (result.isError)
         return;
@@ -2602,16 +2489,13 @@ function gateMessage(text) {
     });
     return message;
 }
-/** Per-agent failure streak, consultation, steering, snapshots, and write evidence. */
+/** Per-agent steering, snapshots, lane decisions, and write evidence. */
 class DelegationState {
     agents = new Map();
     of(agentId) {
         let state = this.agents.get(agentId);
         if (state === undefined) {
             state = {
-                failures: 0,
-                epoch: 0,
-                consultedEpoch: -1,
                 steered: new Set(),
                 turn: -1,
                 evidence: new Map(),
@@ -2622,24 +2506,11 @@ class DelegationState {
         }
         return state;
     }
-    recordToolResult(agentId, isError) {
-        const state = this.of(agentId);
-        if (isError) {
-            state.failures += 1;
-            return;
-        }
-        if (state.failures > 0) {
-            state.failures = 0;
-            state.epoch += 1;
-        }
-    }
     beginTurn(agentId, turn) {
         const state = this.of(agentId);
         if (state.turn === turn)
             return false;
         state.turn = turn;
-        state.failures = 0;
-        state.epoch += 1;
         state.steered.clear();
         state.baseline = undefined;
         state.evidence = new Map();
@@ -2658,9 +2529,6 @@ class DelegationState {
     }
     evidenceOf(agentId) {
         return this.of(agentId).evidence;
-    }
-    failuresOf(agentId) {
-        return this.of(agentId).failures;
     }
     markWorkerStarted(agentId) {
         this.of(agentId).workerStarted = true;
@@ -2709,17 +2577,6 @@ class DelegationState {
         lanes.delete(lane);
         if (lanes.size === 0)
             this.of(agentId).lanes.delete(change);
-    }
-    markConsulted(agentId) {
-        const state = this.of(agentId);
-        state.consultedEpoch = state.epoch;
-    }
-    consulted(agentId) {
-        const state = this.of(agentId);
-        return state.consultedEpoch === state.epoch;
-    }
-    epochOf(agentId) {
-        return this.of(agentId).epoch;
     }
     markSteered(agentId, key) {
         this.of(agentId).steered.add(key);
@@ -2818,9 +2675,9 @@ async function startTarget(services, request) {
         throw new ConfigError(`rule "${rule.id}": target "${rule.to}" requests model/agent options, but provider "${provider.name}" does not support them; remove model/reasoningEffort/agentOptions from the target or choose a provider with agentOptions support`);
     }
     const prompt = [{ type: 'text', text: request.prompt }];
-    // External review runs are cataloged for visibility; synchronous answer/patch
-    // results stay with the caller and are not re-delivered as settlement notices.
-    const delivery = rule.contract === 'review' ? 'parent' : 'caller';
+    // A review run is cataloged for visibility; the settlement notice is what the
+    // delivery flag decides.
+    const delivery = 'parent';
     let activation;
     try {
         activation = await services.subagents.startActivation({
@@ -2927,46 +2784,8 @@ async function finishTarget(started) {
         ...(started.reasoningEffort === undefined ? {} : { reasoningEffort: started.reasoningEffort }),
     };
 }
-async function runTarget(services, request) {
-    return finishTarget(await startTarget(services, request));
-}
-/** One accepted/applied lesson section bound: the promise is 1200 characters. */
-const MAX_LESSON_SECTION_CHARS = 1_200;
-const MAX_LESSONS_IN_PROMPT = 3;
-function lessonText(text) {
-    return text
-        .replace(/\p{Cc}|\p{Zl}|\p{Zp}/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-const LESSON_HEADING = '## Lessons from prior reviews';
-const LESSON_JUDGMENT = 'Treat these as advice from earlier reviews: apply judgment. They never change the P0/P1 rule, the review contract, or the approval gate.';
-/** Bounded `## Lessons from prior reviews` lines, or none when nothing matches. */
-function lessonSection(lessons) {
-    if (lessons.length === 0)
-        return [];
-    // The 1200-character bound covers the whole section, heading and note included.
-    const overhead = LESSON_HEADING.length + LESSON_JUDGMENT.length + 8;
-    const budget = MAX_LESSON_SECTION_CHARS - overhead;
-    const entries = [];
-    let used = 0;
-    for (const lesson of lessons.slice(0, MAX_LESSONS_IN_PROMPT)) {
-        const entry = `- [${lesson.class}] ${lessonText(lesson.title)}\n  ${lessonText(lesson.body)}`;
-        const remaining = budget - used;
-        if (entry.length > remaining) {
-            if (remaining < 20)
-                break;
-            entries.push(`${entry.slice(0, remaining - 1)}…`);
-            used = budget;
-            break;
-        }
-        entries.push(entry);
-        used += entry.length + 1;
-    }
-    return ['', LESSON_HEADING, '', ...entries, '', LESSON_JUDGMENT];
-}
 /** Export for the prompt-budget tests; the engine is the only production caller. */
-export function reviewPrompt(rule, change, digest, task, context, objective, snapshot = false, lessons = [], section) {
+export function reviewPrompt(rule, change, digest, task, context, objective, snapshot = false, section) {
     const lines = [
         instructionText(rule).trimEnd(),
         '',
@@ -3001,34 +2820,7 @@ export function reviewPrompt(rule, change, digest, task, context, objective, sna
         lines.push('', '## Context', '', context.trim());
     if (objective !== undefined && objective.trim() !== '')
         lines.push('', '## Objective', '', objective.trim());
-    lines.push(...lessonSection(lessons));
     lines.push('', 'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with `class`, title, evidence, and fix. Prose outside that block is ignored.');
-    return lines.join('\n');
-}
-function answerPrompt(rule, change, context, objective) {
-    const lines = [instructionText(rule).trimEnd(), '', '## Delegated answer', ''];
-    if (change !== undefined)
-        lines.push(`- Change: ${change.name}`);
-    lines.push(`- Rule: ${rule.id}`);
-    if (context !== undefined && context.trim() !== '')
-        lines.push('', '## Context', '', context.trim());
-    if (objective !== undefined && objective.trim() !== '')
-        lines.push('', '## Objective', '', objective.trim());
-    lines.push('', 'Answer within a bounded response. Name evidence and, for research, sources with dates. Do not modify files.');
-    return lines.join('\n');
-}
-function patchPrompt(rule, context, objective) {
-    const lines = [
-        instructionText(rule).trimEnd(),
-        '',
-        '## Isolated patch run',
-        '',
-        `- Rule: ${rule.id}`,
-        `- Objective: ${objective}`,
-    ];
-    if (context !== undefined && context.trim() !== '')
-        lines.push('', '## Context', '', context.trim());
-    lines.push('', 'Work only inside this worktree. Run the relevant checks, report the root cause, changed files, commands, and results. Never touch the session worktree and never merge.');
     return lines.join('\n');
 }
 function formatRecord(cwd, path, record, reused) {
@@ -3137,37 +2929,11 @@ class DelegationEngine {
         if (args.task !== undefined && args.section !== undefined) {
             fail(`rule "${rule.id}": task and section are mutually exclusive; pass task for one checked task or section for a whole tasks.md section`);
         }
-        if ((args.task !== undefined || args.section !== undefined) && rule.contract !== 'review') {
-            fail(`rule "${rule.id}" is a ${rule.contract} rule; task and section are only valid for a task-scoped review`);
-        }
         const agent = this.requireAgent(context);
         const cwd = this.services.workingDirectory.get(agent.session);
-        const opened = rule.contract === 'review' || args.change !== undefined
-            ? await openChange(cwd, args.change)
-            : undefined;
-        const change = opened?.change;
-        const workspaceRoot = opened === undefined ? undefined : dirname(opened.openspecRoot);
-        if (rule.contract === 'answer') {
-            this.services.state.markConsulted(String(agent.id));
-            const result = await runTarget(this.services, {
-                rule,
-                target: this.target(rule),
-                prompt: answerPrompt(rule, change, args.context, args.objective),
-                agent,
-                cwd,
-                signal: context.signal,
-            });
-            return `${result.text.slice(0, MAX_ANSWER_CHARS)}${result.text.length > MAX_ANSWER_CHARS ? '\n[answer truncated]' : ''}\n\n(no gate record: this answer does not satisfy a strict review rule)`;
-        }
-        if (rule.contract === 'patch') {
-            if (args.objective === undefined || args.objective.trim() === '') {
-                fail(`rule "${rule.id}": a patch rule needs objective: to name the bug to fix`);
-            }
-            if (change !== undefined && workspaceRoot !== undefined) {
-                await this.attributeChange(workspaceRoot, agent, change.name);
-            }
-            return this.runPatch(rule, args, agent, cwd, context.signal);
-        }
+        const opened = await openChange(cwd, args.change);
+        const change = opened.change;
+        const workspaceRoot = dirname(opened.openspecRoot);
         if (change === undefined || workspaceRoot === undefined) {
             fail(`rule "${rule.id}": a review needs an active OpenSpec change`);
         }
@@ -3176,7 +2942,7 @@ class DelegationEngine {
         }
         return this.startReview(rule, change, agent, cwd, workspaceRoot, args);
     }
-    /** An explicit task_progress/review/patch call opts this session into the change. */
+    /** An explicit task_progress or review call opts this session into the change. */
     async attributeChange(workspaceRoot, agent, change, taskIds = []) {
         await withInvolvementLock(workspaceRoot, currentThread(agent), async () => {
             const { involvement } = await readInvolvement(workspaceRoot, currentThread(agent));
@@ -3402,19 +3168,6 @@ class DelegationEngine {
         }
         return undefined;
     }
-    /** Matching accepted/applied lessons; a broken learning store never fails a review. */
-    async reviewLessons(run) {
-        if (!this.config.reviewLearning.enabled)
-            return [];
-        try {
-            const capabilities = await changeCapabilities(run.context.change.dir);
-            const { lessons } = await readLessons(run.workspaceRoot);
-            return matchingLessons(lessons, run.context.rule.id, capabilities);
-        }
-        catch {
-            return [];
-        }
-    }
     /** Start one admitted target; the queue owns the slot and settlement. */
     async startPreparedReview(run) {
         let prepared = run.prepared;
@@ -3479,7 +3232,6 @@ class DelegationEngine {
                 fail(`run ${run.file.id} lost its prepared review after re-preparation`);
             }
         }
-        const lessons = await this.reviewLessons(run);
         await this.services.startHold?.({
             rule: run.context.rule.id,
             change: run.context.change.name,
@@ -3488,7 +3240,7 @@ class DelegationEngine {
         const started = await startTarget(this.services, {
             rule: run.context.rule,
             target: this.target(run.context.rule),
-            prompt: reviewPrompt(run.context.rule, run.context.change, prepared.digest, run.context.task, run.context.args.context, run.context.args.objective, prepared.snapshotTree !== undefined, lessons, run.context.section),
+            prompt: reviewPrompt(run.context.rule, run.context.change, prepared.digest, run.context.task, run.context.args.context, run.context.args.objective, prepared.snapshotTree !== undefined, run.context.section),
             agent: run.context.agent,
             cwd: prepared.reviewCwd ?? run.context.cwd,
             signal: run.context.signal,
@@ -3723,7 +3475,7 @@ class DelegationEngine {
                     throw new InputMutationError(`reviewed inputs changed during the run (${changed.length} changed: ${sample}${changed.length > 5 ? ', …' : ''}); a write inside the reviewed scope happened during the run — finish the writes, then re-run the review`);
                 }
             }
-            const record = await this.publishRecord(run, {
+            await this.publishRecord(run, {
                 digest: prepared.digest,
                 ...(prepared.worktreeDigest === undefined
                     ? {}
@@ -3732,14 +3484,8 @@ class DelegationEngine {
                 findings: parsed.findings,
                 target: targetIdentity(result.provider, result.model, result.reasoningEffort),
             });
-            const historyDetail = await this.recordFindingHistory(run, record);
-            const detail = [
-                parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
-                historyDetail,
-            ]
-                .filter((part) => part !== undefined)
-                .join('; ');
-            await this.markRun(run, 'completed', this.withFallbackDetail(prepared, detail === '' ? undefined : detail));
+            const detail = parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined;
+            await this.markRun(run, 'completed', this.withFallbackDetail(prepared, detail));
             outcome = 'completed';
         }
         catch (error) {
@@ -4004,39 +3750,6 @@ class DelegationEngine {
             // The observer is a seam; it must not change publication.
         }
         return record;
-    }
-    /**
-     * Append one settled review's findings after its record is published. The
-     * helper never throws; when neither the entry nor its gap marker is writable,
-     * the run detail names the gap rather than changing any verdict.
-     */
-    async recordFindingHistory(run, record) {
-        try {
-            const result = await appendFindingHistory(run.workspaceRoot, {
-                v: 1,
-                kind: 'run',
-                rule: record.rule,
-                change: record.change,
-                ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
-                ...(record.section === undefined ? {} : { section: sanitizeText(record.section, 200) }),
-                ...(record.taskIds === undefined ? {} : { taskIds: record.taskIds }),
-                verdict: record.verdict === 'FINDINGS' ? 'FINDINGS' : 'PASS',
-                digest: record.digest,
-                findings: record.findings.map((finding) => ({
-                    class: normalizeFindingClass(finding.class),
-                    title: finding.title,
-                    evidence: finding.evidence,
-                    fix: finding.fix,
-                })),
-                time: record.time,
-            }, { window: this.config.reviewLearning.window });
-            if (result.appended || result.gapAppended)
-                return undefined;
-            return `history gap: ${result.detail ?? 'the finding history could not be written'}`;
-        }
-        catch (error) {
-            return `history gap: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`;
-        }
     }
     /** Best-effort failure path: write a visible ERROR record when inputs were prepared. */
     async failRun(run, error, prepared, failureClass) {
@@ -4378,50 +4091,6 @@ class DelegationEngine {
     async changeApproval(change, openspecRoot, tasks) {
         return changeApproval(this.config, change, openspecRoot, tasks);
     }
-    async runPatch(rule, args, agent, cwd, signal) {
-        const target = this.target(rule);
-        if (target.write !== true) {
-            fail(`rule "${rule.id}": target "${rule.to}" is not declared write-capable; a patch rule never silently escalates`);
-        }
-        const runId = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-        const worktree = join(cwd, DELEGATION_DIR, 'worktrees', runId);
-        await this.services.git.runGit(['worktree', 'add', '--detach', worktree, 'HEAD'], cwd, signal);
-        const result = await runTarget(this.services, {
-            rule,
-            target,
-            prompt: patchPrompt(rule, args.context, args.objective ?? ''),
-            agent,
-            cwd: worktree,
-            signal,
-        });
-        const status = (await this.services.git.runGit(['-C', worktree, 'status', '--porcelain=v1'], cwd, signal))
-            .toString('utf8')
-            .trim();
-        let diff = '';
-        try {
-            diff = (await this.services.git.runGit(['-C', worktree, 'diff', '--binary', 'HEAD'], cwd, signal))
-                .toString('utf8')
-                .trim();
-        }
-        catch {
-            diff = '[diff unavailable]';
-        }
-        const changed = status === '' ? '(no changed files reported)' : status;
-        return [
-            `patch "${rule.id}" completed in isolated worktree ${relativePath(cwd, worktree)}`,
-            '',
-            'Changed files:',
-            changed,
-            '',
-            `Diff${diff.length > 40_000 ? ' (truncated)' : ''}:`,
-            diff.length === 0 ? '(empty)' : diff.slice(0, 40_000),
-            '',
-            'Target report:',
-            result.text.slice(0, MAX_ANSWER_CHARS),
-            '',
-            'Nothing was applied to the session worktree. Review the diff and merge manually.',
-        ].join('\n');
-    }
     async taskProgress(args, context) {
         const agent = this.requireAgent(context);
         const cwd = this.services.workingDirectory.get(agent.session);
@@ -4512,7 +4181,7 @@ class DelegationEngine {
                 provider.capabilities.agentOptions !== true
                 ? '; provider does not support model/reasoningEffort/agentOptions'
                 : '';
-            lines.push(`- ${id}: provider=${target.provider}${model === undefined ? '' : ` model=${model}`}${effort === undefined ? '' : ` reasoningEffort=${effort}`}${target.write === true ? ' write=true' : ''} (${availability}${capabilityProblem})`);
+            lines.push(`- ${id}: provider=${target.provider}${model === undefined ? '' : ` model=${model}`}${effort === undefined ? '' : ` reasoningEffort=${effort}`} (${availability}${capabilityProblem})`);
         }
         lines.push('', 'Configured rules:');
         if (this.config.rules.length === 0)
@@ -5321,20 +4990,6 @@ async function evaluateGate(deps, agent, turn, signal) {
     if (openspecRoot !== undefined && current.digestError !== undefined && involved.length > 0) {
         pushStrict('digest', `the worktree digest could not be computed (${current.digestError}); fix the git workspace failure so gated rules can be evaluated.`, 'git status --porcelain=v1 -z --untracked-files=all');
     }
-    for (const rule of deps.config.rules) {
-        if (rule.when !== 'failure-streak' || rule.gate === 'none')
-            continue;
-        const threshold = rule.threshold ?? deps.config.failureStreak;
-        const failures = deps.state.failuresOf(agentId);
-        if (failures < threshold || deps.state.consulted(agentId))
-            continue;
-        const text = `rule "${rule.id}": ${failures} consecutive failed tool calls with no consultation attempt for this streak; consult before retrying the same approach again.`;
-        const call = `delegate(rule: "${rule.id}", context: "${failures} consecutive tool failures; here are the failing calls and the current plan")`;
-        if (rule.gate === 'strict')
-            pushStrict(rule.id, text, call);
-        else
-            pushSoft(`failure-streak:${rule.id}:${deps.state.epochOf(agentId)}`, rule.id, text, call);
-    }
     deps.state.rememberSnapshot(agentId, current);
     if (issues.length === 0)
         return;
@@ -5529,7 +5184,6 @@ function attachGate({ ctx, deps }) {
         try {
             if (exec.agent !== undefined) {
                 const agentId = String(exec.agent.id);
-                deps.state.recordToolResult(agentId, result.isError);
                 const cwd = deps.services.workingDirectory.get(exec.agent.session);
                 recordWriteEvidence(deps.state, agentId, cwd, exec, result);
                 if (!result.isError && exec.name === 'work_checkpoint') {
@@ -5580,23 +5234,7 @@ function renderOutput(value) {
     const text = isRecord(value) && typeof value.text === 'string' ? value.text : String(value);
     return [{ type: 'text', text }];
 }
-/** The `note` contract runs no target, so it borrows the answer timeout. */
-function timeoutForContract(timeouts, contract) {
-    return contract === 'note' ? timeouts.answer : timeouts[contract];
-}
-/** The learning store is workspace-scoped like the review records. */
-async function sessionWorkspaceRoot(services, agent) {
-    const cwd = services.workingDirectory.get(agent.session);
-    const openspecRoot = await findOpenSpecRoot(cwd);
-    return openspecRoot === undefined ? cwd : dirname(openspecRoot);
-}
-/** Tool executions carry the calling agent; a sessionless call cannot scope a store. */
-function requireToolAgent(agent) {
-    if (agent === undefined)
-        fail('this tool needs a live agent session; call it from a session turn');
-    return agent;
-}
-function buildToolDefinitions(engine, config, services) {
+function buildToolDefinitions(engine, config) {
     const ruleIds = config.rules.map((rule) => rule.id);
     const output = {
         schema: TOOL_OUTPUT_SCHEMA,
@@ -5628,11 +5266,11 @@ function buildToolDefinitions(engine, config, services) {
                     },
                     context: {
                         type: 'string',
-                        description: 'Facts the target needs: for the advisor, the exact question, constraints, and decisive evidence; otherwise failing output, relevant files, constraints.',
+                        description: 'Facts the review target needs: failing output, relevant files, constraints.',
                     },
                     objective: {
                         type: 'string',
-                        description: 'The concrete goal; required for the patch contract.',
+                        description: 'The concrete goal the review checks the task against.',
                     },
                 },
                 required: ['rule'],
@@ -5693,91 +5331,6 @@ function buildToolDefinitions(engine, config, services) {
         enumerable: true,
         configurable: true,
         get: () => `${toolDescriptions.delegate}${sectionCatalogNote()}`,
-    });
-    if (!config.reviewLearning.enabled)
-        return definitions;
-    definitions.push({
-        name: 'review_retro',
-        description: REVIEW_RETRO_DESCRIPTION,
-        parameters: {
-            type: 'object',
-            properties: {
-                action: {
-                    type: 'string',
-                    enum: ['report', 'propose'],
-                    description: 'report: deterministic counts and repeat rate; propose: also store at most one proposed lesson draft.',
-                },
-            },
-            required: ['action'],
-            additionalProperties: false,
-        },
-        output,
-        execute: async (args, exec) => {
-            const agent = requireToolAgent(exec.agent);
-            const workspaceRoot = await sessionWorkspaceRoot(services, agent);
-            return toolOutput(await executeReviewRetro(args, {
-                workspaceRoot,
-                now: services.now,
-                window: config.reviewLearning.window,
-                maxLessons: config.reviewLearning.maxLessons,
-            }));
-        },
-    }, {
-        name: 'review_lesson',
-        description: REVIEW_LESSON_DESCRIPTION,
-        parameters: {
-            type: 'object',
-            properties: {
-                action: {
-                    type: 'string',
-                    enum: ['list', 'propose', 'decide', 'apply'],
-                    description: 'A model may only propose; decide and apply ask the user and return without a write until the user answers.',
-                },
-                class: { type: 'string', description: 'One of the fixed finding-class vocabulary.' },
-                title: { type: 'string', description: 'Short lesson title (dedupe key with the class).' },
-                body: { type: 'string', description: 'The lesson text; stored as bounded data.' },
-                appliesTo: {
-                    type: 'object',
-                    properties: {
-                        rules: { type: 'array', items: { type: 'string' } },
-                        capabilities: { type: 'array', items: { type: 'string' } },
-                    },
-                    additionalProperties: false,
-                },
-                source: {
-                    type: 'object',
-                    properties: {
-                        change: { type: 'string' },
-                        taskId: { type: 'string' },
-                        findingHashes: { type: 'array', items: { type: 'string' } },
-                    },
-                    additionalProperties: false,
-                },
-                id: { type: 'string', description: 'Lesson revision id from list.' },
-                decision: { type: 'string', enum: ['accept', 'reject'] },
-                target: {
-                    type: 'string',
-                    description: 'Change, spec, file, or test the accepted lesson is applied to.',
-                },
-            },
-            required: ['action'],
-            additionalProperties: false,
-        },
-        output,
-        execute: async (args, exec) => {
-            const agent = requireToolAgent(exec.agent);
-            const workspaceRoot = await sessionWorkspaceRoot(services, agent);
-            return toolOutput(await executeReviewLesson(args, {
-                workspaceRoot,
-                now: services.now,
-                maxLessons: config.reviewLearning.maxLessons,
-                agent,
-                signal: exec.signal,
-                ...(services.userQuestions === undefined
-                    ? {}
-                    : { userQuestions: services.userQuestions }),
-            }));
-        },
     });
     return definitions;
 }
@@ -5860,47 +5413,6 @@ function createSkillProvider(note) {
         },
     };
 }
-/**
- * `/review-retro` is a read-only host command: it prints the deterministic
- * report and never accepts or applies a lesson. Disabled learning registers
- * nothing.
- */
-function registerReviewRetroCommand(ctx, config, services) {
-    if (!config.reviewLearning.enabled)
-        return;
-    // Read the optional service without declaring a Cordis inject dependency, so
-    // the plugin still loads in a profile that has no command registry.
-    const commands = ctx.get?.('commands');
-    if (commands === undefined)
-        return;
-    const definition = {
-        definitionId: '@dsh-setup/plugin-delegation-rules/review-retro',
-        name: 'review-retro',
-        description: 'Report repeated review findings by class from the local bounded finding history; never accepts or applies a lesson.',
-        handler: async (invocation) => {
-            try {
-                const workspaceRoot = await sessionWorkspaceRoot(services, invocation.agent);
-                const text = await executeReviewRetro({ action: 'report' }, {
-                    workspaceRoot,
-                    now: services.now,
-                    window: config.reviewLearning.window,
-                });
-                return { kind: 'success', text };
-            }
-            catch (error) {
-                return {
-                    kind: 'error',
-                    text: `review retro failed: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`,
-                };
-            }
-        },
-    };
-    const effect = ctx.effect;
-    if (typeof effect === 'function')
-        effect(() => commands.register(definition));
-    else
-        commands.register(definition);
-}
 /** Provide the ownership status once; an older host or a test double may lack provide(). */
 function provideStatus(ctx, name, value) {
     try {
@@ -5931,17 +5443,13 @@ export function apply(ctx, config = {}, options = {}) {
             rule.gate !== 'none'),
     }));
     const state = new DelegationState();
-    // Optional services are read through ctx.get(), not the service property: a
-    // hard inject would stop the plugin loading in a profile without them.
-    const userQuestions = ctx.get?.('userQuestions');
     const services = {
         subagents: ctx.subagents,
         workingDirectory: ctx.workingDirectory,
         state,
         git: { runGit: options.runGit ?? defaultGit },
         now: options.now ?? (() => new Date()),
-        ...(userQuestions === undefined ? {} : { userQuestions }),
-        timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
+        timeoutsFor: () => validated.timeouts.review,
         ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
         ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
         ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
@@ -5951,10 +5459,9 @@ export function apply(ctx, config = {}, options = {}) {
     };
     const engine = new DelegationEngine(validated, services);
     services.pendingReview = (workspaceRoot, ruleId, change, taskId) => engine.pendingReview(workspaceRoot, ruleId, change, taskId);
-    for (const definition of buildToolDefinitions(engine, validated, services)) {
+    for (const definition of buildToolDefinitions(engine, validated)) {
         ctx.tools.register(definition);
     }
-    registerReviewRetroCommand(ctx, validated, services);
     ctx.skills.registerProvider(() => createSkillProvider(skillAdapterNote()));
     attachGate({
         ctx,

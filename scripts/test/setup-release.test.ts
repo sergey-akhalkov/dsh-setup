@@ -37,16 +37,29 @@ describe('setup release composition', () => {
     return last.config
   }
 
-  it('composes the retained gates and the retired switches', async () => {
+  it('composes the retained review rules and the retired switches', async () => {
     const delegation = await configFor('dsh-setup-delegation-rules')
     const rules = delegation.rules as Array<Record<string, unknown>>
-    for (const [id, when] of [
-      ['spec-review', 'spec-ready'],
-      ['task-progress', 'implementation-work'],
-      ['lane-boundary', 'lane-boundary'],
+    for (const [id, when, gate] of [
+      ['spec-review', 'spec-ready', 'strict'],
+      ['task-review', 'spec-task-ready', 'strict'],
+      ['integration-review', 'implementation-complete', 'soft'],
+      ['lane-fanout', 'lane-assignment', 'strict'],
     ] as const) {
       const rule = rules.find((entry) => entry.id === id)
-      expect(rule).toMatchObject({ when, gate: 'strict' })
+      expect(rule).toMatchObject({ when, gate })
+    }
+    for (const removed of [
+      'task-progress',
+      'lane-boundary',
+      'blocker',
+      'research',
+      'advisor',
+      'worker-fast',
+      'worker-deep',
+      'bug-fix',
+    ]) {
+      expect(rules.some((entry) => entry.id === removed)).toBe(false)
     }
     expect((delegation.gates as Record<string, unknown>).workflowOwned).toBe(false)
     const goal = await configFor('dsh-setup-goal-continuity')

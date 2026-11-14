@@ -33,7 +33,6 @@ afterEach(async () => {
 
 const codexTargets = {
   codex: { provider: 'codex-subagent' },
-  'codex-write': { provider: 'codex-subagent-write', write: true },
 }
 
 function specOnly(gate: 'strict' | 'soft' | 'none' = 'strict'): BundleConfigLike {
@@ -106,7 +105,6 @@ function integrationOnly(gate: 'strict' | 'soft' | 'none'): BundleConfigLike {
 function registered(): FakeSubagents {
   const subagents = new FakeSubagents()
   subagents.addProvider('codex-subagent', { agentOptions: false })
-  subagents.addProvider('codex-subagent-write', { agentOptions: false })
   return subagents
 }
 
@@ -734,65 +732,6 @@ describe('integration review gate', () => {
     )
     await strict.waitForRun(strictRun)
     await strict.turnStopping(1)
-  })
-})
-
-describe('failure-streak gate', () => {
-  const blockerConfig = (failureStreak = 3): BundleConfigLike => ({
-    targets: codexTargets,
-    rules: [
-      {
-        id: 'blocker',
-        when: 'failure-streak',
-        to: 'codex',
-        contract: 'answer',
-        gate: 'soft',
-        instruction: 'bundled:consult',
-      },
-    ],
-    failureStreak,
-  })
-
-  it('steers once per streak, resets on success and turn change, and records the consultation', async () => {
-    const root = await workspace()
-    const subagents = registered()
-    const harness = harnessFor(root, blockerConfig(), subagents)
-    await harness.preStep(1)
-    await harness.toolResult(true)
-    await harness.toolResult(true)
-    await harness.turnStopping(1)
-    expect(steerTexts(harness.agent)).toHaveLength(0)
-    await harness.toolResult(true)
-    await harness.turnStopping(1)
-    expect(combinedSteers(harness.agent)).toContain('consecutive failed tool calls')
-    const steers = steerTexts(harness.agent).length
-    await harness.turnStopping(1)
-    expect(steerTexts(harness.agent)).toHaveLength(steers)
-
-    await harness.callTool('delegate', { rule: 'blocker' })
-    await harness.turnStopping(1)
-    expect(steerTexts(harness.agent)).toHaveLength(steers)
-
-    const root2 = await workspace()
-    const reset = harnessFor(root2, blockerConfig(), registered())
-    await reset.preStep(1)
-    await reset.toolResult(true)
-    await reset.toolResult(true)
-    await reset.toolResult(false)
-    await reset.toolResult(true)
-    await reset.toolResult(true)
-    await reset.turnStopping(1)
-    expect(steerTexts(reset.agent)).toHaveLength(0)
-
-    const root3 = await workspace()
-    const turns = harnessFor(root3, blockerConfig(), registered())
-    await turns.preStep(1)
-    await turns.toolResult(true)
-    await turns.toolResult(true)
-    await turns.toolResult(true)
-    await turns.preStep(2)
-    await turns.turnStopping(2)
-    expect(steerTexts(turns.agent)).toHaveLength(0)
   })
 })
 

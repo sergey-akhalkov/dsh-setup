@@ -3,8 +3,8 @@ name: delegation-rules
 description: >
   Delegation rules: authored triggers, targets, result contracts, and the
   task-by-task review workflow. Load when authoring or debugging delegation
-  rules, when a gate steers, when reviewing a completed task or spec, or when
-  consulting, researching, or patching through a delegated model.
+  rules, when a gate steers, or when reviewing a completed task or spec through
+  a delegated model.
 ---
 
 # Delegation rules
@@ -16,11 +16,10 @@ enforcement points; this skill is the authoring and workflow guide.
 
 ## Tools
 
-- `delegate(rule, change?, task?, context?, objective?)` runs one configured rule. The `rule`
-  enum is generated from the config, so an unknown rule is rejected with the allowed ids. Write
-  the smallest useful `context` (failing output, files, constraints); for `advisor`, pass the
-  exact question, constraints, and decisive evidence. `objective` is required for the patch
-  contract.
+- `delegate(rule, change?, task?, section?, context?, objective?)` runs one configured review
+  rule. The `rule` enum is generated from the config, so an unknown rule is rejected with the
+  allowed ids. Write the smallest useful `context` (failing output, files, constraints) and, when
+  it matters, the `objective` the review checks the task against.
 - `task_progress(task, status, reason)` records an explicit `in-progress`/`blocked` note for an
   unchecked task. It runs no model and costs nothing; with a profile `task-progress` rule it is the
   only non-tick way to close a code-changing turn.
@@ -29,7 +28,8 @@ enforcement points; this skill is the authoring and workflow guide.
   It never attributes a change.
 
 Do not paste a delegation result as a "claim". Only a record written by the engine satisfies a
-strict gate.
+strict gate. For ad-hoc work outside the review runtime, use the first-party `subagent`,
+`codex_subagent`, and `create_worktree` tools instead of a delegation rule.
 
 ## Session involvement
 
@@ -45,35 +45,32 @@ on one change without an exclusive owner.
   before/after contents. A checkbox-only tick is not a spec change; a substantive task-plan edit
   or a newly supplied `tasks.md` is. A brand-new change records created and spec-changed but does
   not import another session's checked tasks.
-- `task_progress` and a review or patch `delegate` attribute the change explicitly; an `answer`
-  `delegate` does not, even with a `change` argument.
+- `task_progress` and a review `delegate` attribute the change explicitly.
 - Legacy `.dsh/delegation/owners/` files are ignored; do not rely on them.
 
 A session with no involvement is not steered for the change. To opt in, edit the change or call
-`task_progress` or a review/patch `delegate`. `delegation_status` shows `this session: ...` or
+`task_progress` or a review `delegate`. `delegation_status` shows `this session: ...` or
 `not involved`.
 
 ## Triggers
 
-| Trigger | Fires when | Typical contract |
+| Trigger | Fires when | Contract |
 | --- | --- | --- |
-| `manual` | No automatic condition; only `delegate` runs it. | `answer`, `patch` |
+| `manual` | No automatic condition; only `delegate` runs it. | `review` |
 | `spec-ready` | A change this session created or whose spec artifacts it changed is review-ready and its whole-spec review has no matching PASS/ERROR for the current spec digest. | `review` scope `whole`, phase `spec` |
 | `spec-task-ready` | A task this session checked has no task-review PASS/ERROR record. | `review` scope `task` |
 | `implementation-work` | The turn changed implementation files in a change this session is involved in and has neither a newly checked-and-reviewed task nor a matching progress note for the current worktree digest. | `note` |
 | `lane-assignment` | A readable `tasks.md` in a change this session is involved in has at least two non-serial lanes with tasks (a completed lane still counts), the turn ticked a task or changed implementation files, and an unassigned non-current lane with unchecked tasks names owned paths and has neither a tagged worker start nor a serial note. | `note` |
 | `lane-boundary` (deprecated) | A task this session ticked in this turn completed the last unchecked task of a `tasks.md` lane, another non-`serial` lane with owned paths still has an unchecked task, and the turn started no parallel worker (`subagent`, `subagent_fork`, `spawn_teammate`, `workflow`). Satisfied by a worker start or by a matching progress note in a remaining lane. Kept for existing profiles; use `lane-assignment` for new rules. | `note` |
 | `implementation-complete` | This session completed the change's task list and the optional integration review has no matching PASS/ERROR for the current worktree digest. | `review` scope `whole`, phase `integration` |
-| `failure-streak` | The configured number of consecutive failed tool calls has no intervening success and no consultation attempt for that streak. | `answer` (soft) |
 
-`manual` rules must use `gate: none`. `failure-streak` rules must not be `strict` (an `answer`
-writes no record). `spec-*` and `implementation-complete` require `review` with the matching
-scope; `implementation-work`, `lane-assignment`, and `lane-boundary` require `note`. A lane is the
-numbered tasks under the nearest level-2 heading of `tasks.md`, its owned paths are the backticked
-segments of that heading, and a heading containing `serial` is the integration tail and never
-counts as remaining parallel work. The lane triggers fail open: no headings, a lane without owned
-paths, an unreadable `tasks.md`, and a ticked task that no longer appears in it report nothing.
-`lane-boundary` is deprecated and accepted only for existing profiles.
+`manual` rules must use `gate: none`. `spec-*` and `implementation-complete` require `review` with
+the matching scope; `implementation-work`, `lane-assignment`, and `lane-boundary` require `note`.
+A lane is the numbered tasks under the nearest level-2 heading of `tasks.md`, its owned paths are
+the backticked segments of that heading, and a heading containing `serial` is the integration tail
+and never counts as remaining parallel work. The lane triggers fail open: no headings, a lane
+without owned paths, an unreadable `tasks.md`, and a ticked task that no longer appears in it
+report nothing. `lane-boundary` is deprecated and accepted only for existing profiles.
 
 ## Contracts
 
@@ -96,15 +93,23 @@ paths, an unreadable `tasks.md`, and a ticked task that no longer appears in it 
   task changes the section digest and needs a new section or task review. Every section finding
   names the affected task's number or text, so the one verdict is still actionable per task. A
   section `ERROR` writes an ERROR record for each covered task and publishes no approval.
-- **answer** — read-only prompt for a blocker, research, or advisor question; returns the answer
-  with evidence and, for research, sources, and, for an advisor, a recommendation, the strongest
-  counterargument, risks, a next action, and confidence. Writes no gate record. A failed answer is
-  reported and marks a consultation attempt so a soft failure-streak rule does not loop.
-- **patch** — runs a write-capable target in an isolated git worktree under
-  `.dsh/delegation/worktrees/`, returns the changed files, diff, and the target's test report,
-  and never applies the diff to the session worktree. The target must be declared
-  `write: true`.
 - **note** — the `task_progress` note. See below.
+
+## Review queue
+
+A review `delegate` call returns a run id and record path before the target finishes; the run is
+admitted through the profile's review queue, continues in the background, and writes its
+digest-bound record when it settles. The turn can continue while it runs.
+
+- `delegation_status` shows each run as queued or running, its queue position, and the record path
+  it will publish; wait for that run instead of starting a duplicate review.
+- A full waiting list refuses admission with `review queue full` and writes an `ERROR` record; let
+  the current reviews settle, then start the review again.
+- A queue-limit, timeout, or target failure settles as `ERROR`, so a turn can close with the failure
+  visible and the cause named. Fix the cause and re-run; a matching `PASS` is reused without another
+  run.
+- `reviewQueue` controls `enabled`, `concurrency`, `maxQueued`, `maxAttempts`, and the backoff; the
+  detailed contract is in the plugin documentation.
 
 ## Task-by-task workflow
 
@@ -147,8 +152,9 @@ digest. Before handing work to more than one write-capable agent at once:
 - Isolate or serialize. If the file sets are disjoint and neither run reads the other's output, run
   them in parallel in separate worktrees. If they overlap, either serialize the writes in one
   checkout or give each its own worktree and merge after review.
-- The patch contract already runs its target in an isolated worktree, so a `bug-fix` delegation
-  needs no extra setup; this guidance applies to agents and teammates you start yourself.
+- A writer that needs an isolated checkout uses `create_worktree` plus a write-capable `subagent`;
+  no delegation contract provides isolation or applies a diff. This guidance applies to agents and
+  teammates you start yourself.
 - A single writer doing sequential work needs no worktree; adding one only makes the return path
   longer.
 
@@ -207,25 +213,18 @@ boundary behavior, but new rules use `lane-assignment`.
 | --- | --- | --- | --- |
 | `spec-review` | `spec-ready` | review, whole, phase `spec` | strict |
 | `task-review` | `spec-task-ready` | review, task | strict |
-| `blocker` | `failure-streak` | answer | soft |
-| `research` | `manual` | answer | none |
-| `advisor` | `manual` | answer | none |
-| `worker-fast` | `manual` | answer | none |
-| `worker-deep` | `manual` | answer | none |
-| `bug-fix` | `manual` | patch | none |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft |
 | `lane-fanout` | `lane-assignment` | note | strict |
 
 The shipped set includes the strict `lane-fanout` rule and intentionally omits an automatic
 `task-progress` rule. The `implementation-work` and `lane-assignment` triggers and the `note`
-contract remain available to profile rules; the goal-continuity `work-checkpoints` capability owns
-the pause-time progress and parallel decision and requires a `work_checkpoint` call at each
-substantial pause.
+contract remain available to profile rules; the deprecated `lane-boundary` alias still works for
+existing profiles, and the goal-continuity `work-checkpoints` capability owns the pause-time
+progress and parallel decision and requires a `work_checkpoint` call at each substantial pause.
 
-The shipped defaults target the installed-Codex provider and select `gpt-6-astra` at `xhigh` for
-`codex` and `codex-write`; `codex-astra` is the explicit strong target the advisor uses. They are
-data: override `targets` and `rules` in the profile's `cordis.patch.yml` (a patch replaces the
-whole config object). A non-Codex target looks like this:
+The shipped default target is the installed-Codex provider and selects `gpt-6-astra` at `xhigh` for
+the `codex` target. Targets are data: override `targets` and `rules` in the profile's
+`cordis.patch.yml` (a patch replaces the whole config object). A non-Codex target looks like this:
 
 ```yaml
 targets:
@@ -245,61 +244,36 @@ rules:
 
 `provider` is the registered subagent provider; `model`, `reasoningEffort`, and `agentOptions`
 are passed only when the provider declares `agentOptions` support, otherwise the target is
-rejected with the capability error.
-
-## Worker effort tiers
-
-The shipped defaults also add two in-process (`spawn`) worker targets, `worker-fast` and
-`worker-deep`, each reachable through the manual `answer` rule of the same name. They set no model,
-so both inherit the profile's model; only the effort differs.
-
-- `worker-fast` at `high` — mechanical inspection, call-site and file sweeps, routine summaries,
-  and any subtask whose answer is a lookup or a checklist.
-- `worker-deep` at `max` — ambiguous analysis, root-cause work, design trade-offs, and anything
-  that gates a decision. Use it when a cheap pass could be plausibly wrong.
-- The main loop keeps its own effort (`max` in the shipped setup). Delegate a bounded subtask
-  whose result can be checked; do not delegate to demote the session itself.
-
-The DeepSeek route exposes three effective levels, not five: `minimal`/`low` map to `low`,
-`medium`/`high`/`xhigh` map to `high`, and `max` is distinct. Pick the tier by the task; do not
-ask for `xhigh` as if it were a separate level.
-
-## When to consult the advisor
-
-`advisor` is a manual, read-only second opinion, not a gate. Use it only when the decision is
-expensive to reverse, security or data integrity is at stake, the design spans modules, or two
-attempts have failed and the next step is unclear. Do not use it for routine edits, syntax,
-lookups, or facts you can verify locally. One well-framed question per call, with constraints and
-decisive evidence; at most three advisor calls per session. An advisor answer writes no record and
-never satisfies a review.
+rejected with the capability error. Removed configuration fails load with its replacement named:
+`contract: answer` and `contract: patch`, `when: failure-streak`, `isolation`, `failureStreak`, a
+target `write`, and the `reviewLearning` block are rejected.
 
 ## Authoring rules
 
 - Rule and target ids are kebab-case and unique. A `delegate` rule id is the record directory.
 - `instruction` is `bundled:<asset>` for one of the shipped prompts or inline text.
 - A whole-scope review needs a kebab-case `phase`; a task-scoped review must not have one.
-- A patch rule needs `isolation: worktree` and a target with `write: true`.
 - Do not duplicate a strict gate for the same trigger/scope/phase: one record cannot satisfy two
   strict rules, so the config is rejected.
 - New triggers or contracts are a code extension, not configuration. Use the documented
   vocabulary.
+- For ad-hoc delegation outside the review runtime, call `subagent` (provider, model, effort) or
+  `codex_subagent`, and `create_worktree` for an isolated checkout; no rule contract does either.
 
 ## Failure and opt-out
 
 A strict gate keeps steering until a matching `PASS`/`ERROR` record exists; a target failure
 writes an `ERROR` record so the turn can close with the failure visible. A soft rule steers once
-per streak and a failed consultation does not trap the turn. The only bypass is disabling or
-removing the `dsh-setup-delegation-rules` row; records, notes, worktrees, and change artifacts
-remain. No in-session phrase bypasses an active gate.
+per turn. The only bypass is disabling or removing the `dsh-setup-delegation-rules` row; records,
+notes, snapshots, and change artifacts remain. No in-session phrase bypasses an active gate.
 
 ## Cost and security
 
-Reviews and answers consume the target's tokens and subscription; the progress note does not.
-Per-task reviews multiply runs, so keep tasks small and sized for one review; set the optional
-integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`
-targets select `gpt-6-astra` at `xhigh`, so every default Codex rule pays for the strong model;
-override those targets for cheaper routine reviews and leave `advisor` on `codex-astra`. The
-engine never starts a target from the turn-stopping listener, uses fixed-argument git calls with
+Reviews consume the target's tokens and subscription; the progress note does not. Per-task reviews
+multiply runs, so keep tasks small and sized for one review; set the optional integration review to
+`soft` or `none` if it adds noise. The shipped `codex` target selects `gpt-6-astra` at `xhigh`, so
+every default review pays for the strong model; override the target for cheaper routine reviews.
+The engine never starts a target from the turn-stopping listener, uses fixed-argument git calls with
 no shell, and treats target output as untrusted data: only the declared fenced verdict is parsed
 and nothing is executed. Records and notes are redacted of machine paths and obvious credentials.
 Session involvement files are local scratch under `.dsh/` and are never committed. Records are a
@@ -312,6 +286,8 @@ record-shaped file.
   profile config; `delegation_status` reports each configured target as available or MISSING.
 - **"does not support model/agent options"** — remove `model`/`reasoningEffort`/`agentOptions`
   from the target or use a provider with `agentOptions` capability.
+- **"the answer contract was removed" / "the patch contract was removed"** — use `subagent` or
+  `codex_subagent` and `create_worktree`; no delegation contract provides those paths.
 - **"verdict digest does not match"** — the target answered about a different revision; re-run
   on the current artifacts.
 - **"no fenced JSON verdict"** — the target returned prose or a malformed block; an `ERROR`
@@ -321,6 +297,6 @@ record-shaped file.
   or check the record path it names.
 - **A change is not attributed** — the session never wrote to it or called an explicit tool, or
   the write used a tool or shell form the engine does not parse. Run `task_progress` or a
-  review/patch `delegate` to opt in. Legacy `.dsh/delegation/owners/` files are ignored.
+  review `delegate` to opt in. Legacy `.dsh/delegation/owners/` files are ignored.
 - **A note is stale** — the worktree changed after the note; refresh the note or tick the task
   and run its review.

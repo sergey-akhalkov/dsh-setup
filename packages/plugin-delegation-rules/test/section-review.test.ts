@@ -3,7 +3,6 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SubagentResult } from '@deepseek-ai/dsh-subagent'
 import { afterEach, describe, expect, it } from 'vitest'
-import { readFindingHistory } from '../src/host/finding-history.ts'
 import {
   type BundleConfigLike,
   defaultTestConfig,
@@ -310,23 +309,12 @@ describe('section selector resolution', () => {
           gate: 'strict',
           instruction: 'bundled:review-spec',
         },
-        {
-          id: 'research',
-          when: 'manual',
-          to: 'codex',
-          contract: 'answer',
-          gate: 'none',
-          instruction: 'bundled:research',
-        },
       ],
     })
     const harness = new Harness({ cwd: workspace.root, config, agents })
     await expect(
       harness.toolText('delegate', { rule: 'spec-review', change: 'change-a', section: '1' }),
     ).rejects.toThrow(/omit section/)
-    await expect(
-      harness.toolText('delegate', { rule: 'research', change: 'change-a', section: '1' }),
-    ).rejects.toThrow(/only valid for a task-scoped review/)
     expect(agents.startCalls).toBe(0)
 
     // Without a selector the existing next-checked-task behavior is unchanged.
@@ -1024,64 +1012,5 @@ describe('section gate and status', () => {
     expect(status).toContain('missing 1')
     expect(status).toContain('missing 1.2 "Second task"')
     expect(status).not.toContain('1.1 First task')
-  })
-
-  it('appends one section finding-history entry and nothing on reuse', async () => {
-    const { root, agents, harness } = await fixture()
-    let calls = 0
-    agents.respond = (run) => {
-      calls += 1
-      return calls === 1 ? findingsResponder()(run) : passResponder(run)
-    }
-    const first = runIdFrom(
-      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
-    )
-    await harness.waitForRun(first)
-    harness.git.status = ' M packages/engine/src/engine.ts\0'
-    harness.git.diff = 'diff --git a/packages/engine/src/engine.ts b/packages/engine/src/engine.ts'
-    const second = runIdFrom(
-      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
-    )
-    await harness.waitForRun(second)
-    const reused = await harness.toolText('delegate', {
-      rule: 'task-review',
-      change: 'change-a',
-      section: '1',
-    })
-    expect(reused).toContain('reused record')
-    const history = await readFindingHistory(root)
-    expect(history.entries).toHaveLength(2)
-    const findingsEntry = history.entries[0]
-    expect(findingsEntry?.kind).toBe('run')
-    if (findingsEntry?.kind === 'run') {
-      expect(findingsEntry.section).toBe('1')
-      expect(findingsEntry.taskIds?.sort()).toEqual([FIRST, SECOND].sort())
-    }
-    const retro = await harness.toolText('review_retro', { action: 'report' })
-    expect(retro).toContain('2 settled review(s), 1 finding(s)')
-    expect(retro).toContain('missing-test: 1 finding(s), 0 repeated')
-  })
-
-  it('sanitizes an unnumbered section key before writing finding history', async () => {
-    const title = 'Review /srv/synthetic/private token=synthetic-history-secret'
-    const untitled = `# Tasks\n\n## ${title}\n\n- [x] 1.1 First task\n`
-    const { root, harness } = await fixture(untitled)
-    const run = runIdFrom(
-      await harness.toolText('delegate', {
-        rule: 'task-review',
-        change: 'change-a',
-        section: title,
-      }),
-    )
-    expect(await harness.waitForRun(run)).toContain('state=completed')
-    const history = await readFindingHistory(root)
-    const entry = history.entries[0]
-    expect(entry?.kind).toBe('run')
-    if (entry?.kind === 'run') {
-      expect(entry.section).not.toContain('/srv/')
-      expect(entry.section).not.toContain('synthetic-history-secret')
-      expect(entry.section).toContain('[path]')
-      expect(entry.section).toContain('[secret]')
-    }
   })
 })
