@@ -17,8 +17,8 @@
 ## 3. Serial integration (serial, owns `packages/setup/**`, the full repository gate, and the live acceptance)
 
 - [x] 3.1 Update `packages/setup/defaults.yml` to the new rules and the single `codex` target, run `pnpm build` and then `pnpm gen`, and commit the regenerated setup manifest, patch, and vendored tree. Verify `pnpm gen:check` passes, the vendored tree carries the new runtime rather than the removed modules, and the generated `packages/setup/cordis.patch.yml` carries no removed rule, target, or `reviewLearning` key.
-- [ ] 3.2 Run `pnpm build && git diff --exit-code`, `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, and `pnpm validate:installer`. Verify every command exits 0.
-- [ ] 3.3 Run `openspec validate simplify-delegation-rules --strict` and verify it exits 0.
+- [x] 3.2 Run `pnpm build && git diff --exit-code`, `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, and `pnpm validate:installer`. Verify every command exits 0.
+- [x] 3.3 Run `openspec validate simplify-delegation-rules --strict` and verify it exits 0.
 
 ## Workflow follow-up
 
