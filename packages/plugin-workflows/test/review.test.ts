@@ -734,7 +734,7 @@ describe('review evidence contract', () => {
           },
         ],
       }),
-    ).toThrow(/gate identity/u)
+    ).toThrow(/another record/u)
     expect(() =>
       validateDefinition({
         ...def,
@@ -749,6 +749,19 @@ describe('review evidence contract', () => {
         ],
       }),
     ).toThrow(/record store/u)
+  })
+
+  it('requires the same record contract even without the review gate', () => {
+    const def = taskDefinition()
+    const step = def.steps[0] as Definition['steps'][number]
+    const { gate: _gate, gateIdentity: _identity, ...settings } = def.settings
+    expect(() =>
+      validateDefinition({
+        ...def,
+        settings,
+        steps: [{ ...step, evidence: { kind: 'file', path: 'README.md' } }],
+      }),
+    ).toThrow(/must be "record"/u)
   })
 
   it('does not call the reviewer when the step evidence is unrelated', async () => {

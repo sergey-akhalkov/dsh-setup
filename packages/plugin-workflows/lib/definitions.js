@@ -902,6 +902,35 @@ export function validateDefinition(raw, source = 'definition') {
     }
     const allowTools = settingsValue.allowTools === undefined ? undefined : new Set(settingsValue.allowTools);
     const steps = raw.steps.map((entry, index) => step(entry, definition, `steps[${String(index)}]`, stepIds, allowTools));
+    // Every review step, gated or not, settles only from the review record it
+    // wrote: the executor and the intake reuse path both rely on this contract.
+    for (const [reviewIndex, reviewStep] of steps.entries()) {
+        if (reviewStep.executor !== 'review')
+            continue;
+        const reviewEvidence = reviewStep.evidence;
+        const reviewField = `steps[${String(reviewIndex)}].evidence`;
+        if (reviewEvidence === undefined || reviewEvidence.kind !== 'record') {
+            fail(definition, `${reviewField}.kind`, 'must be "record"; a review step settles only from its matching verdict record');
+        }
+        const reviewRule = settingsValue.gateIdentity ?? definition;
+        if (reviewEvidence.rule !== reviewRule) {
+            fail(definition, `${reviewField}.rule`, `must be "${reviewRule}" so the step cannot point at another record`);
+        }
+        if (reviewEvidence.path === undefined ||
+            !reviewEvidence.path.replaceAll('\\', '/').startsWith('.dsh/workflows/records/')) {
+            fail(definition, `${reviewField}.path`, 'must name the workflows review record store (.dsh/workflows/records/...), never another file');
+        }
+        const scope = reviewStep.review?.scope;
+        if (scope !== undefined && reviewEvidence.scope !== scope) {
+            fail(definition, `${reviewField}.scope`, `must match the review scope "${scope}"`);
+        }
+        if (scope === 'whole' && reviewEvidence.digest !== 'current') {
+            fail(definition, `${reviewField}.digest`, 'must be "current" so a whole-spec verdict is bound to the current artifacts');
+        }
+        if (scope === 'task' && reviewEvidence.task === undefined) {
+            fail(definition, `${reviewField}.task`, 'must name the task placeholder for a task-scoped review record');
+        }
+    }
     if (settingsValue.gate === 'review') {
         const reviewSteps = steps.filter((entry) => entry.executor === 'review');
         if (reviewSteps.length !== 1) {
@@ -910,32 +939,6 @@ export function validateDefinition(raw, source = 'definition') {
         const reviewStep = reviewSteps[0];
         if (reviewStep?.blockTurnClose !== true) {
             fail(definition, 'steps', 'the "review" step must set blockTurnClose: true; the gate is never a non-blocking step');
-        }
-        // The step settles only from the review record it just wrote: any other
-        // contract would let the workflow complete without a matching verdict.
-        const reviewSpecValue = reviewStep.review;
-        const reviewEvidence = reviewStep.evidence;
-        const reviewIndex = steps.indexOf(reviewStep);
-        const reviewField = `steps[${String(reviewIndex)}].evidence`;
-        if (reviewEvidence === undefined || reviewEvidence.kind !== 'record') {
-            fail(definition, `${reviewField}.kind`, 'must be "record"; a review step settles only from its matching verdict record');
-        }
-        const gateIdentity = settingsValue.gateIdentity;
-        if (reviewEvidence.path === undefined ||
-            !reviewEvidence.path.replaceAll('\\', '/').startsWith('.dsh/workflows/records/')) {
-            fail(definition, `${reviewField}.path`, 'must name the workflows review record store (.dsh/workflows/records/...), never another file');
-        }
-        if (gateIdentity !== undefined && reviewEvidence.rule !== gateIdentity) {
-            fail(definition, `${reviewField}.rule`, `must be the gate identity "${gateIdentity}" so a copy cannot point at another record`);
-        }
-        if (reviewSpecValue !== undefined && reviewEvidence.scope !== reviewSpecValue.scope) {
-            fail(definition, `${reviewField}.scope`, `must match the review scope "${reviewSpecValue.scope}"`);
-        }
-        if (reviewSpecValue?.scope === 'whole' && reviewEvidence.digest !== 'current') {
-            fail(definition, `${reviewField}.digest`, 'must be "current" so a whole-spec verdict is bound to the current artifacts');
-        }
-        if (reviewSpecValue?.scope === 'task' && reviewEvidence.task === undefined) {
-            fail(definition, `${reviewField}.task`, 'must name the task placeholder for a task-scoped review record');
         }
     }
     assertAcyclic(definition, steps);
