@@ -207,7 +207,9 @@ export async function buildConditionContext(
     session: {
       involved: input.involved ?? true,
       changedSpec: input.changedSpec ?? false,
-      completed: input.completed ?? false,
+      // Completion is derived from the change's own task list when the caller
+      // does not know better: every numbered task is checked.
+      completed: input.completed ?? (tasks.length > 0 && tasks.every((task) => task.checked)),
     },
   }
 }

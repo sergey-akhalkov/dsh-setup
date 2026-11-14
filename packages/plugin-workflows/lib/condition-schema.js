@@ -34,6 +34,30 @@ const STATIC_PATHS = new Set([
     'session.completed',
 ]);
 const ROOT_SET = new Set(CONDITION_ROOTS);
+/** Item-relative fields JSONLogic `some`/`all`/`none` bind as the data item. */
+const ITEM_FIELDS = new Set([
+    'id',
+    'number',
+    'text',
+    'checked',
+    'n',
+    'title',
+    'owned',
+    'unchecked',
+]);
+function indexedPath(segments) {
+    if (segments[0] !== 'change')
+        return false;
+    if (segments[1] === 'lanes' && segments.length === 4) {
+        return (/^\d+$/u.test(segments[2] ?? '') &&
+            ['n', 'title', 'owned', 'unchecked'].includes(segments[3] ?? ''));
+    }
+    if (segments[1] === 'tasks' && segments[2] === 'items' && segments.length === 5) {
+        return (/^\d+$/u.test(segments[3] ?? '') &&
+            ['id', 'number', 'text', 'checked'].includes(segments[4] ?? ''));
+    }
+    return false;
+}
 function checkPath(raw, field) {
     if (/[\\/]|(?:^|\.)\.\.(?:\.|$)|:/u.test(raw)) {
         throw new Error(`condition.${field} "var" path "${raw}" must not name a path`);
@@ -45,6 +69,8 @@ function checkPath(raw, field) {
     if (segments.length > 8) {
         throw new Error(`condition.${field} "var" path "${raw}" nests too deeply`);
     }
+    if (raw !== '' && ITEM_FIELDS.has(raw))
+        return;
     const root = segments[0] ?? '';
     if (!ROOT_SET.has(root)) {
         throw new Error(`condition.${field} "var" path "${raw}" names an unknown context field; use one of: ${CONDITION_ROOTS.join(', ')}`);
@@ -52,6 +78,8 @@ function checkPath(raw, field) {
     if (raw === root)
         return;
     if (STATIC_PATHS.has(raw))
+        return;
+    if (indexedPath(segments))
         return;
     // The per-task record map is keyed by task id; its values carry these fields.
     if (segments[0] === 'records' && segments[1] === 'tasks') {
@@ -103,8 +131,19 @@ function varPath(rule, field, depth = 0) {
                         continue;
                     checkPath(name, field);
                 }
+                else if (typeof name === 'number') {
+                }
+                else if (typeof name === 'object' &&
+                    name !== null &&
+                    !Array.isArray(name) &&
+                    Object.keys(name).length === 1 &&
+                    typeof name.var === 'string') {
+                    // A literal `{ var: "field" }` reference is a static name; any other
+                    // computed expression cannot be validated and is refused.
+                    checkPath(name.var, field);
+                }
                 else {
-                    varPath(name, field, depth + 1);
+                    throw new Error(`condition.${field} "${operator}" names must be literal field names, not computed expressions`);
                 }
             }
         }

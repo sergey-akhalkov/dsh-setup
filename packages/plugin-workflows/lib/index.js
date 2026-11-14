@@ -1033,10 +1033,13 @@ export function apply(ctx, config = {}) {
                 : [];
             const definitionRows = [];
             const conditionalDefinitions = (definitionsByWorkspace.get(workspace) ?? []).filter((definition) => definition.trigger.condition !== undefined);
+            // The session's latest change, shared by the condition context and the
+            // run context a conditional turn-close run records.
+            const conditionChangeCandidate = changedName ?? lastChangeBySession.get(input.session);
             const conditionsFor = async (definitionEvent) => {
                 if (conditionalDefinitions.length === 0)
                     return undefined;
-                const conditionChange = definitionEvent.name ?? changedName ?? lastChangeBySession.get(input.session);
+                const conditionChange = definitionEvent.name ?? conditionChangeCandidate;
                 const conditionContext = await buildConditionContext({
                     workspace,
                     ...(conditionChange === undefined ? {} : { change: conditionChange }),
@@ -1052,7 +1055,6 @@ export function apply(ctx, config = {}) {
                         (definitionEvent.kind === 'fs.change' &&
                             /^openspec\/changes\/[^/]+\//u.test(definitionEvent.subject) &&
                             !/\/reviews\//u.test(definitionEvent.subject)),
-                    completed: false,
                 });
                 return evaluateConditions(conditionalDefinitions, conditionContext);
             };
@@ -1120,7 +1122,11 @@ export function apply(ctx, config = {}) {
                                 checkpoint: `.dsh/work-checkpoints/${sessionHash(String(matched.session))}/${String(matched.turn)}.json`,
                             }
                             : {};
-                        const outcome = startDefinitionRun(workspace, definition, matched, limited(), capture === undefined ? extraContext : { name: capture, ...extraContext });
+                        // A conditional turn-close run records the change its condition
+                        // evaluated, so change-scoped evidence can resolve there too.
+                        const contextName = capture ??
+                            (definition.trigger.condition === undefined ? undefined : conditionChangeCandidate);
+                        const outcome = startDefinitionRun(workspace, definition, matched, limited(), contextName === undefined ? extraContext : { name: contextName, ...extraContext });
                         if (outcome.ok)
                             startedThisEvent += 1;
                         return outcome;

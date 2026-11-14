@@ -311,3 +311,59 @@ describe('condition routing', () => {
     expect(suppressed[0]?.reason).toBe('condition-false')
   })
 })
+
+describe('condition route and item scopes', () => {
+  it('refuses a condition on a non-turn-close trigger', () => {
+    expect(() =>
+      validateDefinition({
+        ...definition({ '==': [1, 1] }),
+        trigger: {
+          kind: 'fs.change',
+          match: { path: 'openspec/changes/{name}/tasks.md' },
+          mode: 'active',
+          dedupe: 'path+content-hash',
+          condition: { '==': [1, 1] },
+        },
+      }),
+    ).toThrow(/turn.stopping/u)
+  })
+
+  it('accepts indexed lane and task-item fields, and item-relative vars in some', () => {
+    expect(() =>
+      validateCondition({
+        and: [
+          { '==': [{ var: 'change.lanes.0.title' }, 'Engine'] },
+          { '==': [{ var: 'change.tasks.items.1.checked' }, false] },
+          { some: [{ var: 'change.lanes' }, { '==': [{ var: 'title' }, 'Engine'] }] },
+        ],
+      }),
+    ).not.toThrow()
+  })
+
+  it('refuses a computed missing name', () => {
+    expect(() => validateCondition({ missing: [{ cat: ['session.', 'noSuchField'] }] })).toThrow(
+      /literal field names/u,
+    )
+  })
+
+  it('derives session.completed from the checked task list', async () => {
+    const root = await workspace()
+    const done = await buildConditionContext({
+      workspace: root,
+      change: 'auth',
+      event: { kind: 'turn.stopping' },
+    })
+    expect(done.session.completed).toBe(false)
+    await writeFile(
+      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+      '# Tasks\n\n- [x] 1.1 Done\n- [x] 2.1 Also done\n',
+      'utf8',
+    )
+    const complete = await buildConditionContext({
+      workspace: root,
+      change: 'auth',
+      event: { kind: 'turn.stopping' },
+    })
+    expect(complete.session.completed).toBe(true)
+  })
+})

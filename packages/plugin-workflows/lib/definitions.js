@@ -259,6 +259,9 @@ function trigger(raw, definition) {
             fail(definition, 'trigger.condition', error instanceof Error ? error.message : String(error));
         }
         condition = raw.condition;
+        if (kind !== 'turn.stopping') {
+            fail(definition, 'trigger.condition', 'is evaluated at turn close only; declare it on a turn.stopping trigger');
+        }
     }
     const match = triggerMatch(raw.match ?? {}, definition);
     if (kind === 'intent' && match.command !== undefined) {
