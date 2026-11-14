@@ -3,8 +3,8 @@
   "change": "move-review-runtime-into-workflows",
   "scope": "task",
   "taskId": "ff71daa33e519e0f",
-  "digest": "a48283aedd3e5e11e66e5a424805c65625a634041996acccd64bf69a58a1456b",
-  "worktreeDigest": "633f700cef67d073357bd329c9de7e9afbc65acce38dd0b97beea9661bf9820d",
+  "digest": "3925b1a0bc23e1db9464f1da88eb0cabfc43bfb397d59f7c40fa91209136ac4a",
+  "worktreeDigest": "cb4c71d779f4ec76f9f481ac9469ce5d259b5827f1b27b1ee0727e2958c1589b",
   "verdict": "PASS",
   "findings": [],
   "target": {
@@ -12,5 +12,5 @@
     "model": "gpt-6-astra",
     "reasoningEffort": "xhigh"
   },
-  "time": "2026-11-14T21:52:21.467Z"
+  "time": "2026-11-14T22:14:30.139Z"
 }
