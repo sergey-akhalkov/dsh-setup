@@ -2768,8 +2768,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         const rule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id
         if (!reviewQueue.enabled) {
-          const result = await runReviewStep(request)
-          return result.run
+          try {
+            const result = await runReviewStep(request)
+            return result.run
+          } finally {
+            // A directly executed review must not leak its frozen checkout.
+            if (prepared.reviewCwd !== undefined) {
+              await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(
+                () => undefined,
+              )
+            }
+          }
         }
         const admission = await reviewScheduler.enqueue({
           workspace,
