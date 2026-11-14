@@ -404,7 +404,11 @@ function hashParts(parts) {
 /** The task-scope digest binds the frozen tree; whole scope binds the artifacts. */
 export function reviewDigest(input) {
     return input.scope === 'task'
-        ? hashParts(['task-review-snapshot-v1', input.tree ?? ''])
+        ? hashParts([
+            'task-review-snapshot-v2',
+            input.tree ?? '',
+            input.artifactDigest ?? input.specDigest,
+        ])
         : input.specDigest;
 }
 /** Write one file atomically: temp beside the target, then rename. */
@@ -543,6 +547,9 @@ function baseRecord(input, now) {
             scope: spec.scope,
             specDigest: input.prepared.specDigest,
             ...(input.prepared.tree === undefined ? {} : { tree: input.prepared.tree }),
+            ...(input.prepared.artifactDigest === undefined
+                ? {}
+                : { artifactDigest: input.prepared.artifactDigest }),
         }),
         ...(input.prepared.tree === undefined
             ? {}

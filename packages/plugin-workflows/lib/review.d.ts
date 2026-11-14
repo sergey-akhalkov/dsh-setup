@@ -140,6 +140,8 @@ export declare function reviewDigest(input: {
     readonly scope: 'whole' | 'task';
     readonly specDigest: string;
     readonly tree?: string;
+    /** The frozen change-artifact digest a task review also binds to. */
+    readonly artifactDigest?: string;
 }): string;
 /** Write one file atomically: temp beside the target, then rename. */
 export declare function writeReviewFileAtomic(file: string, bytes: string): Promise<void>;
@@ -173,6 +175,8 @@ export interface ReviewRunInput {
         readonly specDigest: string;
         /** A content tree digest for a frozen task snapshot. */
         readonly tree?: string;
+        /** The frozen change-artifact digest for a task review. */
+        readonly artifactDigest?: string;
         /** The frozen checkout to run in; absent means the live worktree. */
         readonly reviewCwd?: string;
         /** Re-check the change digest after the run and discard a changed verdict. */

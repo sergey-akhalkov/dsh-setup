@@ -421,6 +421,22 @@ describe('parseReviewVerdict', () => {
   })
 })
 
+it('binds a task digest to the frozen change-artifact digest', () => {
+  const first = reviewDigest({
+    scope: 'task',
+    specDigest: 'a'.repeat(64),
+    tree: 'tree',
+    artifactDigest: 'first',
+  })
+  const second = reviewDigest({
+    scope: 'task',
+    specDigest: 'a'.repeat(64),
+    tree: 'tree',
+    artifactDigest: 'second',
+  })
+  expect(first).not.toBe(second)
+  expect(first).toHaveLength(64)
+})
 describe('review record store', () => {
   const record: ReviewRecord = {
     definition: 'task-review',

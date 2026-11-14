@@ -544,9 +544,15 @@ export function reviewDigest(input: {
   readonly scope: 'whole' | 'task'
   readonly specDigest: string
   readonly tree?: string
+  /** The frozen change-artifact digest a task review also binds to. */
+  readonly artifactDigest?: string
 }): string {
   return input.scope === 'task'
-    ? hashParts(['task-review-snapshot-v1', input.tree ?? ''])
+    ? hashParts([
+        'task-review-snapshot-v2',
+        input.tree ?? '',
+        input.artifactDigest ?? input.specDigest,
+      ])
     : input.specDigest
 }
 
@@ -681,6 +687,8 @@ export interface ReviewRunInput {
     readonly specDigest: string
     /** A content tree digest for a frozen task snapshot. */
     readonly tree?: string
+    /** The frozen change-artifact digest for a task review. */
+    readonly artifactDigest?: string
     /** The frozen checkout to run in; absent means the live worktree. */
     readonly reviewCwd?: string
     /** Re-check the change digest after the run and discard a changed verdict. */
@@ -759,6 +767,9 @@ function baseRecord(
       scope: spec.scope,
       specDigest: input.prepared.specDigest,
       ...(input.prepared.tree === undefined ? {} : { tree: input.prepared.tree }),
+      ...(input.prepared.artifactDigest === undefined
+        ? {}
+        : { artifactDigest: input.prepared.artifactDigest }),
     }),
     ...(input.prepared.tree === undefined
       ? {}

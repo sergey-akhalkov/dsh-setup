@@ -2189,7 +2189,11 @@ export function apply(ctx, config = {}) {
                     const liveTree = spec.scope === 'task'
                         ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
                         : undefined;
-                    return { specDigest, ...(liveTree === undefined ? {} : { tree: liveTree }) };
+                    return {
+                        specDigest,
+                        artifactDigest: specDigest,
+                        ...(liveTree === undefined ? {} : { tree: liveTree }),
+                    };
                 };
                 if (!resolved.ok) {
                     // A missing reviewer target is a review failure too: it writes an
@@ -2237,6 +2241,7 @@ export function apply(ctx, config = {}) {
                         if (snapshot !== undefined) {
                             return {
                                 specDigest,
+                                artifactDigest: snapshot.specDigest,
                                 tree: snapshot.tree,
                                 reviewCwd: snapshot.worktree,
                             };
@@ -2244,6 +2249,7 @@ export function apply(ctx, config = {}) {
                         const live = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
                         return {
                             specDigest,
+                            artifactDigest: specDigest,
                             ...(live === undefined ? {} : { tree: live }),
                             liveGuard: async () => (await worktreeDigest(workspace, defaultGit).catch(() => undefined)) === live,
                         };
@@ -2282,6 +2288,9 @@ export function apply(ctx, config = {}) {
                         scope: spec.scope,
                         specDigest,
                         ...(prepared.tree === undefined ? {} : { tree: prepared.tree }),
+                        ...(prepared.artifactDigest === undefined
+                            ? {}
+                            : { artifactDigest: prepared.artifactDigest }),
                     }),
                 });
                 if (admission.kind === 'full') {
