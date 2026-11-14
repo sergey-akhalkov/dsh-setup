@@ -77,6 +77,7 @@ export async function buildConditionContext(input) {
                 verdict: record.verdict,
                 digest: record.digest,
                 current: record.digest === specDigest,
+                pass: record.verdict === 'PASS',
             };
         }
         Object.assign(tasksRecords, await readTaskRecords(input.workspace, [
@@ -119,7 +120,9 @@ export async function buildConditionContext(input) {
 export function evaluateCondition(condition, context) {
     if (condition === undefined)
         return true;
-    return Boolean(evaluateJsonLogic(condition, context));
+    const value = evaluateJsonLogic(condition, context);
+    // JSONLogic truthiness, not JavaScript's: an empty array is false.
+    return Array.isArray(value) ? value.length > 0 : Boolean(value);
 }
 /** Every condition-bearing definition's decision for one event context. */
 export function evaluateConditions(definitions, context) {

@@ -39,6 +39,7 @@ export interface ConditionContext {
             readonly verdict: string;
             readonly digest: string;
             readonly current: boolean;
+            readonly pass: boolean;
         };
         readonly tasks: Readonly<Record<string, {
             readonly verdict: string;

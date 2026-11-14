@@ -46,7 +46,12 @@ export interface ConditionContext {
     readonly lanes: readonly ConditionLaneView[]
   }
   readonly records: {
-    readonly spec?: { readonly verdict: string; readonly digest: string; readonly current: boolean }
+    readonly spec?: {
+      readonly verdict: string
+      readonly digest: string
+      readonly current: boolean
+      readonly pass: boolean
+    }
     readonly tasks: Readonly<Record<string, { readonly verdict: string; readonly digest: string }>>
   }
   readonly digests: {
@@ -164,6 +169,7 @@ export async function buildConditionContext(
         verdict: record.verdict,
         digest: record.digest,
         current: record.digest === specDigest,
+        pass: record.verdict === 'PASS',
       }
     }
     Object.assign(
@@ -212,7 +218,9 @@ export function evaluateCondition(
   context: ConditionContext,
 ): boolean {
   if (condition === undefined) return true
-  return Boolean(evaluateJsonLogic(condition, context))
+  const value = evaluateJsonLogic(condition, context)
+  // JSONLogic truthiness, not JavaScript's: an empty array is false.
+  return Array.isArray(value) ? value.length > 0 : Boolean(value)
 }
 
 /** Every condition-bearing definition's decision for one event context. */

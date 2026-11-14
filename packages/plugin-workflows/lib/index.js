@@ -449,6 +449,8 @@ export function apply(ctx, config = {}) {
     const activeSession = new Map();
     /** The latest change a session observed, for a turn-close condition context. */
     const lastChangeBySession = new Map();
+    /** The turn a session last changed a change artifact, for a turn-close condition. */
+    const lastSpecChangeTurn = new Map();
     /** Whether a session is a root agent; the legacy gates exclude children. */
     const rootSessions = new Map();
     /** One change-tree watcher per workspace, started on its first event. */
@@ -1019,6 +1021,13 @@ export function apply(ctx, config = {}) {
                 : undefined;
             if (changedName !== undefined)
                 lastChangeBySession.set(input.session, changedName);
+            // A change artifact edit marks the session's turn as spec-changing, so a
+            // turn-close condition can see it after the fs.change event is gone.
+            if (event.kind === 'fs.change' &&
+                /^openspec\/changes\/[^/]+\//u.test(event.subject) &&
+                !/\/reviews\//u.test(event.subject)) {
+                lastSpecChangeTurn.set(input.session, input.turn ?? -1);
+            }
             const taskReviewTaskIds = changedName !== undefined && /(?:^|\/)tasks\.md$/u.test(event.subject)
                 ? checkedTaskDelta(workspace, input.session, changedName, event.subject)
                 : [];
@@ -1039,7 +1048,10 @@ export function apply(ctx, config = {}) {
                     },
                     runGit: defaultGit,
                     involved: conditionChange !== undefined,
-                    changedSpec: definitionEvent.kind === 'fs.change' && /(?:^|\/)\.md$/u.test(definitionEvent.subject),
+                    changedSpec: lastSpecChangeTurn.get(input.session) === (input.turn ?? -1) ||
+                        (definitionEvent.kind === 'fs.change' &&
+                            /^openspec\/changes\/[^/]+\//u.test(definitionEvent.subject) &&
+                            !/\/reviews\//u.test(definitionEvent.subject)),
                     completed: false,
                 });
                 return evaluateConditions(conditionalDefinitions, conditionContext);

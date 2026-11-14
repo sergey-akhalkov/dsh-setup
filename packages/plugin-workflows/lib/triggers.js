@@ -301,6 +301,7 @@ export function evaluateDefinitions(definitions, event, context) {
             ...(context.enabled === undefined ? {} : { enabled: context.enabled }),
             ...(context.ready === undefined ? {} : { ready: context.ready }),
             ...(applicability === undefined ? {} : { applicability }),
+            ...(context.conditions === undefined ? {} : { conditions: context.conditions }),
             isDuplicate: context.isDuplicate,
         });
         if (!row.matched) {

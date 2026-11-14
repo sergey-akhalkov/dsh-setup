@@ -10,7 +10,7 @@ import {
 import { validateCondition } from '../src/host/condition-schema.ts'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { currentSpecDigest } from '../src/host/evidence.ts'
-import { evaluateDefinitionTrigger } from '../src/host/triggers.ts'
+import { evaluateDefinitions, evaluateDefinitionTrigger } from '../src/host/triggers.ts'
 
 const roots: string[] = []
 const TASKS = `# Tasks
@@ -140,6 +140,7 @@ describe('condition context', () => {
     expect(context.change.lanes[1]?.title).toContain('Serial tail')
     expect(context.records.spec?.verdict).toBe('PASS')
     expect(context.records.spec?.current).toBe(true)
+    expect(context.records.spec?.pass).toBe(true)
     expect(context.records.tasks[taskId]).toEqual({ verdict: 'PASS', digest: 'b'.repeat(64) })
     expect(context.digests.spec).toBe(digest)
     expect(context.session).toEqual({ involved: true, changedSpec: true, completed: false })
@@ -194,5 +195,119 @@ describe('trigger condition evaluation', () => {
       isDuplicate: () => false,
     })
     expect(missingRow).toMatchObject({ matched: false, reason: 'not-ready' })
+  })
+})
+
+describe('condition schema completeness', () => {
+  it('refuses an unknown nested field and a forbidden path in every field reference', () => {
+    for (const condition of [
+      { '==': [{ var: 'session.noSuchField' }, true] },
+      { '==': [{ var: 'records.spec.unknown' }, true] },
+      { missing: ['workspace.path'] },
+      { missing: ['../secret'] },
+      { missing_some: [1, ['../secret']] },
+    ]) {
+      expect(() => validateCondition(condition)).toThrow(
+        /unknown context field|must not name a path/u,
+      )
+    }
+  })
+
+  it('accepts every documented field including records.spec.pass', () => {
+    expect(() =>
+      validateCondition({
+        and: [
+          { '==': [{ var: 'records.spec.pass' }, true] },
+          { '==': [{ var: 'records.tasks.0123456789abcdef.verdict' }, 'PASS'] },
+          { '==': [{ var: 'change.lanes.title' }, 'x'] },
+          { '==': [{ var: 'digests.worktree' }, 'a'] },
+          { missing: ['records.spec.digest'] },
+        ],
+      }),
+    ).not.toThrow()
+  })
+})
+
+describe('condition truthiness and session fields', () => {
+  it('treats an empty array and an empty missing result as false', async () => {
+    const root = await workspace()
+    const context = await buildConditionContext({
+      workspace: root,
+      change: 'auth',
+      event: { kind: 'turn.stopping' },
+    })
+    expect(context.change.tasks.unchecked).toHaveLength(2)
+    expect(evaluateCondition({ var: 'change.tasks.unchecked' }, context)).toBe(true)
+    expect(evaluateCondition({ missing: ['event.kind'] }, context)).toBe(false)
+    expect(evaluateCondition({ and: [{ missing: ['event.kind'] }, true] }, context)).toBe(false)
+    // A missing required root name yields the documented empty-array false.
+    expect(evaluateCondition({ var: 'records.tasks' }, context)).toBe(true)
+  })
+
+  it('exposes records.spec.pass and the worktree digest', async () => {
+    const root = await workspace()
+    const changeDir = join(root, 'openspec', 'changes', 'auth')
+    const digest = (await currentSpecDigest(root, 'auth')) as string
+    await mkdir(join(root, '.dsh', 'workflows', 'records', 'spec-review', 'auth'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(root, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json'),
+      JSON.stringify({ verdict: 'PASS', digest }),
+      'utf8',
+    )
+    const runGit = async (args: readonly string[]): Promise<Buffer> => {
+      if (args[0] === 'rev-parse') return Buffer.from(root)
+      if (args[0] === 'status') return Buffer.from('?? note.txt\0')
+      if (args[0] === 'diff') return Buffer.from('')
+      throw new Error(`unexpected git ${args[0]}`)
+    }
+    await writeFile(join(root, 'note.txt'), 'x', 'utf8')
+    const context = await buildConditionContext({
+      workspace: root,
+      change: 'auth',
+      event: { kind: 'turn.stopping' },
+      runGit,
+    })
+    expect(context.records.spec?.pass).toBe(true)
+    expect(context.digests.worktree).toHaveLength(64)
+    expect(
+      evaluateCondition(
+        { and: [{ '==': [{ var: 'records.spec.pass' }, true] }, { var: 'digests.worktree' }] },
+        context,
+      ),
+    ).toBe(true)
+    void changeDir
+  })
+})
+
+describe('condition routing', () => {
+  it('forwards a true condition to a run and suppresses a false one', () => {
+    const made = definition({ '==': [{ var: 'session.completed' }, true] })
+    const event = {
+      kind: 'turn.stopping' as const,
+      subject: 'turn',
+      session: 'session-1',
+      turn: 1,
+    }
+    const starts: string[] = []
+    const rows = evaluateDefinitions([made], event, {
+      conditions: new Map([[made.id, true]]),
+      isDuplicate: () => false,
+      startRun: (entry) => {
+        starts.push(entry.id)
+        return { ok: true, runId: 'run-1' }
+      },
+    })
+    expect(rows[0]?.reason).toBe('run-created')
+    expect(starts).toEqual([made.id])
+    const suppressed = evaluateDefinitions([made], event, {
+      conditions: new Map([[made.id, false]]),
+      isDuplicate: () => false,
+      startRun: () => {
+        throw new Error('no run may start')
+      },
+    })
+    expect(suppressed[0]?.reason).toBe('condition-false')
   })
 })
