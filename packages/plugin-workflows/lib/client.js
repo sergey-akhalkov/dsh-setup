@@ -215,6 +215,50 @@ window.__ModuleLoader__.load({
     var import_dsh_client_ui_primitives7 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react6 = require("react");
 
+    // packages/plugin-workflows/src/client/review-contract.ts
+    var PROMPT_KEYS = {
+      "review-spec": "review.prompt.reviewSpec",
+      "review-task": "review.prompt.reviewTask",
+      "review-integration": "review.prompt.reviewIntegration"
+    };
+    var DASH = "\u2014";
+    function text(value2) {
+      return typeof value2 === "string" && value2.trim() !== "" ? value2 : void 0;
+    }
+    function record(value2) {
+      return typeof value2 === "object" && value2 !== null ? value2 : void 0;
+    }
+    function recordPathOf(definitionId, scope, phase, evidence) {
+      const declared = record(evidence);
+      const path = declared?.kind === "record" ? text(declared.path) : void 0;
+      if (path !== void 0) return path;
+      return scope === "task" ? `.dsh/workflows/records/${definitionId}/{name}/tasks/{taskId}.json` : `.dsh/workflows/records/${definitionId}/{name}/${phase ?? "{phase}"}.json`;
+    }
+    function reviewPromptKey(instruction) {
+      if (!Object.hasOwn(PROMPT_KEYS, instruction)) return void 0;
+      return PROMPT_KEYS[instruction];
+    }
+    function promptSummary(contract, t) {
+      return contract.promptKey === void 0 ? contract.prompt ?? DASH : t(contract.promptKey);
+    }
+    function reviewContract(definitionId, step) {
+      if (step.executor !== "review") return void 0;
+      const config = record(step.review) ?? {};
+      const instruction = text(config.instruction) ?? DASH;
+      const scope = config.scope === "task" ? "task" : "whole";
+      const phase = text(config.phase);
+      const prompt = text(step.prompt);
+      const promptKey = reviewPromptKey(instruction);
+      return {
+        instruction,
+        ...promptKey === void 0 ? {} : { promptKey },
+        ...prompt === void 0 ? {} : { prompt },
+        scope,
+        ...phase === void 0 ? {} : { phase },
+        recordPath: recordPathOf(definitionId, scope, phase, step.evidence)
+      };
+    }
+
     // packages/plugin-workflows/src/client/a11y.ts
     var NARROW_WIDTH = 720;
     var WIDE_WIDTH = 980;
@@ -260,13 +304,15 @@ window.__ModuleLoader__.load({
     function fallbackNotice(canvasFailed) {
       return canvasFailed ? "The canvas could not render; the list editor is showing and the definition stays editable." : void 0;
     }
-    function summaryText(definition, selectedTitle, overlay) {
+    function summaryText(definition, selectedTitle, overlay, selectedStep) {
       const steps = definition.steps.length;
       const trigger = String(definition.trigger.kind ?? "unknown");
       const run = overlay?.run;
       const runText = run === void 0 ? "no run selected" : `run ${run.status}${overlay?.versionsDiffer === true ? " on another version" : ""}`;
       const selected2 = selectedTitle === void 0 ? "" : ` Selected: ${selectedTitle}.`;
-      return `Trigger ${trigger}. ${String(steps)} step${steps === 1 ? "" : "s"}. ${runText}.${selected2}`;
+      const contract = selectedStep === void 0 ? void 0 : reviewContract(definition.id, selectedStep);
+      const review = contract === void 0 ? "" : ` Review contract: ${contract.instruction} (${contract.scope} scope${contract.phase === void 0 ? "" : `, phase ${contract.phase}`}); record ${contract.recordPath}.`;
+      return `Trigger ${trigger}. ${String(steps)} step${steps === 1 ? "" : "s"}. ${runText}.${selected2}${review}`;
     }
     function isConnectShortcut(event) {
       if (event.key !== "c" && event.key !== "C") return false;
@@ -10874,13 +10920,13 @@ window.__ModuleLoader__.load({
         body: typeof body === "object" && body !== null ? body : {}
       };
     }
-    function text(body, key, fallback) {
+    function text2(body, key, fallback) {
       const value2 = body[key];
       return typeof value2 === "string" && value2 !== "" ? value2 : fallback;
     }
     function saveResult(result) {
       if (result.status === 200) {
-        return { ok: true, revision: text(result.body, "revision", "") };
+        return { ok: true, revision: text2(result.body, "revision", "") };
       }
       if (result.status === 409) {
         const revision = result.body.revision;
@@ -10896,18 +10942,18 @@ window.__ModuleLoader__.load({
       if (result.status === 400) {
         const errors = Array.isArray(result.body.errors) ? result.body.errors.filter(
           (entry) => typeof entry === "object" && entry !== null && typeof entry.message === "string"
-        ) : [{ path: "", message: text(result.body, "error", "the host refused the write") }];
+        ) : [{ path: "", message: text2(result.body, "error", "the host refused the write") }];
         return { ok: false, kind: "invalid", status: result.status, errors };
       }
       return {
         ok: false,
         kind: "error",
         status: result.status,
-        error: text(result.body, "error", `the request failed (${String(result.status)})`)
+        error: text2(result.body, "error", `the request failed (${String(result.status)})`)
       };
     }
     function failed(result) {
-      return new Error(text(result.body, "error", `the request failed (${String(result.status)})`));
+      return new Error(text2(result.body, "error", `the request failed (${String(result.status)})`));
     }
     function fetchEditorApi(session) {
       return {
@@ -11190,6 +11236,8 @@ window.__ModuleLoader__.load({
             const values = listRowModel(props.state, step);
             const graphId = graphIdOfStep(props.state, step.id);
             const selected2 = props.selected === graphId;
+            const executor = values.executor ?? "main";
+            const executors = EXECUTORS.includes(executor) ? EXECUTORS : [...EXECUTORS, executor];
             return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
               "tr",
               {
@@ -11232,7 +11280,7 @@ window.__ModuleLoader__.load({
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                     "select",
                     {
-                      value: values.executor ?? "main",
+                      value: executor,
                       "aria-label": `Executor of ${step.id}`,
                       onChange: (event) => patchListField(
                         graphId,
@@ -11241,7 +11289,7 @@ window.__ModuleLoader__.load({
                         event.currentTarget.value,
                         props.onPatch
                       ),
-                      children: EXECUTORS.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: executor, children: executor }, executor))
+                      children: executors.map((name) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: name, children: name }, name))
                     }
                   ) }),
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
@@ -11422,10 +11470,259 @@ window.__ModuleLoader__.load({
     // packages/plugin-workflows/src/client/properties.tsx
     var import_dsh_client_ui_primitives5 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react5 = require("react");
+
+    // packages/plugin-workflows/src/client/locale.ts
+    var EN = {
+      "view.label": "Workflows",
+      "state.loading": "Reading the workflow journal\u2026",
+      "state.refreshing": "Refreshing\u2026",
+      "state.refresh": "Refresh",
+      "state.error": "The Workflows view could not be loaded.",
+      "state.retry": "Retry",
+      "state.noSession": "Open a session to see its workflow process.",
+      "status.details": "Listener details",
+      "health.listener-down": "The recorder listener is down",
+      "health.journal-readonly": "The journal is read-only",
+      "health.waiting": "Listener healthy, no matching event yet",
+      "health.healthy": "Listener healthy and matching events observed",
+      "health.listeners": "listeners",
+      "health.triggers": "triggers",
+      "health.lastEvent": "last event",
+      "health.lastCheck": "last check",
+      "health.lastError": "last error",
+      "segment.label": "Workflows view",
+      "segment.workflows": "Workflows",
+      "segment.runs": "Runs",
+      "runs.title": "Runs",
+      "runs.empty": "No run is attributable to this session yet. A run appears here when a workflow starts from this session.",
+      "runs.trigger": "trigger",
+      "runs.started": "Started",
+      "runs.ended": "Ended",
+      "runs.duration": "Duration",
+      "runs.status": "Status",
+      "runs.back": "Back",
+      "runs.missing": "This run is no longer recorded.",
+      "runs.missingBody": "It was removed or is not attributable to this session.",
+      "runs.record": "Record",
+      "runs.definition": "Definition",
+      "runs.steps": "Steps",
+      "runs.step": "Step",
+      "runs.state": "State",
+      "runs.time": "Time",
+      "runs.evidence": "Evidence",
+      "runs.issue": "Issue",
+      "runs.violations": "Violations",
+      "runs.error": "Error",
+      "runs.status.running": "running",
+      "runs.status.done": "done",
+      "runs.status.failed": "failed",
+      "runs.status.unknown": "unknown",
+      "runs.source.checkpoint": "checkpoint",
+      "runs.source.delegation": "delegation",
+      "runs.source.review": "review",
+      "runs.source.workflow": "workflow",
+      "events.empty": "No process event is recorded in this session yet.",
+      "events.truncated": "payload truncated",
+      "events.evaluations": "Trigger evaluations",
+      "events.openRun": "Open run",
+      "overview.unknownKind": "unknown trigger",
+      "overview.empty": "No workflow definition is installed in this workspace yet.",
+      "overview.noWorkflows": "No workflow is bound to this trigger.",
+      "overview.unbound": "unbound triggers",
+      "overview.firings": "firings",
+      "overview.runs": "runs",
+      "overview.failed": "failed",
+      "overview.running": "running",
+      "overview.blocked": "blocked",
+      "overview.cancelled": "cancelled",
+      "overview.interrupted": "interrupted",
+      "overview.statsUnavailable": "run statistics are unavailable",
+      "overview.latestRun": "last run",
+      "overview.noRuns": "no run yet",
+      "overview.iterations": "iterations",
+      "overview.cap": "cap",
+      "overview.list": "list",
+      "overview.latestUnavailable": "some latest runs could not be loaded",
+      "workflow.back": "Back to workflows",
+      "workflow.noDescription": "No description is recorded for this definition.",
+      "workflow.version": "Version",
+      "workflow.gateOwnership": "Gate ownership",
+      "workflow.trigger": "Trigger",
+      "workflow.firings": "Firings",
+      "workflow.countsUnavailable": "Firing counts are unavailable.",
+      "workflow.architecture": "Architecture",
+      "workflow.overlayRun": "Run overlay",
+      "workflow.overlayLatest": "Latest run",
+      "workflow.overlayDiffers": "The selected run was recorded on another definition version.",
+      "workflow.canvasFallback": "The canvas could not render; the ordered step table is showing.",
+      "workflow.step": "Step",
+      "workflow.executor": "Executor",
+      "workflow.next": "next",
+      "workflow.then": "then",
+      "workflow.else": "else",
+      "workflow.loop": "loop",
+      "workflow.noSteps": "No step is recorded for this definition.",
+      "workflow.runs": "Runs",
+      "workflow.noRuns": "No run of this workflow is recorded in this session.",
+      "workflow.history": "Evaluation history",
+      "workflow.noHistory": "No trigger evaluation of this workflow is recorded in this session.",
+      "definitions.heading": "Definitions",
+      "definitions.empty": "No definition is installed yet.",
+      "definitions.id": "Definition",
+      "definitions.trigger": "Trigger",
+      "definitions.mode": "Mode",
+      "definitions.risk": "Risk",
+      "definitions.steps": "Steps",
+      "definitions.source": "Source",
+      "receipts.heading": "Receipts",
+      "receipts.empty": "No authenticated receipt exists yet.",
+      "triggers.title": "Triggers",
+      "triggers.empty": "No trigger catalog is loaded.",
+      "triggers.id": "Trigger",
+      "triggers.event": "Event",
+      "triggers.filter": "Filter",
+      "triggers.mode": "Mode",
+      "triggers.last": "Last evaluation",
+      "triggers.notEvaluated": "not evaluated yet",
+      "reason.would-fire": "would fire",
+      "reason.event-mismatch": "event mismatch",
+      "reason.filter-mismatch": "filter mismatch",
+      "reason.dedupe": "duplicate",
+      "reason.disabled": "disabled",
+      "reason.not-ready": "not ready",
+      "reason.error": "error",
+      "reason.run-created": "run created",
+      "reason.run-suppressed": "run suppressed",
+      "reason.not-applicable": "not applicable",
+      "paging.more": "Load more",
+      "time.now": "now",
+      "time.minutes": "min",
+      "time.hours": "h",
+      "time.days": "d",
+      "time.months": "mo",
+      "time.years": "y",
+      "time.unknown": "unknown time",
+      "design.title": "Design",
+      "design.pageTitle": "Workflow design",
+      "design.guideTitle": "Workflow design",
+      "design.guideDescription": "Edit definitions, inspect triggers, and read the receipts",
+      "design.close": "Close",
+      "design.new": "New definition",
+      "design.open": "Open definition",
+      "design.template": "Template\u2026",
+      "design.copyTemplate": "Create from template",
+      "design.draft": "Draft\u2026",
+      "design.openDraft": "Open draft",
+      "design.save": "Save",
+      "design.reload": "Reload",
+      "design.delete": "Delete",
+      "design.confirmDelete": "Confirm delete",
+      "design.listMode": "List",
+      "design.canvasMode": "Canvas",
+      "design.more": "More",
+      "design.mode": "Editor surface",
+      "design.properties": "Properties",
+      "design.description": "Description",
+      "design.noDescription": "No description",
+      "design.railWorkflows": "Workflows",
+      "design.railBlocks": "Blocks",
+      "design.blocksTriggers": "Trigger kinds",
+      "design.blocksSteps": "Step executors",
+      "design.diagnostics": "Diagnostics",
+      "design.inspector": "Inspector",
+      "design.closeInspector": "Close inspector",
+      "design.resizeRail": "Resize workflow rail",
+      "design.resizeInspector": "Resize inspector",
+      "design.details": "Details",
+      "design.listView": "List view",
+      "design.canvasView": "Canvas view",
+      "design.cancel": "Cancel",
+      "design.deletePrompt": "Delete workflow",
+      "design.brick.agent": "Agent",
+      "design.brick.agent.hint": "The main agent does this step.",
+      "design.brick.tool": "Tool call",
+      "design.brick.tool.hint": "One allowlisted tool call.",
+      "design.brick.subagent": "Subagent",
+      "design.brick.subagent.hint": "Delegate this step to a child agent.",
+      "design.brick.human": "Ask user",
+      "design.brick.human.hint": "Wait for the user to answer.",
+      "design.brick.branch": "Branch",
+      "design.brick.branch.hint": "Choose one of two next steps.",
+      "design.brick.loop": "Loop",
+      "design.brick.loop.hint": "Repeat a step up to a cap.",
+      "design.brick.trigger.turnStopping": "Fires when the turn is about to close.",
+      "design.brick.trigger.toolPreExecute": "Fires before a tool call runs.",
+      "design.brick.trigger.toolResult": "Fires after a tool call returns.",
+      "design.brick.trigger.fsChange": "Fires after a file change.",
+      "design.brick.trigger.subagentEnd": "Fires when a subagent finishes.",
+      "design.brick.trigger.reviewRecord": "Fires when a review record is written.",
+      "design.run": "Run overlay",
+      "design.noRun": "No run",
+      "design.dirty": "unsaved changes",
+      "design.clean": "saved",
+      "design.saveCopy": "Save as copy",
+      "design.useId": "Use id",
+      "design.conflict": "The resource changed on disk.",
+      "design.closeUnsaved": "Discard the unsaved changes to this definition?",
+      "design.intro": "Build a local definition on the canvas or in the list. Shipped definitions are templates; editing one creates a local copy.",
+      "review.contract": "Review contract",
+      "review.contracts": "Review contracts",
+      "review.hint": "Read-only",
+      "review.instruction": "Instruction",
+      "review.prompt": "Prompt summary",
+      "review.scope": "Scope",
+      "review.phase": "Phase",
+      "review.digestScope": "Digest scope",
+      "review.verdictSchema": "Verdict schema",
+      "review.reuse": "Reuse policy",
+      "review.record": "Record path",
+      "review.digest.whole": "the live change-artifact digest",
+      "review.digest.task": "a frozen worktree snapshot taken when the review starts",
+      "review.verdictSchema.text": "Exactly one fenced JSON verdict: verdict PASS | FINDINGS | ERROR, the prepared digest, and findings[] with severity P0 | P1 | P2 and class.",
+      "review.reuse.text": "A matching current PASS or ERROR record settles the step without a new run; FINDINGS keeps it open.",
+      "review.prompt.reviewSpec": "Reviews the whole change (proposal, design, delta specs, and tasks) against the change requirements.",
+      "review.prompt.reviewTask": "Reviews one checked task, its diff, and its verification against the task text and the change artifacts.",
+      "review.prompt.reviewIntegration": "Reviews the finished change as a whole (every task, the spec delta, the docs, and the verification evidence).",
+      "gates.heading": "Engine-owned gates",
+      "gates.intro": "Closed obligations of the workflows listener. They are not definitions: they never appear in the definition rail, canvas, or step table.",
+      "gates.readOnly": "Read-only",
+      "gates.trigger": "Trigger",
+      "gates.evidence": "Evidence",
+      "gates.record": "Record or evidence",
+      "gates.steer": "Steer payload",
+      "gates.taskProgress.title": "Task progress",
+      "gates.taskProgress.trigger": "A code-changing turn leaves its task unchecked and has no current progress note.",
+      "gates.taskProgress.evidence": "A newly checked and reviewed task, or a current note whose worktree digest matches the current worktree.",
+      "gates.taskProgress.record": ".dsh/workflows/notes/{change}.json",
+      "gates.taskProgress.steer": 'workflows { action: "note", change, task, status, reason }',
+      "gates.laneAssignment.title": "Lane assignment",
+      "gates.laneAssignment.trigger": "An implementation turn leaves an unassigned non-serial lane with owned paths and an unchecked task in a plan with at least two non-serial lanes.",
+      "gates.laneAssignment.evidence": "One tagged worker start (lane-tag: <change>#<n>) per reported lane, or one serial note per reported lane.",
+      "gates.laneAssignment.record": ".dsh/workflows/events/<session>.jsonl for the tagged start, and .dsh/workflows/notes/{change}.json for a serial note",
+      "gates.laneAssignment.steer": 'One subagent call per reported lane whose prompt carries lane-tag: <change>#<n>; or workflows { action: "note", ..., reason } with a serial reason.',
+      "gates.goalComplete.title": "Goal completion",
+      "gates.goalComplete.trigger": "The session tries to complete its goal while a checked task has no current portable PASS.",
+      "gates.goalComplete.evidence": "Every checked task has a current portable PASS record.",
+      "gates.goalComplete.record": "openspec/changes/{change}/reviews/{taskId}.json",
+      "gates.goalComplete.steer": "The completion is refused; finish the review and the task, or record the remaining work as a progress note.",
+      "gates.archive.title": "Archive",
+      "gates.archive.trigger": "An archive is attempted for a change without the full required evidence.",
+      "gates.archive.evidence": "An authenticated intake run or receipt, a current whole-spec PASS, and a current PASS for every checked task.",
+      "gates.archive.record": ".dsh/workflows/receipts/{change}.json and openspec/changes/{change}/reviews/{taskId}.json",
+      "gates.archive.steer": "openspec archive <change> is refused with the missing evidence; the refusal names the intake, review, or task to finish."
+    };
+    var fallbackTranslate = (key) => EN[key] ?? key;
+    function reasonLabel(reason, t) {
+      const key = `reason.${reason}`;
+      const label = t(key);
+      return label === key ? reason : label;
+    }
+
+    // packages/plugin-workflows/src/client/properties.tsx
     var import_jsx_runtime6 = require("react/jsx-runtime");
-    function parseJsonField(text2) {
+    function parseJsonField(text3) {
       try {
-        return { ok: true, value: JSON.parse(text2) };
+        return { ok: true, value: JSON.parse(text3) };
       } catch (error) {
         return { ok: false, message: error instanceof Error ? error.message : String(error) };
       }
@@ -11450,13 +11747,13 @@ window.__ModuleLoader__.load({
             "aria-label": props.ariaLabel,
             rows: props.rows ?? 2,
             onChange: (event) => {
-              const text2 = event.currentTarget.value;
-              setDraft(text2);
-              if (text2.trim() === "" && props.allowEmpty === true) {
+              const text3 = event.currentTarget.value;
+              setDraft(text3);
+              if (text3.trim() === "" && props.allowEmpty === true) {
                 props.commit(void 0);
                 return;
               }
-              const parsed = parseJsonField(text2);
+              const parsed = parseJsonField(text3);
               if (parsed.ok) props.commit(parsed.value);
             }
           }
@@ -11465,6 +11762,9 @@ window.__ModuleLoader__.load({
     }
     var EXECUTORS2 = ["main", "subagent", "tool", "branch", "loop", "human"];
     var EVIDENCE_KINDS2 = ["file", "record", "tool", "check", "human", "all", "declaration"];
+    function executorOptions(current) {
+      return EXECUTORS2.includes(current) ? EXECUTORS2 : [...EXECUTORS2, current];
+    }
     function Card(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
         "section",
@@ -11571,7 +11871,8 @@ window.__ModuleLoader__.load({
                 });
               }
             }
-          ) })
+          ) }),
+          typeof settings.gate === "string" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Gate identity", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-mono", "data-gate-identity": settings.gate, children: settings.gate }) }) : null
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "dsh-wf-check-list", children: [
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
@@ -11645,10 +11946,24 @@ window.__ModuleLoader__.load({
         ] })
       ] });
     }
+    function ReviewContractCard(props) {
+      const { contract, t } = props;
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "review-contract", title: t("review.contract"), hint: t("review.hint"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.instruction"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-mono", children: contract.instruction }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.prompt"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-hint", children: promptSummary(contract, t) }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.scope"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: contract.scope }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.phase"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: contract.phase ?? "\u2014" }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.digestScope"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: contract.scope === "task" ? t("review.digest.task") : t("review.digest.whole") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.verdictSchema"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-hint", children: t("review.verdictSchema.text") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.reuse"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-hint", children: t("review.reuse.text") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.record"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-mono", children: contract.recordPath }) })
+      ] });
+    }
     function stepFields(props, node, step) {
       const branch = step.branch;
       const loop = step.loop;
       const regularConnections = branch === void 0 && loop === void 0;
+      const contract = reviewContract(props.state.document.definition.id, step);
       return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "step", title: "Step", hint: "What it does", children: [
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Title", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
@@ -11665,7 +11980,7 @@ window.__ModuleLoader__.load({
               value: step.executor,
               "aria-label": "Executor",
               onChange: (event) => props.onPatch(node.id, { executor: event.currentTarget.value }),
-              children: EXECUTORS2.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: executor, children: executor }, executor))
+              children: executorOptions(step.executor).map((executor) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: executor, children: executor }, executor))
             }
           ) }),
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Prompt", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
@@ -11691,6 +12006,7 @@ window.__ModuleLoader__.load({
             `id:${step.id}`
           ) })
         ] }),
+        contract === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(ReviewContractCard, { contract, t: props.t ?? fallbackTranslate }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "behavior", title: "Behavior", hint: "Ownership and flags", children: [
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Ownership", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
             "select",
@@ -12845,6 +13161,7 @@ window.__ModuleLoader__.load({
           {
             state,
             ...selected2 === void 0 ? {} : { selected: selected2 },
+            t,
             onDefinitionPatch: (patch) => apply2(patchDefinition(state, patch)),
             onPatch: (stepId, patch) => apply2(patchStep(state, stepId, patch)),
             onConnect: (source, target, kind) => apply2(connectSteps(state, source, target, kind)),
@@ -12859,7 +13176,12 @@ window.__ModuleLoader__.load({
       const editorBody = () => {
         if (editor === void 0) return emptyCanvas();
         return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_jsx_runtime8.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-sr-only", "aria-live": "polite", children: summaryText(editor.document.definition, selectedNode?.title, overlay) }),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-sr-only", "aria-live": "polite", children: summaryText(
+            editor.document.definition,
+            selectedNode?.title,
+            overlay,
+            selectedNode?.step
+          ) }),
           fallbackNotice(canvasFailed) === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", role: "status", children: fallbackNotice(canvasFailed) }),
           overlay.notices.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", role: "status", children: overlay.notices.join(" ") }),
           overlay.orphans.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("p", { className: "dsh-wf-muted", "data-orphans": overlay.orphans.length, children: [
@@ -13147,6 +13469,7 @@ window.__ModuleLoader__.load({
                       {
                         state: editor,
                         ...selected2 === void 0 ? {} : { selected: selected2 },
+                        t,
                         onDefinitionPatch: (patch) => apply2(patchDefinition(editor, patch)),
                         onPatch: (stepId, patch) => apply2(patchStep(editor, stepId, patch)),
                         onConnect: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
@@ -13222,209 +13545,6 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/panel.tsx
     var import_dsh_client_ui_primitives8 = require("@deepseek-ai/dsh-client-ui-primitives");
-
-    // packages/plugin-workflows/src/client/locale.ts
-    var EN = {
-      "view.label": "Workflows",
-      "state.loading": "Reading the workflow journal\u2026",
-      "state.refreshing": "Refreshing\u2026",
-      "state.refresh": "Refresh",
-      "state.error": "The Workflows view could not be loaded.",
-      "state.retry": "Retry",
-      "state.noSession": "Open a session to see its workflow process.",
-      "status.details": "Listener details",
-      "health.listener-down": "The recorder listener is down",
-      "health.journal-readonly": "The journal is read-only",
-      "health.waiting": "Listener healthy, no matching event yet",
-      "health.healthy": "Listener healthy and matching events observed",
-      "health.listeners": "listeners",
-      "health.triggers": "triggers",
-      "health.lastEvent": "last event",
-      "health.lastCheck": "last check",
-      "health.lastError": "last error",
-      "segment.label": "Workflows view",
-      "segment.workflows": "Workflows",
-      "segment.runs": "Runs",
-      "runs.title": "Runs",
-      "runs.empty": "No run is attributable to this session yet. A run appears here when a workflow starts from this session.",
-      "runs.trigger": "trigger",
-      "runs.started": "Started",
-      "runs.ended": "Ended",
-      "runs.duration": "Duration",
-      "runs.status": "Status",
-      "runs.back": "Back",
-      "runs.missing": "This run is no longer recorded.",
-      "runs.missingBody": "It was removed or is not attributable to this session.",
-      "runs.record": "Record",
-      "runs.definition": "Definition",
-      "runs.steps": "Steps",
-      "runs.step": "Step",
-      "runs.state": "State",
-      "runs.time": "Time",
-      "runs.evidence": "Evidence",
-      "runs.issue": "Issue",
-      "runs.violations": "Violations",
-      "runs.error": "Error",
-      "runs.status.running": "running",
-      "runs.status.done": "done",
-      "runs.status.failed": "failed",
-      "runs.status.unknown": "unknown",
-      "runs.source.checkpoint": "checkpoint",
-      "runs.source.delegation": "delegation",
-      "runs.source.review": "review",
-      "runs.source.workflow": "workflow",
-      "events.empty": "No process event is recorded in this session yet.",
-      "events.truncated": "payload truncated",
-      "events.evaluations": "Trigger evaluations",
-      "events.openRun": "Open run",
-      "overview.unknownKind": "unknown trigger",
-      "overview.empty": "No workflow definition is installed in this workspace yet.",
-      "overview.noWorkflows": "No workflow is bound to this trigger.",
-      "overview.unbound": "unbound triggers",
-      "overview.firings": "firings",
-      "overview.runs": "runs",
-      "overview.failed": "failed",
-      "overview.running": "running",
-      "overview.blocked": "blocked",
-      "overview.cancelled": "cancelled",
-      "overview.interrupted": "interrupted",
-      "overview.statsUnavailable": "run statistics are unavailable",
-      "overview.latestRun": "last run",
-      "overview.noRuns": "no run yet",
-      "overview.iterations": "iterations",
-      "overview.cap": "cap",
-      "overview.list": "list",
-      "overview.latestUnavailable": "some latest runs could not be loaded",
-      "workflow.back": "Back to workflows",
-      "workflow.noDescription": "No description is recorded for this definition.",
-      "workflow.version": "Version",
-      "workflow.gateOwnership": "Gate ownership",
-      "workflow.trigger": "Trigger",
-      "workflow.firings": "Firings",
-      "workflow.countsUnavailable": "Firing counts are unavailable.",
-      "workflow.architecture": "Architecture",
-      "workflow.overlayRun": "Run overlay",
-      "workflow.overlayLatest": "Latest run",
-      "workflow.overlayDiffers": "The selected run was recorded on another definition version.",
-      "workflow.canvasFallback": "The canvas could not render; the ordered step table is showing.",
-      "workflow.step": "Step",
-      "workflow.executor": "Executor",
-      "workflow.next": "next",
-      "workflow.then": "then",
-      "workflow.else": "else",
-      "workflow.loop": "loop",
-      "workflow.noSteps": "No step is recorded for this definition.",
-      "workflow.runs": "Runs",
-      "workflow.noRuns": "No run of this workflow is recorded in this session.",
-      "workflow.history": "Evaluation history",
-      "workflow.noHistory": "No trigger evaluation of this workflow is recorded in this session.",
-      "definitions.heading": "Definitions",
-      "definitions.empty": "No definition is installed yet.",
-      "definitions.id": "Definition",
-      "definitions.trigger": "Trigger",
-      "definitions.mode": "Mode",
-      "definitions.risk": "Risk",
-      "definitions.steps": "Steps",
-      "definitions.source": "Source",
-      "receipts.heading": "Receipts",
-      "receipts.empty": "No authenticated receipt exists yet.",
-      "triggers.title": "Triggers",
-      "triggers.empty": "No trigger catalog is loaded.",
-      "triggers.id": "Trigger",
-      "triggers.event": "Event",
-      "triggers.filter": "Filter",
-      "triggers.mode": "Mode",
-      "triggers.last": "Last evaluation",
-      "triggers.notEvaluated": "not evaluated yet",
-      "reason.would-fire": "would fire",
-      "reason.event-mismatch": "event mismatch",
-      "reason.filter-mismatch": "filter mismatch",
-      "reason.dedupe": "duplicate",
-      "reason.disabled": "disabled",
-      "reason.not-ready": "not ready",
-      "reason.error": "error",
-      "reason.run-created": "run created",
-      "reason.run-suppressed": "run suppressed",
-      "reason.not-applicable": "not applicable",
-      "paging.more": "Load more",
-      "time.now": "now",
-      "time.minutes": "min",
-      "time.hours": "h",
-      "time.days": "d",
-      "time.months": "mo",
-      "time.years": "y",
-      "time.unknown": "unknown time",
-      "design.title": "Design",
-      "design.pageTitle": "Workflow design",
-      "design.guideTitle": "Workflow design",
-      "design.guideDescription": "Edit definitions, inspect triggers, and read the receipts",
-      "design.close": "Close",
-      "design.new": "New definition",
-      "design.open": "Open definition",
-      "design.template": "Template\u2026",
-      "design.copyTemplate": "Create from template",
-      "design.draft": "Draft\u2026",
-      "design.openDraft": "Open draft",
-      "design.save": "Save",
-      "design.reload": "Reload",
-      "design.delete": "Delete",
-      "design.confirmDelete": "Confirm delete",
-      "design.listMode": "List",
-      "design.canvasMode": "Canvas",
-      "design.more": "More",
-      "design.mode": "Editor surface",
-      "design.properties": "Properties",
-      "design.description": "Description",
-      "design.noDescription": "No description",
-      "design.railWorkflows": "Workflows",
-      "design.railBlocks": "Blocks",
-      "design.blocksTriggers": "Trigger kinds",
-      "design.blocksSteps": "Step executors",
-      "design.diagnostics": "Diagnostics",
-      "design.inspector": "Inspector",
-      "design.closeInspector": "Close inspector",
-      "design.resizeRail": "Resize workflow rail",
-      "design.resizeInspector": "Resize inspector",
-      "design.details": "Details",
-      "design.listView": "List view",
-      "design.canvasView": "Canvas view",
-      "design.cancel": "Cancel",
-      "design.deletePrompt": "Delete workflow",
-      "design.brick.agent": "Agent",
-      "design.brick.agent.hint": "The main agent does this step.",
-      "design.brick.tool": "Tool call",
-      "design.brick.tool.hint": "One allowlisted tool call.",
-      "design.brick.subagent": "Subagent",
-      "design.brick.subagent.hint": "Delegate this step to a child agent.",
-      "design.brick.human": "Ask user",
-      "design.brick.human.hint": "Wait for the user to answer.",
-      "design.brick.branch": "Branch",
-      "design.brick.branch.hint": "Choose one of two next steps.",
-      "design.brick.loop": "Loop",
-      "design.brick.loop.hint": "Repeat a step up to a cap.",
-      "design.brick.trigger.turnStopping": "Fires when the turn is about to close.",
-      "design.brick.trigger.toolPreExecute": "Fires before a tool call runs.",
-      "design.brick.trigger.toolResult": "Fires after a tool call returns.",
-      "design.brick.trigger.fsChange": "Fires after a file change.",
-      "design.brick.trigger.subagentEnd": "Fires when a subagent finishes.",
-      "design.brick.trigger.reviewRecord": "Fires when a review record is written.",
-      "design.run": "Run overlay",
-      "design.noRun": "No run",
-      "design.dirty": "unsaved changes",
-      "design.clean": "saved",
-      "design.saveCopy": "Save as copy",
-      "design.useId": "Use id",
-      "design.conflict": "The resource changed on disk.",
-      "design.closeUnsaved": "Discard the unsaved changes to this definition?",
-      "design.intro": "Build a local definition on the canvas or in the list. Shipped definitions are templates; editing one creates a local copy."
-    };
-    function reasonLabel(reason, t) {
-      const key = `reason.${reason}`;
-      const label = t(key);
-      return label === key ? reason : label;
-    }
-
-    // packages/plugin-workflows/src/client/panel.tsx
     var import_jsx_runtime9 = require("react/jsx-runtime");
     function emptyPageStates() {
       return { runs: void 0, workflowRuns: void 0, history: void 0 };
@@ -13573,7 +13693,6 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/design-page.tsx
     var import_jsx_runtime11 = require("react/jsx-runtime");
-    var fallbackTranslate = (key) => EN[key] ?? key;
     var dirtyByTab = /* @__PURE__ */ new Map();
     function designTabKey(sessionId, tabId) {
       return `${sessionId}:${tabId}`;
@@ -13679,6 +13798,42 @@ window.__ModuleLoader__.load({
     // packages/plugin-workflows/src/client/overview.tsx
     var import_dsh_client_ui_primitives11 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react8 = require("react");
+
+    // packages/plugin-workflows/src/client/gates.ts
+    var ENGINE_GATES = [
+      {
+        gate: "task-progress",
+        titleKey: "gates.taskProgress.title",
+        triggerKey: "gates.taskProgress.trigger",
+        evidenceKey: "gates.taskProgress.evidence",
+        recordKey: "gates.taskProgress.record",
+        steerKey: "gates.taskProgress.steer"
+      },
+      {
+        gate: "lane-assignment",
+        titleKey: "gates.laneAssignment.title",
+        triggerKey: "gates.laneAssignment.trigger",
+        evidenceKey: "gates.laneAssignment.evidence",
+        recordKey: "gates.laneAssignment.record",
+        steerKey: "gates.laneAssignment.steer"
+      },
+      {
+        gate: "goal-complete",
+        titleKey: "gates.goalComplete.title",
+        triggerKey: "gates.goalComplete.trigger",
+        evidenceKey: "gates.goalComplete.evidence",
+        recordKey: "gates.goalComplete.record",
+        steerKey: "gates.goalComplete.steer"
+      },
+      {
+        gate: "archive",
+        titleKey: "gates.archive.title",
+        triggerKey: "gates.archive.trigger",
+        evidenceKey: "gates.archive.evidence",
+        recordKey: "gates.archive.record",
+        steerKey: "gates.archive.steer"
+      }
+    ];
 
     // packages/plugin-workflows/src/client/run-history.tsx
     var import_dsh_client_ui_primitives10 = require("@deepseek-ai/dsh-client-ui-primitives");
@@ -14014,7 +14169,10 @@ window.__ModuleLoader__.load({
     function WorkflowOverview(props) {
       const { t } = props;
       if (props.definitions.length === 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", "data-section": "workflow-overview", "data-state": "empty", children: t("overview.empty") });
+        return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-overview", "data-section": "workflow-overview", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", "data-state": "empty", children: t("overview.empty") }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(EngineGateCards, { t })
+        ] });
       }
       const now2 = props.now ?? Date.now();
       const groups = groupByTrigger(props.definitions, props.triggers, props.stats);
@@ -14066,13 +14224,85 @@ window.__ModuleLoader__.load({
             },
             group.kind === "" ? "__unknown" : group.kind
           )) })
-        ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(EngineGateCards, { t })
       ] });
     }
     function Fact(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
         /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("dt", { children: props.label }),
         /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("dd", { children: props.value })
+      ] });
+    }
+    function EngineGateCard(props) {
+      const { gate, t } = props;
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("li", { className: "dsh-wf-row", "data-gate": gate.gate, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-gate-card", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-card-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-run-title", children: t(gate.titleKey) }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: gate.gate }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: t("gates.readOnly") })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("dl", { className: "dsh-wf-gate-facts", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("gates.trigger"), value: t(gate.triggerKey) }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("gates.evidence"), value: t(gate.evidenceKey) }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("gates.record"), value: t(gate.recordKey) }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("gates.steer"), value: t(gate.steerKey) })
+        ] })
+      ] }) });
+    }
+    function EngineGateCards(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-group", "data-section": "engine-gates", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("div", { className: "dsh-wf-group-head", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-group-title", children: props.t("gates.heading") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", children: props.t("gates.intro") }),
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ul", { className: "dsh-wf-rows", children: ENGINE_GATES.map((gate) => /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(EngineGateCard, { gate, t: props.t }, gate.gate)) })
+      ] });
+    }
+    function ReviewContractCards(props) {
+      const { t } = props;
+      const items = props.steps.flatMap((step) => {
+        const contract = reviewContract(props.definitionId, step);
+        return contract === void 0 ? [] : [{ step, contract }];
+      });
+      if (items.length === 0) return null;
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-section", "data-section": "review-contracts", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-heading", children: t("review.contracts") }),
+        items.map(({ step, contract }) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
+          "div",
+          {
+            className: "dsh-wf-review-contract",
+            "data-contract": "review",
+            "data-review-step": step.id,
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-row-head", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-subject", children: step.title }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-chip", children: step.executor }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: contract.instruction }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: contract.scope })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("dl", { className: "dsh-wf-facts", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("review.prompt"), value: promptSummary(contract, t) }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("review.phase"), value: contract.phase ?? "\u2014" }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+                  Fact,
+                  {
+                    label: t("review.digestScope"),
+                    value: contract.scope === "task" ? t("review.digest.task") : t("review.digest.whole")
+                  }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("review.verdictSchema"), value: t("review.verdictSchema.text") }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("review.reuse"), value: t("review.reuse.text") }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+                  Fact,
+                  {
+                    label: t("review.record"),
+                    value: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-mono", children: contract.recordPath })
+                  }
+                )
+              ] })
+            ]
+          },
+          step.id
+        ))
       ] });
     }
     function workflowCanvasModel(document2, runs, selectedRunId) {
@@ -14197,6 +14427,7 @@ window.__ModuleLoader__.load({
               ] }, row.step.id)) })
             ] })
           ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(ReviewContractCards, { definitionId, steps: document2.steps ?? [], t }),
           /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-runs", children: [
             /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.runs") }),
             props.runs === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(LoadingLine, { t }) : props.runs.items.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", "data-state": "empty", children: t("workflow.noRuns") }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(RunList, { runs: props.runs.items, t, now: props.now, onOpen: props.onOpenRun }),
@@ -14425,6 +14656,11 @@ window.__ModuleLoader__.load({
     .dsh-wf-unbound { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
     .dsh-wf-unbound-list { display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0; }
     .dsh-wf-unbound-row { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-gate-card { display: flex; flex-direction: column; gap: 6px; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+    .dsh-wf-gate-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-gate-facts dt { color: var(--dsw-alias-label-tertiary); }
+    .dsh-wf-gate-facts dd { margin: 0; overflow-wrap: anywhere; }
+    .dsh-wf-review-contract { display: flex; flex-direction: column; gap: 8px; }
     .dsh-wf-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .dsh-wf-event-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
     .dsh-wf-evaluations { list-style: none; margin: 2px 0 0; padding: 0 0 0 12px; display: flex; flex-direction: column; gap: 2px; }

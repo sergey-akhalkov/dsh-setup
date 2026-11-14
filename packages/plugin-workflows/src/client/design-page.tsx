@@ -2,8 +2,8 @@ import { DisclosureRow } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { DesignMode } from './design.tsx'
+import { fallbackTranslate } from './locale.ts'
 import {
-  EN,
   requestJson,
   type Translate,
   TriggersTable,
@@ -18,8 +18,6 @@ import { ReceiptsList, type ReceiptView, receiptsUrl } from './workflows.tsx'
  * workspace's trigger catalog and receipts behind a `Diagnostics` disclosure.
  * Read-only sections never write; the editor keeps its existing save contract.
  */
-
-const fallbackTranslate: Translate = (key) => EN[key] ?? key
 
 interface TabActions {
   close(): void

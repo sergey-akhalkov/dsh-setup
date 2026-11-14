@@ -669,6 +669,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       <PropertyPanel
         state={state}
         {...(selected === undefined ? {} : { selected })}
+        t={t}
         onDefinitionPatch={(patch) => apply(patchDefinition(state, patch))}
         onPatch={(stepId, patch) => apply(patchStep(state, stepId, patch))}
         onConnect={(source, target, kind) => apply(connectSteps(state, source, target, kind))}
@@ -686,7 +687,12 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     return (
       <>
         <p className="dsh-wf-sr-only" aria-live="polite">
-          {summaryText(editor.document.definition, selectedNode?.title, overlay)}
+          {summaryText(
+            editor.document.definition,
+            selectedNode?.title,
+            overlay,
+            selectedNode?.step,
+          )}
         </p>
         {fallbackNotice(canvasFailed) === undefined ? null : (
           <p className="dsh-wf-issue" role="status">
@@ -981,6 +987,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
               <PropertyPanel
                 state={editor}
                 {...(selected === undefined ? {} : { selected })}
+                t={t}
                 onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
                 onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
                 onConnect={(source, target, kind) =>

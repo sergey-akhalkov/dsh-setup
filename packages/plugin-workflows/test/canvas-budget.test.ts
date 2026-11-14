@@ -82,21 +82,22 @@ describe('React Flow dependency', () => {
       gzipBytes: gzipped.length,
       artifactBytes: artifact?.size,
     }
-    // Recorded with the resizable three-pane workbench and the card inspector: esbuild bundle 659,669
-    // bytes, the shipped lib/client.js 721,637 bytes (the loader wrapper indents
-    // every line), minified 344,700 bytes, gzip 100,429 bytes. The workbench added
+    // Recorded with the resizable three-pane workbench, the card inspector, and
+    // the review and engine-gate contract cards: esbuild bundle 676,064 bytes,
+    // the shipped lib/client.js 738,234 bytes (the loader wrapper indents every
+    // line), minified 354,990 bytes, gzip 103,166 bytes. The workbench added
     // React Flow's Background/Controls, the shipped brick icons, the splitter and
     // the run menu to the one static client artifact; the shared build does not
     // minify client bundles, so the whole artifact stays over the original 250 KB
     // design estimate. Shortcut: revisit the 250 KB budget when scripts/build.ts
-    // minifies clients or permits a canvas chunk; the ceilings below keep a
-    // regression visible.
+    // minifies clients or permits a canvas chunk; the ceilings below keep roughly
+    // 4 KB of slack over the recorded values so a regression stays visible.
     expect(record.minifiedBytes).toBeLessThan(352 * 1024)
-    expect(record.bundleBytes).toBeLessThan(648 * 1024)
+    expect(record.bundleBytes).toBeLessThan(664 * 1024)
     expect(record.gzipBytes).toBeLessThan(128 * 1024)
     expect(record.minifiedBytes).toBeGreaterThan(100 * 1024)
     if (record.artifactBytes !== undefined) {
-      expect(record.artifactBytes).toBeLessThan(712 * 1024)
+      expect(record.artifactBytes).toBeLessThan(725 * 1024)
     }
   })
 

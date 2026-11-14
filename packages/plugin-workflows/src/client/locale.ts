@@ -197,7 +197,73 @@ export const EN: Record<string, string> = {
   'design.closeUnsaved': 'Discard the unsaved changes to this definition?',
   'design.intro':
     'Build a local definition on the canvas or in the list. Shipped definitions are templates; editing one creates a local copy.',
+  'review.contract': 'Review contract',
+  'review.contracts': 'Review contracts',
+  'review.hint': 'Read-only',
+  'review.instruction': 'Instruction',
+  'review.prompt': 'Prompt summary',
+  'review.scope': 'Scope',
+  'review.phase': 'Phase',
+  'review.digestScope': 'Digest scope',
+  'review.verdictSchema': 'Verdict schema',
+  'review.reuse': 'Reuse policy',
+  'review.record': 'Record path',
+  'review.digest.whole': 'the live change-artifact digest',
+  'review.digest.task': 'a frozen worktree snapshot taken when the review starts',
+  'review.verdictSchema.text':
+    'Exactly one fenced JSON verdict: verdict PASS | FINDINGS | ERROR, the prepared digest, and findings[] with severity P0 | P1 | P2 and class.',
+  'review.reuse.text':
+    'A matching current PASS or ERROR record settles the step without a new run; FINDINGS keeps it open.',
+  'review.prompt.reviewSpec':
+    'Reviews the whole change (proposal, design, delta specs, and tasks) against the change requirements.',
+  'review.prompt.reviewTask':
+    'Reviews one checked task, its diff, and its verification against the task text and the change artifacts.',
+  'review.prompt.reviewIntegration':
+    'Reviews the finished change as a whole (every task, the spec delta, the docs, and the verification evidence).',
+  'gates.heading': 'Engine-owned gates',
+  'gates.intro':
+    'Closed obligations of the workflows listener. They are not definitions: they never appear in the definition rail, canvas, or step table.',
+  'gates.readOnly': 'Read-only',
+  'gates.trigger': 'Trigger',
+  'gates.evidence': 'Evidence',
+  'gates.record': 'Record or evidence',
+  'gates.steer': 'Steer payload',
+  'gates.taskProgress.title': 'Task progress',
+  'gates.taskProgress.trigger':
+    'A code-changing turn leaves its task unchecked and has no current progress note.',
+  'gates.taskProgress.evidence':
+    'A newly checked and reviewed task, or a current note whose worktree digest matches the current worktree.',
+  'gates.taskProgress.record': '.dsh/workflows/notes/{change}.json',
+  'gates.taskProgress.steer': 'workflows { action: "note", change, task, status, reason }',
+  'gates.laneAssignment.title': 'Lane assignment',
+  'gates.laneAssignment.trigger':
+    'An implementation turn leaves an unassigned non-serial lane with owned paths and an unchecked task in a plan with at least two non-serial lanes.',
+  'gates.laneAssignment.evidence':
+    'One tagged worker start (lane-tag: <change>#<n>) per reported lane, or one serial note per reported lane.',
+  'gates.laneAssignment.record':
+    '.dsh/workflows/events/<session>.jsonl for the tagged start, and .dsh/workflows/notes/{change}.json for a serial note',
+  'gates.laneAssignment.steer':
+    'One subagent call per reported lane whose prompt carries lane-tag: <change>#<n>; or workflows { action: "note", ..., reason } with a serial reason.',
+  'gates.goalComplete.title': 'Goal completion',
+  'gates.goalComplete.trigger':
+    'The session tries to complete its goal while a checked task has no current portable PASS.',
+  'gates.goalComplete.evidence': 'Every checked task has a current portable PASS record.',
+  'gates.goalComplete.record': 'openspec/changes/{change}/reviews/{taskId}.json',
+  'gates.goalComplete.steer':
+    'The completion is refused; finish the review and the task, or record the remaining work as a progress note.',
+  'gates.archive.title': 'Archive',
+  'gates.archive.trigger':
+    'An archive is attempted for a change without the full required evidence.',
+  'gates.archive.evidence':
+    'An authenticated intake run or receipt, a current whole-spec PASS, and a current PASS for every checked task.',
+  'gates.archive.record':
+    '.dsh/workflows/receipts/{change}.json and openspec/changes/{change}/reviews/{taskId}.json',
+  'gates.archive.steer':
+    'openspec archive <change> is refused with the missing evidence; the refusal names the intake, review, or task to finish.',
 }
+
+/** The English fallback for a surface rendered without the locale service. */
+export const fallbackTranslate: Translate = (key) => EN[key] ?? key
 
 export function reasonLabel(reason: string, t: Translate): string {
   const key = `reason.${reason}`
