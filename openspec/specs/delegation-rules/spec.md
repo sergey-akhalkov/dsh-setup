@@ -12,7 +12,7 @@ The bundle SHALL register a rules engine whose rules are data: each rule names a
 #### Scenario: Default rules
 
 - **WHEN** the plugin is active with the shipped default rules
-- **THEN** the spec-review, task-review, blocker, research, advisor, bug-fix, and optional integration-review rules are available to the delegate and task_progress tools
+- **THEN** the spec-review, task-review, and optional integration-review review rules and the strict `lane-fanout` note rule are available to the delegate and task_progress tools
 
 #### Scenario: Custom rule
 
@@ -31,7 +31,7 @@ The bundle SHALL register a rules engine whose rules are data: each rule names a
 
 ### Requirement: Trigger evaluation
 
-The engine SHALL implement the eight deterministic triggers `manual`, `spec-ready`, `spec-task-ready`, `implementation-work`, `lane-assignment`, `lane-boundary` (deprecated), `implementation-complete`, and `failure-streak`. A trigger MUST evaluate only from session/workspace state and tool results, MUST be evaluated at `agent/turn-stopping` for gated rules, and MUST NOT start a target run from the listener. A change-scoped trigger MUST evaluate only for a change attributed to the current session. A new trigger source requires a code extension.
+The engine SHALL implement the seven deterministic triggers `manual`, `spec-ready`, `spec-task-ready`, `implementation-work`, `lane-assignment`, `lane-boundary` (deprecated), and `implementation-complete`. A trigger MUST evaluate only from session/workspace state and tool results, MUST be evaluated at `agent/turn-stopping` for gated rules, and MUST NOT start a target run from the listener. A change-scoped trigger MUST evaluate only for a change attributed to the current session. A new trigger source requires a code extension.
 
 #### Scenario: Spec-ready trigger
 
@@ -65,8 +65,8 @@ The engine SHALL implement the eight deterministic triggers `manual`, `spec-read
 
 #### Scenario: Failure-streak trigger
 
-- **WHEN** the configured number of consecutive failed tool calls has no intervening success and no consultation attempt
-- **THEN** the trigger reports the soft rule as needing a delegation
+- **WHEN** a rule names the removed `failure-streak` trigger
+- **THEN** configuration validation rejects it and names the remaining trigger vocabulary
 
 #### Scenario: Manual trigger
 
@@ -236,54 +236,6 @@ The gate SHALL refuse a code-changing turn close unless every checked task the c
 - **WHEN** the worktree changes after a progress note
 - **THEN** the stale note no longer authorizes a close
 
-### Requirement: Answer contract
-
-The answer contract SHALL run the target in read-only mode, return a bounded answer with evidence and, for research, sources and dates, and, for an advisor rule, a recommendation, the strongest counterargument, risks, a next action, and confidence, and write no gate record. A successful answer MUST be usable by the agent while a failed answer MUST be reported without trapping the turn.
-
-#### Scenario: Research
-
-- **WHEN** a research rule runs
-- **THEN** the answer includes evidence and sources and does not authorize a gate
-
-#### Scenario: Blocker
-
-- **WHEN** a blocker rule runs
-- **THEN** the answer names a recommendation, evidence, and the next action
-
-#### Scenario: Advisor
-
-- **WHEN** an advisor rule runs
-- **THEN** the answer names a recommendation, the strongest counterargument, risks, a next action, and confidence, and does not authorize a gate
-
-#### Scenario: Failed answer
-
-- **WHEN** the target is unavailable or the run fails
-- **THEN** the tool reports the cause and the turn is not trapped by that attempt
-
-### Requirement: Patch contract
-
-The patch contract SHALL run a write-capable target in an isolated git worktree, return the changed files, diff, and test results, and MUST NOT apply the diff to the session worktree or treat the patch as a review pass. A patch rule whose target is not write-capable MUST fail validation before any run.
-
-#### Scenario: Patch produced
-
-- **WHEN** a write-capable target completes a bug-fix rule
-- **THEN** the tool returns the worktree path, diff, and test results for review
-
-#### Scenario: No write target
-
-- **WHEN** a patch rule targets a read-only provider
-- **THEN** the engine rejects the rule before starting a run
-
-#### Scenario: No auto-merge
-
-- **WHEN** a patch completes
-- **THEN** the session worktree is unchanged and the owner/agent decides whether to apply it
-
-#### Scenario: Failed patch
-
-- **WHEN** the target fails or its tests fail
-- **THEN** the tool reports the failure and leaves the worktree for inspection
-
 ### Requirement: Turn-stopping gate
 
 For every gated rule, the engine SHALL refuse a turn close unless a matching `PASS` or `ERROR` record exists for the rule and digest; it MUST steer with the rule id, digest, record path, and exact delegate call and MUST NOT accept a text claim. A soft rule MUST steer once per failure streak; a failed delegation MUST be reported and MUST NOT trap the turn. A stale record MUST never authorize a handoff. A change-scoped review rule MUST apply only in a session that created or modified the change. The engine MUST separate a worktree-level git failure from a per-change artifact problem: a missing or unreadable planning file in a change attributed to the current session (for example `tasks.md`) MUST NOT be reported as a worktree digest failure and MUST instead produce a distinct issue that names the change and the session, or treat the change as not review-ready. When `delegation.gates.workflowOwned` is false, the engine MUST NOT enforce or steer the task-review rule and MUST NOT refuse a close for a missing task review; the whole-spec `spec-review` rule, the task-progress gate, and the lane-assignment/lane-boundary gates MUST remain in force. A `defer` task-review definition MUST be refused in that mode.
@@ -335,17 +287,17 @@ For every gated rule, the engine SHALL refuse a turn close unless a matching `PA
 
 ### Requirement: Delegate tool and status
 
-The bundle SHALL register a `delegate` tool whose rule parameter is generated from the configured rules and whose description names the manual tasks, including the advisor policy and its soft three-call ceiling, a `task_progress` tool for unchecked-task notes, and a `delegation_status` tool that reports registered providers/capabilities, configured targets/rules, active/stale notes, each active change's involvement by the current session, and missing-target diagnostics. The tools MUST validate their rule/target/note inputs before starting a run or writing a note. A review delegate MAY run in any session and records the reviewing session. `delegation_status` MUST report an active change whose `tasks.md` is missing or unreadable as an unreadable per-change state, keep showing that change's involvement and record state, and MUST NOT throw or run a review.
+The bundle SHALL register a `delegate` tool whose rule parameter is generated from the configured rules and whose description names the review rules and the gate policy, a `task_progress` tool for unchecked-task notes, and a `delegation_status` tool that reports registered providers/capabilities, configured targets/rules, active/stale notes, each active change's involvement by the current session, and missing-target diagnostics. The tools MUST validate their rule/target/note inputs before starting a run or writing a note. A review delegate MAY run in any session and records the reviewing session. `delegation_status` MUST report an active change whose `tasks.md` is missing or unreadable as an unreadable per-change state, keep showing that change's involvement and record state, and MUST NOT throw or run a review.
 
 #### Scenario: Manual delegation
 
-- **WHEN** the agent calls delegate for a configured manual rule
-- **THEN** the engine validates the input and runs that rule's target/instruction
+- **WHEN** the agent calls delegate for a configured review or note rule
+- **THEN** the engine validates the input and either starts that rule's target with its instruction or records the note
 
 #### Scenario: Advisor policy
 
 - **WHEN** the delegate tool description is read
-- **THEN** it names the advisor as a manual strong-target second opinion for expensive-to-reverse, cross-module, security/data-integrity, or repeated-failure decisions, excludes routine edits, syntax, lookups, and locally verifiable facts, and states the soft three-call ceiling
+- **THEN** it advertises only the configured review rules, names no manual answer rule, and leaves the second-opinion policy to the working-principles contract
 
 #### Scenario: Progress tool
 
@@ -379,12 +331,12 @@ The bundle SHALL register a `delegate` tool whose rule parameter is generated fr
 
 ### Requirement: Model-agnostic defaults and documentation
 
-The shipped default rules SHALL be model-agnostic data; the setup MAY default their review, consult, and patch rules to the Codex provider, and SHALL default the worker rules to the registered in-process DSH subagent provider. The bundle MUST NOT require Codex, and the documentation MUST show a non-Codex target with another provider/model. The default set SHALL include whole-spec review, task review, blocker, research, advisor, bug fix, the worker effort tiers, an optional integration review, and a strict `lane-fanout` rule on the `lane-assignment` trigger. The lane-fanout rule MUST fire only for a readable `tasks.md` with at least two non-`serial` lanes that own paths and have unchecked tasks; it MUST accept a tagged worker start per unassigned lane or a matching `task_progress` serial note, and MUST NOT fire for a single-lane, hot-file, generated-output, or serial-gate plan. The default set MUST NOT include an automatic task-progress rule; the `implementation-work` trigger remains available for profile rules, and the `work-checkpoints` capability owns the pause-time progress and the parallel decision for work without a multi-lane OpenSpec plan. The deprecated `lane-boundary` trigger MAY remain in a profile but MUST NOT be in the shipped default set. The acceptance MUST exercise at least one non-Codex target.
+The shipped default rules SHALL be model-agnostic data; the setup MAY default their review rules to the Codex provider. The bundle MUST NOT require Codex, and the documentation MUST show a non-Codex target with another provider/model. The default set SHALL include whole-spec review, task review, an optional integration review, and a strict `lane-fanout` rule on the `lane-assignment` trigger. The lane-fanout rule MUST fire only for a readable `tasks.md` with at least two non-`serial` lanes that own paths and have unchecked tasks; it MUST accept a tagged worker start per unassigned lane or a matching `task_progress` serial note, and MUST NOT fire for a single-lane, hot-file, generated-output, or serial-gate plan. The default set MUST NOT include an automatic task-progress rule; the `implementation-work` trigger remains available for profile rules, and the `work-checkpoints` capability owns the pause-time progress and the parallel decision for work without a multi-lane OpenSpec plan. The deprecated `lane-boundary` trigger MAY remain in a profile but MUST NOT be in the shipped default set. The acceptance MUST exercise at least one non-Codex target.
 
 #### Scenario: Default setup
 
 - **WHEN** the setup is installed with the shipped defaults
-- **THEN** the review, consult, and patch rules target the configured Codex provider, and the worker rules target the in-process provider
+- **THEN** the review rules target the configured Codex provider and the strict `lane-fanout` rule uses the `lane-assignment` trigger
 
 #### Scenario: Default lane rule
 
@@ -414,7 +366,7 @@ The shipped default rules SHALL be model-agnostic data; the setup MAY default th
 #### Scenario: Documentation
 
 - **WHEN** a user reads the plugin documentation
-- **THEN** it shows the trigger/contract/gate model, the shipped lane-fanout rule with its justify-or-serial decision, the deprecated lane-boundary trigger, a Codex target, a non-Codex target, the worker effort tiers and their selection policy, the advisor rule, the shipped strong Codex target defaults, and the config/code boundary
+- **THEN** it shows the trigger/contract/gate model, the shipped lane-fanout rule with its justify-or-serial decision, the deprecated lane-boundary trigger, a Codex target, a non-Codex target, the shipped Codex review target default, and the config/code boundary
 
 ### Requirement: Model-facing cost
 
@@ -451,7 +403,7 @@ Disabling or uninstalling the `dsh-setup-delegation-rules` row MUST remove its t
 
 ### Requirement: Security and trust boundaries
 
-The engine SHALL validate rule ids, change names, task ids, worktree paths, and git arguments before effects, MUST use fixed-argument git commands, and MUST keep records and progress notes free of credentials, secrets, and machine paths. Target and model output MUST be treated as untrusted data, and a patch result MUST remain isolated until a human/agent review applies it.
+The engine SHALL validate rule ids, change names, task ids, worktree paths, and git arguments before effects, MUST use fixed-argument git commands, and MUST keep records and progress notes free of credentials, secrets, and machine paths. Target and model output MUST be treated as untrusted data.
 
 #### Scenario: Invalid rule or change
 
@@ -460,7 +412,7 @@ The engine SHALL validate rule ids, change names, task ids, worktree paths, and 
 
 #### Scenario: Fixed git arguments
 
-- **WHEN** the implementation or patch digest/file list is computed
+- **WHEN** the implementation digest or file list is computed
 - **THEN** git runs with fixed arguments and no shell interpolation of model input
 
 #### Scenario: No secrets in records
@@ -494,7 +446,7 @@ The generic bundle SHALL be installable on its own with any registered DSH subag
 
 ### Requirement: Asynchronous review runs
 
-A review delegation SHALL validate the rule, target, and change (and an explicit task when supplied), admit the run through the review queue, and return a run id before the target completes. The run MUST start when the queue admits it, MUST continue in the background, MUST write the rule's digest-bound `PASS`/`FINDINGS`/`ERROR` record when it finishes, and MUST be visible in `delegation_status` while queued, running, and after completion. Multiple review runs MUST be able to proceed concurrently up to the configured queue limit. The answer and patch contracts MUST remain synchronous.
+A review delegation SHALL validate the rule, target, and change (and an explicit task when supplied), admit the run through the review queue, and return a run id before the target completes. The run MUST start when the queue admits it, MUST continue in the background, MUST write the rule's digest-bound `PASS`/`FINDINGS`/`ERROR` record when it finishes, and MUST be visible in `delegation_status` while queued, running, and after completion. Multiple review runs MUST be able to proceed concurrently up to the configured queue limit.
 
 #### Scenario: Review starts and returns
 
@@ -678,8 +630,8 @@ The delegation skill body and the plugin documentation SHALL state that two writ
 
 #### Scenario: Patch contract already isolated
 
-- **WHEN** a patch contract runs a write-capable target
-- **THEN** the existing isolated-worktree behaviour applies and the new guidance does not duplicate it
+- **WHEN** a writer needs an isolated checkout
+- **THEN** the guidance points at `create_worktree` and no delegation contract provides isolation
 
 #### Scenario: Documentation
 
@@ -736,7 +688,7 @@ The bundle SHALL accept an optional settlement observer in its apply options. Wh
 
 ### Requirement: Session change involvement
 
-The engine SHALL record per DSH session which active OpenSpec changes that session created or modified under `.dsh/delegation/sessions`, and MUST NOT attribute a change from observation or a workspace diff alone. Attribution MUST come from write evidence — a successful write or creation tool call targeting the change during the turn — or an explicit `task_progress` or review/patch `delegate` call. The state MUST persist across turns and restarts as local scratch.
+The engine SHALL record per DSH session which active OpenSpec changes that session created or modified under `.dsh/delegation/sessions`, and MUST NOT attribute a change from observation or a workspace diff alone. Attribution MUST come from write evidence — a successful write or creation tool call targeting the change during the turn — or an explicit `task_progress` or review `delegate` call. The state MUST persist across turns and restarts as local scratch.
 
 #### Scenario: No attribution on observation
 
@@ -770,7 +722,7 @@ The engine SHALL record per DSH session which active OpenSpec changes that sessi
 
 #### Scenario: Explicit tool use
 
-- **WHEN** the session calls task_progress or a review/patch delegate for a change
+- **WHEN** the session calls task_progress or a review delegate for a change
 - **THEN** the change is attributed to the session
 
 #### Scenario: Legacy owner state
@@ -853,7 +805,7 @@ The gated automatic triggers for a change SHALL evaluate only in a session that 
 
 ### Requirement: Cross-session delegation tools
 
-`task_progress` notes, answer runs, patch runs, and explicit review runs SHALL remain available in any session. An explicit `task_progress` or review/patch `delegate` call MUST attribute that change to the calling session; an `answer` delegate MUST NOT attribute. A review record MUST name the reviewing session.
+`task_progress` notes and explicit review runs SHALL remain available in any session. An explicit `task_progress` or review `delegate` call MUST attribute that change to the calling session. A review record MUST name the reviewing session.
 
 #### Scenario: Progress note in a foreign session
 
@@ -872,8 +824,8 @@ The gated automatic triggers for a change SHALL evaluate only in a session that 
 
 #### Scenario: Answer does not attribute
 
-- **WHEN** a session runs an answer delegate with a valid change argument
-- **THEN** the change is not attributed to that session and no involvement is recorded
+- **WHEN** a session calls delegate for a rule that is not configured
+- **THEN** the call is rejected before a run and the change is not attributed
 
 ### Requirement: Portable task-review approval
 
@@ -996,43 +948,19 @@ An `ERROR` review record MAY let a turn close but MUST NOT approve a task for ar
 - **WHEN** the status or audit runs
 - **THEN** it reports the PASS, ERROR, and missing counts separately and names the missing tasks
 
-### Requirement: Advisor consultation
-
-The default rule set SHALL include a manual `advisor` answer rule. It MUST start only from an explicit `delegate` call, run read-only, and write no gate record, steer, wake, or inject a chat message. The tool description and skill SHALL state when it is appropriate, exclude routine work, and set a soft three-call ceiling.
-
-#### Scenario: Manual only
-
-- **WHEN** a turn is about to close and no advisor delegate call was made
-- **THEN** the advisor starts no target and does not steer the turn
-
-#### Scenario: Bounded advice
-
-- **WHEN** the agent calls delegate for the advisor rule with a question and context
-- **THEN** the target returns a recommendation, the strongest counterargument, risks, a next action, and confidence, and writes no gate record
-
-#### Scenario: No authority
-
-- **WHEN** an advisor answer exists
-- **THEN** it does not satisfy a strict review, authorize a block or completion, steer, or wake the session
-
-#### Scenario: Routine work excluded
-
-- **WHEN** the delegate tool description and skill are read
-- **THEN** they name the allowed decision classes, exclude routine edits, syntax, lookups, and locally verifiable facts, and state the three-call soft ceiling
-
 ### Requirement: Shipped strong Codex targets
 
-The shipped setup defaults SHALL select the documented strong Codex model and `xhigh` reasoning effort for both `codex` and `codex-write`. The `advisor` rule MUST target the explicit `codex-astra` target so a profile can override `codex` without weakening the advisor. A profile MAY override any target; an unavailable model MUST fail the run with the target/model next action and MUST NOT satisfy a gate.
+The shipped setup defaults SHALL select the documented strong Codex model and `xhigh` reasoning effort for the `codex` review target. A profile MAY override the target; an unavailable model MUST fail the run with the target/model next action and MUST NOT satisfy a gate.
 
 #### Scenario: Strong read and write defaults
 
 - **WHEN** the setup is installed with the shipped defaults
-- **THEN** `codex` and `codex-write` select the documented strong model and `xhigh` effort
+- **THEN** the `codex` target selects the documented strong model and `xhigh` effort, and no write-capable delegation target is shipped
 
 #### Scenario: Advisor target isolation
 
-- **WHEN** a profile overrides `codex` or `codex-write`
-- **THEN** the advisor still runs on `codex-astra` with the strong model
+- **WHEN** a profile overrides the `codex` target
+- **THEN** no advisor target exists to weaken; a second opinion is a `codex_subagent` call whose registered provider row applies, because that tool takes no model or effort argument
 
 #### Scenario: Unavailable model
 
@@ -1042,7 +970,7 @@ The shipped setup defaults SHALL select the documented strong Codex model and `x
 #### Scenario: Documented values
 
 - **WHEN** a user reads the target documentation
-- **THEN** it names the shipped model and effort and shows how to override either target
+- **THEN** it names the shipped model and effort and shows how to override the target
 
 ### Requirement: Lane-boundary fan-out gate
 
@@ -1498,30 +1426,6 @@ The engine SHALL keep `lane-boundary` accepted for existing profiles with its do
 
 - **WHEN** a user reads the delegation skill or documentation
 - **THEN** it names `lane-boundary` as deprecated and directs new rules to `lane-assignment`
-
-### Requirement: Shipped worker effort tiers
-
-The shipped defaults SHALL include two worker targets on the registered in-process DSH subagent provider: `worker-fast` at `high` reasoning effort and `worker-deep` at `max`. Each target MUST be reachable through a manual `answer` rule. The bundled delegation skill SHALL state when to choose each target. A profile MAY override either target. An unavailable provider, model, or unsupported option MUST fail the run with the target next action and MUST NOT satisfy a gate.
-
-#### Scenario: Shipped worker targets
-
-- **WHEN** the setup is installed with the shipped defaults
-- **THEN** `worker-fast` and `worker-deep` name the in-process provider with `high` and `max` effort respectively, and the `delegate` tool offers both worker rules
-
-#### Scenario: Effort selection policy
-
-- **WHEN** the bundled delegation skill is loaded
-- **THEN** it directs mechanical inspection and routine sweeps to `worker-fast`, and ambiguous analysis or root-cause work to `worker-deep`, while the main loop keeps its own effort
-
-#### Scenario: Profile override
-
-- **WHEN** a profile patch redefines `worker-fast` with another effort or provider
-- **THEN** the shipped worker rule uses the overridden target and the engine reports the target it ran
-
-#### Scenario: Unavailable worker target
-
-- **WHEN** the in-process provider is not registered or does not accept agent options
-- **THEN** the worker rule reports the unavailable target and next action, publishes no result, and does not satisfy a gate
 
 ### Requirement: Review fallback visibility
 
@@ -2078,14 +1982,14 @@ A review-contract activation on an external provider SHALL start with parent del
 
 ### Requirement: Provider-specific delivery and catalog behavior
 
-Answer and patch activations on an external provider MUST remain caller-delivered, so they are neither cataloged nor announced as settlement notices. In-process providers keep the service's existing behavior: their local children are always cataloged, and continuable children accept follow-up, independent of the engine's delivery choice; the delivery flag only decides whether the settlement notice is delivered.
+A review-contract activation on an external provider MUST use parent delivery, and the delivery flag only decides whether the settlement notice is delivered. In-process providers keep the service's existing behavior: their local children are always cataloged, and continuable children accept follow-up, independent of the engine's delivery choice.
 
 #### Scenario: External answer and patch uncataloged
 
-- **WHEN** an answer or patch rule targets an external provider
-- **THEN** its activation is caller-delivered, no catalog entry is created, and no settlement notice is delivered
+- **WHEN** a rule activation targets an external provider
+- **THEN** only a review activation is delivered and cataloged, because no answer or patch activation exists
 
 #### Scenario: Local provider unchanged
 
-- **WHEN** a review or answer target uses an in-process provider
+- **WHEN** a review target uses an in-process provider
 - **THEN** the service catalogs the local child exactly as before (a continuable child accepts follow-up), and the engine's delivery choice only decides whether its settlement notice is delivered

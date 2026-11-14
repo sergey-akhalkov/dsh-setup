@@ -1289,7 +1289,7 @@ When `retro` is `own`, the workflow SHALL request `work_checkpoint` at a substan
 
 ### Requirement: Owned task-review gate
 
-When `task-review` is `own`, the workflow SHALL start the review through `delegate` only when no matching PASS or ERROR record exists for the run's change and checked task; a matching record SHALL settle the `start-review` step from that record without dispatching `delegate`. It SHALL accept a matching PASS or ERROR record as intermediate turn-close evidence and refuse the close while the record is FINDINGS or missing. Before advancing any nonterminal task-review run it SHALL compare the run's checked task id with `openspec/changes/<change>/tasks.md` and cancel the run as `superseded` when the id is absent, regardless of which step is pending, and MUST NOT start a second run for the same change and task while a live-session run for that pair is open. A failed tool dispatch SHALL be retried at most three times across turn closes; after the cap the step SHALL remain failed and the run SHALL become `failed` (terminal), and the turn-close gate MUST NOT refuse for that run's failed dispatch. That terminal exemption SHALL apply only to the failed dispatch: the retained completion-coverage and task-progress checks SHALL still refuse a final tick without a portable PASS, and the archive gate SHALL still require a PASS for every checked task. `ERROR` MUST allow an intermediate turn close and MUST NOT approve. The queue, records, and learning loop MUST remain, and the legacy task-review rule and archive gate MUST be off.
+When `task-review` is `own`, the workflow SHALL start the review through `delegate` only when no matching PASS or ERROR record exists for the run's change and checked task; a matching record SHALL settle the `start-review` step from that record without dispatching `delegate`. It SHALL accept a matching PASS or ERROR record as intermediate turn-close evidence and refuse the close while the record is FINDINGS or missing. Before advancing any nonterminal task-review run it SHALL compare the run's checked task id with `openspec/changes/<change>/tasks.md` and cancel the run as `superseded` when the id is absent, regardless of which step is pending, and MUST NOT start a second run for the same change and task while a live-session run for that pair is open. A failed tool dispatch SHALL be retried at most three times across turn closes; after the cap the step SHALL remain failed and the run SHALL become `failed` (terminal), and the turn-close gate MUST NOT refuse for that run's failed dispatch. That terminal exemption SHALL apply only to the failed dispatch: the retained completion-coverage and task-progress checks SHALL still refuse a final tick without a portable PASS, and the archive gate SHALL still require a PASS for every checked task. `ERROR` MUST allow an intermediate turn close and MUST NOT approve. The queue and records MUST remain, and the legacy task-review rule and archive gate MUST be off.
 
 #### Scenario: Review is started
 
@@ -1354,7 +1354,7 @@ When `task-review` is `own`, the workflow SHALL start the review through `delega
 #### Scenario: Review runtime remains
 
 - **WHEN** the legacy task-review rule and archive gate are off
-- **THEN** the delegate tool, queue, records, and lesson store still work
+- **THEN** the delegate tool, queue, and records still work
 
 ### Requirement: Owned completion coverage
 
