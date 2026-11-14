@@ -162,6 +162,7 @@ describe('the active review owner supplies the progress evidence', () => {
   function nativeRecord(
     taskId: string,
     verdict: 'PASS' | 'ERROR' = 'PASS',
+    failureClass?: string,
   ): Record<string, unknown> {
     return {
       definition: 'task-review',
@@ -173,6 +174,7 @@ describe('the active review owner supplies the progress evidence', () => {
       digest: 'a'.repeat(64),
       worktreeDigest: 'b'.repeat(64),
       verdict,
+      ...(failureClass === undefined ? {} : { failureClass }),
       findings: [],
       target: { provider: 'codex-subagent', id: 'codex' },
       time: '2026-11-14T10:00:00.000Z',
@@ -236,6 +238,26 @@ describe('the active review owner supplies the progress evidence', () => {
     await harness.turnStopping(1)
     expect(steer(harness)).not.toContain('changed implementation files in change')
 
+    // An eligible native ERROR also settles the intermediate tick.
+    await writeFile(nativePath, JSON.stringify(nativeRecord(taskId, 'ERROR')), 'utf8')
+    harness.agent.steer.mockClear()
+    await harness.turnStopping(1)
+    expect(steer(harness)).not.toContain('changed implementation files in change')
+
+    // A changed-input or queue failure never settles it.
+    for (const failureClass of ['reviewed-inputs-changed', 'queue-internal-error']) {
+      await writeFile(
+        nativePath,
+        JSON.stringify(nativeRecord(taskId, 'ERROR', failureClass)),
+        'utf8',
+      )
+      harness.agent.steer.mockClear()
+      await harness.turnStopping(1)
+      expect(steer(harness), failureClass).toContain('changed implementation files in change')
+      await writeFile(nativePath, JSON.stringify(nativeRecord(taskId)), 'utf8')
+      harness.agent.steer.mockClear()
+      await harness.turnStopping(1)
+    }
     // Removing it makes the same close need a note again.
     await rm(nativePath)
     harness.agent.steer.mockClear()

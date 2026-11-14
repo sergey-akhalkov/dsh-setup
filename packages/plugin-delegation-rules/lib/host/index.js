@@ -2342,7 +2342,9 @@ async function ownedTaskReviewed(cwd, change, taskId) {
             value.scope !== 'task' ||
             value.taskId !== taskId ||
             (value.verdict !== 'PASS' && value.verdict !== 'ERROR') ||
-            (value.verdict === 'ERROR' && value.failureClass === 'reviewed-inputs-changed') ||
+            (value.verdict === 'ERROR' &&
+                (value.failureClass === 'reviewed-inputs-changed' ||
+                    value.failureClass === 'queue-internal-error')) ||
             typeof value.digest !== 'string' ||
             !DIGEST_PATTERN.test(value.digest) ||
             !Array.isArray(value.findings) ||
