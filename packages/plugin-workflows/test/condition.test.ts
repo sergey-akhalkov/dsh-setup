@@ -10,6 +10,7 @@ import {
 import { validateCondition } from '../src/host/condition-schema.ts'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { currentSpecDigest } from '../src/host/evidence.ts'
+import { taskIdOf } from '../src/host/tasks.ts'
 import { evaluateDefinitions, evaluateDefinitionTrigger } from '../src/host/triggers.ts'
 
 const roots: string[] = []
@@ -417,5 +418,35 @@ describe('condition evaluation budget', () => {
     expect(
       evaluateConditions([{ id: 'gated', trigger: { condition } }], context).get('gated'),
     ).toBe(false)
+  })
+})
+
+describe('scalar item references', () => {
+  it('accepts and evaluates the empty current-item reference', async () => {
+    expect(() =>
+      validateCondition({
+        some: [
+          { var: 'change.tasks.unchecked' },
+          { '==': [{ var: '' }, taskIdOf('Add the gate')] },
+        ],
+      }),
+    ).not.toThrow()
+    const root = await workspace()
+    const context = await buildConditionContext({
+      workspace: root,
+      change: 'auth',
+      event: { kind: 'turn.stopping' },
+    })
+    expect(
+      evaluateCondition(
+        {
+          some: [
+            { var: 'change.tasks.unchecked' },
+            { '==': [{ var: '' }, taskIdOf('Add the gate')] },
+          ],
+        },
+        context,
+      ),
+    ).toBe(true)
   })
 })

@@ -41,3 +41,29 @@ export function attributedSpecWrite(workspace, calls, turn) {
     }
     return undefined;
 }
+const CHANGE_CREATION = /(?:^|[;&|]\s*)openspec(?:\.cmd|\.exe)?\s+new\s+change\s+([a-z0-9][a-z0-9-]*)/u;
+/**
+ * The change this turn made, from a successful write/edit of its artifacts or
+ * the documented successful `openspec new change <name>` creation command. A
+ * session that creates a change through the shell is involved too.
+ */
+export function attributedChangeName(workspace, calls, turn) {
+    const written = attributedSpecWrite(workspace, calls, turn);
+    if (written !== undefined) {
+        return /^openspec\/changes\/([^/]+)\//u.exec(written)?.[1];
+    }
+    for (const call of [...calls].reverse()) {
+        if (turn !== undefined && call.turn !== undefined && call.turn !== turn)
+            continue;
+        if (call.ok === false)
+            continue;
+        const command = call.arguments.command;
+        if (typeof command !== 'string')
+            continue;
+        const normalized = command.replace(/\b(?:rtk|pnpm exec)\s+/gu, '').trim();
+        const match = CHANGE_CREATION.exec(normalized);
+        if (match !== null)
+            return match[1];
+    }
+    return undefined;
+}

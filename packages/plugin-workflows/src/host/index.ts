@@ -131,7 +131,7 @@ import {
   type StartRunOutcome,
   type Trigger,
 } from './triggers.js'
-import { attributedSpecWrite } from './write-attribution.js'
+import { attributedChangeName, attributedSpecWrite } from './write-attribution.js'
 
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows'
@@ -680,8 +680,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const activeSession = new Map<string, string>()
   /** The latest change a session observed, for a turn-close condition context. */
   const lastChangeBySession = new Map<string, string>()
-  /** The turn a session last changed a change artifact, for a turn-close condition. */
-  const lastSpecChangeTurn = new Map<string, number>()
   /** Whether a session is a root agent; the legacy gates exclude children. */
   const rootSessions = new Map<string, boolean>()
   /** One change-tree watcher per workspace, started on its first event. */
@@ -1318,15 +1316,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           : undefined
       // A watcher notification is attributed to whichever session is active at
       // delivery time; it is content, not proof this session made the edit.
-      // A change artifact edit marks the session's turn as spec-changing, so a
-      // turn-close condition can see it after the fs.change event is gone.
-      if (
-        event.kind === 'fs.change' &&
-        /^openspec\/changes\/[^/]+\//u.test(event.subject) &&
-        !/\/reviews\//u.test(event.subject)
-      ) {
-        lastSpecChangeTurn.set(input.session, input.turn ?? -1)
-      }
       const taskReviewTaskIds =
         changedName !== undefined && /(?:^|\/)tasks\.md$/u.test(event.subject)
           ? checkedTaskDelta(workspace, input.session, changedName, event.subject)
@@ -1348,20 +1337,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // turn is attributed immediately: the fs watcher debounces and its event
       // would arrive after the close. OpenSpec writes are tracked from the
       // observed write/edit calls because the code-write metrics exclude them.
-      const pendingSpecWrite = attributedSpecWrite(
-        workspace,
-        sessionToolCalls.get(input.session) ?? [],
-        input.turn,
-      )
+      const sessionWrites = sessionToolCalls.get(input.session) ?? []
+      const pendingSpecWrite = attributedSpecWrite(workspace, sessionWrites, input.turn)
+      const pendingCreatedChange = attributedChangeName(workspace, sessionWrites, input.turn)
       const pendingWritePath =
         pendingSpecWrite ??
         (metrics !== undefined && metrics.turn === input.turn ? metrics.lastWritePath : undefined)
       const pendingChange =
-        pendingWritePath === undefined
+        pendingCreatedChange ??
+        (pendingWritePath === undefined
           ? undefined
-          : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1]
-      const pendingSpec =
-        pendingChange !== undefined && !/\/reviews\//u.test(pendingWritePath ?? '')
+          : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1])
+      const pendingSpec = pendingChange !== undefined
       if (pendingChange !== undefined) lastChangeBySession.set(input.session, pendingChange)
       const conditionChangeCandidate = pendingChange ?? lastChangeBySession.get(input.session)
       const conditionsFor = async (
@@ -1379,13 +1366,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(definitionEvent.path === undefined ? {} : { path: definitionEvent.path }),
           },
           runGit: defaultGit,
-          involved: conditionChange !== undefined,
-          changedSpec:
-            pendingSpec ||
-            lastSpecChangeTurn.get(input.session) === (input.turn ?? -1) ||
-            (definitionEvent.kind === 'fs.change' &&
-              /^openspec\/changes\/[^/]+\//u.test(definitionEvent.subject) &&
-              !/\/reviews\//u.test(definitionEvent.subject)),
+          involved: pendingChange !== undefined,
+          changedSpec: pendingSpec,
         })
         return evaluateConditions(conditionalDefinitions, conditionContext)
       }

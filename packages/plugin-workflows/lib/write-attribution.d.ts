@@ -12,3 +12,9 @@ export declare function normalizedWorkspacePath(workspace: string, raw: string):
  * an attribution.
  */
 export declare function attributedSpecWrite(workspace: string, calls: readonly ToolCallObservation[], turn: number | undefined): string | undefined;
+/**
+ * The change this turn made, from a successful write/edit of its artifacts or
+ * the documented successful `openspec new change <name>` creation command. A
+ * session that creates a change through the shell is involved too.
+ */
+export declare function attributedChangeName(workspace: string, calls: readonly ToolCallObservation[], turn: number | undefined): string | undefined;

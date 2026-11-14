@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { attributedSpecWrite, normalizedWorkspacePath } from '../src/host/write-attribution.ts'
+import {
+  attributedChangeName,
+  attributedSpecWrite,
+  normalizedWorkspacePath,
+} from '../src/host/write-attribution.ts'
 
 const WORKSPACE = 'C:\\repo'
 
@@ -79,6 +83,41 @@ describe('attributedSpecWrite', () => {
     ]
     expect(attributedSpecWrite(WORKSPACE, calls, undefined)).toBe(
       'openspec/changes/second/design.md',
+    )
+  })
+})
+
+describe('attributedChangeName', () => {
+  function shell(
+    command: string,
+    ok = true,
+  ): {
+    readonly callId: string
+    readonly name: string
+    readonly arguments: Readonly<Record<string, unknown>>
+    readonly ok: boolean
+  } {
+    return { callId: 'c', name: 'pwsh', arguments: { command }, ok }
+  }
+
+  it('attributes a successful change creation command in each normalized form', () => {
+    expect(attributedChangeName(WORKSPACE, [shell('openspec new change auth')], 1)).toBe('auth')
+    expect(attributedChangeName(WORKSPACE, [shell('rtk openspec new change auth')], 1)).toBe('auth')
+    expect(attributedChangeName(WORKSPACE, [shell('pnpm exec openspec new change auth')], 1)).toBe(
+      'auth',
+    )
+  })
+
+  it('ignores a failed creation command', () => {
+    expect(attributedChangeName(WORKSPACE, [shell('openspec new change auth', false)], 1)).toBe(
+      undefined,
+    )
+  })
+
+  it('prefers the artifact path when one was written', () => {
+    const written = call('openspec/changes/auth/design.md')
+    expect(attributedChangeName(WORKSPACE, [shell('openspec new change auth'), written], 1)).toBe(
+      'auth',
     )
   })
 })

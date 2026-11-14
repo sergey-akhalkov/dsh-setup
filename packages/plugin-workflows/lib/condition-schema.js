@@ -68,6 +68,8 @@ function checkPath(raw, field, itemScope) {
     if (/[\\/]|(?:^|\.)\.\.(?:\.|$)|:/u.test(raw)) {
         throw new Error(`condition.${field} "var" path "${raw}" must not name a path`);
     }
+    if (raw === '')
+        return;
     const segments = raw.split('.');
     if (segments.some((segment) => segment === '')) {
         throw new Error(`condition.${field} "var" path "${raw}" has an empty segment`);
@@ -76,8 +78,6 @@ function checkPath(raw, field, itemScope) {
         throw new Error(`condition.${field} "var" path "${raw}" nests too deeply`);
     }
     if (itemScope?.has(raw))
-        return;
-    if (raw === '')
         return;
     const root = segments[0] ?? '';
     if (!ROOT_SET.has(root)) {
