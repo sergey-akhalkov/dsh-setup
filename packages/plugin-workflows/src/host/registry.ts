@@ -1,4 +1,9 @@
-import { type Definition, loadShippedDefinitions, validateDefinition } from './definitions.js'
+import {
+  type Definition,
+  loadShippedDefinitions,
+  validateDefinition,
+  withSource,
+} from './definitions.js'
 import { loadCatalog, type Trigger, validateCatalog } from './triggers.js'
 
 /**
@@ -140,7 +145,9 @@ export class DefinitionsRegistry {
     let definitions: Definition[]
     let triggers: Trigger[]
     try {
-      definitions = rawDefinitions.map((raw) => validateDefinition(raw, source))
+      definitions = rawDefinitions.map((raw) =>
+        withSource(validateDefinition(raw, source), 'plugin'),
+      )
       triggers = validateCatalog({ triggers: rawTriggers })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

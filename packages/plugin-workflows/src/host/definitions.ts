@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { validateJsonLogic } from './jsonlogic.js'
 
 /**
  * Workflow definitions are closed-schema JSON data. Every field is validated
@@ -82,9 +83,11 @@ export interface DefinitionTrigger {
   readonly dedupe: DedupePolicy
   readonly repeat?: boolean
   readonly applicability?: ApplicabilityKind
+  /** A bounded JSONLogic predicate over the trigger context; false produces no run. */
+  readonly condition?: Readonly<Record<string, unknown>>
 }
 
-export const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
+export const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human', 'review'] as const
 export type Executor = (typeof EXECUTORS)[number]
 
 export const RISKS = ['low', 'medium', 'high'] as const
@@ -93,8 +96,8 @@ export type Risk = (typeof RISKS)[number]
 export const GATE_OWNERSHIP = ['own', 'defer'] as const
 export type GateOwnership = (typeof GATE_OWNERSHIP)[number]
 
-/** The closed pre-execute gate a definition may declare; the engine owns each. */
-export const DEFINITION_GATES = ['intake'] as const
+/** The closed engine gate a definition may declare; the engine owns each. */
+export const DEFINITION_GATES = ['intake', 'review'] as const
 export type DefinitionGate = (typeof DEFINITION_GATES)[number]
 
 /** The legacy gate a deferred definition or step defers to. */
@@ -102,6 +105,14 @@ export interface LegacySource {
   readonly plugin: string
   readonly signal: string
 }
+
+/**
+ * Where a definition came from. The loader sets this after validation; it is
+ * not a JSON field. A shipped or contributed definition resolves its effective
+ * ownership from the profile's per-signal switch, while a local copy keeps its
+ * declared ownership and must agree with the switch.
+ */
+export type DefinitionSource = 'shipped' | 'plugin' | 'local'
 
 export interface DefinitionSettings {
   readonly allowModelStart: boolean
@@ -112,8 +123,10 @@ export interface DefinitionSettings {
   /** Tool names a `tool` step may call. */
   readonly allowTools?: readonly string[]
   readonly legacy?: LegacySource
-  /** The engine-owned pre-execute gate this definition selects, if any. */
+  /** The engine-owned gate this definition selects, if any. */
   readonly gate?: DefinitionGate
+  /** A stable gate identity a local copy may not remove or narrow. */
+  readonly gateIdentity?: string
 }
 
 export const EVIDENCE_KINDS = [
@@ -200,6 +213,20 @@ export interface ToolSpec {
   readonly args?: Readonly<Record<string, unknown>>
 }
 
+/** The native review executor's step configuration. */
+export interface ReviewSpec {
+  /** A reviewer id from the workflows row's `reviewers` map, never a provider. */
+  readonly target: string
+  /** A bundled review instruction id under `assets/reviews/<id>.md`. */
+  readonly instruction: string
+  readonly scope: 'whole' | 'task'
+  /** The record phase for a whole-scope review; absent for task scope. */
+  readonly phase?: string
+}
+
+export const REVIEW_SCOPES = ['whole', 'task'] as const
+export type ReviewScope = (typeof REVIEW_SCOPES)[number]
+
 export interface SubagentSpec {
   readonly provider: string
   readonly model?: string
@@ -245,6 +272,7 @@ export interface Step {
   readonly human?: HumanSpec
   readonly branch?: BranchSpec
   readonly loop?: LoopSpec
+  readonly review?: ReviewSpec
 }
 
 /** The longest human-readable description a definition may carry. */
@@ -281,8 +309,17 @@ const SETTINGS_KEYS = new Set([
   'allowTools',
   'legacy',
   'gate',
+  'gateIdentity',
 ])
-const TRIGGER_KEYS = new Set(['kind', 'match', 'mode', 'dedupe', 'repeat', 'applicability'])
+const TRIGGER_KEYS = new Set([
+  'kind',
+  'match',
+  'mode',
+  'dedupe',
+  'repeat',
+  'applicability',
+  'condition',
+])
 const MATCH_KEYS = new Set([
   'workspace',
   'session',
@@ -310,6 +347,7 @@ const STEP_KEYS = new Set([
   'human',
   'branch',
   'loop',
+  'review',
 ])
 const FILE_KEYS = new Set(['kind', 'path', 'minBytes', 'glob'])
 const ALL_KEYS = new Set(['kind', 'items'])
@@ -335,6 +373,7 @@ const SUBAGENT_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'schema']
 const HUMAN_KEYS = new Set(['timeoutAction'])
 const BRANCH_KEYS = new Set(['predicate', 'then', 'else'])
 const LOOP_KEYS = new Set(['maxIterations', 'stop', 'next', 'cap', 'list'])
+const REVIEW_KEYS = new Set(['target', 'instruction', 'scope', 'phase'])
 const LEGACY_KEYS = new Set(['plugin', 'signal'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -462,6 +501,17 @@ function trigger(raw: unknown, definition: string): DefinitionTrigger {
     raw.applicability === undefined
       ? undefined
       : isOneOf(raw.applicability, APPLICABILITY_KINDS, definition, 'trigger.applicability')
+  let condition: Readonly<Record<string, unknown>> | undefined
+  if (raw.condition !== undefined) {
+    if (!isRecord(raw.condition))
+      fail(definition, 'trigger.condition', 'must be a JSONLogic object')
+    try {
+      validateJsonLogic(raw.condition)
+    } catch (error) {
+      fail(definition, 'trigger.condition', error instanceof Error ? error.message : String(error))
+    }
+    condition = raw.condition
+  }
   const match = triggerMatch(raw.match ?? {}, definition)
   if (kind === 'intent' && match.command !== undefined) {
     fail(definition, 'trigger.match.command', 'is only valid for a deterministic trigger')
@@ -479,6 +529,7 @@ function trigger(raw: unknown, definition: string): DefinitionTrigger {
     dedupe,
     ...(repeat === undefined ? {} : { repeat }),
     ...(applicability === undefined ? {} : { applicability }),
+    ...(condition === undefined ? {} : { condition }),
   }
 }
 
@@ -506,6 +557,19 @@ function settings(raw: unknown, definition: string): DefinitionSettings {
     raw.gate === undefined
       ? undefined
       : isOneOf(raw.gate, DEFINITION_GATES, definition, 'settings.gate')
+  let gateIdentity: string | undefined
+  if (raw.gateIdentity !== undefined) {
+    gateIdentity = nonEmptyString(raw.gateIdentity, definition, 'settings.gateIdentity')
+    if (!DEFINITION_ID.test(gateIdentity)) {
+      fail(definition, 'settings.gateIdentity', 'must match ^[a-z0-9][a-z0-9-]*$')
+    }
+  }
+  if (gate === 'review' && gateIdentity === undefined) {
+    fail(definition, 'settings.gateIdentity', 'is required when settings.gate is "review"')
+  }
+  if (gate !== 'review' && gateIdentity !== undefined) {
+    fail(definition, 'settings.gateIdentity', 'is only valid when settings.gate is "review"')
+  }
   let allowTools: readonly string[] | undefined
   if (raw.allowTools !== undefined) {
     if (!Array.isArray(raw.allowTools) || raw.allowTools.length === 0) {
@@ -527,6 +591,7 @@ function settings(raw: unknown, definition: string): DefinitionSettings {
     ...(allowTools === undefined ? {} : { allowTools }),
     ...(legacy === undefined ? {} : { legacy }),
     ...(gate === undefined ? {} : { gate }),
+    ...(gateIdentity === undefined ? {} : { gateIdentity }),
   }
 }
 
@@ -831,6 +896,28 @@ function branchSpec(raw: unknown, definition: string, field: string): BranchSpec
   }
 }
 
+function reviewSpec(raw: unknown, definition: string, field: string): ReviewSpec {
+  if (!isRecord(raw)) fail(definition, field, 'must be an object')
+  assertKnown(raw, REVIEW_KEYS, definition, field)
+  const target = nonEmptyString(raw.target, definition, `${field}.target`)
+  const instruction = nonEmptyString(raw.instruction, definition, `${field}.instruction`)
+  if (!DEFINITION_ID.test(instruction)) {
+    fail(definition, `${field}.instruction`, 'must be a bundled instruction id (lowercase kebab)')
+  }
+  const scope = isOneOf(raw.scope, REVIEW_SCOPES, definition, `${field}.scope`)
+  let phase: string | undefined
+  if (raw.phase !== undefined) {
+    phase = nonEmptyString(raw.phase, definition, `${field}.phase`)
+    if (!DEFINITION_ID.test(phase)) {
+      fail(definition, `${field}.phase`, 'must match ^[a-z0-9][a-z0-9-]*$')
+    }
+  }
+  if (scope === 'task' && phase !== undefined) {
+    fail(definition, `${field}.phase`, 'is only valid with scope "whole"')
+  }
+  return { target, instruction, scope, ...(phase === undefined ? {} : { phase }) }
+}
+
 function loopSpec(raw: unknown, definition: string, field: string): LoopSpec {
   if (!isRecord(raw)) fail(definition, field, 'must be an object')
   assertKnown(raw, LOOP_KEYS, definition, field)
@@ -980,11 +1067,19 @@ function step(
       built.loop = spec
       break
     }
+    case 'review': {
+      if (raw.review === undefined)
+        fail(definition, `${field}.review`, 'is required for a review step')
+      built.review = reviewSpec(raw.review, definition, `${field}.review`)
+      if (built.evidence === undefined)
+        fail(definition, `${field}.evidence`, 'is required for a review step')
+      break
+    }
   }
 
   // An object for a different executor is an unknown field for this step, not
   // a silently ignored extra.
-  const executorFields = ['tool', 'subagent', 'human', 'branch', 'loop'] as const
+  const executorFields = ['tool', 'subagent', 'human', 'branch', 'loop', 'review'] as const
   for (const key of executorFields) {
     if (raw[key] !== undefined && key !== executor) {
       fail(definition, `${field}.${key}`, `is not valid on a ${executor} step`)
@@ -1123,6 +1218,24 @@ export function validateDefinition(raw: unknown, source = 'definition'): Definit
   const steps = raw.steps.map((entry, index) =>
     step(entry, definition, `steps[${String(index)}]`, stepIds, allowTools),
   )
+  if (settingsValue.gate === 'review') {
+    const reviewSteps = steps.filter((entry) => entry.executor === 'review')
+    if (reviewSteps.length !== 1) {
+      fail(
+        definition,
+        'steps',
+        'must declare exactly one "review" step for the "review" gate so a local copy cannot drop it',
+      )
+    }
+    const reviewStep = reviewSteps[0]
+    if (reviewStep?.blockTurnClose !== true) {
+      fail(
+        definition,
+        'steps',
+        'the "review" step must set blockTurnClose: true; the gate is never a non-blocking step',
+      )
+    }
+  }
   assertAcyclic(definition, steps)
   return {
     v: DEFINITION_SCHEMA_VERSION,
@@ -1221,12 +1334,24 @@ export function resolveOwnership(
 ): OwnershipResolution {
   const issues: string[] = []
   const settings = definition.settings
-  const definitionDeferred = settings.gateOwnership === 'defer'
   const stateOf = (plugin: string, signal: string): 'not-installed' | 'disabled' | 'enabled' => {
     if (!installed.has(plugin)) return 'not-installed'
     return signalEnabled(plugin, signal, installed, enabledSignals) ? 'enabled' : 'disabled'
   }
-  if (definitionDeferred) {
+  // A shipped or contributed definition follows the profile's per-signal
+  // switch; a local copy keeps its declaration and must agree with the switch.
+  // Definition-level switch resolution is limited to the review gate: the
+  // review rules are the built-in process and must flip without an edit.
+  const source = sourceOf(definition)
+  const switchResolved = source === 'shipped' || source === 'plugin'
+  const definitionResolved = switchResolved && settings.gate === 'review'
+  const declaredDeferred = settings.gateOwnership === 'defer'
+  const definitionSwitchEnabled =
+    definitionResolved &&
+    settings.legacy !== undefined &&
+    stateOf(settings.legacy.plugin, settings.legacy.signal) === 'enabled'
+  const definitionDeferred = declaredDeferred || definitionSwitchEnabled
+  if (declaredDeferred) {
     const legacy = settings.legacy
     if (legacy !== undefined && stateOf(legacy.plugin, legacy.signal) !== 'enabled') {
       issues.push(
@@ -1239,19 +1364,28 @@ export function resolveOwnership(
         ),
       )
     }
-  } else if (
-    settings.legacy !== undefined &&
-    stateOf(settings.legacy.plugin, settings.legacy.signal) === 'enabled'
-  ) {
-    issues.push(
-      issue(definition.id, undefined, settings.legacy.plugin, settings.legacy.signal, 'enabled'),
-    )
+  } else if (!definitionResolved && settings.legacy !== undefined) {
+    const state = stateOf(settings.legacy.plugin, settings.legacy.signal)
+    if (state === 'enabled') {
+      issues.push(
+        issue(definition.id, undefined, settings.legacy.plugin, settings.legacy.signal, state),
+      )
+    }
   }
   const steps = definition.steps.map((step): ResolvedStepOwnership => {
-    const ownership = definitionDeferred ? 'defer' : (step.ownership ?? 'own')
+    const declaredOwnership = definitionDeferred ? 'defer' : (step.ownership ?? 'own')
     const legacy = definitionDeferred ? (step.legacy ?? settings.legacy) : step.legacy
+    // A switch-resolved own step whose legacy signal is enabled is effectively
+    // deferred for this profile, without editing the definition.
+    const stepSwitchEnabled =
+      !declaredDeferred &&
+      switchResolved &&
+      declaredOwnership === 'own' &&
+      legacy !== undefined &&
+      stateOf(legacy.plugin, legacy.signal) === 'enabled'
+    const ownership: GateOwnership = stepSwitchEnabled ? 'defer' : declaredOwnership
     if (definitionDeferred) {
-      if (step.ownership === 'own') {
+      if (step.ownership === 'own' && declaredDeferred) {
         issues.push(
           `workflow definition "${definition.id}": step "${step.id}" claims ownership inside a deferred definition; a deferred definition defers every step`,
         )
@@ -1270,7 +1404,7 @@ export function resolveOwnership(
           ),
         )
       }
-    } else if (ownership === 'defer') {
+    } else if (declaredOwnership === 'defer') {
       if (legacy === undefined) {
         issues.push(
           `workflow definition "${definition.id}": step "${step.id}" declares a defer without a legacy source`,
@@ -1286,8 +1420,10 @@ export function resolveOwnership(
           ),
         )
       }
-    } else if (legacy !== undefined && stateOf(legacy.plugin, legacy.signal) === 'enabled') {
-      issues.push(issue(definition.id, step.id, legacy.plugin, legacy.signal, 'enabled'))
+    } else if (!switchResolved && legacy !== undefined) {
+      const state = stateOf(legacy.plugin, legacy.signal)
+      if (state === 'enabled')
+        issues.push(issue(definition.id, step.id, legacy.plugin, legacy.signal, state))
     }
     return { id: step.id, ownership, ...(legacy === undefined ? {} : { legacy }) }
   })
@@ -1323,6 +1459,19 @@ export function shippedDefinitionsDirectory(): string {
   return found
 }
 
+/** Mark a validated definition with where it came from. */
+const DEFINITION_SOURCES = new WeakMap<Definition, DefinitionSource>()
+
+export function withSource(definition: Definition, source: DefinitionSource): Definition {
+  DEFINITION_SOURCES.set(definition, source)
+  return definition
+}
+
+/** The loader-assigned source of one definition; absent means a local/unknown copy. */
+export function sourceOf(definition: Definition): DefinitionSource | undefined {
+  return DEFINITION_SOURCES.get(definition)
+}
+
 /** Load every shipped definition; a duplicate id or invalid file fails the load. */
 export function loadShippedDefinitions(): Definition[] {
   const directory = shippedDefinitionsDirectory()
@@ -1331,7 +1480,7 @@ export function loadShippedDefinitions(): Definition[] {
   for (const name of readdirSync(directory)
     .filter((entry) => entry.endsWith('.json'))
     .sort()) {
-    const definition = readDefinitionFile(join(directory, name))
+    const definition = withSource(readDefinitionFile(join(directory, name)), 'shipped')
     if (ids.has(definition.id)) {
       throw new Error(`workflow definition "${definition.id}" is shipped twice`)
     }

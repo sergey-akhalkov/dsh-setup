@@ -1,0 +1,646 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { CHANGE_NAME } from './command-parse.js';
+import { verifyEvidence } from './evidence.js';
+import { settleStep } from './runs.js';
+/**
+ * The native review executor. It resolves a reviewer from the row's
+ * `reviewers` map, renders a bundled instruction with the change, task and
+ * digest context, accepts exactly one fenced JSON verdict that echoes the
+ * prepared digest, writes the local record (and, for a task PASS, the committed
+ * approval first), and settles the step from its own evidence. Every failure
+ * writes an ERROR record and publishes no PASS.
+ */
+export const TASK_ID_PATTERN = /^[0-9a-f]{16}$/u;
+/** The fixed finding vocabulary every review producer shares. */
+export const FINDING_CLASSES = [
+    'spec-ambiguity',
+    'missing-test',
+    'path-boundary',
+    'state-persistence',
+    'stale-input',
+    'api-contract',
+    'plan-shape',
+    'docs-drift',
+    'security',
+    'other',
+];
+const FINDING_CLASS_SET = new Set(FINDING_CLASSES);
+export function normalizeFindingClass(value) {
+    return typeof value === 'string' && FINDING_CLASS_SET.has(value)
+        ? value
+        : 'other';
+}
+const REVIEWER_ID = /^[a-z][a-z0-9-]*$/u;
+const REVIEWER_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'agentOptions']);
+const AGENT_OPTION_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'maxTokens']);
+function isRecord(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function nonEmpty(value, field) {
+    if (typeof value !== 'string' || value.trim() === '') {
+        throw new Error(`workflows ${field} must be a non-empty string`);
+    }
+    return value;
+}
+/**
+ * Validate the row's `reviewers` map. A provider that is registered without
+ * `agentOptions` support rejects a model or effort at load; an unregistered
+ * provider is not a load error and fails the run with the target name.
+ */
+export function resolveReviewers(raw, providerSupportsOptions) {
+    if (raw === undefined)
+        return {};
+    if (!isRecord(raw))
+        throw new Error('workflows reviewers must be an object');
+    const reviewers = {};
+    for (const [id, value] of Object.entries(raw)) {
+        if (!REVIEWER_ID.test(id)) {
+            throw new Error(`workflows reviewers.${id} must be a lowercase kebab-case reviewer id`);
+        }
+        if (!isRecord(value))
+            throw new Error(`workflows reviewers.${id} must be an object`);
+        for (const key of Object.keys(value)) {
+            if (!REVIEWER_KEYS.has(key)) {
+                throw new Error(`workflows reviewers.${id} has an unknown field "${key}"`);
+            }
+        }
+        const provider = nonEmpty(value.provider, `reviewers.${id}.provider`);
+        const model = value.model === undefined ? undefined : nonEmpty(value.model, `reviewers.${id}.model`);
+        const reasoningEffort = value.reasoningEffort === undefined
+            ? undefined
+            : nonEmpty(value.reasoningEffort, `reviewers.${id}.reasoningEffort`);
+        let agentOptions;
+        if (value.agentOptions !== undefined) {
+            if (!isRecord(value.agentOptions)) {
+                throw new Error(`workflows reviewers.${id}.agentOptions must be an object`);
+            }
+            for (const key of Object.keys(value.agentOptions)) {
+                if (!AGENT_OPTION_KEYS.has(key)) {
+                    throw new Error(`workflows reviewers.${id}.agentOptions has an unknown field "${key}"`);
+                }
+            }
+            agentOptions = value.agentOptions;
+        }
+        if ((model !== undefined || reasoningEffort !== undefined || agentOptions !== undefined) &&
+            providerSupportsOptions?.(provider) === false) {
+            throw new Error(`workflows reviewers.${id} sets model/reasoningEffort/agentOptions, but provider "${provider}" does not declare agentOptions support; remove the option or choose a capable provider`);
+        }
+        reviewers[id] = {
+            provider,
+            ...(model === undefined ? {} : { model }),
+            ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+            ...(agentOptions === undefined ? {} : { agentOptions }),
+        };
+    }
+    return reviewers;
+}
+/** Resolve one reviewer for a run; a missing id names the config and remedy. */
+export function resolveReviewer(reviewers, target) {
+    const config = reviewers[target];
+    if (config === undefined) {
+        return {
+            ok: false,
+            error: `review target "${target}" is not configured; add reviewers.${target} to the workflows row with a provider`,
+        };
+    }
+    return {
+        ok: true,
+        reviewer: {
+            id: target,
+            provider: config.provider,
+            ...(config.model === undefined ? {} : { model: config.model }),
+            ...(config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort }),
+            ...(config.agentOptions === undefined ? {} : { agentOptions: config.agentOptions }),
+        },
+    };
+}
+export const DEFAULT_REVIEW_QUEUE = Object.freeze({
+    enabled: true,
+    concurrency: 2,
+    maxQueued: 16,
+    maxAttempts: 3,
+    baseDelayMs: 5_000,
+    maxDelayMs: 60_000,
+    waitTimeoutMs: 300_000,
+});
+const REVIEW_QUEUE_KEYS = new Set([
+    'enabled',
+    'concurrency',
+    'maxQueued',
+    'maxAttempts',
+    'baseDelayMs',
+    'maxDelayMs',
+    'waitTimeoutMs',
+]);
+function integerIn(value, field, min, max) {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) {
+        throw new Error(`workflows reviewQueue.${field} must be an integer between ${String(min)} and ${String(max)}`);
+    }
+    return value;
+}
+export function resolveReviewQueue(raw) {
+    if (raw === undefined)
+        return DEFAULT_REVIEW_QUEUE;
+    if (!isRecord(raw))
+        throw new Error('workflows reviewQueue must be an object');
+    for (const key of Object.keys(raw)) {
+        if (!REVIEW_QUEUE_KEYS.has(key)) {
+            throw new Error(`workflows reviewQueue has an unknown field "${key}"`);
+        }
+    }
+    const enabled = raw.enabled;
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+        throw new Error('workflows reviewQueue.enabled must be a boolean');
+    }
+    return {
+        enabled: enabled ?? DEFAULT_REVIEW_QUEUE.enabled,
+        concurrency: raw.concurrency === undefined
+            ? DEFAULT_REVIEW_QUEUE.concurrency
+            : integerIn(raw.concurrency, 'concurrency', 1, 4),
+        maxQueued: raw.maxQueued === undefined
+            ? DEFAULT_REVIEW_QUEUE.maxQueued
+            : integerIn(raw.maxQueued, 'maxQueued', 1, 100),
+        maxAttempts: raw.maxAttempts === undefined
+            ? DEFAULT_REVIEW_QUEUE.maxAttempts
+            : integerIn(raw.maxAttempts, 'maxAttempts', 1, 10),
+        baseDelayMs: raw.baseDelayMs === undefined
+            ? DEFAULT_REVIEW_QUEUE.baseDelayMs
+            : integerIn(raw.baseDelayMs, 'baseDelayMs', 0, 3_600_000),
+        maxDelayMs: raw.maxDelayMs === undefined
+            ? DEFAULT_REVIEW_QUEUE.maxDelayMs
+            : integerIn(raw.maxDelayMs, 'maxDelayMs', 0, 3_600_000),
+        waitTimeoutMs: raw.waitTimeoutMs === undefined
+            ? DEFAULT_REVIEW_QUEUE.waitTimeoutMs
+            : integerIn(raw.waitTimeoutMs, 'waitTimeoutMs', 1_000, 3_600_000),
+    };
+}
+export const DEFAULT_REVIEW_TIMEOUT_MS = 600_000;
+/** Resolve `timeouts.review`; a timeout outside the bounded range fails load. */
+export function resolveReviewTimeout(raw) {
+    if (raw === undefined)
+        return DEFAULT_REVIEW_TIMEOUT_MS;
+    if (!isRecord(raw))
+        throw new Error('workflows timeouts must be an object');
+    for (const key of Object.keys(raw)) {
+        if (key !== 'review')
+            throw new Error(`workflows timeouts has an unknown field "${key}"`);
+    }
+    if (raw.review === undefined)
+        return DEFAULT_REVIEW_TIMEOUT_MS;
+    return integerIn(raw.review, 'review', 1_000, 3_600_000);
+}
+/** The review step's record phase; a task-scoped record is always phase "task". */
+export function reviewPhase(scope, phase) {
+    return scope === 'task' ? 'task' : (phase ?? 'spec');
+}
+/** The workspace-relative local record path for one review. */
+export function localReviewRecordPath(input) {
+    if (!CHANGE_NAME.test(input.change))
+        throw new Error(`"${input.change}" is not a change name`);
+    const root = `.dsh/workflows/records/${input.rule}/${input.change}`;
+    if (input.scope === 'task') {
+        if (input.taskId === undefined || !TASK_ID_PATTERN.test(input.taskId)) {
+            throw new Error('a task-scoped review record needs a 16-hex task id');
+        }
+        return `${root}/tasks/${input.taskId}.json`;
+    }
+    return `${root}/${reviewPhase('whole', input.phase)}.json`;
+}
+/** The committed portable approval path; the format is unchanged. */
+export function portableApprovalPath(change, taskId) {
+    if (!CHANGE_NAME.test(change))
+        throw new Error(`"${change}" is not a change name`);
+    if (!TASK_ID_PATTERN.test(taskId))
+        throw new Error(`"${taskId}" is not a task id`);
+    return `openspec/changes/${change}/reviews/${taskId}.json`;
+}
+const MAX_FIELD_CHARS = 2_000;
+/** Redact machine paths and credentials, then bound the result. */
+export function sanitizeReviewText(text, maximum = MAX_FIELD_CHARS) {
+    const redacted = text
+        .replace(/\bauthorization(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi, '[secret]')
+        .replace(/\b(?:cookie|set-cookie)(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi, '[secret]')
+        .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[secret]@')
+        .replace(/\bfile:\/\/[^\s"'`)]*/gi, '[path]')
+        .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
+        .replace(/\\\\[^\s"'`)]+/g, '[path]')
+        .replace(/~[/\\][^\s"'`)]*/g, '[path]')
+        .replace(/(^|[\s"'=([{<`])\/[^\s"'`)\]}<>]+/g, '$1[path]')
+        .replace(/\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*(?:\\?["'])?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi, '[secret]')
+        .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
+        .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
+        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[secret]');
+    return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`;
+}
+/** Accept exactly one fenced JSON verdict that echoes the requested digest. */
+export function parseReviewVerdict(text, expectedDigest) {
+    const blocks = [];
+    const fence = /```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)```/g;
+    for (const match of text.matchAll(fence))
+        blocks.push(match[1] ?? '');
+    if (blocks.length === 0) {
+        return {
+            ok: false,
+            error: 'the reviewer returned no fenced JSON verdict; exactly one fenced block is required',
+        };
+    }
+    if (blocks.length > 1) {
+        return {
+            ok: false,
+            error: `the reviewer returned ${String(blocks.length)} fenced blocks; exactly one JSON verdict is required`,
+        };
+    }
+    let value;
+    try {
+        value = JSON.parse(blocks[0]);
+    }
+    catch (error) {
+        return {
+            ok: false,
+            error: `the fenced verdict is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+        };
+    }
+    if (!isRecord(value))
+        return { ok: false, error: 'the fenced verdict must be a JSON object' };
+    if (value.digest !== expectedDigest) {
+        return {
+            ok: false,
+            error: 'the verdict digest does not match the prepared digest; re-run the review on the current inputs',
+        };
+    }
+    const verdict = value.verdict;
+    if (verdict !== 'PASS' && verdict !== 'FINDINGS') {
+        return { ok: false, error: 'the verdict must be "PASS" or "FINDINGS"' };
+    }
+    const rawFindings = value.findings ?? [];
+    if (!Array.isArray(rawFindings)) {
+        return { ok: false, error: 'the verdict findings must be a list' };
+    }
+    const findings = [];
+    for (const [index, raw] of rawFindings.entries()) {
+        const position = `finding #${String(index + 1)}`;
+        if (!isRecord(raw))
+            return { ok: false, error: `${position} must be an object` };
+        if (raw.severity !== 'P0' && raw.severity !== 'P1') {
+            return { ok: false, error: `${position} severity must be "P0" or "P1"` };
+        }
+        if (typeof raw.title !== 'string' || raw.title.trim() === '') {
+            return { ok: false, error: `${position}.title must be a non-empty string` };
+        }
+        if (typeof raw.evidence !== 'string' || raw.evidence.trim() === '') {
+            return { ok: false, error: `${position}.evidence must be a non-empty string` };
+        }
+        if (typeof raw.fix !== 'string' || raw.fix.trim() === '') {
+            return { ok: false, error: `${position}.fix must be a non-empty string` };
+        }
+        findings.push({
+            severity: raw.severity,
+            class: normalizeFindingClass(raw.class),
+            title: sanitizeReviewText(raw.title),
+            evidence: sanitizeReviewText(raw.evidence),
+            fix: sanitizeReviewText(raw.fix),
+        });
+    }
+    if (verdict === 'PASS' && findings.length > 0) {
+        return { ok: false, error: 'verdict PASS requires zero P0/P1 findings' };
+    }
+    if (verdict === 'FINDINGS' && findings.length === 0) {
+        return { ok: false, error: 'verdict FINDINGS requires at least one P0/P1 finding' };
+    }
+    return { ok: true, verdict, findings };
+}
+/** The shipped bundled review instructions live beside the definitions. */
+export function reviewAssetsDirectory() {
+    const candidates = [
+        fileURLToPath(new URL('../../assets/reviews', import.meta.url)),
+        fileURLToPath(new URL('../assets/reviews', import.meta.url)),
+    ];
+    for (const candidate of candidates) {
+        try {
+            readFileSync(join(candidate, 'review-task.md'), 'utf8');
+            return candidate;
+        }
+        catch {
+            // try the next layout
+        }
+    }
+    throw new Error(`workflow review instructions were not found at ${candidates.join(' or ')}`);
+}
+export function readReviewInstruction(id) {
+    if (!/^[a-z0-9][a-z0-9-]*$/u.test(id)) {
+        throw new Error(`review instruction "${id}" is not a bundled instruction id`);
+    }
+    try {
+        return readFileSync(join(reviewAssetsDirectory(), `${id}.md`), 'utf8');
+    }
+    catch (error) {
+        throw new Error(`bundled review instruction "${id}" could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+/** Render the bundled instruction with the review's digest-bound context. */
+export function renderReviewPrompt(input) {
+    const lines = [
+        readReviewInstruction(input.instruction).trimEnd(),
+        '',
+        '## Native review',
+        '',
+        `- Rule: ${input.rule}`,
+        `- Change: ${input.change}`,
+        `- Scope: ${input.scope}`,
+    ];
+    if (input.phase !== undefined)
+        lines.push(`- Phase: ${input.phase}`);
+    if (input.task !== undefined) {
+        lines.push(`- Task: ${input.task.number ?? ''} ${input.task.text}`.trimEnd());
+        lines.push(`- Task id: ${input.task.id}`);
+    }
+    lines.push(`- Digest: ${input.digest}`);
+    lines.push(input.snapshot
+        ? '- Reviewed state: a frozen worktree snapshot taken when the review started; later writes are not in it.'
+        : '- Reviewed state: the live worktree; a changed input discards the verdict.');
+    if (input.extra !== undefined && input.extra.trim() !== '') {
+        lines.push('', '## Context', '', input.extra.trim());
+    }
+    lines.push('', 'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with `class`, `title`, `evidence`, and `fix`. Prose outside that block is ignored.');
+    return lines.join('\n');
+}
+function hashParts(parts) {
+    const hash = createHash('sha256');
+    for (const part of parts) {
+        hash.update(part);
+        hash.update('\0');
+    }
+    return hash.digest('hex');
+}
+/** The task-scope digest binds the frozen tree; whole scope binds the artifacts. */
+export function reviewDigest(input) {
+    return input.scope === 'task'
+        ? hashParts(['task-review-snapshot-v1', input.tree ?? ''])
+        : input.specDigest;
+}
+/** Write one file atomically: temp beside the target, then rename. */
+export async function writeReviewFileAtomic(file, bytes) {
+    await mkdir(dirname(file), { recursive: true });
+    const temporary = `${file}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`;
+    await writeFile(temporary, bytes);
+    try {
+        await rename(temporary, file);
+    }
+    catch (error) {
+        await unlink(temporary).catch(() => undefined);
+        throw error;
+    }
+}
+const jsonText = (value) => `${JSON.stringify(value, null, 2)}\n`;
+/** The committed approval subset; the field set and order are the stable format. */
+export function portableApprovalOf(record) {
+    return {
+        rule: record.rule,
+        change: record.change,
+        scope: 'task',
+        taskId: record.taskId,
+        digest: record.digest,
+        ...(record.worktreeDigest === undefined ? {} : { worktreeDigest: record.worktreeDigest }),
+        verdict: 'PASS',
+        findings: [],
+        target: record.target,
+        time: record.time,
+    };
+}
+/** Write the local review record; the path is derived from the record. */
+export async function writeLocalReviewRecord(workspace, record) {
+    try {
+        const path = localReviewRecordPath(record);
+        await writeReviewFileAtomic(join(workspace, path), jsonText(record));
+        return { ok: true, path };
+    }
+    catch (error) {
+        return {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+/** Write the committed approval before the local record; a task PASS only. */
+export async function writePortableApproval(workspace, record) {
+    if (record.scope !== 'task' || record.taskId === undefined) {
+        return { ok: false, error: 'a committed approval is written only for a task-scoped PASS' };
+    }
+    if (record.verdict !== 'PASS') {
+        return { ok: false, error: 'a committed approval requires a PASS verdict' };
+    }
+    try {
+        const path = portableApprovalPath(record.change, record.taskId);
+        await writeReviewFileAtomic(join(workspace, path), jsonText(portableApprovalOf(record)));
+        return { ok: true, path };
+    }
+    catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+}
+function targetIdentity(reviewer) {
+    return {
+        provider: reviewer.provider,
+        ...(reviewer.model === undefined ? {} : { model: reviewer.model }),
+        ...(reviewer.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: reviewer.reasoningEffort }),
+    };
+}
+function baseRecord(input, now) {
+    const spec = input.step.review;
+    if (spec === undefined)
+        throw new Error(`step "${input.step.id}" declares no review`);
+    const rule = input.definition.settings.gateIdentity ?? input.definition.id;
+    return {
+        definition: input.definition.id,
+        rule,
+        change: input.change,
+        phase: reviewPhase(spec.scope, spec.phase),
+        scope: spec.scope,
+        ...(input.task === undefined ? {} : { taskId: input.task.id }),
+        digest: reviewDigest({
+            scope: spec.scope,
+            specDigest: input.prepared.specDigest,
+            ...(input.prepared.tree === undefined ? {} : { tree: input.prepared.tree }),
+        }),
+        ...(input.prepared.tree === undefined
+            ? {}
+            : { worktreeDigest: hashParts(['task-review-snapshot-v1', input.prepared.tree]) }),
+        target: targetIdentity(input.reviewer),
+        reviewer: input.reviewer.id,
+        session: input.session,
+        runId: input.run.id,
+        time: new Date(now).toISOString(),
+    };
+}
+/** Settle a review step from the record it just wrote. */
+async function settleFromRecord(input, record, recordPath, now) {
+    const check = await verifyEvidence(input.step.evidence ?? { kind: 'declaration' }, input.context);
+    if (check.ok) {
+        return settleStep(input.run, input.step.id, 'done', { at: now, evidence: check.evidence });
+    }
+    const reason = record.verdict === 'FINDINGS'
+        ? `the review returned FINDINGS (${String(record.findings.length)} P0/P1); fix them and re-run the review`
+        : `the review record at ${recordPath} does not satisfy the step: ${check.failure.detail}`;
+    return settleStep(input.run, input.step.id, 'blocked', {
+        at: now,
+        reason,
+        evidence: { kind: 'record', path: recordPath, digest: record.digest },
+    });
+}
+async function writeErrorRecord(input, record, error, failureClass, now) {
+    const failed = {
+        ...record,
+        verdict: 'ERROR',
+        findings: [],
+        failureClass,
+        error: sanitizeReviewText(error),
+    };
+    const writeLocal = input.writeLocal ?? writeLocalReviewRecord;
+    const written = await writeLocal(input.context.workspace, failed);
+    const reason = `${error}${written.ok ? `; an ERROR record was written at ${written.path}` : `; the ERROR record could not be written: ${written.error}`}`;
+    const settled = settleStep(input.run, input.step.id, 'failed', {
+        at: now,
+        reason,
+        failureClass,
+        evidence: {
+            kind: 'record',
+            ...(written.ok ? { path: written.path } : {}),
+            digest: failed.digest,
+        },
+    });
+    return {
+        run: settled,
+        record: failed,
+        ...(written.ok ? { recordPath: written.path } : {}),
+        error,
+    };
+}
+/**
+ * Run one review step. It awaits the reviewer (the queue and asynchronous
+ * admission wrap this function), writes the record, and settles the step from
+ * the evidence verifier. A failed start, a timeout, a malformed verdict, or a
+ * changed whole-scope input writes an ERROR record and publishes no PASS.
+ */
+export async function runReviewStep(input) {
+    const now = input.now ?? Date.now();
+    const spec = input.step.review;
+    if (spec === undefined) {
+        return {
+            run: settleStep(input.run, input.step.id, 'failed', {
+                at: now,
+                reason: 'the step declares no review',
+            }),
+            error: 'the step declares no review',
+        };
+    }
+    if (spec.scope === 'task' && input.task === undefined) {
+        return {
+            run: settleStep(input.run, input.step.id, 'failed', {
+                at: now,
+                reason: 'a task review needs the run context task id',
+            }),
+            error: 'a task review needs the run context task id',
+        };
+    }
+    const record = baseRecord(input, now);
+    const promptInput = {
+        instruction: spec.instruction,
+        rule: record.rule,
+        change: input.change,
+        scope: spec.scope,
+        ...(spec.phase === undefined ? {} : { phase: spec.phase }),
+        ...(input.task === undefined ? {} : { task: input.task }),
+        digest: record.digest,
+        snapshot: input.prepared.reviewCwd !== undefined,
+        ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
+    };
+    const prompt = (input.renderPrompt ?? renderReviewPrompt)(promptInput);
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    input.signal?.addEventListener('abort', forwardAbort, { once: true });
+    let timer;
+    const stopped = new Promise((_resolve, reject) => {
+        controller.signal.addEventListener('abort', () => reject(new Error('the review timed out after the configured review timeout')), { once: true });
+        timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error('the review timed out after the configured review timeout'));
+        }, input.timeoutMs);
+    });
+    let text;
+    try {
+        const child = await Promise.race([
+            input.runner.run({
+                provider: input.reviewer.provider,
+                prompt,
+                reviewer: input.reviewer.id,
+                label: `delegation:${record.rule}`,
+                delivery: 'parent',
+                ...(input.prepared.reviewCwd === undefined ? {} : { cwd: input.prepared.reviewCwd }),
+                ...(input.reviewer.model === undefined ? {} : { model: input.reviewer.model }),
+                ...(input.reviewer.reasoningEffort === undefined
+                    ? {}
+                    : { reasoningEffort: input.reviewer.reasoningEffort }),
+                ...(input.reviewer.agentOptions === undefined
+                    ? {}
+                    : { agentOptions: input.reviewer.agentOptions }),
+            }, controller.signal),
+            stopped,
+        ]);
+        if (!child.completed) {
+            const reason = `the reviewer did not complete${child.error === undefined ? '' : `: ${child.error.slice(0, 200)}`}`;
+            return await writeErrorRecord(input, record, reason, 'provider-not-started', now);
+        }
+        if (child.text === undefined || child.text.trim() === '') {
+            return await writeErrorRecord(input, record, 'the reviewer returned no text verdict; re-run the review', 'invalid-output', now);
+        }
+        text = child.text;
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const timedOut = message.includes('timed out');
+        return await writeErrorRecord(input, record, message, timedOut ? 'timeout' : 'provider-not-started', now);
+    }
+    finally {
+        if (timer !== undefined)
+            clearTimeout(timer);
+        input.signal?.removeEventListener('abort', forwardAbort);
+    }
+    const parsed = parseReviewVerdict(text, record.digest);
+    if (!parsed.ok) {
+        return await writeErrorRecord(input, record, `${parsed.error}; re-run the review on the current digest`, 'invalid-output', now);
+    }
+    if (input.prepared.liveGuard !== undefined) {
+        const stillCurrent = await input.prepared.liveGuard().catch(() => false);
+        if (!stillCurrent) {
+            return await writeErrorRecord(input, record, 'reviewed inputs changed during the run; finish the writes and re-run the review', 'reviewed-inputs-changed', now);
+        }
+    }
+    const published = { ...record, verdict: parsed.verdict, findings: parsed.findings };
+    if (published.scope === 'task' && published.verdict === 'PASS') {
+        // The committed approval is written first; a failed publish publishes no PASS.
+        const writePortable = input.writePortable ?? writePortableApproval;
+        const approval = await writePortable(input.context.workspace, published);
+        if (!approval.ok) {
+            return await writeErrorRecord(input, record, `the committed approval at ${portableApprovalPath(published.change, published.taskId ?? '')} could not be written: ${approval.error}`, 'unknown', now);
+        }
+    }
+    const writeLocal = input.writeLocal ?? writeLocalReviewRecord;
+    const local = await writeLocal(input.context.workspace, published);
+    if (!local.ok) {
+        return {
+            run: settleStep(input.run, input.step.id, 'failed', {
+                at: now,
+                reason: `the review record could not be written: ${local.error}`,
+            }),
+            error: local.error,
+        };
+    }
+    const run = await settleFromRecord(input, published, local.path, now);
+    return { run, record: published, recordPath: local.path };
+}

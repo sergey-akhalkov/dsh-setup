@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { CHANGE_NAME } from './command-parse.js';
 import { resultSchemaShapeError, } from './definitions.js';
 import { hostToolName, resolveEvidenceText, toolNameMatches, } from './evidence.js';
+import { validateJsonLogic } from './jsonlogic.js';
 import { requestStep, setRunStatus, settleStep, } from './runs.js';
 import { renderMainSteer } from './steer.js';
+export { validateJsonLogic };
 /**
  * The `main` executor. It steers the root agent and never completes a step
  * itself: only a passing evidence check settles the step, so a model's text
@@ -168,106 +170,6 @@ function truthy(value) {
 }
 function operands(args) {
     return Array.isArray(args) ? args : [args];
-}
-/**
- * A bounded JSONLogic evaluator over plain data. It is data, not code: only a
- * small operator set is accepted, an unknown operator or malformed rule throws,
- * and the recursion depth is capped.
- */
-/** Validate the whole rule tree, operand counts included, before any evaluation. */
-export function validateJsonLogic(rule, depth = 0) {
-    if (depth > 32)
-        throw new Error('invalid JSONLogic: nesting is too deep');
-    if (rule === null || typeof rule !== 'object')
-        return;
-    if (Array.isArray(rule)) {
-        for (const entry of rule)
-            validateJsonLogic(entry, depth + 1);
-        return;
-    }
-    const keys = Object.keys(rule);
-    if (keys.length !== 1)
-        throw new Error('invalid JSONLogic: an operator object has one key');
-    const operator = keys[0] ?? '';
-    const args = operands(rule[operator]);
-    const expect = (min, max) => {
-        if (args.length < min || (max !== undefined && args.length > max)) {
-            throw new Error(`invalid JSONLogic: "${operator}" expects ${max === undefined ? `at least ${String(min)}` : `${String(min)} to ${String(max)}`} operand(s)`);
-        }
-    };
-    switch (operator) {
-        case 'var':
-            expect(1, 2);
-            break;
-        case '==':
-        case '!=':
-        case '===':
-        case '!==':
-        case 'in':
-            expect(2, 2);
-            break;
-        case '<':
-        case '<=':
-        case '>':
-        case '>=':
-            expect(2, 3);
-            break;
-        case 'and':
-        case 'or':
-            expect(1);
-            break;
-        case '!':
-            expect(1, 1);
-            break;
-        case '!!':
-            expect(1, 1);
-            break;
-        case '+':
-        case '*':
-        case 'cat':
-        case 'min':
-        case 'max':
-            expect(1);
-            break;
-        case '-':
-            expect(1, 2);
-            break;
-        case '/':
-            expect(2);
-            break;
-        case '%':
-            expect(2, 2);
-            break;
-        case 'missing':
-            expect(1);
-            break;
-        case 'some':
-        case 'all':
-        case 'none':
-        case 'missing_some':
-            expect(2, 2);
-            break;
-        case 'substr':
-            expect(2, 3);
-            break;
-        case 'map':
-        case 'filter':
-            expect(2, 2);
-            break;
-        case 'reduce':
-            expect(2, 3);
-            break;
-        case 'merge':
-            expect(1);
-            break;
-        case 'if':
-            expect(2);
-            break;
-        default:
-            throw new Error(`invalid JSONLogic: unknown operator "${operator}"`);
-    }
-    for (const entry of args)
-        validateJsonLogic(entry, depth + 1);
 }
 export function evaluateJsonLogic(rule, data, depth = 0) {
     if (depth > 32)

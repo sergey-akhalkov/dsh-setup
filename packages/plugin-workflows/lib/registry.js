@@ -1,4 +1,4 @@
-import { loadShippedDefinitions, validateDefinition } from './definitions.js';
+import { loadShippedDefinitions, validateDefinition, withSource, } from './definitions.js';
 import { loadCatalog, validateCatalog } from './triggers.js';
 /** The engine's own source label for the definitions it ships. */
 export const SHIPPED_SOURCE = '@dsh-setup/plugin-workflows';
@@ -83,7 +83,7 @@ export class DefinitionsRegistry {
         let definitions;
         let triggers;
         try {
-            definitions = rawDefinitions.map((raw) => validateDefinition(raw, source));
+            definitions = rawDefinitions.map((raw) => withSource(validateDefinition(raw, source), 'plugin'));
             triggers = validateCatalog({ triggers: rawTriggers });
         }
         catch (error) {

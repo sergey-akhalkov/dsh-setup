@@ -51,5 +51,11 @@ export interface WorkflowsConfig {
         readonly commands?: readonly string[];
         readonly maxBlocks?: number;
     };
+    /** Reviewer targets a review step names by id. */
+    readonly reviewers?: Readonly<Record<string, unknown>>;
+    /** The review admission queue's validated settings. */
+    readonly reviewQueue?: Readonly<Record<string, unknown>>;
+    /** The review executor's timeout settings. */
+    readonly timeouts?: Readonly<Record<string, unknown>>;
 }
 export declare function apply(ctx: Context, config?: WorkflowsConfig): void;

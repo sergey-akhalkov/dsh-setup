@@ -47,21 +47,30 @@ export interface DefinitionTrigger {
     readonly dedupe: DedupePolicy;
     readonly repeat?: boolean;
     readonly applicability?: ApplicabilityKind;
+    /** A bounded JSONLogic predicate over the trigger context; false produces no run. */
+    readonly condition?: Readonly<Record<string, unknown>>;
 }
-export declare const EXECUTORS: readonly ["main", "subagent", "tool", "branch", "loop", "human"];
+export declare const EXECUTORS: readonly ["main", "subagent", "tool", "branch", "loop", "human", "review"];
 export type Executor = (typeof EXECUTORS)[number];
 export declare const RISKS: readonly ["low", "medium", "high"];
 export type Risk = (typeof RISKS)[number];
 export declare const GATE_OWNERSHIP: readonly ["own", "defer"];
 export type GateOwnership = (typeof GATE_OWNERSHIP)[number];
-/** The closed pre-execute gate a definition may declare; the engine owns each. */
-export declare const DEFINITION_GATES: readonly ["intake"];
+/** The closed engine gate a definition may declare; the engine owns each. */
+export declare const DEFINITION_GATES: readonly ["intake", "review"];
 export type DefinitionGate = (typeof DEFINITION_GATES)[number];
 /** The legacy gate a deferred definition or step defers to. */
 export interface LegacySource {
     readonly plugin: string;
     readonly signal: string;
 }
+/**
+ * Where a definition came from. The loader sets this after validation; it is
+ * not a JSON field. A shipped or contributed definition resolves its effective
+ * ownership from the profile's per-signal switch, while a local copy keeps its
+ * declared ownership and must agree with the switch.
+ */
+export type DefinitionSource = 'shipped' | 'plugin' | 'local';
 export interface DefinitionSettings {
     readonly allowModelStart: boolean;
     readonly risk: Risk;
@@ -71,8 +80,10 @@ export interface DefinitionSettings {
     /** Tool names a `tool` step may call. */
     readonly allowTools?: readonly string[];
     readonly legacy?: LegacySource;
-    /** The engine-owned pre-execute gate this definition selects, if any. */
+    /** The engine-owned gate this definition selects, if any. */
     readonly gate?: DefinitionGate;
+    /** A stable gate identity a local copy may not remove or narrow. */
+    readonly gateIdentity?: string;
 }
 export declare const EVIDENCE_KINDS: readonly ["file", "record", "tool", "check", "human", "all", "declaration"];
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
@@ -133,6 +144,18 @@ export interface ToolSpec {
     readonly command?: string;
     readonly args?: Readonly<Record<string, unknown>>;
 }
+/** The native review executor's step configuration. */
+export interface ReviewSpec {
+    /** A reviewer id from the workflows row's `reviewers` map, never a provider. */
+    readonly target: string;
+    /** A bundled review instruction id under `assets/reviews/<id>.md`. */
+    readonly instruction: string;
+    readonly scope: 'whole' | 'task';
+    /** The record phase for a whole-scope review; absent for task scope. */
+    readonly phase?: string;
+}
+export declare const REVIEW_SCOPES: readonly ["whole", "task"];
+export type ReviewScope = (typeof REVIEW_SCOPES)[number];
 export interface SubagentSpec {
     readonly provider: string;
     readonly model?: string;
@@ -173,6 +196,7 @@ export interface Step {
     readonly human?: HumanSpec;
     readonly branch?: BranchSpec;
     readonly loop?: LoopSpec;
+    readonly review?: ReviewSpec;
 }
 /** The longest human-readable description a definition may carry. */
 export declare const MAX_DEFINITION_DESCRIPTION = 500;
@@ -229,5 +253,8 @@ export declare function readDefinitionFile(file: string): Definition;
  * both `src/host` during a source test and `lib` after compilation.
  */
 export declare function shippedDefinitionsDirectory(): string;
+export declare function withSource(definition: Definition, source: DefinitionSource): Definition;
+/** The loader-assigned source of one definition; absent means a local/unknown copy. */
+export declare function sourceOf(definition: Definition): DefinitionSource | undefined;
 /** Load every shipped definition; a duplicate id or invalid file fails the load. */
 export declare function loadShippedDefinitions(): Definition[];

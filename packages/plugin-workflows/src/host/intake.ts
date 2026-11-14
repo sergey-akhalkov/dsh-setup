@@ -44,8 +44,15 @@ export interface IntakeAdvanceInput {
   readonly toolRunner?: ToolRunner
   readonly subagentRunner?: SubagentRunner
   readonly questions?: HumanQuestionService
+  /** The review executor's host callback; absent keeps the step blocked. */
+  readonly reviewStep?: (request: {
+    readonly run: WorkflowRun
+    readonly definition: Definition
+    readonly step: Step
+    readonly context: EvidenceContext
+  }) => Promise<WorkflowRun | undefined>
   /** The deferred-step record reader; it must not call delegate. */
-  readonly readRecord?: (step: Step) => Promise<EvidenceCheck>
+  readonly readRecord?: (step: Step, owner: 'workflows' | 'legacy') => Promise<EvidenceCheck>
   readonly installedLegacy: ReadonlySet<string>
   /** `${plugin}/${signal}` entries that would actually steer. */
   readonly enabledLegacy?: ReadonlySet<string>
@@ -228,7 +235,12 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
         stepId: step.id,
         installedLegacy: input.installedLegacy,
         ...(input.enabledLegacy === undefined ? {} : { enabledLegacy: input.enabledLegacy }),
-        readRecord: input.readRecord,
+        readRecord: (deferredStep) =>
+          input.readRecord?.(deferredStep, 'legacy') ??
+          Promise.resolve({
+            ok: false as const,
+            failure: { reason: 'unsupported' as const, detail: 'no deferred record reader' },
+          }),
         now: at,
       })
       run = deferred.run
@@ -368,6 +380,44 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
       })
       if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
         return { run, completed: false, waiting: waitingFor(step, input.evidenceContext) }
+      }
+      continue
+    }
+    if (step.executor === 'review') {
+      const stepContext: EvidenceContext = {
+        ...input.evidenceContext,
+        reviewOwner: 'workflows',
+      }
+      // A matching current PASS or ERROR record settles the step without
+      // starting a second review.
+      const existing = await verifyEvidence(step.evidence ?? { kind: 'declaration' }, stepContext)
+      if (existing.ok) {
+        run = settleStep(run, step.id, 'done', { at, evidence: existing.evidence })
+        continue
+      }
+      if (input.reviewStep === undefined) {
+        return {
+          run: setRunStatus(run, 'blocked', at),
+          completed: false,
+          waiting: waitingFor(step, stepContext),
+        }
+      }
+      const reviewed = await input.reviewStep({
+        run,
+        definition: input.definition,
+        step,
+        context: stepContext,
+      })
+      if (reviewed === undefined) {
+        return {
+          run: setRunStatus(run, 'blocked', at),
+          completed: false,
+          waiting: waitingFor(step, stepContext),
+        }
+      }
+      run = reviewed
+      if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
+        return { run, completed: false, waiting: waitingFor(step, stepContext) }
       }
       continue
     }

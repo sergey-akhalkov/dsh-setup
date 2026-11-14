@@ -11,7 +11,7 @@ import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
 import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
 import { evaluateEvent } from './evaluate.js';
-import { commandMatches, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
+import { commandMatches, currentSpecDigest, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
 import { startFsChangeWatcher } from './fs-change.js';
 import { authorizationWriteDecision, evaluateIntakeGate, evaluateTurnClose } from './gates.js';
@@ -24,7 +24,8 @@ import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, storedRuns, writeRun, writeRunSync, } from './runs.js';
+import { resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, runReviewStep, TASK_ID_PATTERN, } from './review.js';
+import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { checkedTaskIds } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, obligationDedupeKey, } from './triggers.js';
@@ -367,6 +368,23 @@ export function apply(ctx, config = {}) {
     const maxRuns = config.maxRuns ?? DEFAULT_MAX_RUNS;
     const checkpointApplicability = resolveCheckpointApplicability(config.checkpointApplicability);
     const verifySettings = resolveVerifySettings(config.verify);
+    // The review settings are validated before any listener registers: a bad
+    // range or an option a registered provider cannot honor fails the load.
+    const providerOptionsSupport = (provider) => {
+        try {
+            const runtime = ctx.get?.('subagents');
+            const entry = runtime?.getProvider?.(provider);
+            return entry === undefined ? undefined : entry.capabilities?.agentOptions === true;
+        }
+        catch {
+            return undefined;
+        }
+    };
+    const reviewers = resolveReviewers(config.reviewers, providerOptionsSupport);
+    const reviewTimeoutMs = resolveReviewTimeout(config.timeouts);
+    // Resolve the queue now so an invalid range fails the load; admission is
+    // wired by the engine's review scheduler.
+    resolveReviewQueue(config.reviewQueue);
     // A malformed shipped trigger or definition refuses the plugin load, naming
     // the field. The registry then holds one merged installed catalog.
     definitionsRegistry.seedShipped();
@@ -1712,19 +1730,34 @@ export function apply(ctx, config = {}) {
         return {
             run: async (request, signal) => {
                 const controller = signal ?? new AbortController().signal;
+                const options = {
+                    ...(request.agentOptions ?? {}),
+                    ...(request.model === undefined ? {} : { model: request.model }),
+                    ...(request.reasoningEffort === undefined
+                        ? {}
+                        : { reasoningEffort: request.reasoningEffort }),
+                };
                 const activation = await subagentRuntime.startActivation({
                     provider: request.provider,
-                    label: `workflows ${request.provider}`.slice(0, 120),
+                    label: (request.label ?? `workflows ${request.provider}`).slice(0, 120),
                     parent: agent,
                     prompt: [{ type: 'text', text: request.prompt }],
                     ...(request.schema === undefined ? {} : { outputSchema: request.schema }),
+                    ...(Object.keys(options).length === 0 ? {} : { agentOptions: options }),
+                    ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
                     signal: controller,
-                    delivery: 'caller',
+                    delivery: request.delivery ?? 'caller',
                 });
                 const result = await activation.result;
+                const text = result.output
+                    .filter((block) => block.type === 'text')
+                    .map((block) => block.text)
+                    .join('\n')
+                    .trim();
                 return {
                     childId: String(activation.childId),
                     completed: result.stopReason === 'completed',
+                    ...(text === '' ? {} : { text }),
                     ...(result.structured === undefined ? {} : { result: result.structured }),
                     ...(result.diagnostic === undefined ? {} : { error: result.diagnostic }),
                 };
@@ -2078,9 +2111,58 @@ export function apply(ctx, config = {}) {
             ...(runner === undefined ? {} : { toolRunner: runner }),
             ...(subagentRunner === undefined ? {} : { subagentRunner }),
             ...(questions === undefined ? {} : { questions }),
-            readRecord: (step) => verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
+            reviewStep: async ({ run: reviewRun, definition: reviewDefinition, step, context }) => {
+                const spec = step.review;
+                if (spec === undefined || subagentRunner === undefined)
+                    return undefined;
+                const resolved = resolveReviewer(reviewers, spec.target);
+                if (!resolved.ok) {
+                    return settleStep(reviewRun, step.id, 'failed', {
+                        at: journal.time(),
+                        reason: resolved.error,
+                    });
+                }
+                const change = reviewRun.context.name;
+                if (typeof change !== 'string' || !CHANGE_NAME.test(change))
+                    return undefined;
+                if (spec.scope === 'task') {
+                    // A task scope reviews a frozen snapshot; the queue admission writes
+                    // it before this executor is admitted. Without a snapshot the live
+                    // fallback is not yet admissible, so the step stays blocked.
+                    const taskId = reviewRun.context.taskId;
+                    if (typeof taskId !== 'string' || !TASK_ID_PATTERN.test(taskId))
+                        return undefined;
+                    return undefined;
+                }
+                const specDigest = await currentSpecDigest(workspace, change);
+                if (specDigest === undefined) {
+                    return settleStep(reviewRun, step.id, 'failed', {
+                        at: journal.time(),
+                        reason: `the change artifacts for "${change}" are unreadable; fix openspec/changes/${change}/ and re-run`,
+                    });
+                }
+                const result = await runReviewStep({
+                    run: reviewRun,
+                    definition: reviewDefinition,
+                    step,
+                    reviewer: resolved.reviewer,
+                    runner: subagentRunner,
+                    context,
+                    change,
+                    prepared: {
+                        specDigest,
+                        liveGuard: async () => (await currentSpecDigest(workspace, change)) === specDigest,
+                    },
+                    timeoutMs: reviewTimeoutMs,
+                    session: sessionId,
+                    now: journal.time(),
+                });
+                return result.run;
+            },
+            readRecord: (step, owner) => verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
                 workspace,
                 values: run.context,
+                reviewOwner: owner,
             }),
             installedLegacy,
             enabledLegacy,

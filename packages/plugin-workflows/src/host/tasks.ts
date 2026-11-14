@@ -33,3 +33,36 @@ export function checkedTaskIdsOf(workspace: string, change: string): string[] | 
     return undefined
   }
 }
+
+export interface NumberedTask {
+  readonly id: string
+  readonly number: string
+  readonly text: string
+}
+
+/** One numbered task by its stable id, checked or not. */
+export function findTaskOf(markdown: string, taskId: string): NumberedTask | undefined {
+  for (const match of markdown.matchAll(/^\s*-\s*\[[ xX]\]\s+(\d+(?:\.\d+)*)\s+(\S.*?)\s*$/gmu)) {
+    const text = match[2] ?? ''
+    if (taskIdOf(text) === taskId) {
+      return { id: taskId, number: match[1] ?? '', text }
+    }
+  }
+  return undefined
+}
+
+/** One numbered task of one change, or undefined when tasks.md is unreadable. */
+export function taskOf(
+  workspace: string,
+  change: string,
+  taskId: string,
+): NumberedTask | undefined {
+  try {
+    return findTaskOf(
+      readFileSync(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8'),
+      taskId,
+    )
+  } catch {
+    return undefined
+  }
+}

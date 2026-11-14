@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { link, lstat, mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile, } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
-import { loadShippedDefinitions, readDefinitionFile, resolveOwnership, validateDefinition, workspaceDefinitionsDirectory, } from './definitions.js';
+import { loadShippedDefinitions, readDefinitionFile, resolveOwnership, validateDefinition, withSource, workspaceDefinitionsDirectory, } from './definitions.js';
 import { isInside } from './fs-change.js';
 /**
  * The host approval store. A local definition or override is active only when
@@ -458,7 +458,7 @@ export async function loadApprovedDefinitions(workspace, options) {
             continue;
         }
         try {
-            const parsed = validateDefinition(JSON.parse(bytes.toString('utf8')), name);
+            const parsed = withSource(validateDefinition(JSON.parse(bytes.toString('utf8')), name), 'local');
             // A local copy that shadows a gated installed definition may not remove
             // the declaration; the installed definition stays effective and the user
             // re-saves a copy from the installed template.

@@ -1,7 +1,9 @@
 import { type Definition, type Step } from './definitions.js';
 import { type EvidenceCheck, type EvidenceContext } from './evidence.js';
+import { validateJsonLogic } from './jsonlogic.js';
 import { type WorkflowRun } from './runs.js';
 import { type SteerTarget } from './steer.js';
+export { validateJsonLogic };
 /**
  * The `main` executor. It steers the root agent and never completes a step
  * itself: only a passing evidence check settles the step, so a model's text
@@ -81,13 +83,6 @@ export interface JsonLogicData {
     readonly iteration?: number;
     readonly item?: unknown;
 }
-/**
- * A bounded JSONLogic evaluator over plain data. It is data, not code: only a
- * small operator set is accepted, an unknown operator or malformed rule throws,
- * and the recursion depth is capped.
- */
-/** Validate the whole rule tree, operand counts included, before any evaluation. */
-export declare function validateJsonLogic(rule: unknown, depth?: number): void;
 export declare function evaluateJsonLogic(rule: unknown, data: unknown, depth?: number): unknown;
 export interface BranchStepInput {
     readonly run: WorkflowRun;
@@ -178,6 +173,8 @@ export interface SubagentRunResult {
     readonly childId: string;
     readonly completed: boolean;
     readonly result?: unknown;
+    /** The child's final assistant text; a review verdict is parsed from it. */
+    readonly text?: string;
     readonly error?: string;
 }
 export interface SubagentRunner {
@@ -187,6 +184,15 @@ export interface SubagentRunner {
         readonly schema?: ResultSchema;
         readonly model?: string;
         readonly reasoningEffort?: string;
+        /** A reviewer id used for the catalog label; ignored by other callers. */
+        readonly reviewer?: string;
+        /** The child's catalog label; a review uses `delegation:<rule>`. */
+        readonly label?: string;
+        /** A frozen review checkout the child runs in. */
+        readonly cwd?: string;
+        /** `parent` makes the child visible with a settlement notice. */
+        readonly delivery?: 'parent' | 'caller';
+        readonly agentOptions?: Readonly<Record<string, unknown>>;
     }, signal?: AbortSignal): Promise<SubagentRunResult>;
 }
 export interface SubagentStepInput {

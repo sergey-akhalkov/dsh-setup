@@ -10,3 +10,12 @@ export declare function taskIdOf(text: string): string;
 export declare function checkedTaskIds(markdown: string): string[];
 /** The checked task ids of one change, or undefined when its tasks.md is unreadable. */
 export declare function checkedTaskIdsOf(workspace: string, change: string): string[] | undefined;
+export interface NumberedTask {
+    readonly id: string;
+    readonly number: string;
+    readonly text: string;
+}
+/** One numbered task by its stable id, checked or not. */
+export declare function findTaskOf(markdown: string, taskId: string): NumberedTask | undefined;
+/** One numbered task of one change, or undefined when tasks.md is unreadable. */
+export declare function taskOf(workspace: string, change: string, taskId: string): NumberedTask | undefined;

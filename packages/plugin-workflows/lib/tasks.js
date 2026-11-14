@@ -28,3 +28,22 @@ export function checkedTaskIdsOf(workspace, change) {
         return undefined;
     }
 }
+/** One numbered task by its stable id, checked or not. */
+export function findTaskOf(markdown, taskId) {
+    for (const match of markdown.matchAll(/^\s*-\s*\[[ xX]\]\s+(\d+(?:\.\d+)*)\s+(\S.*?)\s*$/gmu)) {
+        const text = match[2] ?? '';
+        if (taskIdOf(text) === taskId) {
+            return { id: taskId, number: match[1] ?? '', text };
+        }
+    }
+    return undefined;
+}
+/** One numbered task of one change, or undefined when tasks.md is unreadable. */
+export function taskOf(workspace, change, taskId) {
+    try {
+        return findTaskOf(readFileSync(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8'), taskId);
+    }
+    catch {
+        return undefined;
+    }
+}

@@ -396,6 +396,23 @@ export async function currentSpecDigest(workspace, change) {
 function mismatch(detail, path, item) {
     return failure('record-mismatch', detail, path, item);
 }
+/**
+ * Resolve the record path its step's ownership selects. The new shipped
+ * definitions name the workflows store; under a rolled-back switch the same
+ * suffix is read from the legacy store, and an explicit legacy path under an
+ * owned step is read from the workflows store. The committed approval path is
+ * ownership-independent and never rewritten.
+ */
+export function ownedReviewRecordPath(path, owner) {
+    const normalized = path.replaceAll('\\', '/');
+    if (owner === 'legacy' && normalized.startsWith('.dsh/workflows/records/')) {
+        return `.dsh/delegation/${normalized.slice('.dsh/workflows/records/'.length)}`;
+    }
+    if (owner === 'workflows' && normalized.startsWith('.dsh/delegation/')) {
+        return `.dsh/workflows/records/${normalized.slice('.dsh/delegation/'.length)}`;
+    }
+    return path;
+}
 async function recordCheck(evidence, context, item) {
     const rule = resolveEvidenceText(evidence.rule, context, item);
     if (!rule.ok)
@@ -406,7 +423,7 @@ async function recordCheck(evidence, context, item) {
     const derived = change === undefined
         ? undefined
         : `.dsh/delegation/${rule.text}/${change.text}/${evidence.phase ?? 'spec'}.json`;
-    const path = evidence.path === undefined
+    let path = evidence.path === undefined
         ? derived === undefined
             ? undefined
             : { ok: true, text: derived }
@@ -414,6 +431,7 @@ async function recordCheck(evidence, context, item) {
     if (path === undefined || !path.ok) {
         return failure('invalid-evidence', 'record evidence needs a path, or a rule and change', undefined, item);
     }
+    path = { ok: true, text: ownedReviewRecordPath(path.text, context.reviewOwner) };
     const read = await readWorkspaceFile(context.workspace, path.text);
     if (read === undefined) {
         return failure('missing-file', `the record "${path.text}" is missing or escapes the workspace`, path.text, item);

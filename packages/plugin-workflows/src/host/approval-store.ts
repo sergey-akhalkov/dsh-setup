@@ -18,6 +18,7 @@ import {
   readDefinitionFile,
   resolveOwnership,
   validateDefinition,
+  withSource,
   workspaceDefinitionsDirectory,
 } from './definitions.js'
 import { isInside } from './fs-change.js'
@@ -579,7 +580,10 @@ export async function loadApprovedDefinitions(
       continue
     }
     try {
-      const parsed = validateDefinition(JSON.parse(bytes.toString('utf8')), name)
+      const parsed = withSource(
+        validateDefinition(JSON.parse(bytes.toString('utf8')), name),
+        'local',
+      )
       // A local copy that shadows a gated installed definition may not remove
       // the declaration; the installed definition stays effective and the user
       // re-saves a copy from the installed template.

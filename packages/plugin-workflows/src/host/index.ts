@@ -36,6 +36,7 @@ import {
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
   commandMatches,
+  currentSpecDigest,
   ignoredWrite,
   lastCodeWriteAt,
   type ShellResultObservation,
@@ -79,6 +80,15 @@ import { issueCompletionReceipt, listReceipts } from './receipts.js'
 import { definitionsRegistry, type WorkflowsDefinitionsService } from './registry.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
+  type ReviewerMap,
+  resolveReviewer,
+  resolveReviewers,
+  resolveReviewQueue,
+  resolveReviewTimeout,
+  runReviewStep,
+  TASK_ID_PATTERN,
+} from './review.js'
+import {
   addViolation,
   completeNotApplicable,
   createRun,
@@ -92,6 +102,7 @@ import {
   readAuthenticatedRun,
   runFailure,
   setRunStatus,
+  settleStep,
   storedRuns,
   type WorkflowRun,
   writeRun,
@@ -556,6 +567,12 @@ export interface WorkflowsConfig {
   readonly checkpointApplicability?: CheckpointApplicabilityConfig
   /** The validate-only profile settings for the `verify` definition. */
   readonly verify?: { readonly commands?: readonly string[]; readonly maxBlocks?: number }
+  /** Reviewer targets a review step names by id. */
+  readonly reviewers?: Readonly<Record<string, unknown>>
+  /** The review admission queue's validated settings. */
+  readonly reviewQueue?: Readonly<Record<string, unknown>>
+  /** The review executor's timeout settings. */
+  readonly timeouts?: Readonly<Record<string, unknown>>
 }
 
 export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
@@ -569,6 +586,26 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const maxRuns = config.maxRuns ?? DEFAULT_MAX_RUNS
   const checkpointApplicability = resolveCheckpointApplicability(config.checkpointApplicability)
   const verifySettings = resolveVerifySettings(config.verify)
+  // The review settings are validated before any listener registers: a bad
+  // range or an option a registered provider cannot honor fails the load.
+  const providerOptionsSupport = (provider: string): boolean | undefined => {
+    try {
+      const runtime = (ctx as unknown as { get?: (name: string) => unknown }).get?.('subagents') as
+        | SubagentRuntime
+        | undefined
+      const entry = runtime?.getProvider?.(provider) as
+        | { readonly capabilities?: { readonly agentOptions?: boolean } }
+        | undefined
+      return entry === undefined ? undefined : entry.capabilities?.agentOptions === true
+    } catch {
+      return undefined
+    }
+  }
+  const reviewers: ReviewerMap = resolveReviewers(config.reviewers, providerOptionsSupport)
+  const reviewTimeoutMs = resolveReviewTimeout(config.timeouts)
+  // Resolve the queue now so an invalid range fails the load; admission is
+  // wired by the engine's review scheduler.
+  resolveReviewQueue(config.reviewQueue)
   // A malformed shipped trigger or definition refuses the plugin load, naming
   // the field. The registry then holds one merged installed catalog.
   definitionsRegistry.seedShipped()
@@ -2071,19 +2108,34 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     return {
       run: async (request, signal) => {
         const controller = signal ?? new AbortController().signal
+        const options = {
+          ...(request.agentOptions ?? {}),
+          ...(request.model === undefined ? {} : { model: request.model }),
+          ...(request.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: request.reasoningEffort }),
+        }
         const activation = await subagentRuntime.startActivation({
           provider: request.provider,
-          label: `workflows ${request.provider}`.slice(0, 120),
+          label: (request.label ?? `workflows ${request.provider}`).slice(0, 120),
           parent: agent,
           prompt: [{ type: 'text', text: request.prompt }],
           ...(request.schema === undefined ? {} : { outputSchema: request.schema as never }),
+          ...(Object.keys(options).length === 0 ? {} : { agentOptions: options as never }),
+          ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
           signal: controller,
-          delivery: 'caller',
+          delivery: request.delivery ?? 'caller',
         })
         const result = await activation.result
+        const text = result.output
+          .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n')
+          .trim()
         return {
           childId: String(activation.childId),
           completed: result.stopReason === 'completed',
+          ...(text === '' ? {} : { text }),
           ...(result.structured === undefined ? {} : { result: result.structured }),
           ...(result.diagnostic === undefined ? {} : { error: result.diagnostic }),
         }
@@ -2496,10 +2548,56 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       ...(runner === undefined ? {} : { toolRunner: runner }),
       ...(subagentRunner === undefined ? {} : { subagentRunner }),
       ...(questions === undefined ? {} : { questions }),
-      readRecord: (step) =>
+      reviewStep: async ({ run: reviewRun, definition: reviewDefinition, step, context }) => {
+        const spec = step.review
+        if (spec === undefined || subagentRunner === undefined) return undefined
+        const resolved = resolveReviewer(reviewers, spec.target)
+        if (!resolved.ok) {
+          return settleStep(reviewRun, step.id, 'failed', {
+            at: journal.time(),
+            reason: resolved.error,
+          })
+        }
+        const change = reviewRun.context.name
+        if (typeof change !== 'string' || !CHANGE_NAME.test(change)) return undefined
+        if (spec.scope === 'task') {
+          // A task scope reviews a frozen snapshot; the queue admission writes
+          // it before this executor is admitted. Without a snapshot the live
+          // fallback is not yet admissible, so the step stays blocked.
+          const taskId = reviewRun.context.taskId
+          if (typeof taskId !== 'string' || !TASK_ID_PATTERN.test(taskId)) return undefined
+          return undefined
+        }
+        const specDigest = await currentSpecDigest(workspace, change)
+        if (specDigest === undefined) {
+          return settleStep(reviewRun, step.id, 'failed', {
+            at: journal.time(),
+            reason: `the change artifacts for "${change}" are unreadable; fix openspec/changes/${change}/ and re-run`,
+          })
+        }
+        const result = await runReviewStep({
+          run: reviewRun,
+          definition: reviewDefinition,
+          step,
+          reviewer: resolved.reviewer,
+          runner: subagentRunner,
+          context,
+          change,
+          prepared: {
+            specDigest,
+            liveGuard: async () => (await currentSpecDigest(workspace, change)) === specDigest,
+          },
+          timeoutMs: reviewTimeoutMs,
+          session: sessionId,
+          now: journal.time(),
+        })
+        return result.run
+      },
+      readRecord: (step, owner) =>
         verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
           workspace,
           values: run.context,
+          reviewOwner: owner,
         }),
       installedLegacy,
       enabledLegacy,
