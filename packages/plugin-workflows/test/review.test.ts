@@ -777,6 +777,23 @@ describe('review evidence contract', () => {
     ).toThrow(/placeholder/u)
   })
 
+  it('refuses a review step that cannot accept PASS', () => {
+    const def = taskDefinition()
+    const step = def.steps[0] as Definition['steps'][number]
+    const ev = step.evidence as unknown as Record<string, unknown>
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [{ ...step, evidence: { ...ev, verdicts: ['FINDINGS'] } }],
+      }),
+    ).toThrow(/accept PASS/u)
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [{ ...step, evidence: { ...ev, verdicts: ['PASS'] } }],
+      }),
+    ).not.toThrow()
+  })
   it('requires the same record contract even without the review gate', () => {
     const def = taskDefinition()
     const step = def.steps[0] as Definition['steps'][number]

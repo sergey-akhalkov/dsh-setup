@@ -5,7 +5,12 @@ import type { EditorState } from './editor.ts'
 import { brickGlyph, executorIcon } from './glyphs.tsx'
 import type { DiagramNode, EdgeKind, GraphStep } from './graph.ts'
 import { fallbackTranslate, type Translate } from './locale.ts'
-import { promptSummary, type ReviewContractView, reviewContract } from './review-contract.ts'
+import {
+  promptSummary,
+  type ReviewContractView,
+  reviewContract,
+  reviewReuseText,
+} from './review-contract.ts'
 
 /**
  * The inspector. It edits the same definition the canvas and the list editor
@@ -337,7 +342,7 @@ function ReviewContractCard(props: {
         <span className="dsh-wf-hint">{t('review.verdictSchema.text')}</span>
       </Field>
       <Field label={t('review.reuse')}>
-        <span className="dsh-wf-hint">{t('review.reuse.text')}</span>
+        <span className="dsh-wf-hint">{reviewReuseText(contract, t)}</span>
       </Field>
       <Field label={t('review.record')}>
         <span className="dsh-wf-mono">{contract.recordPath}</span>

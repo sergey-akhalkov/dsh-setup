@@ -28,7 +28,7 @@ import {
   type TriggerEvaluation,
   type TriggerView,
 } from './panel.tsx'
-import { promptSummary, reviewContract } from './review-contract.ts'
+import { promptSummary, reviewContract, reviewReuseText } from './review-contract.ts'
 import { RunList, relativeLabel, runDot } from './run-history.tsx'
 import { FLOW_CSS } from './styles.ts'
 
@@ -586,7 +586,7 @@ function ReviewContractCards(props: {
               value={contract.scope === 'task' ? t('review.digest.task') : t('review.digest.whole')}
             />
             <Fact label={t('review.verdictSchema')} value={t('review.verdictSchema.text')} />
-            <Fact label={t('review.reuse')} value={t('review.reuse.text')} />
+            <Fact label={t('review.reuse')} value={reviewReuseText(contract, t)} />
             <Fact
               label={t('review.record')}
               value={<span className="dsh-wf-mono">{contract.recordPath}</span>}

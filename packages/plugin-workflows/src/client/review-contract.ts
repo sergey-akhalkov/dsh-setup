@@ -15,6 +15,8 @@ export interface ReviewContractView {
   readonly scope: 'whole' | 'task'
   readonly phase: string
   readonly recordPath: string
+  /** The verdicts the step's evidence accepts, in display order. */
+  readonly acceptedVerdicts: readonly string[]
 }
 
 /** The bundled instruction ids the shipped review definitions name. */
@@ -86,6 +88,12 @@ export function reviewContract(
   const phase = scope === 'task' ? 'task' : (text(config.phase) ?? 'spec')
   const prompt = text(step.prompt)
   const promptKey = reviewPromptKey(instruction)
+  const declared = record(step.evidence)
+  const acceptedVerdicts = Array.isArray(declared?.verdicts)
+    ? declared.verdicts.filter((entry): entry is string => typeof entry === 'string')
+    : typeof declared?.verdict === 'string'
+      ? [declared.verdict]
+      : ['PASS', 'ERROR']
   return {
     instruction,
     ...(promptKey === undefined ? {} : { promptKey }),
@@ -93,5 +101,14 @@ export function reviewContract(
     scope,
     phase,
     recordPath: recordPathOf(definitionId, scope, phase, step.evidence),
+    acceptedVerdicts,
   }
+}
+
+/** The step's actual reuse policy, derived from its accepted verdicts. */
+export function reviewReuseText(contract: ReviewContractView, t: Translate): string {
+  const accepted = contract.acceptedVerdicts
+  return accepted.includes('PASS') && accepted.includes('ERROR')
+    ? t('review.reuse.text')
+    : `A matching current ${accepted.join(' or ')} record settles the step without a new run; any other verdict keeps it open.`
 }

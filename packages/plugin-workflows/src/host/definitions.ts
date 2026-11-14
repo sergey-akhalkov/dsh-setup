@@ -1297,6 +1297,19 @@ export function validateDefinition(raw: unknown, source = 'definition'): Definit
         fail(definition, `${reviewField}.path`, 'must carry the {taskId} placeholder')
       }
     }
+    // A review gate must be able to PASS; only an ERROR may also settle it for
+    // an intermediate close. Any other accepted verdict cannot complete it.
+    const accepted = reviewEvidence.verdicts ?? [reviewEvidence.verdict]
+    if (
+      !accepted.includes('PASS') ||
+      accepted.some((verdict) => verdict !== 'PASS' && verdict !== 'ERROR')
+    ) {
+      fail(
+        definition,
+        `${reviewField}.verdicts`,
+        'must accept PASS and may accept ERROR; no other verdict settles a review step',
+      )
+    }
   }
   if (settingsValue.gate === 'review') {
     const reviewSteps = steps.filter((entry) => entry.executor === 'review')

@@ -249,14 +249,21 @@ window.__ModuleLoader__.load({
       const phase = scope === "task" ? "task" : text(config.phase) ?? "spec";
       const prompt = text(step.prompt);
       const promptKey = reviewPromptKey(instruction);
+      const declared = record(step.evidence);
+      const acceptedVerdicts = Array.isArray(declared?.verdicts) ? declared.verdicts.filter((entry) => typeof entry === "string") : typeof declared?.verdict === "string" ? [declared.verdict] : ["PASS", "ERROR"];
       return {
         instruction,
         ...promptKey === void 0 ? {} : { promptKey },
         ...prompt === void 0 ? {} : { prompt },
         scope,
         phase,
-        recordPath: recordPathOf(definitionId, scope, phase, step.evidence)
+        recordPath: recordPathOf(definitionId, scope, phase, step.evidence),
+        acceptedVerdicts
       };
+    }
+    function reviewReuseText(contract, t) {
+      const accepted = contract.acceptedVerdicts;
+      return accepted.includes("PASS") && accepted.includes("ERROR") ? t("review.reuse.text") : `A matching current ${accepted.join(" or ")} record settles the step without a new run; any other verdict keeps it open.`;
     }
 
     // packages/plugin-workflows/src/client/a11y.ts
@@ -11955,7 +11962,7 @@ window.__ModuleLoader__.load({
         /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.phase"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: contract.phase ?? "\u2014" }) }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.digestScope"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: contract.scope === "task" ? t("review.digest.task") : t("review.digest.whole") }) }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.verdictSchema"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-hint", children: t("review.verdictSchema.text") }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.reuse"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-hint", children: t("review.reuse.text") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.reuse"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-hint", children: reviewReuseText(contract, t) }) }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: t("review.record"), children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-mono", children: contract.recordPath }) })
       ] });
     }
@@ -14290,7 +14297,7 @@ window.__ModuleLoader__.load({
                   }
                 ),
                 /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("review.verdictSchema"), value: t("review.verdictSchema.text") }),
-                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("review.reuse"), value: t("review.reuse.text") }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("review.reuse"), value: reviewReuseText(contract, t) }),
                 /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
                   Fact,
                   {
