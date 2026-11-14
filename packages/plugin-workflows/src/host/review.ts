@@ -877,7 +877,18 @@ export async function runReviewStep(input: ReviewRunInput): Promise<ReviewRunRes
     snapshot: input.prepared.reviewCwd !== undefined,
     ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
   }
-  const prompt = (input.renderPrompt ?? renderReviewPrompt)(promptInput)
+  let prompt: string
+  try {
+    prompt = (input.renderPrompt ?? renderReviewPrompt)(promptInput)
+  } catch (error) {
+    return await writeErrorRecord(
+      input,
+      record,
+      `the bundled review instruction "${spec.instruction}" could not be rendered: ${error instanceof Error ? error.message : String(error)}`,
+      'config',
+      now,
+    )
+  }
 
   const controller = new AbortController()
   const forwardAbort = (): void => controller.abort()

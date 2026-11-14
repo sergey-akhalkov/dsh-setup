@@ -820,3 +820,40 @@ describe('review evidence contract', () => {
     expect(result.error).toContain('record')
   })
 })
+
+describe('review instruction failure', () => {
+  it('writes an ERROR record when the bundled instruction cannot be rendered', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0] as Definition['steps'][number]
+    const result = await invoke(root, runnerFor(PASS_TEXT), {
+      step: {
+        ...step,
+        review: {
+          target: 'codex',
+          instruction: 'no-such-instruction',
+          scope: 'task',
+        },
+      },
+      renderPrompt: renderReviewPrompt,
+    })
+    expect(result.error).toContain('could not be rendered')
+    const record = JSON.parse(
+      await readFile(
+        join(
+          root,
+          localReviewRecordPath({
+            definition: 'task-review',
+            change: 'auth',
+            scope: 'task',
+            taskId: TASK_ID,
+          }),
+        ),
+        'utf8',
+      ),
+    ) as ReviewRecord
+    expect(record.verdict).toBe('ERROR')
+    expect(record.failureClass).toBe('config')
+  })
+})
