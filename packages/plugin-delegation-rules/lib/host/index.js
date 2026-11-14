@@ -88,6 +88,8 @@ const REVIEW_QUEUE_KEYS = new Set([
 ]);
 const MAX_ERROR_CHARS = 4_000;
 const MAX_REASON_CHARS = 2_000;
+/** One release of alias life: printed exactly once by the compat status surface. */
+const DEPRECATION_LINE = 'delegation_status is deprecated; use the workflows tool';
 class DelegationError extends Error {
     constructor(message) {
         super(message);
@@ -287,23 +289,69 @@ export function validateConfig(raw) {
     const gates = validateGates(raw.gates);
     return { targets, rules, timeouts, reviewQueue, gates };
 }
-/** Validate the gate-only retirement switch fail-loud with its field and shape. */
+const GATE_KEYS = [
+    'workflowOwned',
+    'specReview',
+    'integrationReview',
+    'taskProgress',
+    'laneFanout',
+];
+/** Validate the per-signal switches fail-loud; every omitted signal stays enabled. */
 export function validateGates(raw) {
+    const gates = {
+        workflowOwned: true,
+        specReview: true,
+        integrationReview: true,
+        taskProgress: true,
+        laneFanout: true,
+    };
     if (raw === undefined)
-        return { workflowOwned: true };
-    if (!isRecord(raw)) {
-        fail('gates must be a mapping; accepted shape: { workflowOwned?: boolean }');
-    }
+        return gates;
+    const accepted = GATE_KEYS.join(', ');
+    if (!isRecord(raw))
+        fail(`gates must be a mapping; accepted keys: ${accepted}`);
     for (const key of Object.keys(raw)) {
-        if (key !== 'workflowOwned') {
-            fail(`gates: unknown field "${key}"; accepted shape: { workflowOwned?: boolean }`);
+        if (!GATE_KEYS.includes(key)) {
+            fail(`gates: unknown field "${key}"; accepted keys: ${accepted}`);
         }
     }
-    const workflowOwned = raw.workflowOwned;
-    if (workflowOwned !== undefined && typeof workflowOwned !== 'boolean') {
-        fail('gates.workflowOwned must be a boolean');
+    for (const key of GATE_KEYS) {
+        const value = raw[key];
+        if (value === undefined)
+            continue;
+        if (typeof value !== 'boolean')
+            fail(`gates.${key} must be a boolean`);
+        gates[key] = value;
     }
-    return { workflowOwned: workflowOwned ?? true };
+    return gates;
+}
+/**
+ * Which legacy signals would actually steer under one row config: a switch is
+ * on and a rule that enforces it is configured. The workflow loader resolves
+ * each shipped definition's effective ownership from this state, so a signal
+ * that cannot steer never keeps a `defer` definition alive.
+ */
+export function resolveLegacySignals(config) {
+    const rules = config.rules;
+    return {
+        workflowOwned: config.gates.workflowOwned,
+        specReview: config.gates.specReview &&
+            rules.some((rule) => rule.when === 'spec-ready' &&
+                rule.contract === 'review' &&
+                rule.scope === 'whole' &&
+                rule.gate !== 'none'),
+        integrationReview: config.gates.integrationReview &&
+            rules.some((rule) => rule.when === 'implementation-complete' &&
+                rule.contract === 'review' &&
+                rule.scope === 'whole' &&
+                rule.gate !== 'none'),
+        taskProgress: config.gates.taskProgress &&
+            rules.some((rule) => rule.when === 'implementation-work' && rule.contract === 'note'),
+        laneFanout: config.gates.laneFanout &&
+            rules.some((rule) => (rule.when === 'lane-assignment' || rule.when === 'lane-boundary') &&
+                rule.contract === 'note' &&
+                rule.gate !== 'none'),
+    };
 }
 /**
  * Validate the review queue block. An omitted block enables the documented
@@ -2264,6 +2312,41 @@ export function recordSatisfies(state, change, scope, digest, taskId) {
         return false;
     return legacyRecordSatisfies(state.record, change, scope, digest, taskId);
 }
+/** Where the owned review runtime keeps one intermediate task review record. */
+function ownedTaskRecordPath(cwd, change, taskId) {
+    return join(cwd, '.dsh', 'workflows', 'records', 'task-review', change, 'tasks', `${taskId}.json`);
+}
+/**
+ * The active review owner's intermediate evidence: a PASS/ERROR record for this
+ * change and task in the workflow record store. The native record is a superset
+ * of the legacy one, so the shared predicate decides the match.
+ */
+async function ownedTaskReviewed(cwd, change, taskId) {
+    let raw;
+    try {
+        raw = await readFile(ownedTaskRecordPath(cwd, change, taskId), 'utf8');
+    }
+    catch {
+        return false;
+    }
+    try {
+        const value = JSON.parse(raw);
+        if (!isRecord(value))
+            return false;
+        return legacyRecordSatisfies({
+            change: typeof value.change === 'string' ? value.change : '',
+            scope: typeof value.scope === 'string' ? value.scope : '',
+            verdict: typeof value.verdict === 'string' ? value.verdict : '',
+            ...(typeof value.taskId === 'string' ? { taskId: value.taskId } : {}),
+            ...(typeof value.digest === 'string' ? { digest: value.digest } : {}),
+            ...(typeof value.error === 'string' ? { error: value.error } : {}),
+            ...(typeof value.failureClass === 'string' ? { failureClass: value.failureClass } : {}),
+        }, change, 'task', undefined, taskId);
+    }
+    catch {
+        return false;
+    }
+}
 async function inspectNote(cwd, change) {
     let raw;
     try {
@@ -2921,6 +3004,16 @@ class DelegationEngine {
             return;
         this.sectionIdentities.set(key, { identity: run.file.identity, seq });
     }
+    signalOwned(ruleId) {
+        const gates = this.config.gates;
+        if (ruleId === 'task-review')
+            return !gates.workflowOwned;
+        if (ruleId === 'spec-review')
+            return !gates.specReview;
+        if (ruleId === 'integration-review')
+            return !gates.integrationReview;
+        return false;
+    }
     async runDelegate(args, context) {
         const rule = this.rule(args.rule);
         if (rule.contract === 'note') {
@@ -2928,6 +3021,22 @@ class DelegationEngine {
         }
         if (args.task !== undefined && args.section !== undefined) {
             fail(`rule "${rule.id}": task and section are mutually exclusive; pass task for one checked task or section for a whole tasks.md section`);
+        }
+        // A review signal owned by the workflow runs its definition; the legacy
+        // runtime keeps handling every signal whose switch is still on.
+        const compat = this.services.compat?.();
+        if (compat !== undefined && this.signalOwned(rule.id)) {
+            const agent = this.requireAgent(context);
+            const cwd = this.services.workingDirectory.get(agent.session);
+            const opened = await openChange(cwd, args.change);
+            if (opened.change !== undefined) {
+                return await compat.delegate({
+                    rule: rule.id,
+                    change: opened.change.name,
+                    ...(args.task === undefined ? {} : { task: args.task }),
+                    ...(args.section === undefined ? {} : { section: args.section }),
+                });
+            }
         }
         const agent = this.requireAgent(context);
         const cwd = this.services.workingDirectory.get(agent.session);
@@ -4132,6 +4241,22 @@ class DelegationEngine {
         if (match.task.checked) {
             fail(`task_progress: task "${match.task.number} ${match.task.text}" is checked; a completed task needs its task-review PASS/ERROR, not a progress note`);
         }
+        // While the workflow owns the progress signal this call is its `note`
+        // action; the returned lane still decides the legacy lane state so a mixed
+        // ownership profile satisfies both gates.
+        const compat = this.services.compat?.();
+        if (compat !== undefined && !this.config.gates.taskProgress) {
+            const result = await compat.note({
+                change: match.change.name,
+                task: `${match.task.number} ${match.task.text}`,
+                status: args.status,
+                reason: args.reason,
+            });
+            if (result.lane !== undefined && result.lane !== '') {
+                this.services.state.markLaneSerial(String(agent.id), match.change.name, result.lane);
+            }
+            return result.text;
+        }
         // An explicit note opts this session into the change; it is valid in any session.
         await this.attributeChange(workspaceRoot, agent, match.change.name);
         const digest = await worktreeDigest(cwd, this.services.git, context.signal);
@@ -4163,6 +4288,13 @@ class DelegationEngine {
     }
     async delegationStatus(context) {
         const agent = this.requireAgent(context);
+        // While the workflow owns the status surface this tool is a deprecated
+        // alias; the deprecation line prints once even if the status text carries it.
+        const compat = this.services.compat?.();
+        if (compat !== undefined) {
+            const text = await compat.status();
+            return text.includes(DEPRECATION_LINE) ? text : `${text}\n\n${DEPRECATION_LINE}`;
+        }
         const cwd = this.services.workingDirectory.get(agent.session);
         const thread = currentThread(agent);
         const lines = ['Delegation status', '', 'Configured targets:'];
@@ -4551,6 +4683,9 @@ async function evaluateGate(deps, agent, turn, signal) {
     const pendingFor = (ruleId, changeName, taskId) => workspaceRoot === undefined
         ? undefined
         : deps.services.pendingReview?.(workspaceRoot, ruleId, changeName, taskId);
+    // The per-signal ownership check: a false switch disables exactly its own
+    // steer, and the remaining signals keep acting.
+    const signals = resolveLegacySignals(deps.config);
     if (openspecRoot !== undefined) {
         const reviewer = await readReviewerBinding(openspecRoot);
         for (const change of involved) {
@@ -4563,7 +4698,8 @@ async function evaluateGate(deps, agent, turn, signal) {
                 continue;
             }
             for (const rule of deps.config.rules) {
-                if (rule.when === 'spec-ready' &&
+                if (signals.specReview &&
+                    rule.when === 'spec-ready' &&
                     rule.contract === 'review' &&
                     rule.scope === 'whole' &&
                     rule.gate !== 'none' &&
@@ -4588,7 +4724,8 @@ async function evaluateGate(deps, agent, turn, signal) {
                     else
                         pushSoft(`spec-review:${rule.id}:${change.name}:${changeSpecDigest ?? 'none'}`, rule.id, text, call);
                 }
-                if (rule.when === 'implementation-complete' &&
+                if (signals.integrationReview &&
+                    rule.when === 'implementation-complete' &&
                     rule.contract === 'review' &&
                     rule.scope === 'whole' &&
                     rule.gate !== 'none' &&
@@ -4619,8 +4756,8 @@ async function evaluateGate(deps, agent, turn, signal) {
             const softTaskRule = taskRules.find((rule) => rule.gate === 'soft');
             // Only the checked tasks this session attributed are in its review scope.
             // A workflow-owned profile moves this rule to the workflow definition;
-            // the spec-review, progress, and lane gates below stay in force.
-            if (deps.config.gates.workflowOwned) {
+            // the spec-review, progress, and lane gates below follow their switches.
+            if (signals.workflowOwned) {
                 for (const task of tasks.filter((task) => task.checked && entry.tasks.includes(task.id))) {
                     let satisfied = false;
                     let findingsOnly = false;
@@ -4670,7 +4807,7 @@ async function evaluateGate(deps, agent, turn, signal) {
             }
             // The completing session must obtain an approval for every checked task,
             // not only the tasks its own tick attributed.
-            if (deps.config.gates.workflowOwned &&
+            if (signals.workflowOwned &&
                 entry.completed &&
                 taskRules.length > 0 &&
                 tasks.length > 0 &&
@@ -4704,13 +4841,19 @@ async function evaluateGate(deps, agent, turn, signal) {
                 }
             }
             const workRules = deps.config.rules.filter((rule) => rule.when === 'implementation-work' && rule.contract === 'note');
-            if (workRules.length > 0) {
+            if (signals.taskProgress && workRules.length > 0) {
                 const base = baseline?.changes.find((entry) => entry.name === change.name);
                 const baseChecked = new Set((base?.tasks ?? []).filter((task) => task.checked).map((task) => task.id));
                 const newlyChecked = tasks.filter((task) => task.checked && entry.tasks.includes(task.id) && !baseChecked.has(task.id));
                 const ownChecked = tasks.filter((task) => task.checked && entry.tasks.includes(task.id));
                 const reviewedOwn = new Set();
                 for (const task of ownChecked) {
+                    // The review signal's owner is the only producer of its evidence.
+                    if (!signals.workflowOwned) {
+                        if (await ownedTaskReviewed(cwd, change.name, task.id))
+                            reviewedOwn.add(task.id);
+                        continue;
+                    }
                     for (const rule of taskRules) {
                         const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id));
                         if (reviewer.error === undefined &&
@@ -4777,7 +4920,9 @@ async function evaluateGate(deps, agent, turn, signal) {
             const assignmentRules = deps.config.rules.filter((rule) => rule.when === 'lane-assignment' && rule.contract === 'note' && rule.gate !== 'none');
             // A profile with no visible worker-start tool cannot assign a lane, so the
             // gate reports nothing there instead of demanding an impossible call.
-            if (assignmentRules.length > 0 && deps.workerToolVisible?.(agent) !== false) {
+            if (signals.laneFanout &&
+                assignmentRules.length > 0 &&
+                deps.workerToolVisible?.(agent) !== false) {
                 const ruleId = assignmentRules.find((rule) => rule.gate === 'strict')?.id ??
                     assignmentRules[0]?.id ??
                     'lane-fanout';
@@ -4901,7 +5046,7 @@ async function evaluateGate(deps, agent, turn, signal) {
             // A completed lane is a decision point: fan out the lanes that remain, or
             // record the serial decision. Everything here fails open.
             const laneRules = deps.config.rules.filter((rule) => rule.when === 'lane-boundary' && rule.contract === 'note' && rule.gate !== 'none');
-            if (laneRules.length > 0 && !deps.state.hasWorkerStart(agentId)) {
+            if (signals.laneFanout && laneRules.length > 0 && !deps.state.hasWorkerStart(agentId)) {
                 // Lane completion comes from this session's own canonical write pair, so
                 // another session's final tick can never gate this one.
                 const evidence = deps.state.evidenceOf(agentId).get(change.name);
@@ -5431,12 +5576,13 @@ function provideStatus(ctx, name, value) {
  */
 export function apply(ctx, config = {}, options = {}) {
     const validated = validateConfig(config);
-    // The workflow engine resolves per-signal legacy ownership from this status;
-    // the review runtime stays mounted either way. The spec-review signal is real
-    // only while a strict or soft `spec-ready` review rule is configured to steer.
+    // The workflow engine resolves each shipped definition's effective ownership
+    // from this status; the review runtime stays mounted either way. A signal is
+    // reported enabled only when its switch is on and a covering rule is
+    // configured, so a switch alone never keeps a `defer` definition alive.
+    const signals = resolveLegacySignals(validated);
     provideStatus(ctx, 'delegationRulesStatus', Object.freeze({
-        workflowOwned: validated.gates.workflowOwned,
-        specReview: validated.rules.some((rule) => rule.when === 'spec-ready' && rule.contract === 'review' && rule.gate !== 'none'),
+        ...signals,
         taskReview: validated.rules.some((rule) => rule.when === 'spec-task-ready' &&
             rule.contract === 'review' &&
             rule.scope === 'task' &&
@@ -5450,6 +5596,15 @@ export function apply(ctx, config = {}, options = {}) {
         git: { runGit: options.runGit ?? defaultGit },
         now: options.now ?? (() => new Date()),
         timeoutsFor: () => validated.timeouts.review,
+        // Read lazily: the workflows row may be mounted after this one.
+        compat: () => {
+            try {
+                return ctx.get('workflowsReviewCompat');
+            }
+            catch {
+                return undefined;
+            }
+        },
         ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
         ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
         ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
