@@ -1306,6 +1306,16 @@ export function apply(ctx, config = {}) {
                 const session = activeSession.get(workspace);
                 if (session === undefined)
                     return;
+                // A watcher-observed change artifact establishes the active session's
+                // involvement, the documented fallback for shell forms the fast path
+                // does not parse.
+                if (/^[a-z0-9][a-z0-9-]*$/u.test(event.change)) {
+                    const key = `${workspace}\0${session}`;
+                    const involved = involvedChangesBySession.get(key) ?? new Set();
+                    involved.add(event.change);
+                    involvedChangesBySession.set(key, involved);
+                    void writeInvolvement(workspace, session, [...involved]).catch(() => undefined);
+                }
                 const summary = `${event.change} ${event.path}`;
                 record(workspace, {
                     at: journal.time(),

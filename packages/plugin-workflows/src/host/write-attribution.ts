@@ -186,11 +186,14 @@ function shellDestinations(command: string, powershell: boolean): string[] {
           continue
         }
         if (
-          /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject)\b/iu.test(
+          /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable)\b/iu.test(
             token,
           )
         ) {
-          skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject)\b/iu.test(token)
+          skipValue =
+            /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable)\b/iu.test(
+              token,
+            )
           continue
         }
         if (token.startsWith('-')) continue
@@ -267,12 +270,14 @@ function splitSegments(text: string, powershell: boolean): ShellSegment[] {
       (char === '&' && text[index + 1] === '&') ||
       char === '|'
     ) {
+      const leftText = current
       const skippedBranch = push()
       if (char === '&' && text[index + 1] === '&') {
         index += 1
       } else if (char === '|') {
         if (text[index + 1] === '|') {
-          skipNext = true
+          // A literal false left side runs the right branch; `true` skips it.
+          skipNext = !/^\s*(?:false|0)\s*$/u.test(leftText)
           index += 1
         } else {
           // A pipeline stage belongs to the branch it continues.
@@ -409,6 +414,16 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
   // creation command can follow a read or a comment on an earlier line.
   for (const segment of splitSegments(executable, powershell)) {
     if (segment.skipped) continue
+    const rawSegment = stripComments(segment.text, powershell)
+    // A creation command may quote its name; parse it with the quotes intact.
+    const quotedCreation =
+      /(?:^|[;&|])\s*openspec(?:\.cmd|\.exe)?\s+new\s+change\s+["']?([a-z0-9][a-z0-9-]*)["']?/iu.exec(
+        rawSegment,
+      )
+    if (quotedCreation !== null) {
+      addChange(quotedCreation[1])
+      continue
+    }
     const executedSegment = executedText(segment.text, powershell).trim()
     if (executedSegment === '') continue
     const creation = CHANGE_CREATION.exec(executedSegment)

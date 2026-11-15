@@ -761,6 +761,51 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('handles literal-false branches, standard options, and quoted creation', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'bash',
+            arguments: {
+              command: 'false || echo x>openspec/changes/auth/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    for (const command of [
+      'Out-File -Width 80 openspec/changes/auth/design.md -InputObject x',
+      'Set-Content -ErrorAction Stop openspec/changes/auth/design.md x',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'b', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'pwsh',
+            arguments: { command: 'openspec new change "auth"' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('skips -InputObject before a positional output', () => {
     expect(
       attributedChangeName(
