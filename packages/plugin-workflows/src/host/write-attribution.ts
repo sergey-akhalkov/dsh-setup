@@ -154,8 +154,8 @@ function resolveMasked(token: string, values: readonly string[]): string {
 
 const WRITER_AT_START =
   /^(?:Set-Content|Add-Content|Out-File|New-Item|tee|Copy-Item|Move-Item|Rename-Item|Remove-Item|cp|mv|rm|touch)\b/iu
-// copy/move/rename/touch target the last positional; others target the first.
-const LAST_DESTINATION = new Set(['copy-item', 'move-item', 'rename-item', 'cp', 'mv', 'touch'])
+// copy/move/touch target the last positional; rename targets its source path.
+const LAST_DESTINATION = new Set(['copy-item', 'move-item', 'cp', 'mv', 'touch'])
 function shellDestinations(command: string, powershell: boolean): string[] {
   const { masked, values } = maskQuoted(command, powershell)
   const destinations: string[] = []

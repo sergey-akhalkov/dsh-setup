@@ -159,7 +159,8 @@ The condition's involvement is established from the session's own successful `wr
 calls under `openspec/changes/<name>/`, a successful `openspec new change <name>`, the persisted
 per-session involvement, and supported shell writes: `Set-Content`, `Add-Content`, `Out-File`,
 `New-Item`, and `tee` stages with a named `-Path`/`-LiteralPath`/`-FilePath` destination or one
-positional destination after standard option values, output redirections (`>`/`>>`), pipelines,
+positional destination after standard option values (copy/move use their destination; rename
+attributes its source path), output redirections (`>`/`>>`), pipelines,
 and PowerShell or POSIX quoting/escapes. A shell form outside this list does not establish
 involvement in Release A: the watcher sees a file mutation but cannot identify the writing session,
 so it is not an involvement source. Correlating watcher mutations with their writer, and parsing

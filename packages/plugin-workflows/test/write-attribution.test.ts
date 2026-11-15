@@ -761,6 +761,24 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('attributes the Rename-Item source path', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command: 'Rename-Item openspec/changes/auth/design.md new-design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('prefers copy/move -Destination and consumes option aliases', () => {
     for (const command of [
       'Copy-Item -Path draft.md -Destination openspec/changes/auth/design.md',
