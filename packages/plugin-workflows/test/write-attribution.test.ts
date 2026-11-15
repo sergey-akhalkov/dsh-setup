@@ -761,6 +761,41 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('keeps escaped spaces inside a destination word', () => {
+    const spaced = 'C:/repo space'
+    expect(
+      attributedChangeName(
+        spaced,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command: 'Set-Content -Path C:/repo` space/openspec/changes/auth/tasks.md -Value x',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        spaced,
+        [
+          {
+            callId: 'b',
+            name: 'bash',
+            arguments: {
+              command: 'Set-Content -Path C:/repo\\ space/openspec/changes/auth/tasks.md -Value x',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('keeps adjacent quoted and unquoted fragments in one destination', () => {
     for (const command of [
       'echo changed >"openspec/changes/"auth/design.md',

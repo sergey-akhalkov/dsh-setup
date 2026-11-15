@@ -74,7 +74,8 @@ function maskQuoted(text, powershell) {
         if (isEscape(text, index, undefined, powershell)) {
             // An escaped operator is literal text; an escaped letter stays a letter.
             const next = text[index + 1] ?? '';
-            masked += /[<>&|;`]/u.test(next) ? '\u0002' : next;
+            // Keep escaped whitespace inside its token; decode it after tokenizing.
+            masked += /[<>&|;`]/u.test(next) ? '\u0002' : /\s/u.test(next) ? '\u0003' : next;
             index += 2;
             continue;
         }
@@ -140,7 +141,9 @@ function maskQuoted(text, powershell) {
     return { masked, values };
 }
 function resolveMasked(token, values) {
-    return token.replace(/\u0000(\d+)\u0000/gu, (_, index) => values[Number(index)] ?? '');
+    return token
+        .replace(/\u0003/gu, ' ')
+        .replace(/\u0000(\d+)\u0000/gu, (_, index) => values[Number(index)] ?? '');
 }
 const WRITER_AT_START = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee|Copy-Item|Move-Item|Rename-Item|Remove-Item|cp|mv|rm|touch)\b/iu;
 // copy/move/touch target the last positional; rename targets its source path.

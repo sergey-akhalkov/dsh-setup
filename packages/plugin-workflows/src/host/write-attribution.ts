@@ -82,7 +82,8 @@ function maskQuoted(
     if (isEscape(text, index, undefined, powershell)) {
       // An escaped operator is literal text; an escaped letter stays a letter.
       const next = text[index + 1] ?? ''
-      masked += /[<>&|;`]/u.test(next) ? '\u0002' : next
+      // Keep escaped whitespace inside its token; decode it after tokenizing.
+      masked += /[<>&|;`]/u.test(next) ? '\u0002' : /\s/u.test(next) ? '\u0003' : next
       index += 2
       continue
     }
@@ -149,7 +150,9 @@ function maskQuoted(
 }
 
 function resolveMasked(token: string, values: readonly string[]): string {
-  return token.replace(/\u0000(\d+)\u0000/gu, (_, index) => values[Number(index)] ?? '')
+  return token
+    .replace(/\u0003/gu, ' ')
+    .replace(/\u0000(\d+)\u0000/gu, (_, index) => values[Number(index)] ?? '')
 }
 
 const WRITER_AT_START =
