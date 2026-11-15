@@ -517,3 +517,13 @@ describe('collection var default form', () => {
     ).not.toThrow()
   })
 })
+
+describe('reduce predicate scope', () => {
+  it('accepts current/accumulator and rejects a root field in the reducer', () => {
+    expect(() => validateCondition({ reduce: [[1, 2], { var: 'current' }, 0] })).not.toThrow()
+    expect(() => validateCondition({ reduce: [[1, 2], { var: 'accumulator' }, 0] })).not.toThrow()
+    expect(() => validateCondition({ reduce: [[1, 2], { var: 'session.involved' }, 0] })).toThrow(
+      /unknown item field/u,
+    )
+  })
+})

@@ -452,10 +452,11 @@ export function apply(ctx, config = {}) {
     /** Every change a session is involved in, for turn-close conditions. */
     const involvedChangesBySession = new Map();
     /**
-     * This turn's change-artifact write, kept per session beyond the bounded tool
-     * observation buffer so a long turn cannot lose its changedSpec attribution.
+     * This turn's change-artifact writes, kept per session beyond the bounded
+     * tool observation buffer so a long turn cannot lose its changedSpec
+     * attribution, and as a set so a second change does not replace a first.
      */
-    const lastSpecWriteBySession = new Map();
+    const specWritesBySession = new Map();
     /** Whether a session is a root agent; the legacy gates exclude children. */
     const rootSessions = new Map();
     /** One change-tree watcher per workspace, started on its first event. */
@@ -1053,30 +1054,35 @@ export function apply(ctx, config = {}) {
                 (pendingWritePath === undefined
                     ? undefined
                     : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1]);
-            const pendingSpec = pendingChange !== undefined;
             const sessionKey = `${workspace}\0${input.session}`;
-            const involvedSet = involvedChangesBySession.get(sessionKey) ?? new Set();
+            // Merge before writing: a restarted host's persisted changes must not be
+            // replaced by the one change this turn happened to touch.
+            const storedInvolvement = conditionalDefinitions.length > 0 ? await readInvolvement(workspace, input.session) : [];
+            const involvedSet = new Set([
+                ...storedInvolvement,
+                ...(involvedChangesBySession.get(sessionKey) ?? []),
+            ]);
             if (pendingChange !== undefined) {
                 involvedSet.add(pendingChange);
                 involvedChangesBySession.set(sessionKey, involvedSet);
-                lastSpecWriteBySession.set(sessionKey, { turn: input.turn, change: pendingChange });
+                const writes = specWritesBySession.get(sessionKey) ?? {
+                    turn: input.turn,
+                    changes: new Set(),
+                };
+                if (writes.turn !== input.turn) {
+                    writes.turn = input.turn;
+                    writes.changes.clear();
+                }
+                writes.changes.add(pendingChange);
+                specWritesBySession.set(sessionKey, writes);
                 await writeInvolvement(workspace, input.session, [...involvedSet]);
             }
-            const retainedSpecWrite = lastSpecWriteBySession.get(sessionKey);
-            const retainedSpecChange = retainedSpecWrite !== undefined && retainedSpecWrite.turn === input.turn
-                ? retainedSpecWrite.change
-                : undefined;
-            const restoredInvolvement = conditionalDefinitions.length > 0 ? await readInvolvement(workspace, input.session) : [];
-            const involvedChanges = [
-                ...new Set([
-                    ...involvedSet,
-                    ...(pendingChange === undefined ? [] : [pendingChange]),
-                    ...restoredInvolvement,
-                ]),
-            ];
-            const changedSpecChange = pendingSpec
-                ? (pendingChange ?? retainedSpecChange)
-                : retainedSpecChange;
+            const involvedChanges = [...involvedSet];
+            const specWrites = specWritesBySession.get(sessionKey);
+            const changedSpecFor = (change) => change !== undefined &&
+                specWrites !== undefined &&
+                specWrites.turn === input.turn &&
+                specWrites.changes.has(change);
             const conditionsFor = async (definitionEvent, change) => {
                 if (conditionalDefinitions.length === 0)
                     return undefined;
@@ -1094,7 +1100,7 @@ export function apply(ctx, config = {}) {
                     // Involvement is retained by session and change: a review condition
                     // must still fire on a later turn that writes nothing new.
                     involved: conditionChange !== undefined,
-                    changedSpec: change !== undefined && change === changedSpecChange,
+                    changedSpec: changedSpecFor(change),
                 });
                 return evaluateConditions(conditionalDefinitions, conditionContext);
             };

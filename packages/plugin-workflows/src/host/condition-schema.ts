@@ -46,6 +46,8 @@ type ItemScope = ReadonlySet<string> | undefined
 
 /** The item field set a collection expression selects, if it is known. */
 const EMPTY_ITEM_SCOPE: ReadonlySet<string> = new Set()
+/** The reducer sees only the current item and the accumulated value. */
+const REDUCE_FIELDS: ReadonlySet<string> = new Set(['current', 'accumulator'])
 
 // Every collection predicate runs against its items alone; a collection whose
 // item fields are unknown (scalar ids or a computed expression) exposes no root
@@ -179,9 +181,11 @@ function varPath(rule: unknown, field: string, depth = 0, itemScope: ItemScope =
     return
   }
   if (operator === 'reduce') {
-    for (const [index, arg] of args.entries()) {
-      varPath(arg, field, depth + 1, index > 0 ? undefined : itemScope)
-    }
+    // reduce: [collection, reducer, initializer]. The collection and the
+    // initializer see the enclosing scope; the reducer sees current/accumulator.
+    varPath(args[0], field, depth + 1, itemScope)
+    varPath(args[1], field, depth + 1, REDUCE_FIELDS)
+    if (args[2] !== undefined) varPath(args[2], field, depth + 1, itemScope)
     return
   }
   for (const arg of args) varPath(arg, field, depth + 1, itemScope)
