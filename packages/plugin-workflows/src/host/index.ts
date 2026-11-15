@@ -1426,11 +1426,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         return evaluateConditions(conditionalDefinitions, conditionContext)
       }
       const evaluationChanges = involvedChanges.length === 0 ? [undefined] : involvedChanges
+      const workspaceDefinitions = definitionsByWorkspace.get(workspace) ?? []
+      // Unconditional definitions run once per event; only a condition-bearing
+      // definition is evaluated again for each involved change.
+      const conditionalOnlyDefinitions = workspaceDefinitions.filter(
+        (definition) => definition.trigger.condition !== undefined,
+      )
       for (const definitionEvent of definitionEventsOf(input, event, workspace)) {
-        for (const currentChange of evaluationChanges) {
+        for (const [changeIndex, currentChange] of evaluationChanges.entries()) {
           const conditions = await conditionsFor(definitionEvent, currentChange)
           const rows = evaluateDefinitions(
-            definitionsByWorkspace.get(workspace) ?? [],
+            changeIndex === 0 ? workspaceDefinitions : conditionalOnlyDefinitions,
             definitionEvent,
             {
               // A newly checked task must reach the per-task live-run guard even

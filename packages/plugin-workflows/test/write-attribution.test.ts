@@ -365,3 +365,20 @@ describe('multi-write shell attribution', () => {
     expect(attributedChangeNames(WORKSPACE, calls, 1)).toEqual(['auth', 'billing'])
   })
 })
+
+describe('quoted shell examples', () => {
+  it('does not treat a quoted example as an executed write', () => {
+    const calls = [
+      {
+        callId: 'c',
+        name: 'pwsh',
+        arguments: {
+          command:
+            "Write-Output 'Example; Set-Content -Path openspec/changes/auth/design.md -Value x'",
+        },
+        ok: true,
+      },
+    ]
+    expect(attributedChangeNames(WORKSPACE, calls, 1)).toEqual([])
+  })
+})

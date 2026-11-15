@@ -6572,7 +6572,10 @@ it('denies casing and tab variants of the archive command without evidence', asy
 })
 
 describe('turn-close condition wiring', () => {
-  async function conditionRows(workspace: string): Promise<Array<Record<string, unknown>>> {
+  async function conditionRows(
+    workspace: string,
+    id = 'definition:conditional-review',
+  ): Promise<Array<Record<string, unknown>>> {
     const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
     return (await readFile(file, 'utf8').catch(() => ''))
       .trim()
@@ -6586,7 +6589,7 @@ describe('turn-close condition wiring', () => {
           return []
         }
       })
-      .filter((row) => row.id === 'definition:conditional-review')
+      .filter((row) => row.id === id)
   }
 
   it("starts a run only after the session's own write establishes involvement", async () => {
@@ -6613,6 +6616,34 @@ describe('turn-close condition wiring', () => {
             dedupe: 'turn',
             condition: { '==': [{ var: 'session.involved' }, true] },
           },
+          settings: {
+            allowModelStart: true,
+            risk: 'low',
+            gateOwnership: 'own',
+            maxBlocks: 3,
+            allowIntent: false,
+          },
+          steps: [
+            {
+              id: 'confirm',
+              title: 'Confirm the change',
+              executor: 'main',
+              prompt: 'Confirm the change artifacts.',
+              evidence: {
+                kind: 'file',
+                path: 'openspec/changes/{name}/proposal.md',
+              },
+              next: 'end',
+              blockTurnClose: true,
+            },
+          ],
+        },
+        {
+          v: 1,
+          id: 'unconditional-review',
+          name: 'Unconditional review',
+          version: 1,
+          trigger: { kind: 'turn.stopping', match: {}, mode: 'active', dedupe: 'none' },
           settings: {
             allowModelStart: true,
             risk: 'low',
@@ -6689,6 +6720,12 @@ describe('turn-close condition wiring', () => {
       expect(
         (await conditionRows(workspace)).filter((row) => row.reason === 'run-created').length,
       ).toBeGreaterThanOrEqual(2)
+      // The unconditional definition starts once per event, not once per change.
+      expect(
+        (await conditionRows(workspace, 'definition:unconditional-review')).filter(
+          (row) => row.reason === 'run-created',
+        ).length,
+      ).toBe(3)
     } finally {
       dispose?.()
     }

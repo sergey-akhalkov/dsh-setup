@@ -79,6 +79,38 @@ function shellDestination(command: string): string | undefined {
   return undefined
 }
 
+/** Split shell text on separators that are outside quotes. */
+function splitSegments(text: string): string[] {
+  const segments: string[] = []
+  let current = ''
+  let quote: string | undefined
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? ''
+    if (quote !== undefined) {
+      current += char
+      if (char === quote) quote = undefined
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      current += char
+      continue
+    }
+    if (
+      char === ';' ||
+      (char === '&' && text[index + 1] === '&') ||
+      (char === '|' && text[index + 1] === '|')
+    ) {
+      segments.push(current)
+      current = ''
+      if ((char === '&' || char === '|') && text[index + 1] === char) index += 1
+      continue
+    }
+    current += char
+  }
+  segments.push(current)
+  return segments
+}
 /** Drop quotes and unquoted comments so only executed text is inspected. */
 function executedText(text: string): string {
   let output = ''
@@ -150,7 +182,7 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
   const creationPattern = new RegExp(CHANGE_CREATION.source, 'gu')
   for (const match of executed.matchAll(creationPattern)) addChange(match[1])
   // One shell call may execute several writes; each destination counts.
-  for (const segment of normalized.split(/(?:;|&&|\|\|)/u)) {
+  for (const segment of splitSegments(normalized)) {
     const executedSegment = executedText(segment).trim()
     if (executedSegment === '') continue
     if (!WRITE_COMMAND.test(executedSegment) && !REDIRECT.test(executedSegment)) continue
