@@ -1306,29 +1306,6 @@ export function apply(ctx, config = {}) {
                 const session = activeSession.get(workspace);
                 if (session === undefined)
                     return;
-                // A watcher-observed change artifact establishes the active session's
-                // involvement, the documented fallback for shell forms the fast path
-                // does not parse. `event.change` is the mutation kind; the name is in
-                // the path. Merge persisted involvement so a restart is not overwritten.
-                const watchedChange = /^openspec\/changes\/([^/]+)\//u.exec(event.path.replaceAll('\\', '/'))?.[1];
-                if (watchedChange !== undefined && /^[a-z0-9][a-z0-9-]*$/u.test(watchedChange)) {
-                    const key = `${workspace}\0${session}`;
-                    void (async () => {
-                        try {
-                            const stored = await readInvolvement(workspace, session);
-                            const involved = new Set([
-                                ...stored,
-                                ...(involvedChangesBySession.get(key) ?? []),
-                                watchedChange,
-                            ]);
-                            involvedChangesBySession.set(key, involved);
-                            await writeInvolvement(workspace, session, [...involved]);
-                        }
-                        catch {
-                            // Best-effort: the next direct write retries the involvement.
-                        }
-                    })();
-                }
                 const summary = `${event.change} ${event.path}`;
                 record(workspace, {
                     at: journal.time(),

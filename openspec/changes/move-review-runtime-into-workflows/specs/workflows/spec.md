@@ -440,7 +440,7 @@ A false condition SHALL produce no run and no steer.
 #### Scenario: Involvement sources are bounded
 
 - **WHEN** a condition reads `session.involved`
-- **THEN** it is true for the session's own write/edit, change creation, persisted involvement, or a supported shell write, and other file changes are attributed by the filesystem watcher
+- **THEN** it is true for the session's own write/edit, change creation, persisted involvement, or a supported shell write; a shell form outside that set does not establish involvement in Release A
 
 #### Scenario: Invalid condition fails load
 

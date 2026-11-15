@@ -160,9 +160,10 @@ calls under `openspec/changes/<name>/`, a successful `openspec new change <name>
 per-session involvement, and supported shell writes: `Set-Content`, `Add-Content`, `Out-File`,
 `New-Item`, and `tee` stages with a named `-Path`/`-LiteralPath`/`-FilePath` destination or one
 positional destination after standard option values, output redirections (`>`/`>>`), pipelines,
-and PowerShell or POSIX quoting/escapes. File changes made by a shell form outside this list are
-still attributed by the filesystem watcher and the persisted involvement record; parsing every
-shell grammar is not a Release A goal.
+and PowerShell or POSIX quoting/escapes. A shell form outside this list does not establish
+involvement in Release A: the watcher sees a file mutation but cannot identify the writing session,
+so it is not an involvement source. Correlating watcher mutations with their writer, and parsing
+further shell grammar, are follow-up work.
 
 The condition context rejects absolute drive paths, `..` traversal, UNC paths, delimiter-adjacent
 absolute POSIX paths, and `event.command` paths after `>`/`>>`. A POSIX path wrapped in Markdown
