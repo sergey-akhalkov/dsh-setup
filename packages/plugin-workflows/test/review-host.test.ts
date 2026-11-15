@@ -204,7 +204,7 @@ describe('native review host admission', () => {
           maxBlocks: 3,
           allowIntent: false,
           gate: 'review',
-          gateIdentity: `phase-${phase}`,
+          gateIdentity: 'phase-review',
         },
         steps: [
           {
@@ -219,7 +219,7 @@ describe('native review host admission', () => {
             },
             evidence: {
               kind: 'record',
-              rule: `phase-${phase}`,
+              rule: 'phase-review',
               change: '{name}',
               scope: 'whole',
               verdicts: ['PASS', 'ERROR'],
@@ -238,6 +238,7 @@ describe('native review host admission', () => {
     })
     const listeners = new Map<string, Listener[]>()
     const activationCalls: string[] = []
+    const releases: (() => void)[] = []
     const agent = {
       id: 'session-1',
       session: { id: 'session-1', header: { origin: 'root' } },
@@ -265,9 +266,12 @@ describe('native review host admission', () => {
               const instruction = spec.prompt.map((block) => block.text).join('\n')
               const digest = /- Digest: ([a-f0-9]{64})/u.exec(instruction)?.[1] ?? ''
               activationCalls.push(digest)
+              const pending = new Promise<void>((resolve) => {
+                releases.push(resolve)
+              })
               return {
                 childId: `child-${activationCalls.length}`,
-                result: Promise.resolve({
+                result: pending.then(() => ({
                   output: [
                     {
                       type: 'text',
@@ -275,7 +279,7 @@ describe('native review host admission', () => {
                     },
                   ],
                   stopReason: 'completed',
-                }),
+                })),
                 dispose: async () => undefined,
               }
             },
@@ -314,6 +318,13 @@ describe('native review host admission', () => {
         await writeRun(workspace, run, auth)
       }
       await emit('agent/turn-stopping', { agent, turn: 1 })
+      // Both admissions must start before either result arrives; with the host
+      // phase omitted the second dedupes and only one activation starts.
+      for (let attempt = 0; attempt < 250 && releases.length < 2; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      expect(releases).toHaveLength(2)
+      for (const release of releases) release()
       const records = await Promise.all(
         definitions.map(async (definition) => {
           const path = join(
@@ -332,7 +343,6 @@ describe('native review host admission', () => {
         }),
       )
       expect(records.map((record) => record.verdict)).toEqual(['PASS', 'PASS'])
-      expect(activationCalls).toHaveLength(2)
     } finally {
       unregister()
     }
