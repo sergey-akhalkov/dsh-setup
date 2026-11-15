@@ -2,7 +2,7 @@ import { lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { type Definition, validateDefinition } from '../src/host/definitions.ts'
+import { type Definition, resolveOwnership, validateDefinition } from '../src/host/definitions.ts'
 import {
   DRAFTS_ROOT,
   draftDirectory,
@@ -183,6 +183,9 @@ describe('change-intake engine', () => {
   it('walks the seven steps in order, completes create-change from its owned call, and never dispatches delegate', async () => {
     const workspace = await tempWorkspace()
     const definition = intakeDefinition()
+    const specReviewStep = definition.steps.find((step) => step.id === 'spec-review')
+    expect(specReviewStep?.executor).toBe('review')
+    expect(specReviewStep?.ownership).toBe('own')
     const owned = new OwnedCalls()
     const auth = HostAuth.fromKey('test-intake-advance-key-012345')
     const toolCalls: Array<{
@@ -206,6 +209,7 @@ describe('change-intake engine', () => {
       stepStartedAt: 2_500,
     }
     let delegateCalls = 0
+    let reviewStarts = 0
     const hostShell = process.platform === 'win32' ? 'pwsh' : 'bash'
     let run = newRun(definition, workspace)
 
@@ -217,6 +221,7 @@ describe('change-intake engine', () => {
         evidenceContext: context,
         owned,
         installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+        enabledLegacy: new Set(['delegation-rules/spec-review']),
         auth,
         now: 2_000,
         toolRunner: {
@@ -240,14 +245,20 @@ describe('change-intake engine', () => {
             return { ok: true }
           },
         },
-        readRecord: async () => ({
-          ok: true,
-          evidence: {
-            kind: 'record',
-            path: '.dsh/delegation/spec-review/auth/spec.json',
-            digest: 'a'.repeat(64),
-          },
-        }),
+        readRecord: async () => {
+          throw new Error('the owned spec-review step must not read the legacy record')
+        },
+        reviewStep: async ({ run: reviewRun, step }) => {
+          reviewStarts += 1
+          return settleStep(reviewRun, step.id, 'done', {
+            at: 2_000,
+            evidence: {
+              kind: 'record',
+              path: '.dsh/workflows/records/change-intake/auth/spec.json',
+              digest: 'a'.repeat(64),
+            },
+          })
+        },
         questions: { ask: async () => ({ answer: 'yes' }) },
       })
 
@@ -287,9 +298,69 @@ describe('change-intake engine', () => {
     })
     expect(run.steps.find((step) => step.id === 'spec')?.state).toBe('done')
     expect(run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
+    expect(run.steps.find((step) => step.id === 'spec-review')?.evidence?.path).toBe(
+      '.dsh/workflows/records/change-intake/auth/spec.json',
+    )
     expect(run.steps.find((step) => step.id === 'approval')?.state).toBe('done')
+    expect(reviewStarts).toBe(1)
     expect(delegateCalls).toBe(0)
     expect(toolCalls).toHaveLength(1)
+  })
+
+  it('owns the spec review and starts it when no whole-spec record exists', async () => {
+    const workspace = await tempWorkspace()
+    const definition = intakeDefinition()
+    const installedLegacy: ReadonlySet<string> = new Set(['delegation-rules', 'goal-continuity'])
+    const enabledLegacy: ReadonlySet<string> = new Set(['delegation-rules/spec-review'])
+    const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy)
+    expect(resolved.issues).toEqual([])
+    expect(resolved.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('own')
+
+    let run = newRun(definition, workspace)
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = settleStep(run, step, 'done', { at: 1_500 })
+    }
+    let legacyReads = 0
+    let reviewStarts = 0
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth' },
+      evidenceContext: { workspace, values: { name: 'auth' } },
+      owned: new OwnedCalls(),
+      installedLegacy,
+      enabledLegacy,
+      now: 2_000,
+      readRecord: async () => {
+        legacyReads += 1
+        return {
+          ok: true,
+          evidence: {
+            kind: 'record',
+            path: '.dsh/delegation/spec-review/auth/spec.json',
+            digest: 'a'.repeat(64),
+          },
+        }
+      },
+      reviewStep: async ({ run: reviewRun, step }) => {
+        reviewStarts += 1
+        return settleStep(reviewRun, step.id, 'done', {
+          at: 2_000,
+          evidence: {
+            kind: 'record',
+            path: '.dsh/workflows/records/change-intake/auth/spec.json',
+            digest: 'b'.repeat(64),
+          },
+        })
+      },
+    })
+    expect(reviewStarts).toBe(1)
+    expect(legacyReads).toBe(0)
+    expect(result.run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
+    expect(result.run.steps.find((step) => step.id === 'spec-review')?.evidence?.path).toBe(
+      '.dsh/workflows/records/change-intake/auth/spec.json',
+    )
+    expect(result.waiting?.stepId).toBe('approval')
   })
 
   it('keeps create-change open until .openspec.yaml exists without re-dispatching', async () => {
