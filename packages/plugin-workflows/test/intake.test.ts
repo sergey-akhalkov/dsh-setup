@@ -11,7 +11,7 @@ import {
   readDraft,
   writeDraft,
 } from '../src/host/drafts.ts'
-import { collectEvidencePaths, currentSpecDigest } from '../src/host/evidence.ts'
+import { collectEvidencePaths, currentSpecDigest, verifyEvidence } from '../src/host/evidence.ts'
 import { OwnedCalls, runHumanStep } from '../src/host/executors.ts'
 import { evaluateTurnClose } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
@@ -26,7 +26,7 @@ import {
 } from '../src/host/runs.ts'
 import { renderMainSteer } from '../src/host/steer.ts'
 import { taskIdOf } from '../src/host/tasks.ts'
-import { contributedIntake } from './intake-definition.ts'
+import { contributedIntake, registeredIntake } from './intake-definition.ts'
 
 const TEMP_DIRECTORIES: string[] = []
 
@@ -181,19 +181,20 @@ describe('change-intake engine', () => {
     }
   }
 
-  /** The canonical whole-spec record the built-in `spec-review` definition writes. */
+  /** A whole-spec record under the native or the legacy store, current by default. */
   async function writeSpecReviewRecord(
     workspace: string,
     verdict: 'PASS' | 'ERROR' = 'PASS',
+    root = '.dsh/workflows/records',
   ): Promise<string> {
     const digest = await currentSpecDigest(workspace, 'auth')
     if (digest === undefined) throw new Error('the auth change artifacts are unreadable')
-    const directory = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    const directory = join(workspace, ...root.split('/'), 'spec-review', 'auth')
     await mkdir(directory, { recursive: true })
     await writeFile(
       join(directory, 'spec.json'),
       `${JSON.stringify({
-        definition: 'spec-review',
+        ...(root === '.dsh/workflows/records' ? { definition: 'spec-review' } : {}),
         rule: 'spec-review',
         change: 'auth',
         phase: 'spec',
@@ -207,6 +208,22 @@ describe('change-intake engine', () => {
       'utf8',
     )
     return digest
+  }
+
+  /** The host's deferred read: the same contract against the selected store. */
+  function deferredReader(
+    workspace: string,
+    values: Readonly<Record<string, unknown>>,
+  ): (
+    step: Definition['steps'][number],
+    owner: 'workflows' | 'legacy',
+  ) => ReturnType<typeof verifyEvidence> {
+    return (step, owner) =>
+      verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
+        workspace,
+        values,
+        reviewOwner: owner,
+      })
   }
 
   it('walks the seven steps in order, completes create-change from its owned call, and never dispatches delegate', async () => {
@@ -250,7 +267,7 @@ describe('change-intake engine', () => {
         evidenceContext: context,
         owned,
         installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
-        enabledLegacy: new Set(['delegation-rules/spec-review']),
+        enabledLegacy: new Set(),
         auth,
         now: 2_000,
         toolRunner: {
@@ -337,19 +354,21 @@ describe('change-intake engine', () => {
     expect(toolCalls).toHaveLength(1)
   })
 
-  it('owns the spec review and starts it when no whole-spec record exists', async () => {
+  it('defers the spec review to an enabled legacy signal and never dispatches the executor', async () => {
     const workspace = await tempWorkspace()
-    const definition = intakeDefinition()
+    const definition = registeredIntake()
     const installedLegacy: ReadonlySet<string> = new Set(['delegation-rules', 'goal-continuity'])
     const enabledLegacy: ReadonlySet<string> = new Set(['delegation-rules/spec-review'])
     const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy)
     expect(resolved.issues).toEqual([])
-    expect(resolved.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('own')
+    expect(resolved.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('defer')
 
     let run = newRun(definition, workspace)
     for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
       run = settleStep(run, step, 'done', { at: 1_500 })
     }
+    await writeChangeArtifacts(workspace)
+    const digest = await writeSpecReviewRecord(workspace, 'PASS', '.dsh/delegation')
     let legacyReads = 0
     let reviewStarts = 0
     const result = await advanceIntake({
@@ -361,35 +380,21 @@ describe('change-intake engine', () => {
       installedLegacy,
       enabledLegacy,
       now: 2_000,
-      readRecord: async () => {
+      readRecord: async (step, owner) => {
         legacyReads += 1
-        return {
-          ok: true,
-          evidence: {
-            kind: 'record',
-            path: '.dsh/delegation/spec-review/auth/spec.json',
-            digest: 'a'.repeat(64),
-          },
-        }
+        return deferredReader(workspace, { name: 'auth' })(step, owner)
       },
-      reviewStep: async ({ run: reviewRun, step }) => {
+      reviewStep: async () => {
         reviewStarts += 1
-        return settleStep(reviewRun, step.id, 'done', {
-          at: 2_000,
-          evidence: {
-            kind: 'record',
-            path: '.dsh/workflows/records/spec-review/auth/spec.json',
-            digest: 'b'.repeat(64),
-          },
-        })
+        return undefined
       },
     })
-    expect(reviewStarts).toBe(1)
-    expect(legacyReads).toBe(0)
-    expect(result.run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
-    expect(result.run.steps.find((step) => step.id === 'spec-review')?.evidence?.path).toBe(
-      '.dsh/workflows/records/spec-review/auth/spec.json',
-    )
+    expect(reviewStarts).toBe(0)
+    expect(legacyReads).toBe(1)
+    const review = result.run.steps.find((step) => step.id === 'spec-review')
+    expect(review?.state).toBe('done')
+    expect(review?.evidence?.path).toBe('.dsh/delegation/spec-review/auth/spec.json')
+    expect(review?.evidence?.digest).toBe(digest)
     expect(result.waiting?.stepId).toBe('approval')
   })
 
@@ -504,6 +509,96 @@ describe('change-intake engine', () => {
     expect(reviewStarts).toBe(1)
     expect(retried.completed).toBe(true)
     expect(retried.run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
+  })
+
+  it('allows the intermediate close on a failing review and retries it once', async () => {
+    const workspace = await tempWorkspace()
+    const definition = intakeDefinition()
+    await writeChangeArtifacts(workspace)
+    const digest = await writeSpecReviewRecord(workspace, 'ERROR')
+    let run = newRun(definition, workspace)
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = settleStep(run, step, 'done', { at: 1_500 })
+    }
+    let reviewStarts = 0
+    // The review executor settles a matching ERROR as failed, never as done.
+    const first = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth' },
+      evidenceContext: { workspace, values: { name: 'auth' } },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+      enabledLegacy: new Set(),
+      now: 2_000,
+      questions: { ask: async () => ({ answer: 'yes' }) },
+      reviewStep: async ({ run: reviewRun, step }) => {
+        reviewStarts += 1
+        return settleStep(reviewRun, step.id, 'failed', {
+          at: 2_000,
+          reason:
+            'the review returned ERROR; the step stays incomplete without approval or completion, the close is allowed with the failure visible, and the next close retries the review: the record verdict "ERROR" is not one of: PASS',
+          evidence: {
+            kind: 'record',
+            path: '.dsh/workflows/records/spec-review/auth/spec.json',
+            digest,
+          },
+        })
+      },
+    })
+    expect(reviewStarts).toBe(1)
+    expect(first.completed).toBe(false)
+    const provisional = first.run.steps.find((step) => step.id === 'spec-review')
+    expect(provisional?.state).toBe('failed')
+    expect(provisional?.evidence).toMatchObject({
+      path: '.dsh/workflows/records/spec-review/auth/spec.json',
+      digest,
+    })
+    // No approval was requested and completion stays unavailable.
+    expect(first.run.steps.find((step) => step.id === 'approval')?.state).toBe('open')
+    const steered: string[] = []
+    const close = evaluateTurnClose({
+      run: first.run,
+      definition,
+      agent: { steer: (text: string) => steered.push(text) },
+      evidenceContext: { workspace, values: { name: 'auth' } },
+      turn: 1,
+      maxBlocks: definition.settings.maxBlocks,
+      installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+      enabledLegacy: new Set(),
+    })
+    // The matching ERROR is intermediate turn-close evidence, not a steer.
+    expect(close.kind).toBe('allow')
+    expect(steered).toEqual([])
+
+    // The next advance retries the review exactly once; only its PASS completes.
+    const retried = await advanceIntake({
+      run: first.run,
+      definition,
+      values: { name: 'auth' },
+      evidenceContext: { workspace, values: { name: 'auth' } },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+      enabledLegacy: new Set(),
+      now: 2_100,
+      questions: { ask: async () => ({ answer: 'yes' }) },
+      reviewStep: async ({ run: reviewRun, step }) => {
+        reviewStarts += 1
+        const passDigest = await writeSpecReviewRecord(workspace)
+        return settleStep(reviewRun, step.id, 'done', {
+          at: 2_100,
+          evidence: {
+            kind: 'record',
+            path: '.dsh/workflows/records/spec-review/auth/spec.json',
+            digest: passDigest,
+          },
+        })
+      },
+    })
+    expect(reviewStarts).toBe(2)
+    expect(retried.completed).toBe(true)
+    expect(retried.run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
+    expect(retried.run.steps.find((step) => step.id === 'approval')?.state).toBe('done')
   })
 
   it('keeps create-change open until .openspec.yaml exists without re-dispatching', async () => {

@@ -25,6 +25,7 @@ import {
 import {
   loadShippedDefinitions,
   validateDefinition,
+  withSource,
   workspaceDefinitionsDirectory,
   workspaceDraftsDirectory,
 } from '../src/host/definitions.ts'
@@ -539,7 +540,9 @@ describe('gate-preserving intake override', () => {
       old,
     )
     await installDefinition(workspace, oldDraft, auth())
-    const intake = validateDefinition(contributedIntake())
+    // The registry installs the contributed intake as a plugin definition, so
+    // its step ownership follows the profile's legacy switches.
+    const intake = withSource(validateDefinition(contributedIntake()), 'plugin')
 
     const loaded = await loadApprovedDefinitions(workspace, {
       auth: auth(),
@@ -656,32 +659,30 @@ describe('gate-preserving intake override', () => {
       conflictLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
     ).toBe('OpenSpec change intake')
 
-    // Adding a legacy binding the installed owned step does not declare is
-    // refused too: the binding selects the owner and bypasses the switch.
-    const rebound = contributedIntake()
-    rebound.name = 'Rebound binding copy'
-    const reboundStep = (rebound.steps as Array<Record<string, unknown>>).find(
+    // Removing the installed step's legacy binding is refused too: the binding
+    // selects the owner, and the installed definition stays effective.
+    const stripped = contributedIntake()
+    stripped.name = 'Stripped binding copy'
+    const strippedStep = (stripped.steps as Array<Record<string, unknown>>).find(
       (step) => step.id === 'spec-review',
     )
-    if (reboundStep !== undefined) {
-      reboundStep.legacy = { plugin: 'delegation-rules', signal: 'spec-review' }
-    }
-    const reboundDraft = await writeDefinitionFile(
+    if (strippedStep !== undefined) delete strippedStep.legacy
+    const strippedDraft = await writeDefinitionFile(
       workspace,
       workspaceDraftsDirectory(workspace),
-      'rebound-intake.json',
-      rebound,
+      'stripped-intake.json',
+      stripped,
     )
-    await installDefinition(workspace, reboundDraft, auth())
-    const reboundLoad = await loadApprovedDefinitions(workspace, {
+    await installDefinition(workspace, strippedDraft, auth())
+    const strippedLoad = await loadApprovedDefinitions(workspace, {
       auth: auth(),
       shipped: [...loadShippedDefinitions(), intake],
       installedLegacy: new Set(['delegation-rules']),
       enabledLegacy: new Set(['delegation-rules/spec-review']),
     })
-    expect(reboundLoad.errors.join('\n')).toMatch(/legacy ownership binding/u)
+    expect(strippedLoad.errors.join('\n')).toMatch(/legacy ownership binding/u)
     expect(
-      reboundLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
+      strippedLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
     ).toBe('OpenSpec change intake')
     // A copy saved from the installed template keeps the gate and loads.
     const reapproved = contributedIntake()

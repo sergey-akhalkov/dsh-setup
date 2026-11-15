@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type Definition, validateDefinition } from '../src/host/definitions.ts'
+import { type Definition, validateDefinition, withSource } from '../src/host/definitions.ts'
 
 /**
  * The `change-intake` definition contributed by the OpenSpec plugin. The engine
@@ -10,6 +10,15 @@ import { type Definition, validateDefinition } from '../src/host/definitions.ts'
  */
 export function contributedIntake(): Definition {
   return validateDefinition(readIntakeAsset())
+}
+
+/**
+ * The same intake as the registry installs it: a plugin-sourced definition, so
+ * its effective ownership follows the profile's per-signal legacy switch. The
+ * source-less `contributedIntake()` has no switch and resolves its own step.
+ */
+export function registeredIntake(): Definition {
+  return withSource(contributedIntake(), 'plugin')
 }
 
 /**

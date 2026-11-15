@@ -63,9 +63,10 @@ export interface TurnCloseInput {
 }
 /**
  * The first open `blockTurnClose` owned step, unless an earlier open step is
- * deferred: an unresolved deferred prerequisite stops the selection no matter
- * whether it blocks the turn close itself, because the legacy gate is the only
- * steer for it.
+ * deferred or a failed review step holds the sequence: an unresolved deferred
+ * prerequisite stops the selection (the legacy gate is the only steer for it),
+ * and a provisional review failure allows the close without opening a later
+ * step.
  */
 export declare function selectBlockingStep(run: WorkflowRun, definition: Definition, installedLegacy: ReadonlySet<string>, enabledLegacy?: ReadonlySet<string>): Step | undefined;
 /** Evaluate one root turn stop. */

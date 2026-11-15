@@ -1,4 +1,4 @@
-import type { Definition, Step } from './definitions.js';
+import { type Definition, type Step } from './definitions.js';
 import { type EvidenceContext } from './evidence.js';
 import type { SubagentRunner } from './executors.js';
 import { type FailureClass } from './review-queue.js';

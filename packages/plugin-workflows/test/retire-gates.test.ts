@@ -26,7 +26,7 @@ import {
   settleStep,
   type WorkflowRun,
 } from '../src/host/runs.ts'
-import { contributedIntake } from './intake-definition.ts'
+import { contributedIntake, registeredIntake } from './intake-definition.ts'
 
 /**
  * The retirement load gate, the owned close/archive decisions, and the verify
@@ -107,17 +107,15 @@ describe('parity load gate and verify settings', () => {
     expect(verify.settings.maxBlocks).toBe(8)
   })
 
-  it('loads the owned intake with the retained spec-review signal in either state', () => {
-    const intake = shipped('change-intake')
+  it('loads the owned intake with the spec-review step following the retained signal', () => {
+    const intake = registeredIntake()
     const enabled = new Set(['delegation-rules/spec-review'])
-    expect(resolveOwnership(intake, new Set(['delegation-rules']), enabled).issues).toEqual([])
-    expect(resolveOwnership(intake, new Set(['delegation-rules']), new Set()).issues).toEqual([])
-    const byId = new Map(
-      resolveOwnership(intake, new Set(['delegation-rules']), enabled).steps.map((step) => [
-        step.id,
-        step.ownership,
-      ]),
-    )
+    const deferred = resolveOwnership(intake, new Set(['delegation-rules']), enabled)
+    expect(deferred.issues).toEqual([])
+    expect(deferred.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('defer')
+    const owned = resolveOwnership(intake, new Set(['delegation-rules']), new Set())
+    expect(owned.issues).toEqual([])
+    const byId = new Map(owned.steps.map((step) => [step.id, step.ownership]))
     expect(byId.get('spec-review')).toBe('own')
   })
 

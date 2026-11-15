@@ -95,6 +95,7 @@
       "title": "Independent spec review",
       "executor": "review",
       "ownership": "own",
+      "legacy": { "plugin": "delegation-rules", "signal": "spec-review" },
       "review": {
         "target": "codex",
         "instruction": "review-spec",
