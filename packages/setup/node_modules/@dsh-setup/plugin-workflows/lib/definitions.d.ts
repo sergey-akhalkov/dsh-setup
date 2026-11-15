@@ -112,8 +112,11 @@ export interface RecordEvidence {
     readonly phase?: string;
     readonly scope?: string;
     readonly task?: string;
-    /** `current` compares the record's digest with the change's current digest. */
-    readonly digest?: 'current' | string;
+    /**
+     * `current` compares the record's digest with the change's current digest;
+     * `current-worktree` also binds the current worktree digest.
+     */
+    readonly digest?: 'current' | 'current-worktree' | string;
     /** `review` (default) or the goal-continuity checkpoint record. */
     readonly source?: 'review' | 'checkpoint';
 }

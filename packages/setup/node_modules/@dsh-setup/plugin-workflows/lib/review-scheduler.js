@@ -65,6 +65,22 @@ export class ReviewScheduler {
     liveRuns = new Map();
     liveKeys = new Map();
     liveByRun = new Map();
+    /** Runs fenced by a completed-soft settlement; their late verdict is discarded. */
+    fenced = new Set();
+    /**
+     * Fence a run that settled without its review (completed-soft): a queued
+     * attempt is cancelled before it starts, and a late verdict is discarded
+     * instead of publishing over the terminal run.
+     */
+    fence(runId) {
+        if (this.disposed)
+            return;
+        this.fenced.add(runId);
+        const entry = this.admitted.get(runId);
+        if (entry === undefined || entry.started)
+            return;
+        void this.queue.cancel(entry.file.id).catch(() => undefined);
+    }
     /** The live review of this workflow run, regardless of current input changes. */
     liveRunById(runId) {
         return this.liveByRun.get(runId);
@@ -128,6 +144,7 @@ export class ReviewScheduler {
                 });
             },
             settled: (entry, state, info) => {
+                this.fenced.delete(entry.run.id);
                 const settled = this.lastSettled.get(entry.run.id);
                 // A quarantined run keeps its slot, key, live dedupe entry, and
                 // snapshot until teardown confirms; the quarantine callback releases
@@ -253,6 +270,15 @@ export class ReviewScheduler {
         // settled this entry; its attempt must not publish a second verdict.
         if (!this.queue.owns(entry.file.id))
             return;
+        if (this.fenced.has(entry.run.id)) {
+            // The run settled completed-soft without its review: the late verdict is
+            // discarded, never published over the terminal state or retried.
+            if (await this.teardownConfirmed(entry))
+                await this.queue.complete(entry, 'discarded');
+            else
+                this.quarantine(entry, 'discarded');
+            return;
+        }
         const result = outcome.result;
         if (result.kind === 'failure' &&
             result.transient &&

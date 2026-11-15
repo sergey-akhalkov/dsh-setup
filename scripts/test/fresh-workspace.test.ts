@@ -46,7 +46,9 @@ describe('fresh-workspace migration', () => {
         validateDefinition(JSON.parse(readFileSync(join(definitionsDir, name), 'utf8')), name),
       )
     expect(definitions.map((definition) => definition.id).sort()).toEqual([
+      'integration-review',
       'retro',
+      'spec-review',
       'task-review',
       'verify',
     ])

@@ -41,7 +41,7 @@
         "phase": "integration",
         "scope": "whole",
         "verdicts": ["PASS", "ERROR"],
-        "digest": "current",
+        "digest": "current-worktree",
         "path": ".dsh/workflows/records/integration-review/{name}/integration.json"
       },
       "next": "end",

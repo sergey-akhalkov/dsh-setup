@@ -156,14 +156,8 @@ export interface ReviewPromptInput {
 }
 /** Render the bundled instruction with the review's digest-bound context. */
 export declare function renderReviewPrompt(input: ReviewPromptInput): string;
-/** The task-scope digest binds the frozen tree; whole scope binds the artifacts. */
-export declare function reviewDigest(input: {
-    readonly scope: 'whole' | 'task';
-    readonly specDigest: string;
-    readonly tree?: string;
-    /** The frozen change-artifact digest a task review also binds to. */
-    readonly artifactDigest?: string;
-}): string;
+/** The per-scope digest lives with the evidence verifier; kept importable here. */
+export { reviewDigest } from './evidence.js';
 /** Write one file atomically: temp beside the target, then rename. */
 export declare function writeReviewFileAtomic(file: string, bytes: string): Promise<void>;
 /** The committed approval subset; the field set and order are the stable format. */
@@ -306,4 +300,3 @@ export declare function publishReviewOutcome(input: ReviewRunInput, outcome: Rev
  * retried attempt publishes nothing.
  */
 export declare function runReviewStep(input: ReviewRunInput): Promise<ReviewRunResult>;
-export {};

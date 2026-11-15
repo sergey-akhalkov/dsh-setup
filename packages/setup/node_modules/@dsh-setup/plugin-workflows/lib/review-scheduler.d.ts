@@ -75,6 +75,14 @@ export declare class ReviewScheduler {
     private readonly liveRuns;
     private readonly liveKeys;
     private readonly liveByRun;
+    /** Runs fenced by a completed-soft settlement; their late verdict is discarded. */
+    private readonly fenced;
+    /**
+     * Fence a run that settled without its review (completed-soft): a queued
+     * attempt is cancelled before it starts, and a late verdict is discarded
+     * instead of publishing over the terminal run.
+     */
+    fence(runId: string): void;
     /** The live review of this workflow run, regardless of current input changes. */
     liveRunById(runId: string): WorkflowRun | undefined;
     /** The run already covering this review, before any snapshot is prepared. */
