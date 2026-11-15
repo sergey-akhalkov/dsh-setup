@@ -157,6 +157,10 @@ export class ReviewScheduler {
             };
             entry.request = { ...entry.request, baseline: entry.baseline };
         }
+        // The baseline read may have awaited; disposal or a successor can land
+        // while it is pending, so ownership is checked again before start.
+        if (this.disposed || !this.queue.owns(entry.file.id))
+            return;
         entry.started = true;
         const attempt = beginReviewAttempt(entry.request);
         let timer;
@@ -245,9 +249,14 @@ export class ReviewScheduler {
             this.queue.attemptsOf(entry.file.id) < this.maxAttempts) {
             if (!(await this.teardownConfirmed(entry))) {
                 // A possibly-still-running child owns the slot, key, and snapshot.
+                // Disposal during that await must not publish or restore the live key.
+                if (this.disposed || !this.queue.owns(entry.file.id))
+                    return;
                 await this.publishAndQuarantine(entry, withUnconfirmedTeardown(outcome), attempt.now);
                 return;
             }
+            if (this.disposed || !this.queue.owns(entry.file.id))
+                return;
             const failure = {
                 failureClass: result.failureClass,
                 transient: true,
