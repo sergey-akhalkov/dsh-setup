@@ -1,7 +1,8 @@
-import { unlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, unlink } from 'node:fs/promises'
+import { reviewDigest } from './evidence.js'
 import {
   beginReviewAttempt,
+  containedRecordTarget,
   publishReviewOutcome,
   type ReviewAttemptHandle,
   type ReviewAttemptOutcome,
@@ -210,18 +211,37 @@ export class ReviewScheduler {
 
   /** Remove a PASS record/approval a fenced settlement must not leave behind. */
   private async discardFencedRecord(entry: ScheduledEntry): Promise<void> {
-    const definition = entry.request.definition.settings.gateIdentity ?? entry.request.definition.id
+    const definition = entry.request.definition.id
     const scope = entry.request.step.review?.scope ?? 'whole'
     const phase = entry.request.step.review?.phase
     const taskId = entry.request.task?.id
     const suffix = scope === 'task' ? `tasks/${taskId ?? ''}.json` : `${phase ?? 'spec'}.json`
-    await unlink(
-      join(entry.workspace, '.dsh', 'workflows', 'records', definition, entry.change, suffix),
-    ).catch(() => undefined)
+    const expectedDigest = reviewDigest({
+      scope,
+      specDigest: entry.request.prepared.specDigest,
+      ...(entry.request.prepared.tree === undefined ? {} : { tree: entry.request.prepared.tree }),
+      ...(entry.request.prepared.artifactDigest === undefined
+        ? {}
+        : { artifactDigest: entry.request.prepared.artifactDigest }),
+    })
+    const removeIfOwned = async (relative: string): Promise<void> => {
+      // Never follow a linked ancestor outside the workspace, and never remove
+      // a record published by another digest.
+      const target = await containedRecordTarget(entry.workspace, relative).catch(() => undefined)
+      if (target === undefined) return
+      const raw = await readFile(target, 'utf8').catch(() => undefined)
+      if (raw === undefined) return
+      let digest: string | undefined
+      try {
+        digest = (JSON.parse(raw) as { digest?: string }).digest
+      } catch {
+        return
+      }
+      if (digest === expectedDigest) await unlink(target).catch(() => undefined)
+    }
+    await removeIfOwned(`.dsh/workflows/records/${definition}/${entry.change}/${suffix}`)
     if (taskId !== undefined) {
-      await unlink(
-        join(entry.workspace, 'openspec', 'changes', entry.change, 'reviews', `${taskId}.json`),
-      ).catch(() => undefined)
+      await removeIfOwned(`openspec/changes/${entry.change}/reviews/${taskId}.json`)
     }
   }
 

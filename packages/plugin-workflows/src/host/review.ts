@@ -620,7 +620,7 @@ export async function writeReviewFileAtomic(
  * stays inside the canonical workspace. A linked store would otherwise publish
  * outside the workspace, which evidence validation cannot undo after the write.
  */
-async function containedRecordTarget(workspace: string, relative: string): Promise<string> {
+export async function containedRecordTarget(workspace: string, relative: string): Promise<string> {
   if (isAbsolute(relative) || relative.split('/').includes('..')) {
     throw new Error(`the record path "${relative}" escapes the workspace`)
   }

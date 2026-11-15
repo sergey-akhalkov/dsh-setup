@@ -160,6 +160,12 @@ export declare function renderReviewPrompt(input: ReviewPromptInput): string;
 export { reviewDigest } from './evidence.js';
 /** Write one file atomically: temp beside the target, then rename. */
 export declare function writeReviewFileAtomic(file: string, bytes: string, cancelled?: () => boolean): Promise<void>;
+/**
+ * Resolve a workspace-relative record path and prove every existing ancestor
+ * stays inside the canonical workspace. A linked store would otherwise publish
+ * outside the workspace, which evidence validation cannot undo after the write.
+ */
+export declare function containedRecordTarget(workspace: string, relative: string): Promise<string>;
 /** The committed approval subset; the field set and order are the stable format. */
 export declare function portableApprovalOf(record: ReviewRecord): Readonly<Record<string, unknown>>;
 export type ReviewWrite = {
