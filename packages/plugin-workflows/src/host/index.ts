@@ -2804,6 +2804,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ? reviewDigest({ scope: spec.scope, specDigest })
             : reviewDigest({ scope: 'task', specDigest, tree: taskLiveTree })
         if (reviewQueue.enabled) {
+          // The same workflow run must keep its one admission even when live
+          // inputs changed; a new digest does not license a second snapshot.
+          const sameRun = reviewScheduler?.liveRunById(reviewRun.id)
+          if (sameRun !== undefined) return sameRun
           const live = reviewScheduler?.liveRun({
             workspace,
             rule: reviewRule,

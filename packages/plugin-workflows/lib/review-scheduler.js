@@ -54,6 +54,11 @@ export class ReviewScheduler {
     /** Live reviews by complete identity, so the host admits before a snapshot. */
     liveRuns = new Map();
     liveKeys = new Map();
+    liveByRun = new Map();
+    /** The live review of this workflow run, regardless of current input changes. */
+    liveRunById(runId) {
+        return this.liveByRun.get(runId);
+    }
     /** The run already covering this review, before any snapshot is prepared. */
     liveRun(input) {
         const exact = this.liveRuns.get(liveIdentity(input));
@@ -144,14 +149,15 @@ export class ReviewScheduler {
             });
             if (started === 'timeout') {
                 void attempt.result.catch(() => undefined);
-                await this.publishAndQuarantine(entry, withUnconfirmedTeardown({
-                    result: {
-                        kind: 'failure',
-                        failureClass: 'timeout',
-                        error: 'provider activation timed out before the reviewer started',
-                        transient: false,
-                    },
-                }), attempt.now);
+                const failure = await recordReviewFailure({
+                    ...entry.request,
+                    error: 'provider activation timed out before the reviewer started; the reviewer could not be confirmed cancelled, so its review slot stays held until teardown completes',
+                    failureClass: 'timeout',
+                }).catch(() => undefined);
+                if (failure !== undefined) {
+                    await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined);
+                }
+                this.quarantine(entry, 'failed');
                 return;
             }
         }
@@ -305,8 +311,10 @@ export class ReviewScheduler {
         });
         this.liveRuns.set(key, entry.run);
         this.liveKeys.set(entry.run.id, key);
+        this.liveByRun.set(entry.run.id, entry.run);
     }
     forgetLive(runId) {
+        this.liveByRun.delete(runId);
         const key = this.liveKeys.get(runId);
         if (key === undefined)
             return;

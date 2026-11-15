@@ -161,6 +161,12 @@ export class ReviewScheduler {
   /** Live reviews by complete identity, so the host admits before a snapshot. */
   private readonly liveRuns = new Map<string, WorkflowRun>()
   private readonly liveKeys = new Map<string, string>()
+  private readonly liveByRun = new Map<string, WorkflowRun>()
+
+  /** The live review of this workflow run, regardless of current input changes. */
+  liveRunById(runId: string): WorkflowRun | undefined {
+    return this.liveByRun.get(runId)
+  }
 
   /** The run already covering this review, before any snapshot is prepared. */
   liveRun(input: {
@@ -260,18 +266,16 @@ export class ReviewScheduler {
       })
       if (started === 'timeout') {
         void attempt.result.catch(() => undefined)
-        await this.publishAndQuarantine(
-          entry,
-          withUnconfirmedTeardown({
-            result: {
-              kind: 'failure',
-              failureClass: 'timeout',
-              error: 'provider activation timed out before the reviewer started',
-              transient: false,
-            },
-          }),
-          attempt.now,
-        )
+        const failure = await recordReviewFailure({
+          ...entry.request,
+          error:
+            'provider activation timed out before the reviewer started; the reviewer could not be confirmed cancelled, so its review slot stays held until teardown completes',
+          failureClass: 'timeout',
+        }).catch(() => undefined)
+        if (failure !== undefined) {
+          await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined)
+        }
+        this.quarantine(entry, 'failed')
         return
       }
     } catch (error) {
@@ -451,9 +455,11 @@ export class ReviewScheduler {
     })
     this.liveRuns.set(key, entry.run)
     this.liveKeys.set(entry.run.id, key)
+    this.liveByRun.set(entry.run.id, entry.run)
   }
 
   private forgetLive(runId: string): void {
+    this.liveByRun.delete(runId)
     const key = this.liveKeys.get(runId)
     if (key === undefined) return
     if (this.liveRuns.get(key)?.id === runId) this.liveRuns.delete(key)

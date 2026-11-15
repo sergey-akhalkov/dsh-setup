@@ -93,6 +93,22 @@ export function hostSubagentRunner(runtime, agent) {
                     : { reasoningEffort: request.reasoningEffort }),
             };
             let activation;
+            // An activation that never resolves still owns the review slot and
+            // snapshot: track it as a pending teardown until it settles.
+            let resolveActivation = () => undefined;
+            let rejectActivation = () => undefined;
+            const activationGate = new Promise((resolve, reject) => {
+                resolveActivation = resolve;
+                rejectActivation = reject;
+            });
+            const unresolved = {
+                dispose: async () => {
+                    const value = await activationGate.catch(() => undefined);
+                    await value?.dispose();
+                },
+            };
+            pendingTeardowns.push(unresolved);
+            void activationGate.catch(() => undefined);
             try {
                 activation = await runtime.startActivation({
                     provider: request.provider,
@@ -105,8 +121,11 @@ export function hostSubagentRunner(runtime, agent) {
                     signal: controller,
                     delivery: request.delivery ?? 'caller',
                 });
+                resolveActivation(activation);
+                unresolved.dispose = () => activation.dispose();
             }
             catch (error) {
+                rejectActivation(error);
                 // Keep the untruncated provider cause for classification and the
                 // public message bounded and actionable; the classifier honors a
                 // retry-after hint carried on either.
@@ -130,9 +149,12 @@ export function hostSubagentRunner(runtime, agent) {
             // dispose the child explicitly, whether the abort arrived before or
             // after publication. Teardown is fire-and-forget here; failures stay
             // pending for `waitForTeardown` to retry.
-            const item = { dispose: () => activation.dispose() };
+            // The activation's pending item is the one teardown path: before it
+            // resolves it holds the slot; after, it disposes the child once.
+            const item = unresolved;
             const stop = () => {
-                pendingTeardowns.push(item);
+                if (!pendingTeardowns.includes(item))
+                    pendingTeardowns.push(item);
                 void teardown(item);
             };
             if (controller.aborted)

@@ -68,6 +68,9 @@ export declare class ReviewScheduler {
     /** Live reviews by complete identity, so the host admits before a snapshot. */
     private readonly liveRuns;
     private readonly liveKeys;
+    private readonly liveByRun;
+    /** The live review of this workflow run, regardless of current input changes. */
+    liveRunById(runId: string): WorkflowRun | undefined;
     /** The run already covering this review, before any snapshot is prepared. */
     liveRun(input: {
         workspace: string;
