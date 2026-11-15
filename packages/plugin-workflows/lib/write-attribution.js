@@ -170,9 +170,11 @@ function splitSegments(text, powershell) {
     let quote;
     let skipNext = false;
     const push = () => {
-        segments.push({ text: current, skipped: skipNext });
+        const skipped = skipNext;
+        segments.push({ text: current, skipped });
         current = '';
         skipNext = false;
+        return skipped;
     };
     for (let index = 0; index < text.length; index += 1) {
         const char = text[index] ?? '';
@@ -202,7 +204,7 @@ function splitSegments(text, powershell) {
             char === '\r' ||
             (char === '&' && text[index + 1] === '&') ||
             char === '|') {
-            push();
+            const skippedBranch = push();
             if (char === '&' && text[index + 1] === '&') {
                 index += 1;
             }
@@ -210,6 +212,10 @@ function splitSegments(text, powershell) {
                 if (text[index + 1] === '|') {
                     skipNext = true;
                     index += 1;
+                }
+                else {
+                    // A pipeline stage belongs to the branch it continues.
+                    skipNext = skippedBranch;
                 }
             }
             if (char === '\r' && text[index + 1] === '\n')

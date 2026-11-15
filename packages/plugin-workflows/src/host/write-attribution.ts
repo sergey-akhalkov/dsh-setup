@@ -180,10 +180,12 @@ function splitSegments(text: string, powershell: boolean): ShellSegment[] {
   let current = ''
   let quote: string | undefined
   let skipNext = false
-  const push = (): void => {
-    segments.push({ text: current, skipped: skipNext })
+  const push = (): boolean => {
+    const skipped = skipNext
+    segments.push({ text: current, skipped })
     current = ''
     skipNext = false
+    return skipped
   }
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
@@ -214,13 +216,16 @@ function splitSegments(text: string, powershell: boolean): ShellSegment[] {
       (char === '&' && text[index + 1] === '&') ||
       char === '|'
     ) {
-      push()
+      const skippedBranch = push()
       if (char === '&' && text[index + 1] === '&') {
         index += 1
       } else if (char === '|') {
         if (text[index + 1] === '|') {
           skipNext = true
           index += 1
+        } else {
+          // A pipeline stage belongs to the branch it continues.
+          skipNext = skippedBranch
         }
       }
       if (char === '\r' && text[index + 1] === '\n') index += 1

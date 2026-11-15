@@ -673,6 +673,25 @@ describe('skipped branches and compact redirection', () => {
     }
   })
 
+  it('keeps a skipped pipeline skipped until the next statement', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'bash',
+            arguments: {
+              command:
+                'true || echo skipped | tee openspec/changes/auth/design.md\necho changed>openspec/changes/billing/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual(['billing'])
+  })
   it('ignores a writer name that is only printed', () => {
     for (const command of [
       'Write-Output Set-Content openspec/changes/auth/design.md',
