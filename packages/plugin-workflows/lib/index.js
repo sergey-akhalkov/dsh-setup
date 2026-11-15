@@ -2526,6 +2526,7 @@ export function apply(ctx, config = {}) {
                     rule: reviewRule,
                     change,
                     ...(task === undefined ? {} : { taskId: task.id }),
+                    phase: reviewPhase(spec.scope, spec.phase),
                     liveDigest: current.liveDigest,
                     digest: current.digest,
                     reprepare,

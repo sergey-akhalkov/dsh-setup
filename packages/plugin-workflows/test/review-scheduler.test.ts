@@ -510,6 +510,68 @@ it('rechecks the live guard after teardown and refuses a PASS', async () => {
   expect(record.verdict).toBe('ERROR')
   scheduler.dispose()
 })
+
+it('admits distinct whole-scope phases separately', async () => {
+  const { root, digest } = await reviewWorkspace()
+  const def = definition()
+  const persisted: WorkflowRun[] = []
+  const scheduler = new ReviewScheduler(
+    {
+      enabled: true,
+      concurrency: 2,
+      maxQueued: 2,
+      maxAttempts: 1,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      waitTimeoutMs: 10_000,
+    },
+    {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async () => undefined,
+    },
+  )
+  const runner: SubagentRunner = {
+    run: async () => ({ childId: 'child-1', completed: true, text: fencedPASS(digest) }),
+  }
+  const requestFor = (run: WorkflowRun) => ({
+    run,
+    definition: def,
+    step: def.steps[0] as Definition['steps'][number],
+    reviewer: reviewers(),
+    runner,
+    context: { workspace: root, values: { name: 'auth' } },
+    change: 'auth',
+    prepared: { specDigest: digest },
+    timeoutMs: 5_000,
+    session: 'session-1',
+  })
+  const specRun = runFor(def)
+  const integrationRun = runFor(def)
+  await scheduler.enqueue({
+    workspace: root,
+    run: specRun,
+    request: requestFor(specRun),
+    rule: 'spec-review',
+    change: 'auth',
+    phase: 'spec',
+    digest,
+  })
+  await scheduler.enqueue({
+    workspace: root,
+    run: integrationRun,
+    request: requestFor(integrationRun),
+    rule: 'spec-review',
+    change: 'auth',
+    phase: 'integration',
+    digest,
+  })
+  await waitFor(async () => persisted.length === 2)
+  expect(persisted.length).toBe(2)
+  scheduler.dispose()
+})
 describe('review snapshot', () => {
   it('builds a frozen checkout, copies the change, and discards it', async () => {
     const root = await workspace()
