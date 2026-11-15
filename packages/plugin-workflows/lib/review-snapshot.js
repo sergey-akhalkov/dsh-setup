@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile, } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { specDigest } from './evidence.js';
 import { repositoryRoot } from './git.js';
 /**
@@ -282,4 +283,115 @@ export async function createReviewSnapshot(cwd, change, runId, runGit, signal, a
         onUnavailable?.('the snapshot worktree could not be built (git error during snapshot creation)');
         return undefined;
     }
+}
+/** Change-root entries that are engine output, not reviewed input. */
+const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml', 'reviews']);
+async function inputStat(path) {
+    try {
+        const info = await stat(path, { bigint: true });
+        return `${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+    }
+    catch {
+        // A deleted tracked file is a changed input, not an unreadable workspace.
+        return '[missing]';
+    }
+}
+async function inputSignature(root, excludes = new Set()) {
+    const entries = new Map();
+    async function walk(directory, prefix) {
+        let dirents;
+        try {
+            dirents = await readdir(directory, { withFileTypes: true });
+        }
+        catch (error) {
+            throw new Error(`could not read reviewed inputs under ${prefix === '' ? '.' : prefix}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        for (const entry of dirents) {
+            // Exclusions are change-root entries: a nested `reviews/` is an artifact.
+            if (prefix === '' && excludes.has(entry.name))
+                continue;
+            const name = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+            const absolute = join(directory, entry.name);
+            if (entry.isDirectory()) {
+                await walk(absolute, name);
+                continue;
+            }
+            if (!entry.isFile())
+                continue;
+            entries.set(absolute, await inputStat(absolute));
+        }
+    }
+    await walk(root, '');
+    return { root, entries };
+}
+/** The git-visible worktree file set the worktree digest covers, with stats. */
+async function gitInputSignature(root, runGit, signal) {
+    let raw;
+    try {
+        raw = await runGit(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], root, signal);
+    }
+    catch (error) {
+        throw new Error(`could not list the reviewed worktree inputs: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const entries = new Map();
+    for (const path of raw.toString('utf8').split('\0')) {
+        if (path === '' || ignoredForDigest(path))
+            continue;
+        entries.set(resolve(root, path), await inputStat(resolve(root, path)));
+    }
+    return { root, entries };
+}
+/** Every file the reviewer can read for one review, before it is prepared. */
+export async function reviewedInputs(cwd, changeDir, runGit, signal) {
+    const root = await repositoryRoot(cwd, runGit, signal);
+    const signature = await gitInputSignature(root, runGit, signal);
+    const entries = new Map(signature.entries);
+    // The portable approval directory is engine output, not reviewed input: a
+    // record another review writes during this run must not discard the verdict.
+    let approvals = resolve(changeDir, 'reviews');
+    try {
+        approvals = resolve(root, relative(await realpath(root), await realpath(changeDir)), 'reviews');
+    }
+    catch {
+        // Fall back to the session's lexical form when the paths cannot be resolved.
+    }
+    for (const path of [...entries.keys()]) {
+        if (path === approvals || path.startsWith(`${approvals}${sep}`))
+            entries.delete(path);
+    }
+    // A task digest also hashes the change artifacts, so they are guarded
+    // regardless of git; whole scope reads the change and the worktree both.
+    // Resolve a linked checkout so changed paths stay relative to the root.
+    const resolvedChange = await realpath(changeDir).catch(() => changeDir);
+    const change = await inputSignature(resolvedChange, CHANGE_INPUT_EXCLUDES);
+    for (const [path, value] of change.entries)
+        entries.set(path, value);
+    return { root, entries };
+}
+/** Paths whose reviewed input changed (added, removed, or stat mutation). */
+export function changedInputPaths(signature, current) {
+    const changed = new Set();
+    for (const [path, value] of signature.entries) {
+        if (current.entries.get(path) !== value)
+            changed.add(toRelative(signature.root, path));
+    }
+    for (const path of current.entries.keys()) {
+        if (!signature.entries.has(path))
+            changed.add(toRelative(signature.root, path));
+    }
+    return [...changed].sort();
+}
+function toRelative(root, path) {
+    return relative(root, path).split(sep).join('/');
+}
+/** Stable hash of the source input set a queued review re-checks before start. */
+export function signatureHash(signature) {
+    const hash = createHash('sha256');
+    hash.update('queue-signature-v1');
+    hash.update('\0');
+    for (const [path, value] of [...signature.entries].sort(([left], [right]) => left.localeCompare(right))) {
+        hash.update(`${path}\u0000${value}`);
+        hash.update('\0');
+    }
+    return hash.digest('hex');
 }

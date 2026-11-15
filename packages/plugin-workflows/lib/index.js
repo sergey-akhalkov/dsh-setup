@@ -27,9 +27,9 @@ import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, runReviewStep, TASK_ID_PATTERN, } from './review.js';
+import { InputMutationError, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, runReviewStep, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
-import { createReviewSnapshot, discardReviewSnapshot } from './review-snapshot.js';
+import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, taskOf } from './tasks.js';
@@ -2241,6 +2241,7 @@ export function apply(ctx, config = {}) {
                         reason: `the change artifacts for "${change}" are unreadable; fix openspec/changes/${change}/ and re-run`,
                     });
                 }
+                const changeDir = join(workspace, 'openspec', 'changes', change);
                 const taskId = reviewRun.context.taskId;
                 const task = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
                     ? taskOf(workspace, change, taskId)
@@ -2295,7 +2296,14 @@ export function apply(ctx, config = {}) {
                 }
                 const startEpoch = mutationEpochs.get(workspace) ?? 0;
                 const reviewRule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id;
-                const liveDigest = reviewDigest({ scope: spec.scope, specDigest });
+                // The pre-snapshot admission identity names the task worktree content,
+                // so two different task snapshots are not conflated before preparation.
+                const taskLiveTree = spec.scope === 'task'
+                    ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+                    : undefined;
+                const liveDigest = taskLiveTree === undefined
+                    ? reviewDigest({ scope: spec.scope, specDigest })
+                    : reviewDigest({ scope: 'task', specDigest, tree: taskLiveTree });
                 if (reviewQueue.enabled) {
                     const live = reviewScheduler?.liveRun({
                         workspace,
@@ -2308,41 +2316,124 @@ export function apply(ctx, config = {}) {
                     if (live !== undefined)
                         return live;
                 }
-                const prepared = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
-                    ? await (async () => {
-                        // The snapshot freezes the reviewed tree; when it cannot be
-                        // built, the live worktree is reviewed under a digest guard.
-                        const snapshot = await createReviewSnapshot(workspace, { dir: join(workspace, 'openspec', 'changes', change) }, reviewRun.id, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined);
-                        if (snapshot !== undefined) {
-                            return {
+                // Capture the complete reviewed input set before preparing it: a stat
+                // signature survives an edit-read-restore that a content digest hides.
+                let captured;
+                try {
+                    captured = await reviewedInputs(workspace, changeDir, defaultGit);
+                }
+                catch (error) {
+                    return settleStep(reviewRun, step.id, 'failed', {
+                        at: journal.time(),
+                        reason: `the reviewed inputs could not be read (${error instanceof Error ? error.message : String(error)}); fix the workspace and re-run the review`,
+                    });
+                }
+                let capturedHash = signatureHash(captured);
+                const guardFor = (signature, tree) => async () => {
+                    if ((mutationEpochs.get(workspace) ?? 0) !== startEpoch) {
+                        return 'a watched change-tree mutation was observed during the run';
+                    }
+                    const current = await reviewedInputs(workspace, changeDir, defaultGit).catch(() => undefined);
+                    if (current !== undefined) {
+                        const changed = changedInputPaths(signature, current);
+                        if (changed.length > 0) {
+                            const sample = changed.slice(0, 5).join(', ');
+                            return `${String(changed.length)} changed: ${sample}${changed.length > 5 ? ', …' : ''}`;
+                        }
+                    }
+                    if ((await currentSpecDigest(workspace, change)) !== specDigest) {
+                        return 'the change digest changed';
+                    }
+                    if (tree !== undefined &&
+                        (await worktreeDigest(workspace, defaultGit).catch(() => undefined)) !== tree) {
+                        return 'the worktree digest changed';
+                    }
+                    return undefined;
+                };
+                const prepareInputs = async (signature) => {
+                    const taskScope = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId);
+                    if (!taskScope) {
+                        const tree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
+                        return {
+                            prepared: {
+                                specDigest,
+                                ...(tree === undefined ? {} : { tree }),
+                                liveGuard: guardFor(signature, tree),
+                            },
+                            digest: reviewDigest({ scope: spec.scope, specDigest }),
+                            liveDigest,
+                        };
+                    }
+                    // The snapshot freezes the reviewed tree; when it cannot be built,
+                    // the live worktree is reviewed under the mutation guard.
+                    const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, reviewRun.id, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined);
+                    const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
+                    if (snapshot !== undefined) {
+                        return {
+                            prepared: {
                                 specDigest,
                                 artifactDigest: snapshot.specDigest,
                                 tree: snapshot.tree,
                                 reviewCwd: snapshot.worktree,
-                            };
-                        }
-                        const live = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
-                        return {
+                            },
+                            digest: reviewDigest({
+                                scope: 'task',
+                                specDigest,
+                                tree: snapshot.tree,
+                                artifactDigest: snapshot.specDigest,
+                            }),
+                            liveDigest: liveTree === undefined
+                                ? reviewDigest({ scope: 'task', specDigest })
+                                : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
+                        };
+                    }
+                    return {
+                        prepared: {
                             specDigest,
                             artifactDigest: specDigest,
-                            ...(live === undefined ? {} : { tree: live }),
-                            liveGuard: async () => (mutationEpochs.get(workspace) ?? 0) === startEpoch &&
-                                (await worktreeDigest(workspace, defaultGit).catch(() => undefined)) === live,
-                        };
-                    })()
-                    : await (async () => {
-                        const tree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
-                        return {
+                            ...(liveTree === undefined ? {} : { tree: liveTree }),
+                            liveGuard: guardFor(signature, liveTree),
+                        },
+                        digest: reviewDigest({
+                            scope: 'task',
                             specDigest,
-                            ...(tree === undefined ? {} : { tree }),
-                            liveGuard: async () => (mutationEpochs.get(workspace) ?? 0) === startEpoch &&
-                                (await currentSpecDigest(workspace, change)) === specDigest &&
-                                (tree === undefined
-                                    ? true
-                                    : (await worktreeDigest(workspace, defaultGit).catch(() => undefined)) ===
-                                        tree),
-                        };
-                    })();
+                            ...(liveTree === undefined ? {} : { tree: liveTree }),
+                            artifactDigest: specDigest,
+                        }),
+                        liveDigest: liveTree === undefined
+                            ? reviewDigest({ scope: 'task', specDigest })
+                            : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
+                    };
+                };
+                let current = await prepareInputs(captured);
+                // A queued entry re-checks the live source set when a slot frees; one
+                // re-preparation replaces the identity atomically before the start.
+                const reprepare = async (alreadyReprepared) => {
+                    const next = await reviewedInputs(workspace, changeDir, defaultGit);
+                    const nextHash = signatureHash(next);
+                    if (nextHash === capturedHash)
+                        return { kind: 'unchanged' };
+                    if (alreadyReprepared) {
+                        throw new InputMutationError('reviewed inputs changed again while the review waited in the queue; a review re-prepares only once — finish the writes and start a fresh review');
+                    }
+                    const nextTask = task === undefined ? undefined : taskOf(workspace, change, task.id);
+                    if (task !== undefined && nextTask === undefined) {
+                        throw new InputMutationError(`task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" changed while the review was queued in change "${change}"; finish the writes and start a fresh review`);
+                    }
+                    if (current.prepared.reviewCwd !== undefined) {
+                        await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined);
+                    }
+                    captured = next;
+                    capturedHash = nextHash;
+                    current = await prepareInputs(next);
+                    return {
+                        kind: 'replaced',
+                        prepared: current.prepared,
+                        digest: current.digest,
+                        liveDigest: current.liveDigest,
+                        ...(nextTask === undefined ? {} : { task: nextTask }),
+                    };
+                };
                 const request = {
                     run: reviewRun,
                     definition: reviewDefinition,
@@ -2352,20 +2443,27 @@ export function apply(ctx, config = {}) {
                     context,
                     change,
                     ...(task === undefined ? {} : { task }),
-                    prepared,
+                    prepared: current.prepared,
                     timeoutMs: reviewTimeoutMs,
                     session: sessionId,
                     now: journal.time(),
                 };
-                const rule = reviewRule;
                 if (!reviewQueue.enabled) {
                     try {
                         const result = await runReviewStep(request);
                         return result.run;
                     }
                     finally {
-                        // A directly executed review must not leak its frozen checkout.
-                        if (prepared.reviewCwd !== undefined) {
+                        // A directly executed review must not leak its frozen checkout; a
+                        // child that is not confirmed torn down keeps it for the sweep.
+                        let tornDown = true;
+                        try {
+                            await request.runner.waitForTeardown?.();
+                        }
+                        catch {
+                            tornDown = false;
+                        }
+                        if (tornDown && current.prepared.reviewCwd !== undefined) {
                             await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined);
                         }
                     }
@@ -2374,21 +2472,15 @@ export function apply(ctx, config = {}) {
                     workspace,
                     run: reviewRun,
                     request,
-                    rule,
+                    rule: reviewRule,
                     change,
                     ...(task === undefined ? {} : { taskId: task.id }),
-                    liveDigest,
-                    digest: reviewDigest({
-                        scope: spec.scope,
-                        specDigest,
-                        ...(prepared.tree === undefined ? {} : { tree: prepared.tree }),
-                        ...(prepared.artifactDigest === undefined
-                            ? {}
-                            : { artifactDigest: prepared.artifactDigest }),
-                    }),
+                    liveDigest: current.liveDigest,
+                    digest: current.digest,
+                    reprepare,
                 });
                 if (admission.kind === 'full') {
-                    if (prepared.reviewCwd !== undefined) {
+                    if (current.prepared.reviewCwd !== undefined) {
                         await discardReviewSnapshot(workspace, reviewRun.id, defaultGit);
                     }
                     const failure = await recordReviewFailure({
@@ -2399,7 +2491,7 @@ export function apply(ctx, config = {}) {
                         context,
                         change,
                         ...(task === undefined ? {} : { task }),
-                        prepared,
+                        prepared: current.prepared,
                         session: sessionId,
                         error: `review queue full (${String(admission.depth)} queued, ${String(admission.maxQueued)} maximum); wait for a settled record, then start the review again`,
                         failureClass: 'queue-full',

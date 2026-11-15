@@ -400,10 +400,10 @@ export class ReviewQueue {
             delete entry.retryTimer;
         }
         this.removeWaiting(entry);
-        this.forgetIdentity(entry);
-        // Keep `active` and the key head: followers and fresh same-key runs wait.
+        // Keep `active`, the key head, and the identity mapping: followers, fresh
+        // same-key runs, and duplicate admissions wait for confirmed teardown.
         try {
-            this.hooks.settled(entry.run, outcome);
+            this.hooks.settled(entry.run, outcome, { quarantined: true });
         }
         catch {
             // The observer is a seam; it must not change quarantine cleanup.
@@ -431,6 +431,7 @@ export class ReviewQueue {
         if (this.disposed)
             return;
         entry.quarantined = false;
+        this.forgetIdentity(entry);
         this.active.delete(entry);
         this.detachKey(entry);
         this.entries.delete(entry.run.file.id);

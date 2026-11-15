@@ -146,10 +146,14 @@ describe('runReviewStep', () => {
     const root = await workspace()
     roots.push(root)
     const result = await invoke(root, runnerFor(PASS_TEXT), {
-      prepared: { specDigest: DIGEST, liveGuard: async () => false },
+      prepared: {
+        specDigest: DIGEST,
+        liveGuard: async () => '1 changed: src/engine.ts',
+      },
     })
     expect(result.record?.verdict).toBe('ERROR')
     expect(result.record?.failureClass).toBe('reviewed-inputs-changed')
+    expect(result.record?.error).toContain('src/engine.ts')
     expect(result.run.steps[0]?.state).not.toBe('done')
   })
   it('writes the local record and the committed approval for a task PASS', async () => {
@@ -309,7 +313,8 @@ describe('runReviewStep', () => {
       ),
     ) as ReviewRecord
     expect(record.verdict).toBe('ERROR')
-    expect(record.failureClass).toBe('provider-not-started')
+    // A missing provider is a permanent config failure, never a retryable start.
+    expect(record.failureClass).toBe('config')
   })
 
   it('times out with an ERROR record', async () => {

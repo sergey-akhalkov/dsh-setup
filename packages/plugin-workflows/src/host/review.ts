@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url'
 import { CHANGE_NAME } from './command-parse.js'
 import type { Definition, Step } from './definitions.js'
 import { type EvidenceContext, verifyEvidence } from './evidence.js'
-import type { SubagentRunner } from './executors.js'
+import type { SubagentRunner, SubagentRunResult } from './executors.js'
 import { isInside } from './fs-change.js'
+import { classifyFailure, type FailureClass } from './review-queue.js'
 import { settleStep, type WorkflowRun } from './runs.js'
 
 /**
@@ -20,6 +21,46 @@ import { settleStep, type WorkflowRun } from './runs.js'
  */
 
 export const TASK_ID_PATTERN = /^[0-9a-f]{16}$/u
+
+/**
+ * Typed review failures: the queue's classifier reads the name and provider
+ * message, so a permanent cause is never retried as a transient one.
+ */
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ConfigError'
+  }
+}
+
+export class ProviderStartError extends Error {
+  constructor(
+    message: string,
+    readonly providerMessage?: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message)
+    this.name = 'ProviderStartError'
+  }
+}
+
+export class ProviderResultError extends Error {
+  constructor(
+    message: string,
+    readonly providerMessage?: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message)
+    this.name = 'ProviderResultError'
+  }
+}
+
+export class InputMutationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InputMutationError'
+  }
+}
 
 /** The fixed finding vocabulary every review producer shares. */
 export const FINDING_CLASSES = [
@@ -674,12 +715,18 @@ export async function writePortableApproval(
   }
 }
 
+/** A review's runner: it can report when the target actually started. */
+export interface ReviewSubagentRunner extends SubagentRunner {
+  /** Resolves once the most recent target activation is published; rejects on a start failure. */
+  awaitStart?(): Promise<void>
+}
+
 export interface ReviewRunInput {
   readonly run: WorkflowRun
   readonly definition: Definition
   readonly step: Step
   readonly reviewer: ResolvedReviewer
-  readonly runner: SubagentRunner
+  readonly runner: ReviewSubagentRunner
   readonly context: EvidenceContext
   readonly change: string
   readonly task?: { readonly id: string; readonly number?: string; readonly text: string }
@@ -691,8 +738,8 @@ export interface ReviewRunInput {
     readonly artifactDigest?: string
     /** The frozen checkout to run in; absent means the live worktree. */
     readonly reviewCwd?: string
-    /** Re-check the change digest after the run and discard a changed verdict. */
-    readonly liveGuard?: () => Promise<boolean>
+    /** Re-check the reviewed input set after the run; a reason discards the verdict. */
+    readonly liveGuard?: () => Promise<string | undefined>
   }
   readonly timeoutMs: number
   readonly session: string
@@ -858,41 +905,91 @@ async function writeErrorRecord(
   const run = await settleFromRecord(input, failed, written.path, now)
   return { run, record: failed, recordPath: written.path, error }
 }
-/**
- * Run one review step. It awaits the reviewer (the queue and asynchronous
- * admission wrap this function), writes the record, and settles the step from
- * the evidence verifier. A failed start, a timeout, a malformed verdict, or a
- * changed whole-scope input writes an ERROR record and publishes no PASS.
- */
-export async function runReviewStep(input: ReviewRunInput): Promise<ReviewRunResult> {
-  const now = input.now ?? Date.now()
+/** The review identity every attempt carries before a verdict exists. */
+type ReviewRecordBase = Omit<ReviewRecord, 'verdict' | 'findings'>
+
+export type ReviewAttemptResult =
+  | {
+      readonly kind: 'verdict'
+      readonly verdict: 'PASS' | 'FINDINGS'
+      readonly findings: readonly ReviewFinding[]
+    }
+  | {
+      readonly kind: 'failure'
+      readonly error: string
+      readonly failureClass: FailureClass
+      readonly transient: boolean
+      readonly retryAfterMs?: number
+    }
+
+/** One executed attempt, unpublished: the scheduler decides whether it settles. */
+export interface ReviewAttemptOutcome {
+  readonly record?: ReviewRecordBase
+  readonly result: ReviewAttemptResult
+}
+
+export interface ReviewAttemptHandle {
+  /** Resolves when the target actually started; rejects with the raw start failure. */
+  readonly started: Promise<void>
+  /** The attempt result; it never rejects. */
+  readonly result: Promise<ReviewAttemptOutcome>
+  readonly now: number
+}
+
+function failureOutcome(
+  record: ReviewRecordBase | undefined,
+  error: string,
+  failureClass: FailureClass,
+  transient: boolean,
+  retryAfterMs?: number,
+): ReviewAttemptOutcome {
+  return {
+    ...(record === undefined ? {} : { record }),
+    result: {
+      kind: 'failure',
+      error,
+      failureClass,
+      transient,
+      ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    },
+  }
+}
+
+/** Validate the step and render the prompt before any target starts. */
+function prepareAttempt(
+  input: ReviewRunInput,
+  now: number,
+):
+  | { kind: 'ready'; record: ReviewRecordBase; prompt: string }
+  | { kind: 'failed'; outcome: ReviewAttemptOutcome } {
   const spec = input.step.review
   if (spec === undefined) {
     return {
-      run: settleStep(input.run, input.step.id, 'failed', {
-        at: now,
-        reason: 'the step declares no review',
-      }),
-      error: 'the step declares no review',
+      kind: 'failed',
+      outcome: failureOutcome(
+        undefined,
+        `step "${input.step.id}" declares no review`,
+        'config',
+        false,
+      ),
     }
   }
   if (spec.scope === 'task' && input.task === undefined) {
     return {
-      run: settleStep(input.run, input.step.id, 'failed', {
-        at: now,
-        reason: 'a task review needs the run context task id',
-      }),
-      error: 'a task review needs the run context task id',
+      kind: 'failed',
+      outcome: failureOutcome(
+        undefined,
+        'a task review needs the run context task id',
+        'config',
+        false,
+      ),
     }
   }
   const rule = input.definition.settings.gateIdentity ?? input.definition.id
   const declared = input.step.evidence
   if (declared === undefined || declared.kind !== 'record' || declared.rule !== rule) {
     const reason = `the review step must declare a "record" evidence contract for rule "${rule}"; a review never settles from unrelated evidence`
-    return {
-      run: settleStep(input.run, input.step.id, 'failed', { at: now, reason }),
-      error: reason,
-    }
+    return { kind: 'failed', outcome: failureOutcome(undefined, reason, 'config', false) }
   }
   const record = baseRecord(input, now)
   const promptInput: ReviewPromptInput = {
@@ -906,38 +1003,44 @@ export async function runReviewStep(input: ReviewRunInput): Promise<ReviewRunRes
     snapshot: input.prepared.reviewCwd !== undefined,
     ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
   }
-  let prompt: string
   try {
-    prompt = (input.renderPrompt ?? renderReviewPrompt)(promptInput)
+    const prompt = (input.renderPrompt ?? renderReviewPrompt)(promptInput)
+    return { kind: 'ready', record, prompt }
   } catch (error) {
-    return await writeErrorRecord(
-      input,
-      record,
-      `the bundled review instruction "${spec.instruction}" could not be rendered: ${error instanceof Error ? error.message : String(error)}`,
-      'config',
-      now,
-    )
+    return {
+      kind: 'failed',
+      outcome: failureOutcome(
+        record,
+        `the bundled review instruction "${spec.instruction}" could not be rendered: ${error instanceof Error ? error.message : String(error)}`,
+        'config',
+        false,
+      ),
+    }
   }
+}
 
-  const controller = new AbortController()
-  const forwardAbort = (): void => controller.abort()
-  input.signal?.addEventListener('abort', forwardAbort, { once: true })
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const stopped = new Promise<never>((_resolve, reject) => {
-    controller.signal.addEventListener(
-      'abort',
-      () => reject(new Error('the review timed out after the configured review timeout')),
-      { once: true },
-    )
-    timer = setTimeout(() => {
-      controller.abort()
-      reject(new Error('the review timed out after the configured review timeout'))
-    }, input.timeoutMs)
-  })
+function resultFailure(error: unknown, fallback: FailureClass): ReviewAttemptOutcome['result'] {
+  const message = error instanceof Error ? error.message : String(error)
+  const failure = classifyFailure(error, 'run')
+  return {
+    kind: 'failure',
+    error: message,
+    failureClass: failure.failureClass === 'unknown' ? fallback : failure.failureClass,
+    transient: failure.transient,
+    ...(failure.retryAfterMs === undefined ? {} : { retryAfterMs: failure.retryAfterMs }),
+  }
+}
 
-  let text: string
+async function executeAttempt(
+  input: ReviewRunInput,
+  record: ReviewRecordBase,
+  prompt: string,
+  controller: AbortController,
+  stopped: Promise<never>,
+): Promise<ReviewAttemptOutcome> {
+  let child: SubagentRunResult
   try {
-    const child = await Promise.race([
+    child = await Promise.race([
       input.runner.run(
         {
           provider: input.reviewer.provider,
@@ -958,59 +1061,133 @@ export async function runReviewStep(input: ReviewRunInput): Promise<ReviewRunRes
       ),
       stopped,
     ])
-    if (!child.completed) {
-      const reason = `the reviewer did not complete${child.error === undefined ? '' : `: ${child.error.slice(0, 200)}`}`
-      return await writeErrorRecord(input, record, reason, 'provider-not-started', now)
-    }
-    if (child.text === undefined || child.text.trim() === '') {
-      return await writeErrorRecord(
-        input,
-        record,
-        'the reviewer returned no text verdict; re-run the review',
-        'invalid-output',
-        now,
-      )
-    }
-    text = child.text
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    const timedOut = message.includes('timed out')
-    return await writeErrorRecord(
-      input,
-      record,
-      message,
-      timedOut ? 'timeout' : 'provider-not-started',
-      now,
-    )
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-    input.signal?.removeEventListener('abort', forwardAbort)
+    // A timeout, a permission denial, and a capacity rejection classify
+    // differently; the scheduler retries only the transient classes.
+    return { record, result: resultFailure(error, 'provider-not-started') }
   }
-
-  const parsed = parseReviewVerdict(text, record.digest)
-  if (!parsed.ok) {
-    return await writeErrorRecord(
-      input,
-      record,
-      `${parsed.error}; re-run the review on the current digest`,
-      'invalid-output',
-      now,
+  if (!child.completed) {
+    // The provider reported a terminal stop: classify its diagnostic rather
+    // than assuming every non-completion is a transient start failure.
+    const diagnostic = child.error === undefined ? '' : `: ${child.error.slice(0, 200)}`
+    const providerMessage =
+      child.error === undefined
+        ? 'the reviewer stopped without completing'
+        : `the reviewer stopped without completing: ${child.error}`
+    const failure = new ProviderResultError(
+      `review target "${input.reviewer.id}" (provider "${input.reviewer.provider}") did not complete${diagnostic}; check the provider, then re-run the review`,
+      providerMessage,
     )
+    return { record, result: resultFailure(failure, 'unknown') }
+  }
+  if (child.text === undefined || child.text.trim() === '') {
+    return {
+      record,
+      result: {
+        kind: 'failure',
+        error: 'the reviewer returned no text verdict; re-run the review',
+        failureClass: 'invalid-output',
+        transient: false,
+      },
+    }
+  }
+  const parsed = parseReviewVerdict(child.text, record.digest)
+  if (!parsed.ok) {
+    return {
+      record,
+      result: {
+        kind: 'failure',
+        error: `${parsed.error}; re-run the review on the current digest`,
+        failureClass: 'invalid-output',
+        transient: false,
+      },
+    }
   }
   if (input.prepared.liveGuard !== undefined) {
-    const stillCurrent = await input.prepared.liveGuard().catch(() => false)
-    if (!stillCurrent) {
-      return await writeErrorRecord(
-        input,
-        record,
-        'reviewed inputs changed during the run; finish the writes and re-run the review',
-        'reviewed-inputs-changed',
-        now,
+    const changed = await input.prepared
+      .liveGuard()
+      .catch((error: unknown) =>
+        error instanceof Error
+          ? `the reviewed inputs could not be re-checked: ${error.message}`
+          : 'the reviewed inputs could not be re-checked',
       )
+    if (changed !== undefined) {
+      const failure = new InputMutationError(
+        `reviewed inputs changed during the run (${changed}); finish the writes and re-run the review`,
+      )
+      return { record, result: resultFailure(failure, 'reviewed-inputs-changed') }
     }
   }
+  return { record, result: { kind: 'verdict', verdict: parsed.verdict, findings: parsed.findings } }
+}
 
-  const published: ReviewRecord = { ...record, verdict: parsed.verdict, findings: parsed.findings }
+/**
+ * Start one review attempt and return only after the target actually started.
+ * The result continues in the background; the queue's start hook awaits
+ * `started`, so an activation failure is classified and retried before the
+ * acceptance deadline is cleared. No record is written here.
+ */
+export function beginReviewAttempt(input: ReviewRunInput): ReviewAttemptHandle {
+  const now = input.now ?? Date.now()
+  const prepared = prepareAttempt(input, now)
+  if (prepared.kind === 'failed') {
+    return { started: Promise.resolve(), result: Promise.resolve(prepared.outcome), now }
+  }
+  const controller = new AbortController()
+  const forwardAbort = (): void => controller.abort()
+  input.signal?.addEventListener('abort', forwardAbort, { once: true })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const stopped = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener(
+      'abort',
+      () => reject(new Error('the review timed out after the configured review timeout')),
+      { once: true },
+    )
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error('the review timed out after the configured review timeout'))
+    }, input.timeoutMs)
+  })
+  const result = executeAttempt(input, prepared.record, prepared.prompt, controller, stopped)
+    .finally(() => {
+      if (timer !== undefined) clearTimeout(timer)
+      input.signal?.removeEventListener('abort', forwardAbort)
+    })
+    .catch((error: unknown) => ({
+      record: prepared.record,
+      result: resultFailure(error, 'unknown'),
+    }))
+  const runner = input.runner
+  const started = typeof runner.awaitStart === 'function' ? runner.awaitStart() : Promise.resolve()
+  // The scheduler awaits this to classify a start failure; direct callers only
+  // await the result, so an unobserved rejection must not be unhandled.
+  started.catch(() => undefined)
+  return { started, result, now }
+}
+
+/**
+ * Publish one settled attempt: write the ERROR record or the verdict record
+ * (and the committed approval first for a task PASS), then settle the step from
+ * its own evidence. Only the scheduler's settled attempt reaches this.
+ */
+export async function publishReviewOutcome(
+  input: ReviewRunInput,
+  outcome: ReviewAttemptOutcome,
+  now = input.now ?? Date.now(),
+): Promise<ReviewRunResult> {
+  const record = outcome.record
+  const result = outcome.result
+  if (record === undefined) {
+    const error = result.kind === 'failure' ? result.error : 'the review produced no record'
+    return {
+      run: settleStep(input.run, input.step.id, 'failed', { at: now, reason: error }),
+      error,
+    }
+  }
+  if (result.kind === 'failure') {
+    return writeErrorRecord(input, record, result.error, result.failureClass, now)
+  }
+  const published: ReviewRecord = { ...record, verdict: result.verdict, findings: result.findings }
   if (published.scope === 'task' && published.verdict === 'PASS') {
     // The committed approval is written first; a failed publish publishes no PASS.
     const writePortable = input.writePortable ?? writePortableApproval
@@ -1038,4 +1215,14 @@ export async function runReviewStep(input: ReviewRunInput): Promise<ReviewRunRes
   }
   const run = await settleFromRecord(input, published, local.path, now)
   return { run, record: published, recordPath: local.path }
+}
+
+/**
+ * Run one review step synchronously: execute the attempt and publish it. The
+ * queue wraps `beginReviewAttempt` and `publishReviewOutcome` instead, so a
+ * retried attempt publishes nothing.
+ */
+export async function runReviewStep(input: ReviewRunInput): Promise<ReviewRunResult> {
+  const attempt = beginReviewAttempt(input)
+  return publishReviewOutcome(input, await attempt.result, attempt.now)
 }

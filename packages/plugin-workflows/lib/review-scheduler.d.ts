@@ -8,6 +8,17 @@ import type { WorkflowRun } from './runs.js';
  * open while its run is admitted, so the turn-close gate still refuses a
  * PASS-dependent close until the record exists.
  */
+/** The re-prepared inputs of a queued review whose source set moved. */
+export interface RepreparedReview {
+    readonly kind: 'replaced';
+    readonly prepared: ReviewRunInput['prepared'];
+    readonly digest: string;
+    readonly liveDigest: string;
+    readonly task?: NonNullable<ReviewRunInput['task']>;
+}
+export type ReviewReprepareOutcome = {
+    readonly kind: 'unchanged';
+} | RepreparedReview;
 export interface ScheduledReview {
     readonly workspace: string;
     readonly run: WorkflowRun;
@@ -19,6 +30,12 @@ export interface ScheduledReview {
     readonly digest: string;
     /** The digest known before the snapshot exists, for the live-admission key. */
     readonly liveDigest?: string;
+    /**
+     * Re-check the live source inputs when the entry becomes start-eligible. The
+     * callback reports `unchanged`, or rebuilds once and returns the replacement;
+     * it throws a classified failure when the inputs moved a second time.
+     */
+    readonly reprepare?: (reprepared: boolean) => Promise<ReviewReprepareOutcome>;
 }
 /** The host-owned operations the scheduler cannot perform alone. */
 export interface ReviewSchedulerHost {
@@ -48,10 +65,9 @@ export declare class ReviewScheduler {
     private readonly queue;
     /** The last settled result per run id, for a status read. */
     private readonly lastSettled;
-    /** Live reviews by workspace+rule+change+task, so the host admits before a snapshot. */
+    /** Live reviews by complete identity, so the host admits before a snapshot. */
     private readonly liveRuns;
     private readonly liveKeys;
-    private liveKey;
     /** The run already covering this review, before any snapshot is prepared. */
     liveRun(input: {
         workspace: string;
@@ -62,7 +78,28 @@ export declare class ReviewScheduler {
         reviewer?: string;
     }): WorkflowRun | undefined;
     constructor(limits: QueueLimits, host: ReviewSchedulerHost);
-    private launch;
+    /** The queue's start hook: start the target and report once it is live. */
+    private start;
+    /** Re-check and re-prepare a queued entry's inputs exactly once. */
+    private reprepareIfChanged;
+    /** Settle a finished attempt: retry (publishing nothing) or publish once. */
+    private finish;
+    /** Publish the settled attempt, then release or quarantine the slot. */
+    private publishAndSettle;
+    /** Publish a terminal attempt whose child teardown is not yet confirmed. */
+    private publishAndQuarantine;
+    private publish;
+    /**
+     * Hold the run's slot, key, live dedupe entry, and snapshot until the child
+     * teardown succeeds; the queue retries the callback with backoff.
+     */
+    private quarantine;
+    /** Whether the reviewer child is confirmed gone; false on failure or timeout. */
+    private teardownConfirmed;
+    /** Await teardown, letting a rejection reach the queue's quarantine retry. */
+    private waitForTeardown;
+    private rememberLive;
+    private forgetLive;
     summary(): {
         enabled: boolean;
         concurrency: number;

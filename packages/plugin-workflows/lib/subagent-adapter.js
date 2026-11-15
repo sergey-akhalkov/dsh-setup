@@ -1,18 +1,74 @@
-/**
- * Adapt the DSH subagent runtime to the engine's runner. A caller-delivered
- * review is cataloged for visibility; a `parent` delivery notifies the model.
- * Cancellation after publication stops the child with `dispose()`, because the
- * start signal no longer governs a published activation.
- */
+import { ConfigError, ProviderStartError } from './review.js';
 export function hostSubagentRunner(runtime, agent) {
     const pendingTeardowns = [];
+    let startState = 'idle';
+    let startError;
+    const startWaiters = [];
+    const settleStart = (error) => {
+        startState = error === undefined ? 'started' : 'failed';
+        startError = error;
+        for (const waiter of startWaiters.splice(0)) {
+            if (startState === 'started')
+                waiter.resolve();
+            else
+                waiter.reject(error);
+        }
+    };
+    /** Run one dispose attempt and remember whether it confirmed the teardown. */
+    const teardown = (item) => {
+        item.error = undefined;
+        item.done = false;
+        let pending;
+        try {
+            pending = item.dispose();
+        }
+        catch (error) {
+            item.error = error;
+            return Promise.resolve();
+        }
+        const attempt = pending.then(() => {
+            item.done = true;
+        }, (error) => {
+            item.error = error;
+        });
+        item.attempt = attempt;
+        return attempt;
+    };
     return {
+        // Resolves only after the most recent target actually started; a failed
+        // activation rejects with its cause so the queue can classify and retry it.
+        awaitStart: () => startState === 'started'
+            ? Promise.resolve()
+            : startState === 'failed'
+                ? Promise.reject(startError)
+                : new Promise((resolve, reject) => {
+                    startWaiters.push({ resolve, reject });
+                }),
+        // A dispose failure is preserved, never swallowed: the scheduler keeps the
+        // queue slot, conversation key, and snapshot in quarantine until a later
+        // call confirms the child is gone.
         waitForTeardown: async () => {
-            while (pendingTeardowns.length > 0) {
-                await Promise.all(pendingTeardowns.splice(0));
+            let failure;
+            for (const item of [...pendingTeardowns]) {
+                if (item.attempt !== undefined)
+                    await item.attempt;
+                if (item.done !== true)
+                    await teardown(item);
+                if (item.done === true) {
+                    const index = pendingTeardowns.indexOf(item);
+                    if (index >= 0)
+                        pendingTeardowns.splice(index, 1);
+                }
+                else if (failure === undefined) {
+                    failure = item.error ?? new Error('the reviewer child could not be torn down');
+                }
             }
+            if (failure !== undefined)
+                throw failure;
         },
         run: async (request, signal) => {
+            startState = 'idle';
+            startError = undefined;
             const controller = signal ?? new AbortController().signal;
             // A missing provider is a run-time review failure with the target id and
             // the recovery action, not the provider's bare "no provider" message. A
@@ -24,7 +80,9 @@ export function hostSubagentRunner(runtime, agent) {
                     const subject = request.reviewer === undefined
                         ? `provider "${request.provider}"`
                         : `review target "${request.reviewer}" (provider "${request.provider}")`;
-                    throw new Error(`${subject} is not registered; install or enable that provider, or set reviewers.${request.reviewer ?? '<target>'}.provider in the workflows row, then re-run`);
+                    const error = new ConfigError(`${subject} is not registered; install or enable that provider, or set reviewers.${request.reviewer ?? '<target>'}.provider in the workflows row, then re-run`);
+                    settleStart(error);
+                    throw error;
                 }
             }
             const options = {
@@ -34,23 +92,48 @@ export function hostSubagentRunner(runtime, agent) {
                     ? {}
                     : { reasoningEffort: request.reasoningEffort }),
             };
-            const activation = await runtime.startActivation({
-                provider: request.provider,
-                label: (request.label ?? `workflows ${request.provider}`).slice(0, 120),
-                parent: agent,
-                prompt: [{ type: 'text', text: request.prompt }],
-                ...(request.schema === undefined ? {} : { outputSchema: request.schema }),
-                ...(Object.keys(options).length === 0 ? {} : { agentOptions: options }),
-                ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
-                signal: controller,
-                delivery: request.delivery ?? 'caller',
-            });
+            let activation;
+            try {
+                activation = await runtime.startActivation({
+                    provider: request.provider,
+                    label: (request.label ?? `workflows ${request.provider}`).slice(0, 120),
+                    parent: agent,
+                    prompt: [{ type: 'text', text: request.prompt }],
+                    ...(request.schema === undefined ? {} : { outputSchema: request.schema }),
+                    ...(Object.keys(options).length === 0 ? {} : { agentOptions: options }),
+                    ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+                    signal: controller,
+                    delivery: request.delivery ?? 'caller',
+                });
+            }
+            catch (error) {
+                // Keep the untruncated provider cause for classification and the
+                // public message bounded and actionable; the classifier honors a
+                // retry-after hint carried on either.
+                const providerMessage = error instanceof Error ? error.message : String(error);
+                const subject = request.reviewer === undefined
+                    ? `provider "${request.provider}"`
+                    : `review target "${request.reviewer}" (provider "${request.provider}")`;
+                const hint = typeof error === 'object' && error !== null
+                    ? (error.retryAfterMs ??
+                        error.retryAfter)
+                    : undefined;
+                const retryAfterMs = typeof hint === 'number' && Number.isFinite(hint) && hint > 0
+                    ? Math.round(hint)
+                    : undefined;
+                const failure = new ProviderStartError(`${subject} could not start: ${providerMessage.slice(0, 300)}; check reviewers.${request.reviewer ?? '<target>'} against provider "${request.provider}", then re-run the review`, providerMessage, retryAfterMs);
+                settleStart(failure);
+                throw failure;
+            }
+            settleStart();
             // A published activation outlives the start signal: cancellation must
             // dispose the child explicitly, whether the abort arrived before or
-            // after publication. Teardown is fire-and-forget and never masks the
-            // result or leaks an unhandled rejection.
+            // after publication. Teardown is fire-and-forget here; failures stay
+            // pending for `waitForTeardown` to retry.
+            const item = { dispose: () => activation.dispose() };
             const stop = () => {
-                pendingTeardowns.push(activation.dispose().catch(() => undefined));
+                pendingTeardowns.push(item);
+                void teardown(item);
             };
             if (controller.aborted)
                 stop();

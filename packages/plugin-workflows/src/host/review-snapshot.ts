@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { type Dirent, existsSync } from 'node:fs'
 import {
   cp,
@@ -12,7 +13,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { specDigest } from './evidence.js'
 import { type GitRunner, repositoryRoot } from './git.js'
 
@@ -337,4 +338,147 @@ export async function createReviewSnapshot(
     onUnavailable?.('the snapshot worktree could not be built (git error during snapshot creation)')
     return undefined
   }
+}
+
+/**
+ * The reviewed input set of a review: every file the reviewer can read, with a
+ * stat signature that survives an edit-read-restore (content digests do not).
+ * Whole scope covers the git-visible worktree and the change; a task review
+ * covers the same set plus the change artifacts its digest also binds.
+ */
+export interface InputSignature {
+  /** Walk root, used to render changed paths as evidence. */
+  readonly root: string
+  /** Absolute path -> stat signature. */
+  readonly entries: ReadonlyMap<string, string>
+}
+
+/** Change-root entries that are engine output, not reviewed input. */
+const CHANGE_INPUT_EXCLUDES: ReadonlySet<string> = new Set(['.openspec.yaml', 'reviews'])
+
+async function inputStat(path: string): Promise<string> {
+  try {
+    const info = await stat(path, { bigint: true })
+    return `${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+  } catch {
+    // A deleted tracked file is a changed input, not an unreadable workspace.
+    return '[missing]'
+  }
+}
+
+async function inputSignature(
+  root: string,
+  excludes: ReadonlySet<string> = new Set(),
+): Promise<InputSignature> {
+  const entries = new Map<string, string>()
+  async function walk(directory: string, prefix: string): Promise<void> {
+    let dirents: Dirent<string>[]
+    try {
+      dirents = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      throw new Error(
+        `could not read reviewed inputs under ${prefix === '' ? '.' : prefix}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    for (const entry of dirents) {
+      // Exclusions are change-root entries: a nested `reviews/` is an artifact.
+      if (prefix === '' && excludes.has(entry.name)) continue
+      const name = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+      const absolute = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await walk(absolute, name)
+        continue
+      }
+      if (!entry.isFile()) continue
+      entries.set(absolute, await inputStat(absolute))
+    }
+  }
+  await walk(root, '')
+  return { root, entries }
+}
+
+/** The git-visible worktree file set the worktree digest covers, with stats. */
+async function gitInputSignature(
+  root: string,
+  runGit: GitRunner,
+  signal?: AbortSignal,
+): Promise<InputSignature> {
+  let raw: Buffer
+  try {
+    raw = await runGit(
+      ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+      root,
+      signal,
+    )
+  } catch (error) {
+    throw new Error(
+      `could not list the reviewed worktree inputs: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  const entries = new Map<string, string>()
+  for (const path of raw.toString('utf8').split('\0')) {
+    if (path === '' || ignoredForDigest(path)) continue
+    entries.set(resolve(root, path), await inputStat(resolve(root, path)))
+  }
+  return { root, entries }
+}
+
+/** Every file the reviewer can read for one review, before it is prepared. */
+export async function reviewedInputs(
+  cwd: string,
+  changeDir: string,
+  runGit: GitRunner,
+  signal?: AbortSignal,
+): Promise<InputSignature> {
+  const root = await repositoryRoot(cwd, runGit, signal)
+  const signature = await gitInputSignature(root, runGit, signal)
+  const entries = new Map(signature.entries)
+  // The portable approval directory is engine output, not reviewed input: a
+  // record another review writes during this run must not discard the verdict.
+  let approvals = resolve(changeDir, 'reviews')
+  try {
+    approvals = resolve(root, relative(await realpath(root), await realpath(changeDir)), 'reviews')
+  } catch {
+    // Fall back to the session's lexical form when the paths cannot be resolved.
+  }
+  for (const path of [...entries.keys()]) {
+    if (path === approvals || path.startsWith(`${approvals}${sep}`)) entries.delete(path)
+  }
+  // A task digest also hashes the change artifacts, so they are guarded
+  // regardless of git; whole scope reads the change and the worktree both.
+  // Resolve a linked checkout so changed paths stay relative to the root.
+  const resolvedChange = await realpath(changeDir).catch(() => changeDir)
+  const change = await inputSignature(resolvedChange, CHANGE_INPUT_EXCLUDES)
+  for (const [path, value] of change.entries) entries.set(path, value)
+  return { root, entries }
+}
+
+/** Paths whose reviewed input changed (added, removed, or stat mutation). */
+export function changedInputPaths(signature: InputSignature, current: InputSignature): string[] {
+  const changed = new Set<string>()
+  for (const [path, value] of signature.entries) {
+    if (current.entries.get(path) !== value) changed.add(toRelative(signature.root, path))
+  }
+  for (const path of current.entries.keys()) {
+    if (!signature.entries.has(path)) changed.add(toRelative(signature.root, path))
+  }
+  return [...changed].sort()
+}
+
+function toRelative(root: string, path: string): string {
+  return relative(root, path).split(sep).join('/')
+}
+
+/** Stable hash of the source input set a queued review re-checks before start. */
+export function signatureHash(signature: InputSignature): string {
+  const hash = createHash('sha256')
+  hash.update('queue-signature-v1')
+  hash.update('\0')
+  for (const [path, value] of [...signature.entries].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    hash.update(`${path}\u0000${value}`)
+    hash.update('\0')
+  }
+  return hash.digest('hex')
 }

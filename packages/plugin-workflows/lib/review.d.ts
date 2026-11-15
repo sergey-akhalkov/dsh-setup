@@ -1,6 +1,7 @@
 import type { Definition, Step } from './definitions.js';
 import { type EvidenceContext } from './evidence.js';
 import type { SubagentRunner } from './executors.js';
+import { type FailureClass } from './review-queue.js';
 import { type WorkflowRun } from './runs.js';
 /**
  * The native review executor. It resolves a reviewer from the row's
@@ -11,6 +12,26 @@ import { type WorkflowRun } from './runs.js';
  * writes an ERROR record and publishes no PASS.
  */
 export declare const TASK_ID_PATTERN: RegExp;
+/**
+ * Typed review failures: the queue's classifier reads the name and provider
+ * message, so a permanent cause is never retried as a transient one.
+ */
+export declare class ConfigError extends Error {
+    constructor(message: string);
+}
+export declare class ProviderStartError extends Error {
+    readonly providerMessage?: string | undefined;
+    readonly retryAfterMs?: number | undefined;
+    constructor(message: string, providerMessage?: string | undefined, retryAfterMs?: number | undefined);
+}
+export declare class ProviderResultError extends Error {
+    readonly providerMessage?: string | undefined;
+    readonly retryAfterMs?: number | undefined;
+    constructor(message: string, providerMessage?: string | undefined, retryAfterMs?: number | undefined);
+}
+export declare class InputMutationError extends Error {
+    constructor(message: string);
+}
 /** The fixed finding vocabulary every review producer shares. */
 export declare const FINDING_CLASSES: readonly ["spec-ambiguity", "missing-test", "path-boundary", "state-persistence", "stale-input", "api-contract", "plan-shape", "docs-drift", "security", "other"];
 export type FindingClass = (typeof FINDING_CLASSES)[number];
@@ -158,12 +179,17 @@ export type ReviewWrite = {
 export declare function writeLocalReviewRecord(workspace: string, record: ReviewRecord): Promise<ReviewWrite>;
 /** Write the committed approval before the local record; a task PASS only. */
 export declare function writePortableApproval(workspace: string, record: ReviewRecord): Promise<ReviewWrite>;
+/** A review's runner: it can report when the target actually started. */
+export interface ReviewSubagentRunner extends SubagentRunner {
+    /** Resolves once the most recent target activation is published; rejects on a start failure. */
+    awaitStart?(): Promise<void>;
+}
 export interface ReviewRunInput {
     readonly run: WorkflowRun;
     readonly definition: Definition;
     readonly step: Step;
     readonly reviewer: ResolvedReviewer;
-    readonly runner: SubagentRunner;
+    readonly runner: ReviewSubagentRunner;
     readonly context: EvidenceContext;
     readonly change: string;
     readonly task?: {
@@ -179,8 +205,8 @@ export interface ReviewRunInput {
         readonly artifactDigest?: string;
         /** The frozen checkout to run in; absent means the live worktree. */
         readonly reviewCwd?: string;
-        /** Re-check the change digest after the run and discard a changed verdict. */
-        readonly liveGuard?: () => Promise<boolean>;
+        /** Re-check the reviewed input set after the run; a reason discards the verdict. */
+        readonly liveGuard?: () => Promise<string | undefined>;
     };
     readonly timeoutMs: number;
     readonly session: string;
@@ -218,10 +244,48 @@ export declare function recordReviewFailure(input: {
     readonly now?: number;
     readonly writeLocal?: typeof writeLocalReviewRecord;
 }): Promise<ReviewRunResult>;
+/** The review identity every attempt carries before a verdict exists. */
+type ReviewRecordBase = Omit<ReviewRecord, 'verdict' | 'findings'>;
+export type ReviewAttemptResult = {
+    readonly kind: 'verdict';
+    readonly verdict: 'PASS' | 'FINDINGS';
+    readonly findings: readonly ReviewFinding[];
+} | {
+    readonly kind: 'failure';
+    readonly error: string;
+    readonly failureClass: FailureClass;
+    readonly transient: boolean;
+    readonly retryAfterMs?: number;
+};
+/** One executed attempt, unpublished: the scheduler decides whether it settles. */
+export interface ReviewAttemptOutcome {
+    readonly record?: ReviewRecordBase;
+    readonly result: ReviewAttemptResult;
+}
+export interface ReviewAttemptHandle {
+    /** Resolves when the target actually started; rejects with the raw start failure. */
+    readonly started: Promise<void>;
+    /** The attempt result; it never rejects. */
+    readonly result: Promise<ReviewAttemptOutcome>;
+    readonly now: number;
+}
 /**
- * Run one review step. It awaits the reviewer (the queue and asynchronous
- * admission wrap this function), writes the record, and settles the step from
- * the evidence verifier. A failed start, a timeout, a malformed verdict, or a
- * changed whole-scope input writes an ERROR record and publishes no PASS.
+ * Start one review attempt and return only after the target actually started.
+ * The result continues in the background; the queue's start hook awaits
+ * `started`, so an activation failure is classified and retried before the
+ * acceptance deadline is cleared. No record is written here.
+ */
+export declare function beginReviewAttempt(input: ReviewRunInput): ReviewAttemptHandle;
+/**
+ * Publish one settled attempt: write the ERROR record or the verdict record
+ * (and the committed approval first for a task PASS), then settle the step from
+ * its own evidence. Only the scheduler's settled attempt reaches this.
+ */
+export declare function publishReviewOutcome(input: ReviewRunInput, outcome: ReviewAttemptOutcome, now?: number): Promise<ReviewRunResult>;
+/**
+ * Run one review step synchronously: execute the attempt and publish it. The
+ * queue wraps `beginReviewAttempt` and `publishReviewOutcome` instead, so a
+ * retried attempt publishes nothing.
  */
 export declare function runReviewStep(input: ReviewRunInput): Promise<ReviewRunResult>;
+export {};

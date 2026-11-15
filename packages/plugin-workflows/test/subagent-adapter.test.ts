@@ -1,6 +1,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { describe, expect, it } from 'vitest'
+import { classifyFailure } from '../src/host/review-queue.ts'
 import { hostSubagentRunner } from '../src/host/subagent-adapter.ts'
 
 interface Captured {
@@ -132,5 +133,89 @@ describe('missing provider diagnostic', () => {
     await expect(
       runner.run({ provider: 'absent', prompt: 'prompt', reviewer: 'codex' }),
     ).rejects.toThrow(/review target "codex" \(provider "absent"\).*reviewers\.codex\.provider/u)
+  })
+})
+
+describe('adapter start and teardown signals', () => {
+  it('reports a start failure through awaitStart and classifies it', async () => {
+    const runtime = {
+      getProvider: () => ({ name: 'codex-subagent', capabilities: { agentOptions: true } }),
+      startActivation: async () => {
+        throw new Error('permission denied: reviewer is not authorized')
+      },
+    } as unknown as SubagentRuntime
+    const runner = hostSubagentRunner(runtime, agent)
+    const running = runner.run({ provider: 'codex-subagent', prompt: 'prompt', reviewer: 'codex' })
+    const startError = await runner.awaitStart?.().catch((error: unknown) => error)
+    expect(startError).toBeInstanceOf(Error)
+    expect(classifyFailure(startError, 'start')).toMatchObject({
+      failureClass: 'permission',
+      transient: false,
+    })
+    await expect(running).rejects.toThrow(/could not start: permission denied/)
+  })
+
+  it('resolves awaitStart only after the activation is published', async () => {
+    const captured: Captured = { spec: {}, disposed: 0 }
+    let publish: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      publish = resolve
+    })
+    const runtime = {
+      getProvider: () => ({ name: 'codex-subagent', capabilities: { agentOptions: true } }),
+      startActivation: async (spec: Record<string, unknown>) => {
+        captured.spec = spec
+        await gate
+        return {
+          childId: 'child-1',
+          name: 'child',
+          result: Promise.resolve({ stopReason: 'completed', output: [] }),
+          dispose: async () => undefined,
+        }
+      },
+    } as unknown as SubagentRuntime
+    const runner = hostSubagentRunner(runtime, agent)
+    const running = runner.run({ provider: 'codex-subagent', prompt: 'prompt' })
+    let started = false
+    void runner.awaitStart?.().then(() => {
+      started = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(started).toBe(false)
+    publish?.()
+    await runner.awaitStart?.()
+    expect(started).toBe(true)
+    await running
+  })
+
+  it('preserves a dispose failure and retries it until teardown confirms', async () => {
+    const captured: Captured = { spec: {}, disposed: 0 }
+    let failures = 2
+    const runtime = {
+      getProvider: () => ({ name: 'codex-subagent', capabilities: { agentOptions: true } }),
+      startActivation: async () => ({
+        childId: 'child-1',
+        name: 'child',
+        result: new Promise(() => undefined),
+        dispose: async () => {
+          captured.disposed += 1
+          if (failures > 0) {
+            failures -= 1
+            throw new Error('teardown unconfirmed')
+          }
+        },
+      }),
+    } as unknown as SubagentRuntime
+    const runner = hostSubagentRunner(runtime, agent)
+    const controller = new AbortController()
+    void runner.run({ provider: 'codex-subagent', prompt: 'prompt' }, controller.signal)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    controller.abort()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await expect(runner.waitForTeardown?.()).rejects.toThrow(/teardown unconfirmed/)
+    await expect(runner.waitForTeardown?.()).resolves.toBeUndefined()
+    expect(captured.disposed).toBe(3)
+    await expect(runner.waitForTeardown?.()).resolves.toBeUndefined()
+    expect(captured.disposed).toBe(3)
   })
 })

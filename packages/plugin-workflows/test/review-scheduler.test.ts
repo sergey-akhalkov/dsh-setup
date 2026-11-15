@@ -7,7 +7,13 @@ import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { currentSpecDigest } from '../src/host/evidence.ts'
 import type { SubagentRunner } from '../src/host/executors.ts'
 import { defaultGit } from '../src/host/git.ts'
-import { type ReviewRecord, resolveReviewers } from '../src/host/review.ts'
+import {
+  type ReviewRecord,
+  type ReviewRunInput,
+  type ReviewSubagentRunner,
+  resolveReviewers,
+} from '../src/host/review.ts'
+import type { QueueLimits } from '../src/host/review-queue.ts'
 import { ReviewScheduler } from '../src/host/review-scheduler.ts'
 import { createReviewSnapshot, discardReviewSnapshot } from '../src/host/review-snapshot.ts'
 import { createRun, type WorkflowRun } from '../src/host/runs.ts'
@@ -468,5 +474,514 @@ describe('review snapshot', () => {
     expect(snapshot.specDigest).toHaveLength(64)
     await discardReviewSnapshot(root, 'run-1', defaultGit)
     expect(existsSync(snapshot.worktree)).toBe(false)
+  })
+})
+
+function limitsFor(overrides: Partial<QueueLimits> = {}): QueueLimits {
+  return {
+    enabled: true,
+    concurrency: 1,
+    maxQueued: 2,
+    maxAttempts: 1,
+    baseDelayMs: 0,
+    maxDelayMs: 0,
+    waitTimeoutMs: 10_000,
+    ...overrides,
+  }
+}
+
+function requestFor(
+  root: string,
+  digest: string,
+  overrides: Partial<ReviewRunInput> = {},
+): ReviewRunInput {
+  const def = definition()
+  const base: ReviewRunInput = {
+    run: runFor(def),
+    definition: def,
+    step: def.steps[0] as Definition['steps'][number],
+    reviewer: reviewers(),
+    runner: {
+      run: async () => ({ childId: 'child-1', completed: true, text: fencedPASS(digest) }),
+    },
+    context: { workspace: root, values: { name: 'auth' } },
+    change: 'auth',
+    prepared: { specDigest: digest },
+    timeoutMs: 5_000,
+    session: 'session-1',
+  }
+  return { ...base, ...overrides }
+}
+
+function recordPath(root: string, change = 'auth'): string {
+  return join(root, '.dsh/workflows/records/spec-review', change, 'spec.json')
+}
+
+describe('review scheduler retries and publication', () => {
+  it('publishes nothing on an intermediate retry and only the settled verdict', async () => {
+    const { root, digest } = await reviewWorkspace()
+    await mkdir(join(root, '.dsh'), { recursive: true })
+    const persisted: WorkflowRun[] = []
+    let calls = 0
+    const scheduler = new ReviewScheduler(
+      limitsFor({ maxAttempts: 2, baseDelayMs: 150, maxDelayMs: 150 }),
+      {
+        persistRun: async (_workspace, run) => {
+          persisted.push(run)
+          return run
+        },
+        discardSnapshot: async () => undefined,
+      },
+    )
+    const runner: SubagentRunner = {
+      run: async () => {
+        calls += 1
+        if (calls === 1) throw new Error('active child limit reached')
+        return { childId: 'child-1', completed: true, text: fencedPASS(digest) }
+      },
+    }
+    const request = requestFor(root, digest, { runner })
+    const admission = await scheduler.enqueue({
+      workspace: root,
+      run: request.run,
+      request,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    expect(admission.kind).toBe('accepted')
+    await waitFor(async () => calls === 1)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    // The retrying attempt publishes neither an ERROR nor a verdict.
+    expect(existsSync(recordPath(root))).toBe(false)
+    expect(persisted).toEqual([])
+    await waitFor(async () => persisted.length === 1)
+    expect(calls).toBe(2)
+    const record = JSON.parse(await readFile(recordPath(root), 'utf8')) as ReviewRecord
+    expect(record.verdict).toBe('PASS')
+    expect(persisted[0]?.steps[0]?.state).toBe('done')
+    scheduler.dispose()
+  })
+
+  it('settles a permanent permission failure without retrying and keeps its diagnostic', async () => {
+    const { root, digest } = await reviewWorkspace()
+    await mkdir(join(root, '.dsh'), { recursive: true })
+    const persisted: WorkflowRun[] = []
+    let calls = 0
+    const scheduler = new ReviewScheduler(
+      limitsFor({ maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 }),
+      {
+        persistRun: async (_workspace, run) => {
+          persisted.push(run)
+          return run
+        },
+        discardSnapshot: async () => undefined,
+      },
+    )
+    const runner: SubagentRunner = {
+      run: async () => {
+        calls += 1
+        throw new Error('permission denied: reviewer is not authorized for this workspace')
+      },
+    }
+    const request = requestFor(root, digest, { runner })
+    await scheduler.enqueue({
+      workspace: root,
+      run: request.run,
+      request,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    await waitFor(async () => persisted.length === 1)
+    expect(calls).toBe(1)
+    const record = JSON.parse(await readFile(recordPath(root), 'utf8')) as ReviewRecord
+    expect(record.verdict).toBe('ERROR')
+    expect(record.failureClass).toBe('permission')
+    expect(record.error).toContain('permission denied')
+    scheduler.dispose()
+  })
+})
+
+describe('review scheduler start deadline', () => {
+  it('keeps the acceptance deadline active across failed starts and backoff', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const persisted: WorkflowRun[] = []
+    let calls = 0
+    const scheduler = new ReviewScheduler(
+      limitsFor({
+        maxAttempts: 3,
+        baseDelayMs: 1_000,
+        maxDelayMs: 1_000,
+        waitTimeoutMs: 50,
+      }),
+      {
+        persistRun: async (_workspace, run) => {
+          persisted.push(run)
+          return run
+        },
+        discardSnapshot: async () => undefined,
+      },
+    )
+    const runner: ReviewSubagentRunner = {
+      run: async () => {
+        calls += 1
+        throw new Error('active child limit reached')
+      },
+      awaitStart: async () => {
+        throw new Error('active child limit reached')
+      },
+    }
+    const request = requestFor(root, digest, { runner })
+    const admission = await scheduler.enqueue({
+      workspace: root,
+      run: request.run,
+      request,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    expect(admission.kind).toBe('accepted')
+    await waitFor(async () => persisted.length === 1, 5_000)
+    expect(calls).toBe(1)
+    const record = JSON.parse(await readFile(recordPath(root), 'utf8')) as ReviewRecord
+    expect(record.failureClass).toBe('queue-timeout')
+    expect(record.error).toContain('timed out')
+    scheduler.dispose()
+  })
+})
+
+describe('review scheduler quarantine', () => {
+  it('retains the slot, live identity, and snapshot until teardown is confirmed', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const persisted: WorkflowRun[] = []
+    const discarded: string[] = []
+    const settled: string[] = []
+    let teardownConfirmed = false
+    let teardownCalls = 0
+    let secondCalls = 0
+    let releaseSecond: (() => void) | undefined
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve
+    })
+    const scheduler = new ReviewScheduler(
+      limitsFor({ maxAttempts: 1, baseDelayMs: 10, maxDelayMs: 20 }),
+      {
+        persistRun: async (_workspace, run) => {
+          persisted.push(run)
+          return run
+        },
+        discardSnapshot: async (_workspace, runId) => {
+          discarded.push(runId)
+        },
+        onSettled: (status) => {
+          settled.push(`${status.runId}:${status.state}`)
+        },
+      },
+    )
+    const hanging = (): Promise<{ childId: string; completed: boolean }> =>
+      new Promise(() => undefined)
+    const runner: SubagentRunner = {
+      run: hanging,
+      waitForTeardown: async () => {
+        teardownCalls += 1
+        if (!teardownConfirmed) throw new Error('teardown unconfirmed')
+      },
+    }
+    const first = requestFor(root, digest, { runner, timeoutMs: 25 })
+    await scheduler.enqueue({
+      workspace: root,
+      run: first.run,
+      request: first,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    await waitFor(async () => persisted.length === 1 && settled.length === 1, 5_000)
+    const record = JSON.parse(await readFile(recordPath(root), 'utf8')) as ReviewRecord
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('could not be confirmed cancelled')
+    expect(settled).toEqual([`${first.run.id}:failed`])
+    // The quarantined run keeps its live key and both snapshots.
+    expect(
+      scheduler.liveRun({
+        workspace: root,
+        rule: 'spec-review',
+        change: 'auth',
+        digest,
+        reviewer: 'codex',
+      })?.id,
+    ).toBe(first.run.id)
+    expect(discarded).toEqual([])
+    // A free-slot demand queues behind the retained slot instead of starting.
+    const second = requestFor(root, digest, {
+      runner: {
+        run: async () => {
+          secondCalls += 1
+          await secondGate
+          return { childId: 'child-2', completed: true, text: fencedPASS(digest) }
+        },
+      },
+    })
+    const secondRun = createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-2',
+      workspace: '/workspace',
+      context: { name: 'other' },
+      steps: ['review'],
+      now: 1_000,
+    })
+    const admission = await scheduler.enqueue({
+      workspace: root,
+      run: secondRun,
+      request: { ...second, run: secondRun, change: 'other' },
+      rule: 'spec-review',
+      change: 'other',
+      digest,
+    })
+    expect(admission.kind).toBe('accepted')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(secondCalls).toBe(0)
+    teardownConfirmed = true
+    await waitFor(async () => discarded.includes(first.run.id), 5_000)
+    await waitFor(async () => secondCalls === 1, 5_000)
+    expect(teardownCalls).toBeGreaterThan(1)
+    expect(
+      scheduler.liveRun({
+        workspace: root,
+        rule: 'spec-review',
+        change: 'auth',
+        digest,
+        reviewer: 'codex',
+      }),
+    ).toBeUndefined()
+    releaseSecond?.()
+    await waitFor(async () => persisted.some((run) => run.id === secondRun.id))
+    scheduler.dispose()
+  })
+})
+
+describe('review scheduler live identity', () => {
+  it('does not conflate a different digest or reviewer with a live run', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const map = resolveReviewers({
+      codex: { provider: 'codex-subagent' },
+      other: { provider: 'codex-subagent' },
+    })
+    const other = map.other
+    if (other === undefined) throw new Error('test reviewer missing')
+    const scheduler = new ReviewScheduler(limitsFor({ concurrency: 2, maxAttempts: 1 }), {
+      persistRun: async (_workspace, run) => run,
+      discardSnapshot: async () => undefined,
+    })
+    const pending = (): Promise<{ childId: string; completed: boolean }> =>
+      new Promise(() => undefined)
+    const first = requestFor(root, digest, { runner: { run: pending } })
+    await scheduler.enqueue({
+      workspace: root,
+      run: first.run,
+      request: first,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    const sameIdentity = {
+      workspace: root,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+      reviewer: 'codex',
+    }
+    expect(scheduler.liveRun(sameIdentity)?.id).toBe(first.run.id)
+    expect(scheduler.liveRun({ ...sameIdentity, digest: 'b'.repeat(64) })).toBeUndefined()
+    expect(scheduler.liveRun({ ...sameIdentity, reviewer: 'other' })).toBeUndefined()
+    const second = requestFor(root, digest, { runner: { run: pending } })
+    const otherRun = createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-2',
+      workspace: '/workspace',
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 1_000,
+    })
+    const accepted = await scheduler.enqueue({
+      workspace: root,
+      run: otherRun,
+      request: { ...second, run: otherRun, reviewer: { id: 'other', ...other } },
+      rule: 'spec-review',
+      change: 'auth',
+      digest: 'b'.repeat(64),
+    })
+    expect(accepted.kind).toBe('accepted')
+    scheduler.dispose()
+  })
+})
+
+describe('review scheduler queued re-preparation', () => {
+  it('re-checks a queued entry and starts on the replaced identity', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const persisted: WorkflowRun[] = []
+    let releaseFirst: (() => void) | undefined
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const prompts: string[] = []
+    const scheduler = new ReviewScheduler(limitsFor({ maxAttempts: 1, waitTimeoutMs: 10_000 }), {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async () => undefined,
+    })
+    const first = requestFor(root, digest, {
+      runner: {
+        run: async () => {
+          await firstGate
+          return { childId: 'child-1', completed: true, text: fencedPASS(digest) }
+        },
+      },
+    })
+    await scheduler.enqueue({
+      workspace: root,
+      run: first.run,
+      request: first,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    const queuedRun = createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-2',
+      workspace: '/workspace',
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 1_000,
+    })
+    const queuedDigest = 'b'.repeat(64)
+    const replacedDigest = 'c'.repeat(64)
+    const queued = requestFor(root, queuedDigest, {
+      run: queuedRun,
+      renderPrompt: (prompt) => prompt.digest,
+      runner: {
+        run: async (request) => {
+          prompts.push(request.prompt)
+          return { childId: 'child-2', completed: true, text: fencedPASS(replacedDigest) }
+        },
+      },
+    })
+    const preparings: boolean[] = []
+    const admission = await scheduler.enqueue({
+      workspace: root,
+      run: queuedRun,
+      request: queued,
+      rule: 'spec-review',
+      change: 'auth',
+      digest: queuedDigest,
+      reprepare: async (already) => {
+        preparings.push(already)
+        return {
+          kind: 'replaced',
+          prepared: { specDigest: replacedDigest },
+          digest: replacedDigest,
+          liveDigest: replacedDigest,
+        }
+      },
+    })
+    expect(admission.kind).toBe('accepted')
+    releaseFirst?.()
+    await waitFor(async () => prompts.length === 1)
+    expect(preparings).toEqual([false])
+    expect(prompts[0]).toBe(replacedDigest)
+    await waitFor(async () => persisted.length === 2)
+    const record = JSON.parse(await readFile(recordPath(root), 'utf8')) as ReviewRecord
+    expect(record.digest).toBe(replacedDigest)
+    scheduler.dispose()
+  })
+
+  it('settles a second change after the one re-preparation as a permanent failure', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const persisted: WorkflowRun[] = []
+    let releaseFirst: (() => void) | undefined
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const scheduler = new ReviewScheduler(limitsFor({ maxAttempts: 2 }), {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async () => undefined,
+    })
+    const first = requestFor(root, digest, {
+      runner: {
+        run: async () => {
+          await firstGate
+          return { childId: 'child-1', completed: true, text: fencedPASS(digest) }
+        },
+      },
+    })
+    await scheduler.enqueue({
+      workspace: root,
+      run: first.run,
+      request: first,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    const queuedRun = createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-2',
+      workspace: '/workspace',
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 1_000,
+    })
+    const queuedDigest = 'b'.repeat(64)
+    let attempts = 0
+    const queued = requestFor(root, queuedDigest, {
+      run: queuedRun,
+      runner: {
+        run: async () => {
+          attempts += 1
+          throw new Error('active child limit reached')
+        },
+      },
+    })
+    const preparings: boolean[] = []
+    await scheduler.enqueue({
+      workspace: root,
+      run: queuedRun,
+      request: queued,
+      rule: 'spec-review',
+      change: 'auth',
+      digest: queuedDigest,
+      reprepare: async (already) => {
+        preparings.push(already)
+        if (already) {
+          throw new Error(
+            'reviewed inputs changed again while the review waited in the queue; a review re-prepares only once',
+          )
+        }
+        return {
+          kind: 'replaced',
+          prepared: { specDigest: 'c'.repeat(64) },
+          digest: 'c'.repeat(64),
+          liveDigest: 'c'.repeat(64),
+        }
+      },
+    })
+    releaseFirst?.()
+    await waitFor(async () => persisted.length === 2, 5_000)
+    expect(attempts).toBe(1)
+    expect(preparings).toEqual([false, true])
+    const record = JSON.parse(await readFile(recordPath(root), 'utf8')) as ReviewRecord
+    expect(record.verdict).toBe('ERROR')
+    expect(record.failureClass).toBe('reviewed-inputs-changed')
+    expect(record.error).toContain('re-prepares only once')
+    scheduler.dispose()
   })
 })

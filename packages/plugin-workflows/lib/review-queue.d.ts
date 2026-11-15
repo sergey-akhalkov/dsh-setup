@@ -54,6 +54,11 @@ export interface QueueTimeoutInfo {
     position?: number;
     waitMs: number;
 }
+/** Facts a settlement observer needs to tell a release from a quarantine. */
+export interface SettlementInfo {
+    /** The run settled visibly but its child is not yet confirmed torn down. */
+    readonly quarantined?: boolean;
+}
 /** Engine callbacks; every write of a record or run file stays in the engine. */
 export interface ReviewQueueHooks<T extends QueueRun> {
     /** Start the prepared target; throws on a classified or unknown failure. */
@@ -64,8 +69,8 @@ export interface ReviewQueueHooks<T extends QueueRun> {
     fail(run: T, error: unknown, failureClass: FailureClass): Promise<void>;
     /** Write the terminal wait-timeout `ERROR` and mark the run failed. */
     timeout(run: T, info: QueueTimeoutInfo): Promise<void>;
-    /** Fire the settlement observer exactly once. */
-    settled(run: T, state: SettledRunState): void;
+    /** Fire the settlement observer exactly once; a quarantine retains its slot. */
+    settled(run: T, state: SettledRunState, info?: SettlementInfo): void;
     /** Record bounded evidence when an unexpected fault is survived. */
     internalFault?(run: T, message: string): void | Promise<void>;
     now(): Date;

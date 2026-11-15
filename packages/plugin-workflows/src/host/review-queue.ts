@@ -93,6 +93,12 @@ export interface QueueTimeoutInfo {
   waitMs: number
 }
 
+/** Facts a settlement observer needs to tell a release from a quarantine. */
+export interface SettlementInfo {
+  /** The run settled visibly but its child is not yet confirmed torn down. */
+  readonly quarantined?: boolean
+}
+
 /** Engine callbacks; every write of a record or run file stays in the engine. */
 export interface ReviewQueueHooks<T extends QueueRun> {
   /** Start the prepared target; throws on a classified or unknown failure. */
@@ -103,8 +109,8 @@ export interface ReviewQueueHooks<T extends QueueRun> {
   fail(run: T, error: unknown, failureClass: FailureClass): Promise<void>
   /** Write the terminal wait-timeout `ERROR` and mark the run failed. */
   timeout(run: T, info: QueueTimeoutInfo): Promise<void>
-  /** Fire the settlement observer exactly once. */
-  settled(run: T, state: SettledRunState): void
+  /** Fire the settlement observer exactly once; a quarantine retains its slot. */
+  settled(run: T, state: SettledRunState, info?: SettlementInfo): void
   /** Record bounded evidence when an unexpected fault is survived. */
   internalFault?(run: T, message: string): void | Promise<void>
   now(): Date
@@ -532,10 +538,10 @@ export class ReviewQueue<T extends QueueRun> {
       delete entry.retryTimer
     }
     this.removeWaiting(entry)
-    this.forgetIdentity(entry)
-    // Keep `active` and the key head: followers and fresh same-key runs wait.
+    // Keep `active`, the key head, and the identity mapping: followers, fresh
+    // same-key runs, and duplicate admissions wait for confirmed teardown.
     try {
-      this.hooks.settled(entry.run, outcome)
+      this.hooks.settled(entry.run, outcome, { quarantined: true })
     } catch {
       // The observer is a seam; it must not change quarantine cleanup.
     }
@@ -562,6 +568,7 @@ export class ReviewQueue<T extends QueueRun> {
     }
     if (this.disposed) return
     entry.quarantined = false
+    this.forgetIdentity(entry)
     this.active.delete(entry)
     this.detachKey(entry)
     this.entries.delete(entry.run.file.id)

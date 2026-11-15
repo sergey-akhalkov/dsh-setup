@@ -34,3 +34,21 @@ export declare function discardReviewSnapshot(cwd: string, runId: string, runGit
 export declare function createReviewSnapshot(cwd: string, change: {
     readonly dir: string;
 }, runId: string, runGit: GitRunner, signal: AbortSignal, afterCopy?: () => Promise<void> | void, onUnavailable?: (reason: string) => void): Promise<ReviewSnapshot | undefined>;
+/**
+ * The reviewed input set of a review: every file the reviewer can read, with a
+ * stat signature that survives an edit-read-restore (content digests do not).
+ * Whole scope covers the git-visible worktree and the change; a task review
+ * covers the same set plus the change artifacts its digest also binds.
+ */
+export interface InputSignature {
+    /** Walk root, used to render changed paths as evidence. */
+    readonly root: string;
+    /** Absolute path -> stat signature. */
+    readonly entries: ReadonlyMap<string, string>;
+}
+/** Every file the reviewer can read for one review, before it is prepared. */
+export declare function reviewedInputs(cwd: string, changeDir: string, runGit: GitRunner, signal?: AbortSignal): Promise<InputSignature>;
+/** Paths whose reviewed input changed (added, removed, or stat mutation). */
+export declare function changedInputPaths(signature: InputSignature, current: InputSignature): string[];
+/** Stable hash of the source input set a queued review re-checks before start. */
+export declare function signatureHash(signature: InputSignature): string;
