@@ -89,6 +89,8 @@ export class ReviewScheduler {
             start: (entry) => this.start(entry),
             persist: () => undefined,
             fail: async (entry, error, failureClass) => {
+                if (this.disposed)
+                    return;
                 const failure = await recordReviewFailure({
                     ...entry.request,
                     error: error instanceof Error ? error.message : String(error),
@@ -104,6 +106,8 @@ export class ReviewScheduler {
                 });
             },
             timeout: async (entry, info) => {
+                if (this.disposed)
+                    return;
                 const position = info.position === undefined ? '' : ` at position ${String(info.position)}`;
                 const failure = await recordReviewFailure({
                     ...entry.request,
@@ -166,6 +170,8 @@ export class ReviewScheduler {
                 attempt.started.then(() => resolve('started'), (error) => reject(error));
             });
             if (started === 'timeout') {
+                if (this.disposed || !this.queue.owns(entry.file.id))
+                    return;
                 void attempt.result.catch(() => undefined);
                 const failure = await recordReviewFailure({
                     ...entry.request,
