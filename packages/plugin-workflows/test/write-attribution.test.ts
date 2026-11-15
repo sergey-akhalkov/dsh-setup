@@ -761,6 +761,49 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('ignores escaped redirections and parses adjacent input redirection', () => {
+    for (const [name, command] of [
+      ['bash', 'echo x \\>openspec/changes/auth/design.md'],
+      ['pwsh', 'Write-Output x `>openspec/changes/auth/design.md'],
+    ] as const) {
+      expect(
+        attributedChangeNames(
+          WORKSPACE,
+          [{ callId: 'a', name, arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toEqual([])
+    }
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'bash',
+            arguments: {
+              command: 'echo x 2>/dev/null<input.txt>openspec/changes/auth/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
+
+  it('opens a quoted span after a PowerShell literal backslash', () => {
+    const command =
+      'Set-Content -Value C:\\"-Path openspec/changes/fake/design.md" -Path openspec/changes/auth/design.md'
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [{ callId: 'c', name: 'pwsh', arguments: { command }, ok: true }],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('parses adjacent redirect targets and PowerShell literal backslashes', () => {
     expect(
       attributedChangeName(

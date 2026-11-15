@@ -71,9 +71,9 @@ function maskQuoted(text, powershell) {
     let index = 0;
     while (index < text.length) {
         const char = text[index] ?? '';
-        if (char === '\\' || char === '`') {
-            // Outside quotes keep the pair: a Windows separator must survive.
-            masked += char + (text[index + 1] ?? '');
+        if (isEscape(text, index, undefined, powershell)) {
+            // An escaped operator is literal text, not a redirection.
+            masked += '\u0002';
             index += 2;
             continue;
         }
@@ -152,7 +152,7 @@ function shellDestination(command, powershell) {
         const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest);
         if (named !== null)
             return resolveMasked(named[1] ?? '', values);
-        const tokens = rest.match(/\u0000\d+\u0000|[^>\s]+/gu) ?? [];
+        const tokens = rest.match(/\u0000\d+\u0000|[^><\s]+/gu) ?? [];
         let skipValue = false;
         for (const token of tokens) {
             if (/^\d*>/u.test(token))
@@ -171,7 +171,7 @@ function shellDestination(command, powershell) {
         }
     }
     // Stream duplication and the null device are skipped; a later real target wins.
-    for (const match of masked.matchAll(/>+\s*(\u0000\d+\u0000|[^>\s]+)/gu)) {
+    for (const match of masked.matchAll(/>+\s*(\u0000\d+\u0000|[^><\s]+)/gu)) {
         const target = resolveMasked(match[1] ?? '', values);
         if (/^&\d+$/u.test(target) ||
             target === 'NUL' ||
