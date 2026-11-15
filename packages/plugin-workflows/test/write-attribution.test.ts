@@ -638,3 +638,39 @@ describe('single-quoted PowerShell values', () => {
     }
   })
 })
+
+describe('skipped branches and compact redirection', () => {
+  it('ignores a write on the right of ||', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'bash',
+            arguments: { command: 'true || tee openspec/changes/auth/design.md' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+  })
+
+  it('recognizes a redirection without preceding whitespace', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'bash',
+            arguments: { command: 'echo changed>openspec/changes/auth/design.md' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
+})

@@ -136,7 +136,7 @@ function resolveMasked(token, values) {
 }
 function shellDestination(command, powershell) {
     const { masked, values } = maskQuoted(command, powershell);
-    const redirect = /(?:^|[\s;&|])>{1,2}\s*(\u0000\d+\u0000|\S+)/u.exec(masked);
+    const redirect = />{1,2}\s*(\u0000\d+\u0000|\S+)/u.exec(masked);
     if (redirect !== null)
         return resolveMasked(redirect[1] ?? '', values);
     const write = /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(masked);
@@ -208,6 +208,33 @@ function splitSegments(text, powershell) {
     }
     segments.push(current);
     return segments;
+}
+/** Keep only branches that run when the call succeeds: `||` skips its right side. */
+function dropSkippedOr(text, powershell) {
+    let quote;
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index] ?? '';
+        if (isEscape(char, quote, powershell)) {
+            index += 1;
+            continue;
+        }
+        if (quote !== undefined) {
+            if (quote === "'" && char === "'" && text[index + 1] === "'") {
+                index += 1;
+                continue;
+            }
+            if (char === quote)
+                quote = undefined;
+            continue;
+        }
+        if (char === '"' || char === "'") {
+            quote = char;
+            continue;
+        }
+        if (char === '|' && text[index + 1] === '|')
+            return text.slice(0, index);
+    }
+    return text;
 }
 /** Remove unquoted comments while keeping quoted text and its destinations. */
 function stripComments(text, powershell) {
@@ -285,8 +312,6 @@ function executedText(text, powershell) {
     }
     return output;
 }
-const WRITE_COMMAND = /(?:^|[;&|]|\|)\s*(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b/iu;
-const REDIRECT = /(?:^|[\s;&|])>{1,2}/u;
 /** Whether a directory is the workspace root or one of its descendants. */
 export function isWorkspaceDirectory(workspace, directory) {
     const root = resolve(workspace);
@@ -327,12 +352,13 @@ function changesOfCall(workspace, call) {
     if (workdir !== undefined && !isWorkspaceDirectory(workspace, workdir)) {
         return [...changes];
     }
-    const executed = executedText(normalized, powershell).trim();
+    const executable = dropSkippedOr(normalized, powershell);
+    const executed = executedText(executable, powershell).trim();
     if (executed === '')
         return [...changes];
     // One shell call may execute several writes; each segment counts, and a
     // creation command can follow a read or a comment on an earlier line.
-    for (const segment of splitSegments(stripComments(normalized, powershell), powershell)) {
+    for (const segment of splitSegments(stripComments(executable, powershell), powershell)) {
         const executedSegment = executedText(segment, powershell).trim();
         if (executedSegment === '')
             continue;
@@ -341,8 +367,6 @@ function changesOfCall(workspace, call) {
             addChange(creation[1]);
             continue;
         }
-        if (!WRITE_COMMAND.test(executedSegment) && !REDIRECT.test(executedSegment))
-            continue;
         // The destination is parsed from the original text so a quoted path is kept.
         const raw = shellDestination(segment, powershell);
         if (raw === undefined)
