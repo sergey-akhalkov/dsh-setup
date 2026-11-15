@@ -94,15 +94,20 @@ export async function buildConditionContext(input) {
     }
     // A condition may not read a filesystem path out of the workspace: an
     // absolute or traversing lane/path value would leak it into a predicate.
+    // shortcut: a POSIX path wrapped in Markdown emphasis (**/etc/x**) is
+    // indistinguishable from a legitimate glob (**/spec.md), so it is treated as
+    // a glob; upgrade if task prose becomes untrusted input instead of an
+    // owner-authored plan. Drive, traversal, UNC, and delimiter-adjacent absolute
+    // paths are always rejected.
     const startsPath = /^(?:[A-Za-z]:[\\/]|[\\/])/u;
     // A drive path needs a separator or a non-space right after the colon, so
     // prose labels such as "release A: migration" stay readable.
     const drivePath = /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/]|[^\s])/u;
-    const absolutePath = /(?:^|[\s"'`=([[{(])\/[A-Za-z0-9._-]/u;
+    const absolutePath = /(?:^|[\s"'`=([[{(<:,])\/[A-Za-z0-9._-]/u;
     const uncPath = /(?:^|[^A-Za-z0-9])\\\\[A-Za-z0-9._-]+[\\/]/u;
     // `..` counts only as a whole path segment, never as the ellipsis in
     // ".../tasks/<taskId>.json".
-    const traverses = /(?:^|[^A-Za-z0-9.])\.\.(?:[\\/]|$)/u;
+    const traverses = /(?:^|[^A-Za-z0-9.])\.\.(?:[\\/]|$|[\s"'`\]>),:;])/u;
     const assertNoPath = (value) => {
         if (value !== undefined &&
             (startsPath.test(value) ||

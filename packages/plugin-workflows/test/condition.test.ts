@@ -607,6 +607,27 @@ describe('condition context path boundary', () => {
     expect(context.change.tasks.items.length).toBeGreaterThan(0)
   })
 
+  it('refuses delimiter-adjacent paths and a terminal traversal', async () => {
+    for (const text of [
+      'Read </etc/private/token.txt>',
+      'Read path:/etc/private/token.txt',
+      'Read `safe/..`',
+    ]) {
+      const root = await workspace()
+      await writeFile(
+        join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+        `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 ${text}\n`,
+        'utf8',
+      )
+      await expect(
+        buildConditionContext({
+          workspace: root,
+          change: 'auth',
+          event: { kind: 'turn.stopping' },
+        }),
+      ).rejects.toThrow(/filesystem path/u)
+    }
+  })
   it('refuses an embedded UNC path', async () => {
     const root = await workspace()
     await writeFile(
