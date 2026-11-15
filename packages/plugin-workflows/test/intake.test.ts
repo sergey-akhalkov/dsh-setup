@@ -2,7 +2,7 @@ import { lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { type Definition, loadShippedDefinitions } from '../src/host/definitions.ts'
+import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import {
   DRAFTS_ROOT,
   draftDirectory,
@@ -611,10 +611,77 @@ it('renders the resolved record task id in a main steer', () => {
 })
 
 describe('task-review dispatch lifecycle', () => {
+  // The retained tool-step dispatch path (a legacy `delegate` start step) is
+  // still supported for a profile's local definition; the shipped task-review
+  // definition now starts through the review executor instead.
   function taskReviewDefinition(): Definition {
-    const definition = loadShippedDefinitions().find((entry) => entry.id === 'task-review')
-    if (definition === undefined) throw new Error('the task-review definition is missing')
-    return definition
+    return validateDefinition({
+      v: 1,
+      id: 'task-review',
+      name: 'Task review',
+      version: 1,
+      trigger: {
+        kind: 'fs.change',
+        match: { path: 'openspec/changes/{name}/tasks.md' },
+        mode: 'active',
+        dedupe: 'path+content-hash',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        allowTools: ['delegate'],
+        legacy: { plugin: 'delegation-rules', signal: 'task-review' },
+      },
+      steps: [
+        {
+          id: 'start-review',
+          title: 'Start the task review',
+          executor: 'tool',
+          tool: {
+            name: 'delegate',
+            args: { rule: 'task-review', change: '{name}', task: '{taskId}' },
+          },
+          evidence: {
+            kind: 'tool',
+            name: 'delegate',
+            args: { rule: 'task-review', task: '{taskId}' },
+          },
+          next: 'await-review',
+          blockTurnClose: true,
+        },
+        {
+          id: 'await-review',
+          title: 'Wait for the task review record',
+          executor: 'main',
+          prompt:
+            'Wait for the task review record this run started. A matching PASS or ERROR closes this step; FINDINGS keeps it open until the findings are fixed and the review re-run.',
+          evidence: {
+            kind: 'record',
+            rule: 'task-review',
+            change: '{name}',
+            scope: 'task',
+            task: '{taskId}',
+            verdicts: ['PASS', 'ERROR'],
+            path: '.dsh/delegation/task-review/{name}/tasks/{taskId}.json',
+          },
+          next: 'complete-review',
+          blockTurnClose: true,
+        },
+        {
+          id: 'complete-review',
+          title: 'Confirm the completion coverage',
+          executor: 'main',
+          prompt:
+            'Confirm the portable task-review PASS coverage for every checked task before the change can complete. Do not tick or archive; a missing or non-PASS checked task keeps this step open.',
+          evidence: { kind: 'check', source: 'task-review-coverage' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    })
   }
 
   interface TaskWorkspace {

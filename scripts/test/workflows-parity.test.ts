@@ -174,10 +174,10 @@ describe('retirement parity report', () => {
           session: 'session-1',
           workspace: '/workspace',
           context: { name: 'change-a', taskId: '0123456789abcdef' },
-          steps: ['start-review', 'await-review', 'complete-review'],
+          steps: ['review', 'complete-review'],
           now: 1_000,
         })
-        run = settleStep(run, 'start-review', 'done', { at: 1_001 })
+        run = settleStep(run, 'review', 'done', { at: 1_001 })
         const outcome = evaluateTurnClose({
           run,
           definition: unblocked,

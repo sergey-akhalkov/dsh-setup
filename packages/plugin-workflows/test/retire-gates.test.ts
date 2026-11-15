@@ -1270,7 +1270,7 @@ describe('owned verification evidence', () => {
 describe('owned task-review definition', () => {
   async function workspaceWithRecords(verdicts: Record<string, string>): Promise<string> {
     const workspace = await mkdtemp(join(tmpdir(), 'workflows-retire-'))
-    const localDir = join(workspace, '.dsh', 'delegation', 'task-review', 'auth', 'tasks')
+    const localDir = join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks')
     await mkdir(localDir, { recursive: true })
     for (const [taskId, verdict] of Object.entries(verdicts)) {
       await writeFile(
@@ -1296,15 +1296,15 @@ describe('owned task-review definition', () => {
     return workspace
   }
 
-  it('accepts PASS and ERROR for await-review, and keeps FINDINGS open', async () => {
+  it('accepts PASS and ERROR for the review step, and keeps FINDINGS open', async () => {
     const taskId = '0123456789abcdef'
-    const awaitEvidence = shipped('task-review').steps.find(
-      (step) => step.id === 'await-review',
+    const reviewEvidence = shipped('task-review').steps.find(
+      (step) => step.id === 'review',
     )?.evidence
-    expect(awaitEvidence).toBeDefined()
+    expect(reviewEvidence).toBeDefined()
     for (const verdict of ['PASS', 'ERROR']) {
       const workspace = await workspaceWithRecords({ [taskId]: verdict })
-      const check = await verifyEvidence(awaitEvidence as never, {
+      const check = await verifyEvidence(reviewEvidence as never, {
         workspace,
         values: { name: 'auth', taskId },
       })
@@ -1312,7 +1312,7 @@ describe('owned task-review definition', () => {
       await rm(workspace, { recursive: true, force: true })
     }
     const findings = await workspaceWithRecords({ [taskId]: 'FINDINGS' })
-    const check = await verifyEvidence(awaitEvidence as never, {
+    const check = await verifyEvidence(reviewEvidence as never, {
       workspace: findings,
       values: { name: 'auth', taskId },
     })
@@ -1320,10 +1320,10 @@ describe('owned task-review definition', () => {
     await rm(findings, { recursive: true, force: true })
   })
 
-  it('rejects ERROR through the shipped await-review when PASS is the only verdict', async () => {
+  it('rejects ERROR through the shipped review step when PASS is the only verdict', async () => {
     const taskId = '0123456789abcdef'
     const workspace = await workspaceWithRecords({ [taskId]: 'ERROR' })
-    const step = shipped('task-review').steps.find((entry) => entry.id === 'await-review')
+    const step = shipped('task-review').steps.find((entry) => entry.id === 'review')
     const evidence = {
       ...(step?.evidence as unknown as Record<string, unknown>),
       verdicts: ['PASS'],
@@ -1374,8 +1374,8 @@ describe('owned task-review definition', () => {
 
   it('rejects a discarded or queue-fault ERROR record and a malformed approval', async () => {
     const taskId = '0123456789abcdef'
-    const awaitEvidence = shipped('task-review').steps.find(
-      (step) => step.id === 'await-review',
+    const reviewEvidence = shipped('task-review').steps.find(
+      (step) => step.id === 'review',
     )?.evidence
     for (const extra of [
       { failureClass: 'reviewed-inputs-changed' },
@@ -1389,7 +1389,8 @@ describe('owned task-review definition', () => {
       const recordPath = join(
         workspace,
         '.dsh',
-        'delegation',
+        'workflows',
+        'records',
         'task-review',
         'auth',
         'tasks',
@@ -1397,7 +1398,7 @@ describe('owned task-review definition', () => {
       )
       const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
       await writeFile(recordPath, JSON.stringify({ ...record, ...extra }), 'utf8')
-      const check = await verifyEvidence(awaitEvidence as never, {
+      const check = await verifyEvidence(reviewEvidence as never, {
         workspace,
         values: { name: 'auth', taskId },
       })
@@ -1490,8 +1491,7 @@ describe('owned task-review definition', () => {
       steps: definition.steps.map((step) => step.id),
       now: 1_000,
     })
-    run = settleStep(run, 'start-review', 'done', { at: 1_001, evidence: { kind: 'declaration' } })
-    run = settleStep(run, 'await-review', 'done', { at: 1_002, evidence: { kind: 'declaration' } })
+    run = settleStep(run, 'review', 'done', { at: 1_001, evidence: { kind: 'declaration' } })
     const steers: string[] = []
     const outcome = evaluateTurnClose({
       run,
@@ -1513,8 +1513,8 @@ describe('owned task-review definition', () => {
 
   it('applies the reviewer binding to intermediate records and refuses an invalid marker', async () => {
     const taskId = '0123456789abcdef'
-    const awaitEvidence = shipped('task-review').steps.find(
-      (step) => step.id === 'await-review',
+    const reviewEvidence = shipped('task-review').steps.find(
+      (step) => step.id === 'review',
     )?.evidence
     const workspace = await workspaceWithRecords({ [taskId]: 'PASS' })
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
@@ -1545,7 +1545,7 @@ describe('owned task-review definition', () => {
     expect(taskReviewCoverage(workspace, 'auth').ok).toBe(true)
     expect(
       (
-        await verifyEvidence(awaitEvidence as never, {
+        await verifyEvidence(reviewEvidence as never, {
           workspace,
           values: { name: 'auth', taskId },
         })
@@ -1563,7 +1563,7 @@ describe('owned task-review definition', () => {
     )
     expect(
       (
-        await verifyEvidence(awaitEvidence as never, {
+        await verifyEvidence(reviewEvidence as never, {
           workspace,
           values: { name: 'auth', taskId },
         })
@@ -1606,7 +1606,7 @@ describe('owned task-review definition', () => {
       expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
       expect(
         (
-          await verifyEvidence(awaitEvidence as never, {
+          await verifyEvidence(reviewEvidence as never, {
             workspace,
             values: { name: 'auth', taskId },
           })
@@ -1679,7 +1679,7 @@ describe('owned task-review definition', () => {
       steps: definition.steps.map((step) => step.id),
       now: 1_000,
     })
-    run = settleStep(run, 'start-review', 'failed', { at: 1_001, reason: 'delegate failed' })
+    run = settleStep(run, 'review', 'failed', { at: 1_001, reason: 'delegate failed' })
     const steers: string[] = []
     const outcome = evaluateTurnClose({
       run,
@@ -1708,7 +1708,7 @@ describe('owned task-review definition', () => {
       steps: definition.steps.map((step) => step.id),
       now: 1_000,
     })
-    run = settleStep(run, 'start-review', 'failed', {
+    run = settleStep(run, 'review', 'failed', {
       at: 1_001,
       reason: 'the review dispatch failed 3 time(s); resume or cancel the run',
       attempts: 3,
@@ -1740,7 +1740,7 @@ describe('owned task-review definition', () => {
       steps: definition.steps.map((step) => step.id),
       now: 1_000,
     })
-    run = settleStep(run, 'start-review', 'failed', {
+    run = settleStep(run, 'review', 'failed', {
       at: 1_001,
       reason: 'the review dispatch failed 3 time(s)',
       attempts: 3,

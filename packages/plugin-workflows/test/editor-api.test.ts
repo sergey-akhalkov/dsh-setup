@@ -139,7 +139,9 @@ describe('editor read API', () => {
       (entry) => entry.source === 'shipped',
     )
     expect(shipped.map((entry) => (entry as { id?: string }).id)).toEqual([
+      'integration-review',
       'retro',
+      'spec-review',
       'task-review',
       'verify',
     ])

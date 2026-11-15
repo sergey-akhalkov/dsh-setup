@@ -1,0 +1,60 @@
+{
+  "v": 1,
+  "id": "spec-review",
+  "name": "Whole-spec review",
+  "description": "Run the whole-spec review through the native review executor while no current whole-spec PASS record exists for the change.",
+  "version": 1,
+  "trigger": {
+    "kind": "turn.stopping",
+    "match": {},
+    "mode": "active",
+    "dedupe": "turn",
+    "condition": {
+      "and": [
+        { "var": "session.involved" },
+        {
+          "or": [
+            { "missing": ["records.spec"] },
+            { "!": [{ "var": "records.spec.pass" }] },
+            { "!": [{ "var": "records.spec.current" }] }
+          ]
+        }
+      ]
+    }
+  },
+  "settings": {
+    "allowModelStart": false,
+    "risk": "low",
+    "gateOwnership": "own",
+    "maxBlocks": 3,
+    "allowIntent": false,
+    "gate": "review",
+    "gateIdentity": "spec-review",
+    "legacy": { "plugin": "delegation-rules", "signal": "spec-review" }
+  },
+  "steps": [
+    {
+      "id": "review",
+      "title": "Review the whole change spec",
+      "executor": "review",
+      "review": {
+        "target": "codex",
+        "instruction": "review-spec",
+        "scope": "whole",
+        "phase": "spec"
+      },
+      "evidence": {
+        "kind": "record",
+        "rule": "spec-review",
+        "change": "{name}",
+        "phase": "spec",
+        "scope": "whole",
+        "verdicts": ["PASS", "ERROR"],
+        "digest": "current",
+        "path": ".dsh/workflows/records/spec-review/{name}/spec.json"
+      },
+      "next": "end",
+      "blockTurnClose": true
+    }
+  ]
+}

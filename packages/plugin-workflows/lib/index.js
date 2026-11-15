@@ -8,7 +8,7 @@ import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
 import { authorizeUserArchive, decideArchiveAuthorization, } from './archive-authorization.js';
 import { CHANGE_NAME, parseArchiveCommand } from './command-parse.js';
 import { runWorkflowCommand } from './commands.js';
-import { buildConditionContext, evaluateConditions } from './condition.js';
+import { buildConditionContext, conditionNeedsWorktree, evaluateConditions } from './condition.js';
 import { KNOWN_LEGACY_SOURCES, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
 import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
 import { evaluateEvent } from './evaluate.js';
@@ -1089,6 +1089,9 @@ export function apply(ctx, config = {}) {
                 if (conditionalDefinitions.length === 0)
                     return undefined;
                 const conditionChange = definitionEvent.name ?? change;
+                // The worktree digest runs git on every close; only a predicate that
+                // reads it pays that cost.
+                const needsWorktree = conditionalDefinitions.some((definition) => conditionNeedsWorktree(definition.trigger.condition));
                 let conditionContext;
                 try {
                     conditionContext = await buildConditionContext({
@@ -1102,7 +1105,7 @@ export function apply(ctx, config = {}) {
                                 : { command: definitionEvent.command }),
                             ...(definitionEvent.path === undefined ? {} : { path: definitionEvent.path }),
                         },
-                        runGit: defaultGit,
+                        ...(needsWorktree ? { runGit: defaultGit } : {}),
                         // Involvement is retained by session and change: a review condition
                         // must still fire on a later turn that writes nothing new.
                         involved: conditionChange !== undefined,

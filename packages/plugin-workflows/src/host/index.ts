@@ -22,7 +22,7 @@ import {
 } from './archive-authorization.js'
 import { CHANGE_NAME, parseArchiveCommand } from './command-parse.js'
 import { runWorkflowCommand, type WorkflowCommandHost } from './commands.js'
-import { buildConditionContext, evaluateConditions } from './condition.js'
+import { buildConditionContext, conditionNeedsWorktree, evaluateConditions } from './condition.js'
 import {
   type Definition,
   KNOWN_LEGACY_SOURCES,
@@ -1416,6 +1416,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       ): Promise<ReadonlyMap<string, boolean> | undefined> => {
         if (conditionalDefinitions.length === 0) return undefined
         const conditionChange = definitionEvent.name ?? change
+        // The worktree digest runs git on every close; only a predicate that
+        // reads it pays that cost.
+        const needsWorktree = conditionalDefinitions.some((definition) =>
+          conditionNeedsWorktree(definition.trigger.condition),
+        )
         let conditionContext: Awaited<ReturnType<typeof buildConditionContext>>
         try {
           conditionContext = await buildConditionContext({
@@ -1429,7 +1434,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 : { command: definitionEvent.command }),
               ...(definitionEvent.path === undefined ? {} : { path: definitionEvent.path }),
             },
-            runGit: defaultGit,
+            ...(needsWorktree ? { runGit: defaultGit } : {}),
             // Involvement is retained by session and change: a review condition
             // must still fire on a later turn that writes nothing new.
             involved: conditionChange !== undefined,

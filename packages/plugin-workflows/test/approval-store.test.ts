@@ -138,7 +138,13 @@ describe('local definitions and the host approval store', () => {
     expect(loadShippedDefinitions().find((entry) => entry.id === 'retro')?.name).toBe(
       'Work checkpoint',
     )
-    expect(loaded.definitions.map((entry) => entry.id)).toEqual(['retro', 'task-review', 'verify'])
+    expect(loaded.definitions.map((entry) => entry.id)).toEqual([
+      'integration-review',
+      'retro',
+      'spec-review',
+      'task-review',
+      'verify',
+    ])
   })
 
   it('refuses an unapproved local definition and never loads a draft', async () => {

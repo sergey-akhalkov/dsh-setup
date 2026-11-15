@@ -2,6 +2,16 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { resolveOwnership } from './definitions.js';
 import { requestMainStep } from './executors.js';
 import { addViolation, incrementTurnBlocks, resetStepAttempts, setRunStatus, settleStep, } from './runs.js';
+/**
+ * The label a `nonCritical` step records when its turn-close budget is
+ * exhausted: the run closes without its evidence and never counts as a pass.
+ */
+export const SOFT_SETTLEMENT = 'completed-soft';
+/** Release an optional step and finish the run: no open required step, no pass. */
+function releaseSoft(run, stepId, at) {
+    const reason = `${SOFT_SETTLEMENT}: the refusal budget was exhausted; the run closed without its evidence and never counts as a pass`;
+    return setRunStatus(settleStep(run, stepId, 'cancelled', { at, reason }), 'completed', at, SOFT_SETTLEMENT);
+}
 function stepIsOpen(run, stepId) {
     const state = run.steps.find((step) => step.id === stepId)?.state;
     return state === 'open' || state === 'blocked';
@@ -118,8 +128,11 @@ export function evaluateTurnClose(input) {
         }
         const blocks = blocksForTurn(input.run);
         if (blocks >= input.maxBlocks) {
-            const detail = `turn close was refused ${String(blocks)} time(s) with step "${step.id}" open; the close is allowed once as a VIOLATION, never as a pass`;
-            const run = markTurn(resetStepAttempts(addViolation(input.run, detail, { step: step.id, at }), step.id));
+            const soft = step.nonCritical === true;
+            const detail = `turn close was refused ${String(blocks)} time(s) with step "${step.id}" open; the close is allowed once as a VIOLATION, never as a pass${soft ? `; the optional step settles ${SOFT_SETTLEMENT} and the run keeps no open required step` : ''}`;
+            let run = markTurn(resetStepAttempts(addViolation(input.run, detail, { step: step.id, at }), step.id));
+            if (soft)
+                run = releaseSoft(run, step.id, at);
             return { kind: 'violation', run, detail };
         }
         // A new turn also starts a fresh request budget: without this reset the
@@ -142,25 +155,25 @@ export function evaluateTurnClose(input) {
         const run = markTurn(incrementTurnBlocks(steered.run, at));
         if (!steered.steered) {
             if (steered.reason.includes('request bound')) {
-                const detail = `step "${step.id}" reached its request bound; the close is allowed once as a VIOLATION, never as a pass`;
+                const soft = step.nonCritical === true;
+                const detail = `step "${step.id}" reached its request bound; the close is allowed once as a VIOLATION, never as a pass${soft ? `; the optional step settles ${SOFT_SETTLEMENT}` : ''}`;
                 const recorded = addViolation(input.run, detail, { step: step.id, at });
-                return {
-                    kind: 'violation',
-                    run: markTurn(resetStepAttempts(recorded, step.id)),
-                    detail,
-                };
+                let run = markTurn(resetStepAttempts(recorded, step.id));
+                if (soft)
+                    run = releaseSoft(run, step.id, at);
+                return { kind: 'violation', run, detail };
             }
             // A failed dispatch stays an obligation until the run advances/retries;
             // never let the close pass silently on the failed step.
             if (steered.reason.includes('already failed')) {
                 const blocks = blocksForTurn(input.run);
                 if (blocks >= input.maxBlocks) {
-                    const detail = `step "${step.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`;
-                    return {
-                        kind: 'violation',
-                        run: markTurn(addViolation(input.run, detail, { step: step.id, at })),
-                        detail,
-                    };
+                    const soft = step.nonCritical === true;
+                    const detail = `step "${step.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass${soft ? `; the optional step settles ${SOFT_SETTLEMENT}` : ''}`;
+                    let released = markTurn(addViolation(input.run, detail, { step: step.id, at }));
+                    if (soft)
+                        released = releaseSoft(released, step.id, at);
+                    return { kind: 'violation', run: released, detail };
                 }
                 return {
                     kind: 'refuse',

@@ -117,16 +117,16 @@ async function checkpointWorkflow(input: {
       }
 }
 
-/** The shipped await-review step judged by the production evidence reader. */
+/** The shipped review step judged by the production evidence reader. */
 async function reviewWorkflow(verdict: string | undefined): Promise<ParityDecision> {
   const definition = loadShippedDefinitionsForFixtures().find((entry) => entry.id === 'task-review')
   if (definition === undefined) throw new Error('the shipped task-review definition is missing')
-  const evidence = definition.steps.find((step) => step.id === 'await-review')?.evidence
-  if (evidence === undefined) throw new Error('the shipped await-review evidence is missing')
+  const evidence = definition.steps.find((step) => step.id === 'review')?.evidence
+  if (evidence === undefined) throw new Error('the shipped review evidence is missing')
   const root = await mkdtemp(join(tmpdir(), 'workflows-parity-'))
   try {
     const taskId = '0123456789abcdef'
-    const directory = join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks')
+    const directory = join(root, '.dsh', 'workflows', 'records', 'task-review', 'change-a', 'tasks')
     await mkdir(directory, { recursive: true })
     if (verdict !== undefined) {
       await writeFile(
@@ -159,12 +159,11 @@ async function reviewWorkflow(verdict: string | undefined): Promise<ParityDecisi
       session: 'session-1',
       workspace: '/workspace',
       context: { name: 'change-a', taskId },
-      steps: ['start-review', 'await-review', 'complete-review'],
+      steps: ['review', 'complete-review'],
       now: 1_000,
     })
-    run = settleStep(run, 'start-review', 'done', { at: 1_001 })
     if (check.ok) {
-      run = settleStep(run, 'await-review', 'done', { at: 1_002 })
+      run = settleStep(run, 'review', 'done', { at: 1_002 })
       run = settleStep(run, 'complete-review', 'done', { at: 1_003 })
     }
     const outcome = evaluateTurnClose({

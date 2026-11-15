@@ -307,7 +307,7 @@ describe('workflow event recorder', () => {
     expect(records[1]?.callId).toBe('call-1')
     expect(records[1]?.ok).toBe(true)
     expect(records[1]?.turn).toBe(2)
-    expect(records[1]?.triggers).toHaveLength(12)
+    expect(records[1]?.triggers).toHaveLength(14)
     expect(
       records[1]?.triggers?.some(
         (evaluation) =>
