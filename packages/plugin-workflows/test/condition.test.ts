@@ -607,6 +607,21 @@ describe('condition context path boundary', () => {
     expect(context.change.tasks.items.length).toBeGreaterThan(0)
   })
 
+  it('refuses an embedded UNC path', async () => {
+    const root = await workspace()
+    await writeFile(
+      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+      '# Tasks\n\n## 1. Lane (lane 1, owns `packages/**`)\n\n- [ ] 1.1 Read \\\\server\\share\\token.txt\n',
+      'utf8',
+    )
+    await expect(
+      buildConditionContext({
+        workspace: root,
+        change: 'auth',
+        event: { kind: 'turn.stopping' },
+      }),
+    ).rejects.toThrow(/filesystem path/u)
+  })
   it('refuses an embedded absolute POSIX path', async () => {
     const root = await workspace()
     await writeFile(

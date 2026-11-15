@@ -99,6 +99,7 @@ export async function buildConditionContext(input) {
     // prose labels such as "release A: migration" stay readable.
     const drivePath = /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/]|[^\s])/u;
     const absolutePath = /(?:^|[\s"'`=([[{(])\/[A-Za-z0-9._-]/u;
+    const uncPath = /(?:^|[^A-Za-z0-9])\\\\[A-Za-z0-9._-]+[\\/]/u;
     // `..` counts only as a whole path segment, never as the ellipsis in
     // ".../tasks/<taskId>.json".
     const traverses = /(?:^|[^A-Za-z0-9.])\.\.(?:[\\/]|$)/u;
@@ -107,6 +108,7 @@ export async function buildConditionContext(input) {
             (startsPath.test(value) ||
                 drivePath.test(value) ||
                 absolutePath.test(value) ||
+                uncPath.test(value) ||
                 traverses.test(value))) {
             throw new Error('condition context contains a filesystem path');
         }
