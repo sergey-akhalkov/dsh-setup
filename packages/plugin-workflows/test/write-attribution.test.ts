@@ -491,3 +491,44 @@ describe('inline shell comments', () => {
     ).toEqual(['auth'])
   })
 })
+
+describe('quoted value text', () => {
+  it('ignores a fake -Path inside a quoted value', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'pwsh',
+            arguments: {
+              command:
+                'Set-Content -Value "example -Path openspec/changes/example/design.md" -Path openspec/changes/auth/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
+
+  it('resolves a quoted redirection destination', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'pwsh',
+            arguments: {
+              command: 'echo x > "openspec/changes/auth/design.md"',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
+})

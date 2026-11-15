@@ -42,24 +42,52 @@ export function attributedSpecWrite(workspace, calls, turn) {
     return undefined;
 }
 const CHANGE_CREATION = /(?:^|[;&|]\s*)openspec(?:\.cmd|\.exe)?\s+new\s+change\s+([a-z0-9][a-z0-9-]*)/u;
-const SHELL_REDIRECT = /(?:^|[\s;&|])>{1,2}\s*(['"]?)([^'"\s;&|]*openspec[\\/]changes[\\/][a-z0-9-]+[\\/][^'"\s;&|]*)\1/iu;
 /**
  * The destination a write command acts on, never a value argument or a printed
- * example. `-Path`/`-LiteralPath` wins; otherwise the first positional token
- * that is not an option or a `-Value` argument.
+ * example. Quoted spans are masked first, so `-Path` text inside a quoted
+ * `-Value` is invisible while a quoted destination is still resolved.
  */
+function maskQuoted(text) {
+    const values = [];
+    let masked = '';
+    let index = 0;
+    while (index < text.length) {
+        const char = text[index] ?? '';
+        if (char === '"' || char === "'") {
+            const quote = char;
+            let content = '';
+            index += 1;
+            while (index < text.length && text[index] !== quote) {
+                content += text[index] ?? '';
+                index += 1;
+            }
+            index += 1;
+            masked += `\u0000${String(values.length)}\u0000`;
+            values.push(content);
+            continue;
+        }
+        masked += char;
+        index += 1;
+    }
+    return { masked, values };
+}
+function resolveMasked(token, values) {
+    const match = /^\u0000(\d+)\u0000$/u.exec(token);
+    return match === null ? token : (values[Number(match[1])] ?? '');
+}
 function shellDestination(command) {
-    const redirect = SHELL_REDIRECT.exec(command);
+    const { masked, values } = maskQuoted(command);
+    const redirect = /(?:^|[\s;&|])>{1,2}\s*(\u0000\d+\u0000|\S+)/u.exec(masked);
     if (redirect !== null)
-        return redirect[2];
-    const write = /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(command);
+        return resolveMasked(redirect[1] ?? '', values);
+    const write = /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(masked);
     if (write === null)
         return undefined;
     const rest = write[1] ?? '';
-    const named = /-(?:Path|LiteralPath)\s+(?:"([^"]+)"|'([^']+)'|(\S+))/iu.exec(rest);
+    const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest);
     if (named !== null)
-        return named[1] ?? named[2] ?? named[3];
-    const tokens = rest.match(/"[^"]*"|'[^']*'|\S+/gu) ?? [];
+        return resolveMasked(named[1] ?? '', values);
+    const tokens = rest.match(/\u0000\d+\u0000|\S+/gu) ?? [];
     let skipValue = false;
     for (const token of tokens) {
         if (skipValue) {
@@ -72,7 +100,7 @@ function shellDestination(command) {
         }
         if (token.startsWith('-'))
             continue;
-        return token.replace(/^["']|["']$/gu, '');
+        return resolveMasked(token, values);
     }
     return undefined;
 }
