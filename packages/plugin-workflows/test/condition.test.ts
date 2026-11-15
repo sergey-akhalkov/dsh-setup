@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildConditionContext,
@@ -596,6 +597,31 @@ describe('condition context path boundary', () => {
     }
   })
 
+  it('builds a context for this change without rejecting its prose', async () => {
+    const root = join(fileURLToPath(new URL('..', import.meta.url)), '..', '..')
+    const context = await buildConditionContext({
+      workspace: root,
+      change: 'move-review-runtime-into-workflows',
+      event: { kind: 'turn.stopping' },
+    })
+    expect(context.change.tasks.items.length).toBeGreaterThan(0)
+  })
+
+  it('refuses an embedded absolute POSIX path', async () => {
+    const root = await workspace()
+    await writeFile(
+      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+      '# Tasks\n\n## 1. Lane (lane 1, owns `packages/**`)\n\n- [ ] 1.1 Read /etc/private/token.txt\n',
+      'utf8',
+    )
+    await expect(
+      buildConditionContext({
+        workspace: root,
+        change: 'auth',
+        event: { kind: 'turn.stopping' },
+      }),
+    ).rejects.toThrow(/filesystem path/u)
+  })
   it('refuses Markdown-wrapped and punctuation-adjacent paths', async () => {
     for (const text of [
       'Read **C:/private/token.txt**',

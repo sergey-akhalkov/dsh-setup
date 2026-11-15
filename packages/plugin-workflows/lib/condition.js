@@ -94,13 +94,20 @@ export async function buildConditionContext(input) {
     }
     // A condition may not read a filesystem path out of the workspace: an
     // absolute or traversing lane/path value would leak it into a predicate.
-    const startsPath = /^(?:[A-Za-z]:|[\\/])/u;
-    // Anywhere in prose, including inside Markdown emphasis or brackets.
-    const drivePath = /(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]?/u;
-    const traverses = /(?:^|[^A-Za-z0-9])\.\.(?:[\\/]|$)/u;
+    const startsPath = /^(?:[A-Za-z]:[\\/]|[\\/])/u;
+    // A drive path needs a separator or a non-space right after the colon, so
+    // prose labels such as "release A: migration" stay readable.
+    const drivePath = /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/]|[^\s])/u;
+    const absolutePath = /(?:^|[\s"'`=([[{(])\/[A-Za-z0-9._-]/u;
+    // `..` counts only as a whole path segment, never as the ellipsis in
+    // ".../tasks/<taskId>.json".
+    const traverses = /(?:^|[^A-Za-z0-9.])\.\.(?:[\\/]|$)/u;
     const assertNoPath = (value) => {
         if (value !== undefined &&
-            (startsPath.test(value) || drivePath.test(value) || traverses.test(value))) {
+            (startsPath.test(value) ||
+                drivePath.test(value) ||
+                absolutePath.test(value) ||
+                traverses.test(value))) {
             throw new Error('condition context contains a filesystem path');
         }
     };
