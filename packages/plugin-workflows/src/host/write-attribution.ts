@@ -56,20 +56,29 @@ function maskQuoted(text: string): { masked: string; values: readonly string[] }
   let index = 0
   while (index < text.length) {
     const char = text[index] ?? ''
+    if (char === '\\' || char === '`') {
+      masked += text[index + 1] ?? ''
+      index += 2
+      continue
+    }
     if (char === '"' || char === "'") {
       const quote = char
       let content = ''
       index += 1
-      while (index < text.length && text[index] !== quote) {
-        if ((text[index] === '\\' || text[index] === '`') && text[index + 1] === quote) {
+      while (index < text.length) {
+        const inner = text[index] ?? ''
+        if (inner === '\\' || inner === '`') {
           content += text[index + 1] ?? ''
           index += 2
           continue
         }
-        content += text[index] ?? ''
+        if (inner === quote) {
+          index += 1
+          break
+        }
+        content += inner
         index += 1
       }
-      index += 1
       masked += `\u0000${String(values.length)}\u0000`
       values.push(content)
       continue
@@ -120,12 +129,12 @@ function splitSegments(text: string): string[] {
   let quote: string | undefined
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
+    if (char === '\\' || char === '`') {
+      current += char + (text[index + 1] ?? '')
+      index += 1
+      continue
+    }
     if (quote !== undefined) {
-      if ((char === '\\' || char === '`') && text[index + 1] === quote) {
-        current += char + (text[index + 1] ?? '')
-        index += 1
-        continue
-      }
       current += char
       if (char === quote) quote = undefined
       continue
@@ -160,12 +169,12 @@ function stripComments(text: string): string {
   let quote: string | undefined
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
+    if (char === '\\' || char === '`') {
+      output += char + (text[index + 1] ?? '')
+      index += 1
+      continue
+    }
     if (quote !== undefined) {
-      if ((char === '\\' || char === '`') && text[index + 1] === quote) {
-        output += char + (text[index + 1] ?? '')
-        index += 1
-        continue
-      }
       output += char
       if (char === quote) quote = undefined
       continue
@@ -192,11 +201,12 @@ function executedText(text: string): string {
   let quote: string | undefined
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
+    if (char === '\\' || char === '`') {
+      if (quote === undefined) output += char + (text[index + 1] ?? '')
+      index += 1
+      continue
+    }
     if (quote !== undefined) {
-      if ((char === '\\' || char === '`') && text[index + 1] === quote) {
-        index += 1
-        continue
-      }
       if (char === quote) quote = undefined
       continue
     }
