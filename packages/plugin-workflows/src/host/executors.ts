@@ -288,6 +288,28 @@ function guardLogicSize(value: unknown): void {
   visit(value, 0)
 }
 
+/** Bound the string a coercion would build before it is allocated. */
+function guardLogicString(value: unknown): void {
+  let total = 0
+  const visit = (entry: unknown, depth: number): void => {
+    if (depth > 32) throw new Error('invalid JSONLogic: evaluation nesting is too deep')
+    if (typeof entry === 'string') {
+      total += entry.length
+      if (total > MAX_LOGIC_STRING) {
+        throw new Error('invalid JSONLogic: evaluation produced an oversized string')
+      }
+      return
+    }
+    if (Array.isArray(entry)) {
+      if (entry.length > MAX_LOGIC_COLLECTION) {
+        throw new Error('invalid JSONLogic: evaluation produced an oversized collection')
+      }
+      for (const item of entry) visit(item, depth + 1)
+    }
+  }
+  visit(value, 0)
+}
+
 export function evaluateJsonLogic(
   rule: unknown,
   data: unknown,
@@ -410,7 +432,13 @@ export function evaluateJsonLogic(
     case 'max':
       return Math.max(...args.map((entry) => Number(value(entry))))
     case 'cat': {
-      const joined = args.map((entry) => String(value(entry) ?? '')).join('')
+      const joined = args
+        .map((entry) => {
+          const evaluated = value(entry)
+          guardLogicString(evaluated)
+          return String(evaluated ?? '')
+        })
+        .join('')
       guardLogicSize(joined)
       return joined
     }
@@ -447,13 +475,21 @@ export function evaluateJsonLogic(
       return !results.some(Boolean)
     }
     case 'substr': {
-      const text = String(value(args[0]))
+      const source = value(args[0])
+      guardLogicString(source)
+      const text = String(source)
       const start = Number(value(args[1]))
-      if (args.length < 3) return text.substr(start)
-      const length = Number(value(args[2]))
-      return length < 0
-        ? text.slice(start, Math.max(start, text.length + length))
-        : text.substr(start, length)
+      const result =
+        args.length < 3
+          ? text.substr(start)
+          : (() => {
+              const length = Number(value(args[2]))
+              return length < 0
+                ? text.slice(start, Math.max(start, text.length + length))
+                : text.substr(start, length)
+            })()
+      guardLogicSize(result)
+      return result
     }
     case 'map': {
       const collection = value(args[0])

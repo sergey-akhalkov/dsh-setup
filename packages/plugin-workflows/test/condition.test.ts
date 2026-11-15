@@ -561,6 +561,40 @@ describe('condition size bound', () => {
 })
 
 describe('condition context path boundary', () => {
+  it('refuses a drive-relative owner and a path in task text', async () => {
+    for (const content of [
+      '# Tasks\n\n## 1. Lane (lane 1, owns `C:private/**`)\n\n- [ ] 1.1 Do it\n',
+      '# Tasks\n\n## 1. Lane (lane 1, owns `packages/**`)\n\n- [ ] 1.1 Read C:/private/token.txt\n',
+    ]) {
+      const root = await workspace()
+      await writeFile(join(root, 'openspec', 'changes', 'auth', 'tasks.md'), content, 'utf8')
+      await expect(
+        buildConditionContext({
+          workspace: root,
+          change: 'auth',
+          event: { kind: 'turn.stopping' },
+        }),
+      ).rejects.toThrow(/filesystem path/u)
+    }
+  })
+
+  it('bounds a substr coercion of many repeated strings', async () => {
+    const root = await workspace()
+    await writeFile(
+      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+      `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 ${'x'.repeat(1001)}\n`,
+      'utf8',
+    )
+    const context = await buildConditionContext({
+      workspace: root,
+      change: 'auth',
+      event: { kind: 'turn.stopping' },
+    })
+    const condition = {
+      substr: [Array.from({ length: 1000 }, () => ({ var: 'change.tasks.items.0.text' })), 0],
+    }
+    expect(() => evaluateCondition(condition, context)).toThrow(/oversized string/u)
+  })
   it('refuses a traversing lane owner', async () => {
     for (const owned of ['../private/**', 'safe/../../private/**', '..\\private\\**']) {
       const root = await workspace()
