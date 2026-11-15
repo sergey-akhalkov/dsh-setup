@@ -112,6 +112,14 @@ export async function worktreeDigest(cwd, runGit, signal) {
         }
     }
     try {
+        // Include the committed tree identity: a clean checkout's status is empty,
+        // so two different revisions would otherwise hash identically.
+        parts.push(await runGit(['rev-parse', 'HEAD'], cwd, signal));
+    }
+    catch {
+        // An unborn HEAD has no committed tree; the working status still identifies it.
+    }
+    try {
         parts.push(await runGit(['diff', '--binary', 'HEAD'], cwd, signal));
     }
     catch {

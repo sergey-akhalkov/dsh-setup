@@ -92,6 +92,19 @@ export async function buildConditionContext(input) {
             `.dsh/delegation/task-review/${change}/tasks`,
         ]));
     }
+    // A condition may not read a filesystem path out of the workspace: an
+    // absolute or traversing lane/path value would leak it into a predicate.
+    const pathEscape = /(?:^[A-Za-z]:[\\\\/]|^[\\\\/]|(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))/u;
+    const assertNoPath = (value) => {
+        if (value !== undefined && pathEscape.test(value)) {
+            throw new Error('condition context contains a filesystem path');
+        }
+    };
+    assertNoPath(input.event.path);
+    for (const lane of lanes) {
+        for (const owned of lane.owned)
+            assertNoPath(owned);
+    }
     return {
         event: input.event,
         change: {

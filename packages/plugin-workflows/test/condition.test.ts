@@ -559,3 +559,21 @@ describe('condition size bound', () => {
     expect(() => evaluateCondition(condition, context)).toThrow(/oversized collection/u)
   })
 })
+
+describe('condition context path boundary', () => {
+  it('refuses an absolute path in a lane owner', async () => {
+    const root = await workspace()
+    await writeFile(
+      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+      '# Tasks\n\n## 1. Lane (lane 1, owns `C:/private/**`)\n\n- [ ] 1.1 Do it\n',
+      'utf8',
+    )
+    await expect(
+      buildConditionContext({
+        workspace: root,
+        change: 'auth',
+        event: { kind: 'turn.stopping' },
+      }),
+    ).rejects.toThrow(/filesystem path/u)
+  })
+})
