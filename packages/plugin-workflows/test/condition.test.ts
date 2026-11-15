@@ -612,6 +612,9 @@ describe('condition context path boundary', () => {
       'Read </etc/private/token.txt>',
       'Read path:/etc/private/token.txt',
       'Read `safe/..`',
+      'Read </данные/private/token.txt>',
+      'Read \\\\сервер\\share\\token.txt',
+      'Read \\\\?\\UNC\\server\\share\\token.txt',
     ]) {
       const root = await workspace()
       await writeFile(
