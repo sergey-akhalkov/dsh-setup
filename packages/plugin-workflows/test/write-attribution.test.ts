@@ -453,3 +453,41 @@ describe('multiline shell attribution', () => {
     ).toEqual(['auth', 'billing'])
   })
 })
+
+describe('inline shell comments', () => {
+  it('ignores a command after an inline comment', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'pwsh',
+            arguments: {
+              command: 'Write-Output ok # example; openspec new change auth',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+  })
+
+  it('keeps a command on a later line after a comment-only line', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'pwsh',
+            arguments: { command: '# note\nopenspec new change auth' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual(['auth'])
+  })
+})

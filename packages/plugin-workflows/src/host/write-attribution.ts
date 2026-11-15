@@ -114,6 +114,34 @@ function splitSegments(text: string): string[] {
   segments.push(current)
   return segments
 }
+
+/** Remove unquoted comments while keeping quoted text and its destinations. */
+function stripComments(text: string): string {
+  let output = ''
+  let quote: string | undefined
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? ''
+    if (quote !== undefined) {
+      output += char
+      if (char === quote) quote = undefined
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      output += char
+      continue
+    }
+    if (char === '#' && (index === 0 || /[\s;&|]/u.test(text[index - 1] ?? ''))) {
+      const newline = text.indexOf('\n', index)
+      if (newline === -1) break
+      output += '\n'
+      index = newline
+      continue
+    }
+    output += char
+  }
+  return output
+}
 /** Drop quotes and unquoted comments so only executed text is inspected. */
 function executedText(text: string): string {
   let output = ''
@@ -188,7 +216,7 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
   if (executed === '') return [...changes]
   // One shell call may execute several writes; each segment counts, and a
   // creation command can follow a read or a comment on an earlier line.
-  for (const segment of splitSegments(normalized)) {
+  for (const segment of splitSegments(stripComments(normalized))) {
     const executedSegment = executedText(segment).trim()
     if (executedSegment === '') continue
     const creation = CHANGE_CREATION.exec(executedSegment)
