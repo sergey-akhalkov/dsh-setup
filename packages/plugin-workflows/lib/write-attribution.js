@@ -168,6 +168,12 @@ function splitSegments(text, powershell) {
     const segments = [];
     let current = '';
     let quote;
+    let skipNext = false;
+    const push = () => {
+        segments.push({ text: current, skipped: skipNext });
+        current = '';
+        skipNext = false;
+    };
     for (let index = 0; index < text.length; index += 1) {
         const char = text[index] ?? '';
         if (isEscape(char, quote, powershell)) {
@@ -196,45 +202,24 @@ function splitSegments(text, powershell) {
             char === '\r' ||
             (char === '&' && text[index + 1] === '&') ||
             char === '|') {
-            segments.push(current);
-            current = '';
-            if ((char === '&' || char === '|') && text[index + 1] === char)
+            push();
+            if (char === '&' && text[index + 1] === '&') {
                 index += 1;
+            }
+            else if (char === '|') {
+                if (text[index + 1] === '|') {
+                    skipNext = true;
+                    index += 1;
+                }
+            }
             if (char === '\r' && text[index + 1] === '\n')
                 index += 1;
             continue;
         }
         current += char;
     }
-    segments.push(current);
+    segments.push({ text: current, skipped: skipNext });
     return segments;
-}
-/** Keep only branches that run when the call succeeds: `||` skips its right side. */
-function dropSkippedOr(text, powershell) {
-    let quote;
-    for (let index = 0; index < text.length; index += 1) {
-        const char = text[index] ?? '';
-        if (isEscape(char, quote, powershell)) {
-            index += 1;
-            continue;
-        }
-        if (quote !== undefined) {
-            if (quote === "'" && char === "'" && text[index + 1] === "'") {
-                index += 1;
-                continue;
-            }
-            if (char === quote)
-                quote = undefined;
-            continue;
-        }
-        if (char === '"' || char === "'") {
-            quote = char;
-            continue;
-        }
-        if (char === '|' && text[index + 1] === '|')
-            return text.slice(0, index);
-    }
-    return text;
 }
 /** Remove unquoted comments while keeping quoted text and its destinations. */
 function stripComments(text, powershell) {
@@ -352,14 +337,16 @@ function changesOfCall(workspace, call) {
     if (workdir !== undefined && !isWorkspaceDirectory(workspace, workdir)) {
         return [...changes];
     }
-    const executable = dropSkippedOr(normalized, powershell);
+    const executable = stripComments(normalized, powershell);
     const executed = executedText(executable, powershell).trim();
     if (executed === '')
         return [...changes];
     // One shell call may execute several writes; each segment counts, and a
     // creation command can follow a read or a comment on an earlier line.
-    for (const segment of splitSegments(stripComments(executable, powershell), powershell)) {
-        const executedSegment = executedText(segment, powershell).trim();
+    for (const segment of splitSegments(executable, powershell)) {
+        if (segment.skipped)
+            continue;
+        const executedSegment = executedText(segment.text, powershell).trim();
         if (executedSegment === '')
             continue;
         const creation = CHANGE_CREATION.exec(executedSegment);
@@ -367,8 +354,14 @@ function changesOfCall(workspace, call) {
             addChange(creation[1]);
             continue;
         }
+        // A writer must start the stage or follow a redirect; a printed writer name
+        // in an argument does not execute anything.
+        const writerAtStart = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b/iu.test(executedSegment);
+        const hasRedirect = />/u.test(executedSegment);
+        if (!writerAtStart && !hasRedirect)
+            continue;
         // The destination is parsed from the original text so a quoted path is kept.
-        const raw = shellDestination(segment, powershell);
+        const raw = shellDestination(segment.text, powershell);
         if (raw === undefined)
             continue;
         const candidate = isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)

@@ -657,6 +657,37 @@ describe('skipped branches and compact redirection', () => {
     ).toEqual([])
   })
 
+  it('keeps independent statements after a skipped || branch', () => {
+    for (const command of [
+      'true || echo skipped\necho changed>openspec/changes/auth/design.md',
+      'Write-Output ok # example || skipped\nSet-Content -Path openspec/changes/auth/design.md -Value x',
+    ]) {
+      expect(
+        attributedChangeNames(
+          WORKSPACE,
+          [{ callId: 'c', name: 'bash', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toEqual(['auth'])
+    }
+  })
+
+  it('ignores a writer name that is only printed', () => {
+    for (const command of [
+      'Write-Output Set-Content openspec/changes/auth/design.md',
+      'echo tee openspec/changes/auth/design.md',
+    ]) {
+      expect(
+        attributedChangeNames(
+          WORKSPACE,
+          [{ callId: 'c', name: 'bash', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toEqual([])
+    }
+  })
   it('recognizes a redirection without preceding whitespace', () => {
     expect(
       attributedChangeName(
