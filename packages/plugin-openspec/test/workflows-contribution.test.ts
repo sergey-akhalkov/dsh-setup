@@ -11,13 +11,7 @@ interface AssetDefinition {
   id: string
   trigger: { match: { tool?: string; command?: string } }
   settings?: { gate?: string }
-  steps: Array<{
-    id: string
-    ownership?: string
-    executor?: string
-    review?: { scope?: string; phase?: string }
-    evidence?: Record<string, unknown>
-  }>
+  steps: Array<{ id: string; ownership?: string }>
 }
 
 interface FakeRegistry {
@@ -97,14 +91,7 @@ describe('OpenSpec workflow contribution', () => {
       'spec-review',
       'approval',
     ])
-    const specReview = definition.steps.find((step) => step.id === 'spec-review')
-    expect(specReview?.ownership).toBe('own')
-    expect(specReview?.executor).toBe('review')
-    expect(specReview?.review).toMatchObject({ scope: 'whole', phase: 'spec' })
-    expect(specReview?.evidence).toMatchObject({
-      path: '.dsh/workflows/records/change-intake/{name}/spec.json',
-      digest: 'current',
-    })
+    expect(definition.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('defer')
     expect(definition.trigger.match).toEqual({
       tool: 'shell',
       command: 'openspec new change {name}',

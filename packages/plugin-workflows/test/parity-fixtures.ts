@@ -28,7 +28,13 @@ import {
 import { parseArchiveCommand } from '../lib/command-parse.js'
 import type { Evidence } from '../lib/definitions.js'
 import { currentSpecDigest, verifyEvidence } from '../lib/evidence.js'
-import { evaluateArchiveGate, evaluateTurnClose, SOFT_SETTLEMENT } from '../lib/gates.js'
+import {
+  evaluateArchiveGate,
+  evaluateLaneParity,
+  evaluateProgressParity,
+  evaluateTurnClose,
+  SOFT_SETTLEMENT,
+} from '../lib/gates.js'
 import {
   type CheckpointCloseRecord,
   type CheckpointObservation,
@@ -37,7 +43,6 @@ import {
   taskReviewCoverage,
 } from '../lib/parity.js'
 import { createRun, incrementTurnBlocks, settleStep } from '../lib/runs.js'
-import { evaluateLaneParity, evaluateProgressParity } from '../src/host/gates.ts'
 
 /**
  * The shared retirement-parity fixture table. Each case carries the legacy
