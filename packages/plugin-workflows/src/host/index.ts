@@ -2617,9 +2617,22 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const stored = await readAuthenticatedRun(targetWorkspace, settledRun.id, auth).catch(
           () => undefined,
         )
+        // A reviewer settlement must not erase the current once-only refusal
+        // budget or its recorded violations.
+        const merged =
+          stored === undefined
+            ? settledRun
+            : {
+                ...settledRun,
+                ...(stored.turnBlocks === undefined ? {} : { turnBlocks: stored.turnBlocks }),
+                ...(stored.turnBlocksTurn === undefined
+                  ? {}
+                  : { turnBlocksTurn: stored.turnBlocksTurn }),
+                violations: stored.violations,
+              }
         return await persistRun(
           targetWorkspace,
-          settledRun,
+          merged,
           auth,
           runGeneration(settledRun.id),
           undefined,

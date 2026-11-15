@@ -311,6 +311,15 @@ export class ReviewScheduler {
         // publish; ownership is rechecked immediately before any record write.
         if (this.disposed || !this.queue.owns(entry.file.id))
             return;
+        // A completed-soft settlement may land during the teardown await; the
+        // late verdict is discarded, never published over the terminal run.
+        if (this.fenced.has(entry.run.id)) {
+            if (teardownConfirmed)
+                await this.queue.complete(entry, 'discarded');
+            else
+                this.quarantine(entry, 'discarded');
+            return;
+        }
         // Teardown can take up to 30 seconds; recheck the reviewed inputs after it
         // and immediately before publishing a verdict, failing closed on change.
         // A verdict from a reviewer that may still be alive is never published.
@@ -332,6 +341,12 @@ export class ReviewScheduler {
             // can land in that window, so ownership is checked again before writing.
             if (this.disposed || !this.queue.owns(entry.file.id))
                 return;
+            // The fence can land while the guard awaits; check it again before
+            // either publication branch.
+            if (this.fenced.has(entry.run.id)) {
+                await this.queue.complete(entry, 'discarded');
+                return;
+            }
             if (reason !== undefined) {
                 const failure = await recordReviewFailure({
                     ...entry.request,

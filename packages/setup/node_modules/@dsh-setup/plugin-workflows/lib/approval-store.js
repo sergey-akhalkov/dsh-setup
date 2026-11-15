@@ -383,6 +383,29 @@ function preservesGate(installed, local) {
     // disable enforcement; the installed gate has none.
     if (installed.trigger.applicability !== local.trigger.applicability)
         return false;
+    // A local copy must keep the trigger condition and the review contract
+    // (scope, phase, digest binding) the installed gate enforces.
+    const installedCondition = installed.trigger.condition;
+    const localCondition = local.trigger.condition;
+    if (JSON.stringify(installedCondition ?? null) !== JSON.stringify(localCondition ?? null)) {
+        return false;
+    }
+    const installedReview = installed.steps.find((step) => step.executor === 'review');
+    if (installedReview !== undefined) {
+        const localReview = local.steps.find((step) => step.executor === 'review');
+        if (localReview === undefined)
+            return false;
+        if (installedReview.review?.scope !== localReview.review?.scope)
+            return false;
+        const installedPhase = installedReview.review?.phase;
+        const localPhase = localReview.review?.phase;
+        if (installedPhase !== localPhase)
+            return false;
+        const installedDigest = installedReview.evidence.digest;
+        const localDigest = localReview.evidence.digest;
+        if (installedDigest !== localDigest)
+            return false;
+    }
     const keys = [
         'workspace',
         'session',

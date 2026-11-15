@@ -2155,7 +2155,19 @@ export function apply(ctx, config = {}) {
             // The settlement guard compares against the durable pre-settlement
             // revision, not the new timestamp the settlement itself carries.
             const stored = await readAuthenticatedRun(targetWorkspace, settledRun.id, auth).catch(() => undefined);
-            return await persistRun(targetWorkspace, settledRun, auth, runGeneration(settledRun.id), undefined, stored?.updatedAt);
+            // A reviewer settlement must not erase the current once-only refusal
+            // budget or its recorded violations.
+            const merged = stored === undefined
+                ? settledRun
+                : {
+                    ...settledRun,
+                    ...(stored.turnBlocks === undefined ? {} : { turnBlocks: stored.turnBlocks }),
+                    ...(stored.turnBlocksTurn === undefined
+                        ? {}
+                        : { turnBlocksTurn: stored.turnBlocksTurn }),
+                    violations: stored.violations,
+                };
+            return await persistRun(targetWorkspace, merged, auth, runGeneration(settledRun.id), undefined, stored?.updatedAt);
         },
         discardSnapshot: (targetWorkspace, runId) => discardReviewSnapshot(targetWorkspace, runId, defaultGit),
     });
