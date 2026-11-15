@@ -208,6 +208,8 @@ export interface ReviewRunInput {
     readonly signal?: AbortSignal;
     /** Captured before the first start; a retry preserves it across attempts. */
     readonly baseline?: ReviewRecordBaseline;
+    /** True once the run settled completed-soft; a late verdict is discarded. */
+    readonly cancelled?: () => boolean;
     /** Test seams; production writes the real stores. */
     readonly writePortable?: typeof writePortableApproval;
     readonly writeLocal?: typeof writeLocalReviewRecord;

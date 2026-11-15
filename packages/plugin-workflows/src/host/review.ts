@@ -733,6 +733,8 @@ export interface ReviewRunInput {
   readonly signal?: AbortSignal
   /** Captured before the first start; a retry preserves it across attempts. */
   readonly baseline?: ReviewRecordBaseline
+  /** True once the run settled completed-soft; a late verdict is discarded. */
+  readonly cancelled?: () => boolean
   /** Test seams; production writes the real stores. */
   readonly writePortable?: typeof writePortableApproval
   readonly writeLocal?: typeof writeLocalReviewRecord
@@ -1230,6 +1232,16 @@ export async function publishReviewOutcome(
   // approval nor the local record.
   const superseded = await supersededOutcome(input, now)
   if (superseded !== undefined) return superseded
+  if (input.cancelled?.() === true) {
+    return {
+      run: settleStep(input.run, input.step.id, 'failed', {
+        at: now,
+        reason:
+          'the run settled completed-soft while this review published; the late verdict is discarded',
+      }),
+      discarded: true,
+    }
+  }
   const record = outcome.record
   const result = outcome.result
   if (record === undefined) {

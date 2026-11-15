@@ -713,7 +713,10 @@ export class ReviewScheduler {
       rule: input.rule,
       change: input.change,
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
-      request: input.request,
+      request: {
+        ...input.request,
+        cancelled: () => this.fenced.has(input.run.id),
+      },
       ...(input.phase === undefined ? {} : { phase: input.phase }),
       liveKey: key,
       waited: false,
