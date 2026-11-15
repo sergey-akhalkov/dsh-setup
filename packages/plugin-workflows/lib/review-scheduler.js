@@ -268,6 +268,13 @@ export class ReviewScheduler {
      * teardown succeeds; the queue retries the callback with backoff.
      */
     quarantine(entry, outcome) {
+        // A quarantined run still owns its admission: an identical request must
+        // join it until teardown confirms and releases the slot.
+        if (entry.liveKey !== undefined) {
+            this.liveRuns.set(entry.liveKey, entry.run);
+            this.liveKeys.set(entry.run.id, entry.liveKey);
+            this.liveByRun.set(entry.run.id, entry.run);
+        }
         this.queue.quarantine(entry, async () => {
             await this.waitForTeardown(entry);
             this.forgetLive(entry.run.id);

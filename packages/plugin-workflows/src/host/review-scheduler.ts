@@ -63,6 +63,8 @@ interface ScheduledEntry extends QueueRun {
   readonly change: string
   readonly taskId?: string
   request: ReviewRunInput
+  /** The live-admission key, kept through quarantine until teardown confirms. */
+  liveKey?: string
   /** The entry waited in the queue or in retry backoff at least once. */
   waited: boolean
   /** The single input re-preparation is spent. */
@@ -402,6 +404,13 @@ export class ReviewScheduler {
    * teardown succeeds; the queue retries the callback with backoff.
    */
   private quarantine(entry: ScheduledEntry, outcome: SettledRunState): void {
+    // A quarantined run still owns its admission: an identical request must
+    // join it until teardown confirms and releases the slot.
+    if (entry.liveKey !== undefined) {
+      this.liveRuns.set(entry.liveKey, entry.run)
+      this.liveKeys.set(entry.run.id, entry.liveKey)
+      this.liveByRun.set(entry.run.id, entry.run)
+    }
     this.queue.quarantine(
       entry,
       async () => {

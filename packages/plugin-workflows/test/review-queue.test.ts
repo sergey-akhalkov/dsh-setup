@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { type QueueLimits, type QueueRun, ReviewQueue } from '../src/host/review-queue.ts'
+import {
+  type QueueLimits,
+  type QueueRun,
+  ReviewQueue,
+  retryDelayMs,
+} from '../src/host/review-queue.ts'
 
 interface TestRun extends QueueRun {
   readonly label: string
@@ -40,6 +45,24 @@ async function waitFor(check: () => boolean, timeoutMs = 2_000): Promise<void> {
 }
 
 describe('review queue admission', () => {
+  it('backs off exponentially with a cap and honors retry-after', () => {
+    const limits = {
+      enabled: true,
+      concurrency: 1,
+      maxQueued: 2,
+      maxAttempts: 3,
+      baseDelayMs: 100,
+      maxDelayMs: 1000,
+      waitTimeoutMs: 1000,
+    }
+    expect(retryDelayMs(1, limits, undefined, () => 1)).toBe(100)
+    expect(retryDelayMs(1, limits, undefined, () => 0)).toBe(50)
+    expect(retryDelayMs(2, limits, undefined, () => 1)).toBe(200)
+    expect(retryDelayMs(3, limits, undefined, () => 1)).toBe(400)
+    expect(retryDelayMs(10, limits, undefined, () => 1)).toBe(1000)
+    expect(retryDelayMs(1, limits, 700, () => 0)).toBe(700)
+    expect(retryDelayMs(1, limits, 5000, () => 1)).toBe(1000)
+  })
   it('serializes one key at concurrency 1 and releases the next slot', async () => {
     const starts: string[] = []
     const settled: string[] = []

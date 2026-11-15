@@ -1661,7 +1661,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (pluginDisposed) return
         // A live review must see any file mutation, including one restored
         // before settle; the per-workspace epoch is its cheap proof.
-        mutationEpochs.set(workspace, (mutationEpochs.get(workspace) ?? 0) + 1)
+        // An approval is a review output, not a reviewed input; it must not
+        // invalidate the live review that published it.
+        if (!/^openspec\/changes\/[^/]+\/reviews\//u.test(event.path.replaceAll('\\\\', '/'))) {
+          mutationEpochs.set(workspace, (mutationEpochs.get(workspace) ?? 0) + 1)
+        }
         const session = activeSession.get(workspace)
         if (session === undefined) return
         const summary = `${event.change} ${event.path}`
@@ -2848,12 +2852,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             if ((await currentSpecDigest(workspace, change)) !== specDigest) {
               return 'the change digest changed'
             }
-            if (
-              tree !== undefined &&
-              (await worktreeDigest(workspace, defaultGit).catch(() => undefined)) !== tree
-            ) {
-              return 'the worktree digest changed'
-            }
+            // The captured reviewed-input signature already excludes approvals
+            // and catches edit-read-restore; a worktree digest would flag them.
+            void tree
             return undefined
           }
         interface PreparedReview {
