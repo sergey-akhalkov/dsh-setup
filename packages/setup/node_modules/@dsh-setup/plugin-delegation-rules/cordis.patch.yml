@@ -39,3 +39,9 @@
             gate: strict
         timeouts:
           review: 600000
+        gates:
+          workflowOwned: false
+          specReview: false
+          integrationReview: false
+          taskProgress: false
+          laneFanout: false

@@ -480,6 +480,7 @@ describe('target resolution', () => {
     })
     const harness = harnessFor(root, {
       ...shipped,
+      gates: { ...(shipped.gates ?? {}), taskProgress: true },
       rules: [
         ...shippedRules,
         { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },

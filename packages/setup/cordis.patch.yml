@@ -50,6 +50,12 @@
             gate: strict
         timeouts:
           review: 600000
+        gates:
+          workflowOwned: false
+          specReview: false
+          integrationReview: false
+          taskProgress: false
+          laneFanout: false
     - id: dsh-setup-goal-continuity
       name: "@dsh-setup/plugin-goal-continuity"
       config:
@@ -388,6 +394,11 @@
     verify:
       commands: []
       maxBlocks: 8
+    reviewers:
+      codex:
+        provider: codex-subagent
+        model: gpt-6-astra
+        reasoningEffort: xhigh
 - id: dsh-setup-goal-continuity
   config:
     enabled: true
@@ -456,7 +467,15 @@
         when: lane-assignment
         contract: note
         gate: strict
+      - id: implementation-work
+        when: implementation-work
+        contract: note
+        gate: strict
     timeouts:
       review: 600000
     gates:
       workflowOwned: false
+      specReview: false
+      integrationReview: false
+      taskProgress: false
+      laneFanout: false

@@ -105,7 +105,16 @@ describe('fresh-workspace migration', () => {
       join(repoRoot, 'packages', 'plugin-delegation-rules', 'cordis.fragment.yml'),
       'utf8',
     )
-    expect(delegationFragment).not.toContain('workflowOwned: false')
+    for (const name of [
+      'workflowOwned',
+      'specReview',
+      'integrationReview',
+      'taskProgress',
+      'laneFanout',
+    ]) {
+      expect(delegationFragment).toContain(`${name}: false`)
+    }
+    expect(delegationFragment).not.toContain('when: implementation-work')
   })
 
   it('accepts two profile verify settings, including a cap above 128', () => {
