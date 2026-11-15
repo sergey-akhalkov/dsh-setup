@@ -761,6 +761,35 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('prefers copy/move -Destination and consumes option aliases', () => {
+    for (const command of [
+      'Copy-Item -Path draft.md -Destination openspec/changes/auth/design.md',
+      'Move-Item -LiteralPath draft.md -Destination openspec/changes/auth/design.md',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'a', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+    for (const command of [
+      "Set-Content -Filter '*.md' openspec/changes/auth/design.md x",
+      'Set-Content -ea Stop openspec/changes/auth/design.md x',
+      'Set-Content -Encoding:utf8 openspec/changes/auth/design.md x',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'b', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+  })
   it('decodes partial placeholders and inline option values', () => {
     expect(
       attributedChangeName(
