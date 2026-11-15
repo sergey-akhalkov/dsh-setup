@@ -63,6 +63,7 @@ const runStoreFaults = vi.hoisted(() => ({
   readdir: undefined as string | undefined,
   stat: undefined as string | undefined,
   writeFile: undefined as string | undefined,
+  recordWriteFile: undefined as string | undefined,
   pauseNextWrite: undefined as Promise<void> | undefined,
   pauseFor: undefined as ((path: string) => boolean) | undefined,
 }))
@@ -87,6 +88,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     stat: fault(actual.stat, () => runStoreFaults.stat),
     writeFile: (async (...args: Parameters<typeof actual.writeFile>) => {
       const target = String(args[0]).replaceAll('\\', '/')
+      if (runStoreFaults.recordWriteFile !== undefined && target.includes('/workflows/records/')) {
+        return reject(runStoreFaults.recordWriteFile)
+      }
       const inRunStore = target.includes('/workflows/runs/') && target.endsWith('.tmp')
       if (
         inRunStore &&
@@ -116,6 +120,7 @@ afterEach(async () => {
   runStoreFaults.readdir = undefined
   runStoreFaults.stat = undefined
   runStoreFaults.writeFile = undefined
+  runStoreFaults.recordWriteFile = undefined
   runStoreFaults.pauseNextWrite = undefined
   runStoreFaults.pauseFor = undefined
   await Promise.all(
@@ -3996,6 +4001,112 @@ describe('owned review at runtime', () => {
     expect(retriedReview?.state).toBe('failed')
     expect(retriedReview?.at ?? 0).toBeGreaterThan(firstAt)
     expect(host.steers).toHaveLength(0)
+  })
+
+  it('blocks the close when a failed review leaves no record to read', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { specReview: false })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = definitionsRegistry.installed('change-intake')?.definition
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-unreadable-artifacts',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    await runs.writeRun(workspace, run, auth)
+    const steerText = (): string =>
+      host.steers
+        .map((message) =>
+          ((message as { content?: Array<{ text?: string }> }).content ?? [])
+            .map((block) => block.text ?? '')
+            .join(''),
+        )
+        .join('\n')
+    // No `openspec/changes/auth/` directory: the review cannot compute the
+    // current digest and settles failed without writing a record.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-unreadable-artifacts', auth)
+    const review = stored?.steps.find((step) => step.id === 'spec-review')
+    expect(review?.state).toBe('failed')
+    expect(review?.reason).toContain('unreadable')
+    expect(review?.evidence).toBeUndefined()
+    // A recordless failure is not provisional evidence: the close is refused
+    // and its cause is steered instead of allowed silently.
+    expect(host.steers).toHaveLength(1)
+    expect(steerText()).toContain('spec-review')
+    expect(steerText()).toContain('unreadable')
+  })
+
+  it('blocks the close when the ERROR record cannot be published', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { specReview: false })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = definitionsRegistry.installed('change-intake')?.definition
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    // Readable artifacts, so the review reaches the unconfigured reviewer and
+    // its ERROR publication is the only failure.
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    for (const file of ['proposal.md', 'design.md', 'tasks.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-unpublished-error',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    await runs.writeRun(workspace, run, auth)
+    const steerText = (): string =>
+      host.steers
+        .map((message) =>
+          ((message as { content?: Array<{ text?: string }> }).content ?? [])
+            .map((block) => block.text ?? '')
+            .join(''),
+        )
+        .join('\n')
+    runStoreFaults.recordWriteFile = 'EACCES'
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-unpublished-error', auth)
+    const review = stored?.steps.find((step) => step.id === 'spec-review')
+    expect(review?.state).toBe('failed')
+    expect(review?.reason).toContain('could not be written')
+    expect(review?.evidence).toBeUndefined()
+    expect(host.steers).toHaveLength(1)
+    expect(steerText()).toContain('could not be written')
+    // The retry cannot publish either, so the failure keeps blocking the close;
+    // the bounded violation is the only way past it.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(host.steers).toHaveLength(2)
   })
 })
 

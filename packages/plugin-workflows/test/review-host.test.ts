@@ -1,14 +1,17 @@
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { validateDefinition } from '../src/host/definitions.ts'
 import { SOFT_SETTLEMENT } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
+import { readReceipt } from '../src/host/receipts.ts'
 import { definitionsRegistry } from '../src/host/registry.ts'
-import { createRun, readAuthenticatedRun, writeRun } from '../src/host/runs.ts'
+import { createRun, readAuthenticatedRun, settleStep, writeRun } from '../src/host/runs.ts'
 import { taskIdOf } from '../src/host/tasks.ts'
 
 /**
@@ -104,6 +107,8 @@ interface DelayedReviewHost {
   readonly digests: string[]
   /** Release one pending reviewer activation. */
   readonly releases: Array<() => void>
+  /** The steer texts the host sent to the session-1 agent. */
+  readonly steers: string[]
   /** Resolves when a released activation is disposed, i.e. teardown is confirmed. */
   readonly disposed: Promise<void>
   emit(name: string, ...args: unknown[]): Promise<unknown>
@@ -122,6 +127,7 @@ function delayedReviewHost(workspace: string, verdict: 'PASS' | 'FINDINGS'): Del
   const listeners = new Map<string, Listener[]>()
   const digests: string[] = []
   const releases: Array<() => void> = []
+  const steers: string[] = []
   let confirmDispose: (() => void) | undefined
   const disposed = new Promise<void>((resolve) => {
     confirmDispose = resolve
@@ -130,7 +136,10 @@ function delayedReviewHost(workspace: string, verdict: 'PASS' | 'FINDINGS'): Del
     id: 'session-1',
     session: { id: 'session-1', header: { origin: 'root' } },
     ctx: { on: () => () => {} },
-    steer: () => {},
+    steer: (message: unknown) => {
+      const content = (message as { content?: Array<{ text?: string }> }).content
+      steers.push(content?.map((block) => block.text ?? '').join('') ?? '')
+    },
     inject: () => {},
   }
   const ctx = {
@@ -145,6 +154,16 @@ function delayedReviewHost(workspace: string, verdict: 'PASS' | 'FINDINGS'): Del
       }
       if (name === 'connection') {
         return { fetch: { register: () => () => {} } }
+      }
+      if (name === 'userQuestions') {
+        return {
+          ask: async (request: { questions: ReadonlyArray<{ id: string }> }) => ({
+            answers: request.questions.map((question) => ({
+              id: question.id,
+              selected: ['yes'],
+            })),
+          }),
+        }
       }
       if (name === 'subagents') {
         return {
@@ -203,7 +222,7 @@ function delayedReviewHost(workspace: string, verdict: 'PASS' | 'FINDINGS'): Del
     for (const listener of listeners.get(name) ?? []) result = await listener(...args)
     return result
   }
-  return { ctx, agent, digests, releases, disposed, emit }
+  return { ctx, agent, digests, releases, steers, disposed, emit }
 }
 
 describe('native review host admission', () => {
@@ -494,4 +513,112 @@ describe('native review host admission', () => {
       }
     },
   )
+})
+
+/** The OpenSpec plugin's contributed intake, as the real profile registers it. */
+function contributedIntake(): ReturnType<typeof validateDefinition> {
+  return validateDefinition(
+    JSON.parse(
+      readFileSync(
+        join(
+          fileURLToPath(new URL('.', import.meta.url)),
+          '..',
+          '..',
+          'plugin-openspec',
+          'assets',
+          'workflows',
+          'change-intake.json',
+        ),
+        'utf8',
+      ),
+    ),
+  )
+}
+
+describe('shared whole-spec review admission', () => {
+  it('keeps the intake run when the built-in review of the shared identity is live', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const intake = contributedIntake()
+    const unregister = definitionsRegistry.register({
+      source: '@dsh-setup/plugin-openspec',
+      definitions: [intake],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      // Session 2's built-in whole-spec review is running while session 1
+      // advances its intake: both steps share the canonical spec-review
+      // identity, its queue admission, and its record.
+      const builtin = createRun({
+        definition: 'spec-review',
+        trigger: 'turn.stopping',
+        session: 'session-2',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, builtin, auth)
+      let intakeRun = createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: intake.steps.map((step) => step.id),
+        now: 2_000,
+      })
+      for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+        intakeRun = settleStep(intakeRun, step, 'done', { at: 2_100 })
+      }
+      await writeRun(workspace, intakeRun, auth)
+      const steersTwo: string[] = []
+      const agentTwo = {
+        ...host.agent,
+        id: 'session-2',
+        session: { id: 'session-2', header: { origin: 'root' as const } },
+        steer: (message: unknown) => {
+          const content = (message as { content?: Array<{ text?: string }> }).content
+          steersTwo.push(content?.map((block) => block.text ?? '').join('') ?? '')
+        },
+      }
+      // Session 2 starts the shared review and leaves it live.
+      await host.emit('agent/turn-stopping', { agent: agentTwo, turn: 1 })
+      await waitFor(() => host.digests.length === 1)
+      const beforeIntake = host.steers.length
+      // Session 1 must keep its own run and stay pending instead of adopting
+      // the live built-in run, whose steps would replace the intake's.
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      const admitted = await readAuthenticatedRun(workspace, intakeRun.id, auth)
+      expect(admitted?.definition.id).toBe('change-intake')
+      expect(admitted?.steps.map((step) => step.id)).toEqual(intake.steps.map((step) => step.id))
+      expect(admitted?.steps.find((step) => step.id === 'spec-review')?.state).toBe('open')
+      expect(host.steers.length).toBeGreaterThan(beforeIntake)
+      expect(host.steers.at(-1)).toContain('spec-review')
+      // The shared identity ran one reviewer, not two.
+      expect(host.digests).toHaveLength(1)
+      expect(steersTwo.length).toBeGreaterThan(0)
+      // The shared PASS record satisfies the intake step, so its close passes
+      // and the completed intake issues its receipt.
+      const release = host.releases[0]
+      if (release === undefined) throw new Error('the shared review never started')
+      release()
+      const recordPath = join(workspace, '.dsh/workflows/records/spec-review/auth/spec.json')
+      await waitFor(
+        async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
+      )
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      const completed = await readAuthenticatedRun(workspace, intakeRun.id, auth)
+      expect(completed?.status).toBe('completed')
+      expect(completed?.steps.every((step) => step.state === 'done')).toBe(true)
+      expect(await readReceipt(workspace, 'auth', auth)).toMatchObject({
+        kind: 'intake',
+        change: 'auth',
+      })
+    } finally {
+      unregister()
+    }
+  })
 })
