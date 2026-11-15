@@ -77,14 +77,18 @@ export declare class ReviewScheduler {
     private readonly liveByRun;
     /** Runs fenced by a completed-soft settlement; their late verdict is discarded. */
     private readonly fenced;
+    private readonly recordLocks;
     /**
      * Fence a run that settled without its review (completed-soft): a queued
      * attempt is cancelled before it starts, and a late verdict is discarded
      * instead of publishing over the terminal run.
      */
     fence(runId: string): void;
+    private recordKey;
+    private withRecordLock;
     /** Remove a PASS record/approval a fenced settlement must not leave behind. */
     private discardFencedRecord;
+    private discardFencedRecordUnlocked;
     /** The live review of this workflow run, regardless of current input changes. */
     liveRunById(runId: string): WorkflowRun | undefined;
     /** The run already covering this review, before any snapshot is prepared. */
@@ -111,6 +115,7 @@ export declare class ReviewScheduler {
     /** Publish a terminal attempt whose child teardown is not yet confirmed. */
     private publishAndQuarantine;
     private publish;
+    private publishUnlocked;
     /**
      * Hold the run's slot, key, live dedupe entry, and snapshot until the child
      * teardown succeeds; the queue retries the callback with backoff.

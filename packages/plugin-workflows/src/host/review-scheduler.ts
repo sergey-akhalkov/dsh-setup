@@ -193,6 +193,7 @@ export class ReviewScheduler {
   private readonly liveByRun = new Map<string, WorkflowRun>()
   /** Runs fenced by a completed-soft settlement; their late verdict is discarded. */
   private readonly fenced = new Set<string>()
+  private readonly recordLocks = new Map<string, Promise<void>>()
 
   /**
    * Fence a run that settled without its review (completed-soft): a queued
@@ -209,8 +210,32 @@ export class ReviewScheduler {
     void this.queue.cancel(entry.file.id).catch(() => undefined)
   }
 
+  private recordKey(entry: ScheduledEntry): string {
+    const definition = entry.request.definition.id
+    const scope = entry.request.step.review?.scope ?? 'whole'
+    const phase = entry.request.step.review?.phase ?? 'spec'
+    return scope === 'task'
+      ? `${entry.workspace}\u0000${definition}\u0000${entry.change}\u0000task\u0000${entry.request.task?.id ?? ''}`
+      : `${entry.workspace}\u0000${definition}\u0000${entry.change}\u0000whole\u0000${phase}`
+  }
+
+  private async withRecordLock(key: string, action: () => Promise<void>): Promise<void> {
+    const previous = this.recordLocks.get(key) ?? Promise.resolve()
+    const next = previous.then(action, action).finally(() => {
+      if (this.recordLocks.get(key) === next) this.recordLocks.delete(key)
+    })
+    this.recordLocks.set(key, next)
+    return next
+  }
+
   /** Remove a PASS record/approval a fenced settlement must not leave behind. */
   private async discardFencedRecord(entry: ScheduledEntry): Promise<void> {
+    await this.withRecordLock(this.recordKey(entry), async () => {
+      await this.discardFencedRecordUnlocked(entry)
+    })
+  }
+
+  private async discardFencedRecordUnlocked(entry: ScheduledEntry): Promise<void> {
     const definition = entry.request.definition.id
     const scope = entry.request.step.review?.scope ?? 'whole'
     const phase = entry.request.step.review?.phase
@@ -579,6 +604,18 @@ export class ReviewScheduler {
   }
 
   private async publish(
+    entry: ScheduledEntry,
+    outcome: ReviewAttemptOutcome,
+    now: number,
+  ): Promise<ReviewRunResult> {
+    let result: ReviewRunResult | undefined
+    await this.withRecordLock(this.recordKey(entry), async () => {
+      result = await this.publishUnlocked(entry, outcome, now)
+    })
+    return result ?? { run: entry.run }
+  }
+
+  private async publishUnlocked(
     entry: ScheduledEntry,
     outcome: ReviewAttemptOutcome,
     now: number,

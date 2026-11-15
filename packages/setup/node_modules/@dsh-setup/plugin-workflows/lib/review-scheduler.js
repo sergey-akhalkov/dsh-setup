@@ -69,6 +69,7 @@ export class ReviewScheduler {
     liveByRun = new Map();
     /** Runs fenced by a completed-soft settlement; their late verdict is discarded. */
     fenced = new Set();
+    recordLocks = new Map();
     /**
      * Fence a run that settled without its review (completed-soft): a queued
      * attempt is cancelled before it starts, and a late verdict is discarded
@@ -86,8 +87,30 @@ export class ReviewScheduler {
             return;
         void this.queue.cancel(entry.file.id).catch(() => undefined);
     }
+    recordKey(entry) {
+        const definition = entry.request.definition.id;
+        const scope = entry.request.step.review?.scope ?? 'whole';
+        const phase = entry.request.step.review?.phase ?? 'spec';
+        return scope === 'task'
+            ? `${entry.workspace}\u0000${definition}\u0000${entry.change}\u0000task\u0000${entry.request.task?.id ?? ''}`
+            : `${entry.workspace}\u0000${definition}\u0000${entry.change}\u0000whole\u0000${phase}`;
+    }
+    async withRecordLock(key, action) {
+        const previous = this.recordLocks.get(key) ?? Promise.resolve();
+        const next = previous.then(action, action).finally(() => {
+            if (this.recordLocks.get(key) === next)
+                this.recordLocks.delete(key);
+        });
+        this.recordLocks.set(key, next);
+        return next;
+    }
     /** Remove a PASS record/approval a fenced settlement must not leave behind. */
     async discardFencedRecord(entry) {
+        await this.withRecordLock(this.recordKey(entry), async () => {
+            await this.discardFencedRecordUnlocked(entry);
+        });
+    }
+    async discardFencedRecordUnlocked(entry) {
         const definition = entry.request.definition.id;
         const scope = entry.request.step.review?.scope ?? 'whole';
         const phase = entry.request.step.review?.phase;
@@ -446,6 +469,13 @@ export class ReviewScheduler {
                 : 'failed');
     }
     async publish(entry, outcome, now) {
+        let result;
+        await this.withRecordLock(this.recordKey(entry), async () => {
+            result = await this.publishUnlocked(entry, outcome, now);
+        });
+        return result ?? { run: entry.run };
+    }
+    async publishUnlocked(entry, outcome, now) {
         const result = await publishReviewOutcome(entry.request, outcome, now).catch(async (error) => {
             // A publication fault must still settle visibly; the queue then releases
             // or quarantines by the actual teardown state.
