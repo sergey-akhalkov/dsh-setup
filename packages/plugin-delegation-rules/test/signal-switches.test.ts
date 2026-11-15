@@ -150,6 +150,21 @@ describe('each false switch disables exactly its own steer', () => {
   })
 })
 
+it('disables only the lane-boundary steer with laneFanout false', async () => {
+  const on = await implementationTurn(releaseAConfig({ gates: { ...ALL_GATES } }))
+  await on.harness.turnStopping(1)
+  const onText = steer(on.harness)
+  expect(onText).toContain('is complete and')
+  expect(onText).toContain('requires its task-scoped review')
+
+  const off = await implementationTurn(
+    releaseAConfig({ gates: { ...ALL_GATES, laneFanout: false } }),
+  )
+  await off.harness.turnStopping(1)
+  const offText = steer(off.harness)
+  expect(offText).not.toContain('is complete and')
+  expect(offText).toContain('requires its task-scoped review')
+})
 describe('the active review owner supplies the progress evidence', () => {
   const gates: GatesConfig = {
     workflowOwned: false,

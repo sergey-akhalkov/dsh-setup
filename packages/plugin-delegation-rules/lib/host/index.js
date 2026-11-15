@@ -5379,6 +5379,10 @@ function attachGate({ ctx, deps }) {
             await evaluateGate(deps, payload.agent, payload.turn, payload.signal);
         }
         catch (error) {
+            // A failed evaluation is not a reason to steer when every legacy signal
+            // is retired; the dormant row must stay silent.
+            if (!Object.values(resolveLegacySignals(deps.config)).some((value) => value === true))
+                return;
             try {
                 payload.agent.steer(gateMessage(`Delegation gate (delegation-rules) could not evaluate this turn: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}. Fix the workspace or plugin configuration; disabling the row is the explicit opt-out.`));
             }

@@ -713,6 +713,7 @@ export function releaseARules(): NonNullable<BundleConfig['rules']> {
     },
     { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },
     { id: 'lane-fanout', when: 'lane-assignment', contract: 'note', gate: 'strict' },
+    { id: 'lane-boundary', when: 'lane-boundary', contract: 'note', gate: 'strict' },
   ]
 }
 
