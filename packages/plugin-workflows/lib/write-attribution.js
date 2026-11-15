@@ -53,7 +53,7 @@ function isEscape(text, index, quote, powershell) {
     if (quote === "'")
         return false;
     if (char === '`')
-        return true;
+        return powershell;
     if (char !== '\\')
         return false;
     // PowerShell keeps backslashes literal outside and inside double quotes.
@@ -106,7 +106,7 @@ function maskQuoted(text, powershell) {
             index += 1;
             while (index < text.length) {
                 const inner = text[index] ?? '';
-                if (inner === '`') {
+                if (inner === '`' && powershell) {
                     content += text[index + 1] ?? '';
                     index += 2;
                     continue;
@@ -142,35 +142,40 @@ function resolveMasked(token, values) {
     const match = /^\u0000(\d+)\u0000$/u.exec(token);
     return match === null ? token : (values[Number(match[1])] ?? '');
 }
-function shellDestination(command, powershell) {
+function shellDestinations(command, powershell) {
     const { masked, values } = maskQuoted(command, powershell);
+    const destinations = [];
     // Only a writer that starts the stage executes; a printed writer name does not.
     const atStart = masked.trimStart();
     const writer = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(atStart);
     if (writer !== null) {
         const rest = writer[1] ?? '';
         const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest);
-        if (named !== null)
-            return resolveMasked(named[1] ?? '', values);
-        const tokens = rest.match(/\u0000\d+\u0000|[^><\s]+/gu) ?? [];
-        let skipValue = false;
-        for (const token of tokens) {
-            if (/^\d*>/u.test(token))
+        if (named !== null) {
+            destinations.push(resolveMasked(named[1] ?? '', values));
+        }
+        else {
+            const tokens = rest.match(/\u0000\d+\u0000|[^><\s]+/gu) ?? [];
+            let skipValue = false;
+            for (const token of tokens) {
+                if (/^\d*>/u.test(token))
+                    break;
+                if (skipValue) {
+                    skipValue = false;
+                    continue;
+                }
+                if (/^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType)\b/iu.test(token)) {
+                    skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType)\b/iu.test(token);
+                    continue;
+                }
+                if (token.startsWith('-'))
+                    continue;
+                destinations.push(resolveMasked(token, values));
                 break;
-            if (skipValue) {
-                skipValue = false;
-                continue;
             }
-            if (/^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType)\b/iu.test(token)) {
-                skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType)\b/iu.test(token);
-                continue;
-            }
-            if (token.startsWith('-'))
-                continue;
-            return resolveMasked(token, values);
         }
     }
-    // Stream duplication and the null device are skipped; a later real target wins.
+    // Every real output target counts; duplication and null devices do not.
     for (const match of masked.matchAll(/>+\s*(\u0000\d+\u0000|[^><\s]+)/gu)) {
         const target = resolveMasked(match[1] ?? '', values);
         if (/^&\d+$/u.test(target) ||
@@ -179,9 +184,9 @@ function shellDestination(command, powershell) {
             /^\$null$/iu.test(target)) {
             continue;
         }
-        return target;
+        destinations.push(target);
     }
-    return undefined;
+    return destinations;
 }
 /** Split shell text on separators that are outside quotes. */
 function splitSegments(text, powershell) {
@@ -387,19 +392,18 @@ function changesOfCall(workspace, call) {
         if (!writerAtStart && !hasRedirect)
             continue;
         // The destination is parsed from the original text so a quoted path is kept.
-        const raw = shellDestination(segment.text, powershell);
-        if (raw === undefined)
-            continue;
-        const candidate = isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
-            ? raw
-            : workdir === undefined
+        for (const raw of shellDestinations(segment.text, powershell)) {
+            const candidate = isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
                 ? raw
-                : resolve(workdir, raw);
-        const rel = normalizedWorkspacePath(workspace, candidate);
-        if (rel !== undefined &&
-            /^openspec\/changes\/[^/]+\//u.test(rel) &&
-            !/\/reviews\//u.test(rel)) {
-            addChange(/^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1]);
+                : workdir === undefined
+                    ? raw
+                    : resolve(workdir, raw);
+            const rel = normalizedWorkspacePath(workspace, candidate);
+            if (rel !== undefined &&
+                /^openspec\/changes\/[^/]+\//u.test(rel) &&
+                !/\/reviews\//u.test(rel)) {
+                addChange(/^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1]);
+            }
         }
     }
     return [...changes];

@@ -761,6 +761,40 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('attributes bash command substitution before redirection and later targets', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'bash',
+            arguments: {
+              command: 'echo `printf x`>openspec/changes/auth/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'bash',
+            arguments: {
+              command: 'echo x 2>log.txt >openspec/changes/auth/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('ignores escaped redirections and parses adjacent input redirection', () => {
     for (const [name, command] of [
       ['bash', 'echo x \\>openspec/changes/auth/design.md'],
