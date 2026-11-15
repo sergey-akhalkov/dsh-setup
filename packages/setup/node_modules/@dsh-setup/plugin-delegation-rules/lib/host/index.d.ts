@@ -296,6 +296,8 @@ export interface WorkflowsReviewCompat {
     }>;
     status(): Promise<string>;
 }
+/** Resolve a legacy undled:<name> instruction to its asset text. */
+export declare function resolveBundledInstruction(instruction: string): string;
 /** Export for the prompt-budget tests; the engine is the only production caller. */
 export declare function reviewPrompt(rule: RuleConfig, change: ChangeInfo, digest: string, task: TaskInfo | undefined, context: string | undefined, objective: string | undefined, snapshot?: boolean, section?: SectionInfo): string;
 /**
