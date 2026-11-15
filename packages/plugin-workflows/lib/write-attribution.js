@@ -111,53 +111,72 @@ export function isWorkspaceDirectory(workspace, directory) {
  * the documented successful `openspec new change <name>` creation command. A
  * session that creates a change through the shell is involved too.
  */
-export function attributedChangeName(workspace, calls, turn) {
-    const written = attributedSpecWrite(workspace, calls, turn);
-    if (written !== undefined) {
-        return /^openspec\/changes\/([^/]+)\//u.exec(written)?.[1];
+/** The change one successful observation touched, or undefined. */
+function changeOfCall(workspace, call) {
+    const rawPath = call.arguments.file_path ?? call.arguments.path;
+    if ((call.name === 'write' || call.name === 'edit') && typeof rawPath === 'string') {
+        const rel = normalizedWorkspacePath(workspace, rawPath);
+        if (rel !== undefined &&
+            /^openspec\/changes\/[^/]+\//u.test(rel) &&
+            !/\/reviews\//u.test(rel)) {
+            return /^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1];
+        }
     }
-    for (const call of [...calls].reverse()) {
+    const command = call.arguments.command;
+    if (typeof command !== 'string')
+        return undefined;
+    const normalized = command.replace(/\b(?:rtk|pnpm exec)\s+/gu, '').trim();
+    const workdir = typeof call.arguments.workdir === 'string'
+        ? call.arguments.workdir
+        : typeof call.arguments.cwd === 'string'
+            ? call.arguments.cwd
+            : undefined;
+    if (workdir !== undefined && !isWorkspaceDirectory(workspace, workdir)) {
+        return undefined;
+    }
+    const executed = executedText(normalized).trim();
+    if (executed === '')
+        return undefined;
+    const creation = CHANGE_CREATION.exec(executed);
+    if (creation !== null)
+        return creation[1];
+    const startsWrite = WRITE_COMMAND.test(executed);
+    const hasRedirect = REDIRECT.test(executed);
+    if (!startsWrite && !hasRedirect)
+        return undefined;
+    // The destination is parsed from the original text so a quoted path is kept.
+    const raw = shellDestination(normalized);
+    if (raw === undefined)
+        return undefined;
+    const candidate = isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
+        ? raw
+        : workdir === undefined
+            ? raw
+            : resolve(workdir, raw);
+    const rel = normalizedWorkspacePath(workspace, candidate);
+    if (rel !== undefined && /^openspec\/changes\/[^/]+\//u.test(rel) && !/\/reviews\//u.test(rel)) {
+        return /^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1];
+    }
+    return undefined;
+}
+/**
+ * Every change this turn made, from successful write/edit observations and the
+ * documented creation and shell-write commands. A turn may touch more than one.
+ */
+export function attributedChangeNames(workspace, calls, turn) {
+    const changes = new Set();
+    for (const call of calls) {
         if (turn !== undefined && call.turn !== undefined && call.turn !== turn)
             continue;
         if (call.ok === false)
             continue;
-        const command = call.arguments.command;
-        if (typeof command !== 'string')
-            continue;
-        const normalized = command.replace(/\b(?:rtk|pnpm exec)\s+/gu, '').trim();
-        const workdir = typeof call.arguments.workdir === 'string'
-            ? call.arguments.workdir
-            : typeof call.arguments.cwd === 'string'
-                ? call.arguments.cwd
-                : undefined;
-        if (workdir !== undefined && !isWorkspaceDirectory(workspace, workdir)) {
-            continue;
-        }
-        const executed = executedText(normalized).trim();
-        if (executed === '')
-            continue;
-        const creation = CHANGE_CREATION.exec(executed);
-        if (creation !== null)
-            return creation[1];
-        const startsWrite = WRITE_COMMAND.test(executed);
-        const hasRedirect = REDIRECT.test(executed);
-        if (!startsWrite && !hasRedirect)
-            continue;
-        // The destination is parsed from the original text so a quoted path is kept.
-        const raw = shellDestination(normalized);
-        if (raw !== undefined) {
-            const candidate = isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
-                ? raw
-                : workdir === undefined
-                    ? raw
-                    : resolve(workdir, raw);
-            const rel = normalizedWorkspacePath(workspace, candidate);
-            if (rel !== undefined &&
-                /^openspec\/changes\/[^/]+\//u.test(rel) &&
-                !/\/reviews\//u.test(rel)) {
-                return /^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1];
-            }
-        }
+        const change = changeOfCall(workspace, call);
+        if (change !== undefined)
+            changes.add(change);
     }
-    return undefined;
+    return [...changes];
+}
+/** The latest change this turn made, for callers that need one. */
+export function attributedChangeName(workspace, calls, turn) {
+    return attributedChangeNames(workspace, calls, turn).at(-1);
 }

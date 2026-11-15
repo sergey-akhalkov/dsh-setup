@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   attributedChangeName,
+  attributedChangeNames,
   attributedSpecWrite,
   normalizedWorkspacePath,
 } from '../src/host/write-attribution.ts'
@@ -325,5 +326,25 @@ describe('shell destination arguments', () => {
         1,
       ),
     ).toBe('real')
+  })
+})
+
+describe('multi-change attribution', () => {
+  it('collects a direct write and a shell creation in one turn', () => {
+    const calls = [
+      {
+        callId: 'w',
+        name: 'write',
+        arguments: { file_path: 'openspec/changes/auth/design.md' },
+        ok: true,
+      },
+      {
+        callId: 'c',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change billing' },
+        ok: true,
+      },
+    ]
+    expect(attributedChangeNames(WORKSPACE, calls, 1)).toEqual(['auth', 'billing'])
   })
 })

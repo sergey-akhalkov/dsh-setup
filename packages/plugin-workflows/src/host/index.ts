@@ -132,7 +132,7 @@ import {
   type StartRunOutcome,
   type Trigger,
 } from './triggers.js'
-import { attributedChangeName, attributedSpecWrite } from './write-attribution.js'
+import { attributedChangeNames } from './write-attribution.js'
 
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows'
@@ -956,6 +956,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         event,
         typeof extraContext.name === 'string' ? extraContext.name : undefined,
       )
+      // A conditional run's identity includes the change it evaluated, and the
+      // persisted key must match what a reload seeds back into sessionSeen.
+      const scopedKey =
+        dedupeKey !== undefined &&
+        definition.trigger.condition !== undefined &&
+        typeof extraContext.name === 'string'
+          ? `${dedupeKey}\0${extraContext.name}`
+          : dedupeKey
       const session = event.session ?? ''
       const entryGeneration = sessionGeneration(session)
       const run = createRun({
@@ -970,7 +978,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         },
         steps: definition.steps.map((step) => step.id),
         now: journal.time(),
-        ...(dedupeKey === undefined ? {} : { dedupeKey }),
+        ...(scopedKey === undefined ? {} : { dedupeKey: scopedKey }),
       })
       // A queued trigger evaluation can run after the session was disposed.
       creationCounter += 1
@@ -1362,16 +1370,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // would arrive after the close. OpenSpec writes are tracked from the
       // observed write/edit calls because the code-write metrics exclude them.
       const sessionWrites = sessionToolCalls.get(input.session) ?? []
-      const pendingSpecWrite = attributedSpecWrite(workspace, sessionWrites, input.turn)
-      const pendingCreatedChange = attributedChangeName(workspace, sessionWrites, input.turn)
-      const pendingWritePath =
-        pendingSpecWrite ??
-        (metrics !== undefined && metrics.turn === input.turn ? metrics.lastWritePath : undefined)
-      const pendingChange =
-        pendingCreatedChange ??
-        (pendingWritePath === undefined
-          ? undefined
-          : /^openspec\/changes\/([^/]+)\//u.exec(pendingWritePath)?.[1])
+      const pendingChanges = attributedChangeNames(workspace, sessionWrites, input.turn)
       const sessionKey = `${workspace}\0${input.session}`
       // Merge before writing: a restarted host's persisted changes must not be
       // replaced by the one change this turn happened to touch.
@@ -1381,8 +1380,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         ...storedInvolvement,
         ...(involvedChangesBySession.get(sessionKey) ?? []),
       ])
-      if (pendingChange !== undefined) {
-        involvedSet.add(pendingChange)
+      if (pendingChanges.length > 0) {
+        for (const change of pendingChanges) involvedSet.add(change)
         involvedChangesBySession.set(sessionKey, involvedSet)
         const writes = specWritesBySession.get(sessionKey) ?? {
           turn: input.turn,
@@ -1392,7 +1391,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           writes.turn = input.turn
           writes.changes.clear()
         }
-        writes.changes.add(pendingChange)
+        for (const change of pendingChanges) writes.changes.add(change)
         specWritesBySession.set(sessionKey, writes)
         await writeInvolvement(workspace, input.session, [...involvedSet])
       }

@@ -15,8 +15,9 @@ export declare function attributedSpecWrite(workspace: string, calls: readonly T
 /** Whether a directory is the workspace root or one of its descendants. */
 export declare function isWorkspaceDirectory(workspace: string, directory: string): boolean;
 /**
- * The change this turn made, from a successful write/edit of its artifacts or
- * the documented successful `openspec new change <name>` creation command. A
- * session that creates a change through the shell is involved too.
+ * Every change this turn made, from successful write/edit observations and the
+ * documented creation and shell-write commands. A turn may touch more than one.
  */
+export declare function attributedChangeNames(workspace: string, calls: readonly ToolCallObservation[], turn: number | undefined): string[];
+/** The latest change this turn made, for callers that need one. */
 export declare function attributedChangeName(workspace: string, calls: readonly ToolCallObservation[], turn: number | undefined): string | undefined;
