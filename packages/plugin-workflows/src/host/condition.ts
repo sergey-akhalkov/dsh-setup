@@ -190,6 +190,11 @@ export async function buildConditionContext(
   }
   // A condition may not read a filesystem path out of the workspace: an
   // absolute or traversing lane/path value would leak it into a predicate.
+  // shortcut: a POSIX path wrapped in Markdown emphasis (**/etc/x**) is
+  // indistinguishable from a legitimate glob (**/spec.md), so it is treated as
+  // a glob; upgrade if task prose becomes untrusted input instead of an
+  // owner-authored plan. Drive, traversal, UNC, and delimiter-adjacent absolute
+  // paths are always rejected.
   const startsPath = /^(?:[A-Za-z]:[\\/]|[\\/])/u
   // A drive path needs a separator or a non-space right after the colon, so
   // prose labels such as "release A: migration" stay readable.
