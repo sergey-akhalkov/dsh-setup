@@ -154,7 +154,7 @@ function shellDestinations(command, powershell) {
     if (writer !== null) {
         const writerName = writer[0].toLowerCase();
         const rest = atStart.slice(writer[0].length);
-        const tokens = rest.match(/\u0000\d+\u0000|\d*[<>]+|[^><\s]+/gu) ?? [];
+        const tokens = rest.match(/\d*[<>]+|[^><\s]+/gu) ?? [];
         const consumed = new Set();
         const namedTokens = LAST_DESTINATION.has(writerName)
             ? ['destination']
@@ -222,7 +222,7 @@ function shellDestinations(command, powershell) {
         }
     }
     // Every real output target counts; duplication and null devices do not.
-    for (const match of masked.matchAll(/>+\s*(\u0000\d+\u0000|[^><\s]+)/gu)) {
+    for (const match of masked.matchAll(/>+\s*([^><\s]+)/gu)) {
         const target = resolveMasked(match[1] ?? '', values);
         if (/^&\d+$/u.test(target) ||
             target === 'NUL' ||

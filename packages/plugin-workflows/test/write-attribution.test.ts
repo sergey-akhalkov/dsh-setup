@@ -761,6 +761,21 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('keeps adjacent quoted and unquoted fragments in one destination', () => {
+    for (const command of [
+      'echo changed >"openspec/changes/"auth/design.md',
+      'tee "openspec/changes/"auth/design.md',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'a', name: 'bash', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+  })
   it('consumes -Include/-Exclude and reads named destinations at token starts', () => {
     for (const command of [
       'Set-Content -Include *.md openspec/changes/auth/design.md x',
