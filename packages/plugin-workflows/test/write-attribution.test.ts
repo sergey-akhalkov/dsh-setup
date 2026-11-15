@@ -575,3 +575,40 @@ describe('pipeline attribution', () => {
     ).toEqual(['auth', 'billing'])
   })
 })
+
+describe('Windows path separators', () => {
+  it('attributes quoted and unquoted backslash destinations', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command: "Set-Content -Path 'openspec\\changes\\auth\\design.md' -Value 'x'",
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'pwsh',
+            arguments: {
+              command: 'Set-Content -Path openspec\\changes\\auth\\design.md -Value x',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
+})

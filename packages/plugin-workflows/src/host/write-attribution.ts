@@ -57,22 +57,57 @@ function maskQuoted(text: string): { masked: string; values: readonly string[] }
   while (index < text.length) {
     const char = text[index] ?? ''
     if (char === '\\' || char === '`') {
-      masked += text[index + 1] ?? ''
+      // Outside quotes keep the pair: a Windows separator must survive.
+      masked += char + (text[index + 1] ?? '')
       index += 2
       continue
     }
-    if (char === '"' || char === "'") {
-      const quote = char
+    if (char === "'") {
+      // PowerShell single quotes are literal; only '' escapes a quote.
       let content = ''
       index += 1
       while (index < text.length) {
         const inner = text[index] ?? ''
-        if (inner === '\\' || inner === '`') {
+        if (inner === "'" && text[index + 1] === "'") {
+          content += "'"
+          index += 2
+          continue
+        }
+        if (inner === "'") {
+          index += 1
+          break
+        }
+        content += inner
+        index += 1
+      }
+      masked += `\u0000${String(values.length)}\u0000`
+      values.push(content)
+      continue
+    }
+    if (char === '"') {
+      // A backtick escapes here; a backslash only escapes a few characters,
+      // so Windows path separators survive in a double-quoted destination.
+      let content = ''
+      index += 1
+      while (index < text.length) {
+        const inner = text[index] ?? ''
+        if (inner === '`') {
           content += text[index + 1] ?? ''
           index += 2
           continue
         }
-        if (inner === quote) {
+        if (inner === '\\') {
+          const next = text[index + 1] ?? ''
+          if (next === '"' || next === '\\' || next === '`' || next === '$') {
+            content += next
+            index += 2
+            continue
+          }
+          content += '\\'
+          index += 1
+          continue
+        }
+        if (inner === '"') {
           index += 1
           break
         }
