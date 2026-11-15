@@ -50,7 +50,18 @@ const CHANGE_CREATION =
  * example. Quoted spans are masked first, so `-Path` text inside a quoted
  * `-Value` is invisible while a quoted destination is still resolved.
  */
-function maskQuoted(text: string): { masked: string; values: readonly string[] } {
+/** Whether this character starts an escape in the active shell and quote. */
+function isEscape(char: string, quote: string | undefined, powershell: boolean): boolean {
+  if (quote === "'") return false
+  if (char === '`') return true
+  if (char !== '\\') return false
+  return quote !== '"' || !powershell
+}
+
+function maskQuoted(
+  text: string,
+  powershell: boolean,
+): { masked: string; values: readonly string[] } {
   const values: string[] = []
   let masked = ''
   let index = 0
@@ -96,7 +107,7 @@ function maskQuoted(text: string): { masked: string; values: readonly string[] }
           index += 2
           continue
         }
-        if (inner === '\\') {
+        if (inner === '\\' && !powershell) {
           const next = text[index + 1] ?? ''
           if (next === '"' || next === '\\' || next === '`' || next === '$') {
             content += next
@@ -129,8 +140,8 @@ function resolveMasked(token: string, values: readonly string[]): string {
   return match === null ? token : (values[Number(match[1])] ?? '')
 }
 
-function shellDestination(command: string): string | undefined {
-  const { masked, values } = maskQuoted(command)
+function shellDestination(command: string, powershell: boolean): string | undefined {
+  const { masked, values } = maskQuoted(command, powershell)
   const redirect = /(?:^|[\s;&|])>{1,2}\s*(\u0000\d+\u0000|\S+)/u.exec(masked)
   if (redirect !== null) return resolveMasked(redirect[1] ?? '', values)
   const write = /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(masked)
@@ -158,13 +169,13 @@ function shellDestination(command: string): string | undefined {
 }
 
 /** Split shell text on separators that are outside quotes. */
-function splitSegments(text: string): string[] {
+function splitSegments(text: string, powershell: boolean): string[] {
   const segments: string[] = []
   let current = ''
   let quote: string | undefined
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
-    if (quote !== "'" && (char === '\\' || char === '`')) {
+    if (isEscape(char, quote, powershell)) {
       current += char + (text[index + 1] ?? '')
       index += 1
       continue
@@ -204,12 +215,12 @@ function splitSegments(text: string): string[] {
 }
 
 /** Remove unquoted comments while keeping quoted text and its destinations. */
-function stripComments(text: string): string {
+function stripComments(text: string, powershell: boolean): string {
   let output = ''
   let quote: string | undefined
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
-    if (quote !== "'" && (char === '\\' || char === '`')) {
+    if (isEscape(char, quote, powershell)) {
       output += char + (text[index + 1] ?? '')
       index += 1
       continue
@@ -241,12 +252,12 @@ function stripComments(text: string): string {
   return output
 }
 /** Drop quotes and unquoted comments so only executed text is inspected. */
-function executedText(text: string): string {
+function executedText(text: string, powershell: boolean): string {
   let output = ''
   let quote: string | undefined
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
-    if (quote !== "'" && (char === '\\' || char === '`')) {
+    if (isEscape(char, quote, powershell)) {
       if (quote === undefined) output += char + (text[index + 1] ?? '')
       index += 1
       continue
@@ -296,6 +307,7 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
   const addChange = (name: string | undefined): void => {
     if (name !== undefined) changes.add(name)
   }
+  const powershell = call.name === 'pwsh'
   const rawPath = call.arguments.file_path ?? call.arguments.path
   if ((call.name === 'write' || call.name === 'edit') && typeof rawPath === 'string') {
     const rel = normalizedWorkspacePath(workspace, rawPath)
@@ -319,12 +331,12 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
   if (workdir !== undefined && !isWorkspaceDirectory(workspace, workdir)) {
     return [...changes]
   }
-  const executed = executedText(normalized).trim()
+  const executed = executedText(normalized, powershell).trim()
   if (executed === '') return [...changes]
   // One shell call may execute several writes; each segment counts, and a
   // creation command can follow a read or a comment on an earlier line.
-  for (const segment of splitSegments(stripComments(normalized))) {
-    const executedSegment = executedText(segment).trim()
+  for (const segment of splitSegments(stripComments(normalized, powershell), powershell)) {
+    const executedSegment = executedText(segment, powershell).trim()
     if (executedSegment === '') continue
     const creation = CHANGE_CREATION.exec(executedSegment)
     if (creation !== null) {
@@ -333,7 +345,7 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
     }
     if (!WRITE_COMMAND.test(executedSegment) && !REDIRECT.test(executedSegment)) continue
     // The destination is parsed from the original text so a quoted path is kept.
-    const raw = shellDestination(segment)
+    const raw = shellDestination(segment, powershell)
     if (raw === undefined) continue
     const candidate =
       isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)

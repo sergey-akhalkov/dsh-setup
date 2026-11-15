@@ -513,6 +513,16 @@ describe('quoted value text', () => {
     ).toBe('auth')
   })
 
+  it('treats a backslash before a double quote literally in PowerShell', () => {
+    const command = 'Set-Content -Value "ends with \\\\" -Path openspec/changes/auth/design.md'
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [{ callId: 'c', name: 'pwsh', arguments: { command }, ok: true }],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('treats a doubled backtick as a literal before the closing quote', () => {
     const command = 'Set-Content -Value "ends with ``" -Path openspec/changes/auth/design.md'
     expect(
