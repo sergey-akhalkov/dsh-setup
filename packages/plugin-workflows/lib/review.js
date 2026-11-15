@@ -4,7 +4,7 @@ import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'nod
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHANGE_NAME } from './command-parse.js';
-import { verifyEvidence } from './evidence.js';
+import { reviewDigest, verifyEvidence } from './evidence.js';
 import { isInside } from './fs-change.js';
 import { classifyFailure } from './review-queue.js';
 import { settleStep } from './runs.js';
@@ -438,16 +438,8 @@ function hashParts(parts) {
     }
     return hash.digest('hex');
 }
-/** The task-scope digest binds the frozen tree; whole scope binds the artifacts. */
-export function reviewDigest(input) {
-    return input.scope === 'task'
-        ? hashParts([
-            'task-review-snapshot-v2',
-            input.tree ?? '',
-            input.artifactDigest ?? input.specDigest,
-        ])
-        : input.specDigest;
-}
+/** The per-scope digest lives with the evidence verifier; kept importable here. */
+export { reviewDigest } from './evidence.js';
 /** Write one file atomically: temp beside the target, then rename. */
 export async function writeReviewFileAtomic(file, bytes) {
     await mkdir(dirname(file), { recursive: true });

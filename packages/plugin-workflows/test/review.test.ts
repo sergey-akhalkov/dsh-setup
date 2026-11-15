@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,8 +9,9 @@ import {
   validateDefinition,
   withSource,
 } from '../src/host/definitions.ts'
-import { verifyEvidence } from '../src/host/evidence.ts'
+import { currentSpecDigest, verifyEvidence } from '../src/host/evidence.ts'
 import type { SubagentRunner, SubagentRunResult } from '../src/host/executors.ts'
+import { defaultGit, worktreeDigest } from '../src/host/git.ts'
 import { portableRecordError } from '../src/host/projection.ts'
 import {
   localReviewRecordPath,
@@ -908,6 +910,136 @@ describe('review instruction failure', () => {
     ) as ReviewRecord
     expect(record.verdict).toBe('ERROR')
     expect(record.failureClass).toBe('config')
+  })
+})
+
+describe('integration review worktree binding', () => {
+  function integrationDefinition(): Definition {
+    return validateDefinition({
+      v: 1,
+      id: 'integration-review',
+      name: 'Integration review',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'active', dedupe: 'turn' },
+      settings: {
+        allowModelStart: true,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 1,
+        allowIntent: false,
+        gate: 'review',
+        gateIdentity: 'integration-review',
+        legacy: { plugin: 'delegation-rules', signal: 'integration-review' },
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Review the worktree',
+          executor: 'review',
+          review: {
+            target: 'codex',
+            instruction: 'review-integration',
+            scope: 'whole',
+            phase: 'integration',
+          },
+          evidence: {
+            kind: 'record',
+            rule: 'integration-review',
+            change: '{name}',
+            scope: 'whole',
+            phase: 'integration',
+            verdicts: ['PASS', 'ERROR'],
+            digest: 'current-worktree',
+            path: '.dsh/workflows/records/integration-review/{name}/integration.json',
+          },
+          next: 'end',
+          blockTurnClose: true,
+          nonCritical: true,
+        },
+      ],
+    })
+  }
+
+  function integrationRun(root: string) {
+    const definition = integrationDefinition()
+    return createRun({
+      definition: definition.id,
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace: root,
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 1_000,
+    })
+  }
+
+  /** Run the integration review step as if the host prepared it at one tree. */
+  async function invokeIntegration(root: string, specDigest: string, tree: string) {
+    const definition = integrationDefinition()
+    const step = definition.steps[0]
+    if (step === undefined || step.review === undefined) throw new Error('test step missing')
+    const digest = reviewDigest({ scope: 'whole', specDigest, tree })
+    return await runReviewStep({
+      run: integrationRun(root),
+      definition,
+      step,
+      reviewer: reviewer(),
+      runner: runnerFor(fenced({ digest, verdict: 'PASS', findings: [] })),
+      context: { workspace: root, values: { name: 'auth' }, runGit: defaultGit },
+      change: 'auth',
+      prepared: { specDigest, tree },
+      timeoutMs: 5_000,
+      session: 'session-1',
+      now: 2_000,
+      renderPrompt: () => 'test prompt',
+    })
+  }
+
+  async function gitWorkspace(): Promise<string> {
+    const root = await workspace()
+    roots.push(root)
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'export const engine = 1\n', 'utf8')
+    await writeFile(join(root, '.gitignore'), '.dsh/\n', 'utf8')
+    const changeDir = join(root, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8')
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review-test')
+    git('config', 'user.email', 'review-test@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    return root
+  }
+
+  it('invalidates a previous integration PASS after a code-only change', async () => {
+    const root = await gitWorkspace()
+    const specDigest = await currentSpecDigest(root, 'auth')
+    if (specDigest === undefined) throw new Error('test change digest missing')
+    const treeBefore = await worktreeDigest(root, defaultGit)
+    if (treeBefore === undefined) throw new Error('test worktree digest missing')
+    const first = await invokeIntegration(root, specDigest, treeBefore)
+    expect(first.run.steps[0]?.state).toBe('done')
+    const firstDigest = first.record?.digest
+    expect(firstDigest).toBe(reviewDigest({ scope: 'whole', specDigest, tree: treeBefore }))
+    expect(first.record?.worktreeDigest).toBeDefined()
+
+    // A code-only edit leaves the change artifacts untouched and moves the tree.
+    await writeFile(join(root, 'src', 'engine.ts'), 'export const engine = 2\n', 'utf8')
+    expect(await currentSpecDigest(root, 'auth')).toBe(specDigest)
+    const treeAfter = await worktreeDigest(root, defaultGit)
+    if (treeAfter === undefined) throw new Error('test worktree digest missing')
+    expect(treeAfter).not.toBe(treeBefore)
+    const freshDigest = reviewDigest({ scope: 'whole', specDigest, tree: treeAfter })
+    expect(freshDigest).not.toBe(firstDigest)
+
+    // The old PASS is stale for the moved worktree and never completes the run.
+    const stale = await invokeIntegration(root, specDigest, treeBefore)
+    expect(stale.run.steps[0]?.state).toBe('blocked')
+    expect(stale.run.steps[0]?.reason).toContain('stale')
   })
 })
 

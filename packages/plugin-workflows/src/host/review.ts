@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CHANGE_NAME } from './command-parse.js'
 import type { Definition, Step } from './definitions.js'
-import { type EvidenceContext, verifyEvidence } from './evidence.js'
+import { type EvidenceContext, reviewDigest, verifyEvidence } from './evidence.js'
 import type { SubagentRunner, SubagentRunResult } from './executors.js'
 import { isInside } from './fs-change.js'
 import { classifyFailure, type FailureClass } from './review-queue.js'
@@ -580,22 +580,8 @@ function hashParts(parts: readonly string[]): string {
   return hash.digest('hex')
 }
 
-/** The task-scope digest binds the frozen tree; whole scope binds the artifacts. */
-export function reviewDigest(input: {
-  readonly scope: 'whole' | 'task'
-  readonly specDigest: string
-  readonly tree?: string
-  /** The frozen change-artifact digest a task review also binds to. */
-  readonly artifactDigest?: string
-}): string {
-  return input.scope === 'task'
-    ? hashParts([
-        'task-review-snapshot-v2',
-        input.tree ?? '',
-        input.artifactDigest ?? input.specDigest,
-      ])
-    : input.specDigest
-}
+/** The per-scope digest lives with the evidence verifier; kept importable here. */
+export { reviewDigest } from './evidence.js'
 
 /** Write one file atomically: temp beside the target, then rename. */
 export async function writeReviewFileAtomic(file: string, bytes: string): Promise<void> {

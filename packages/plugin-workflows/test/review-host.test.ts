@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { validateDefinition } from '../src/host/definitions.ts'
+import { SOFT_SETTLEMENT } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
 import { definitionsRegistry } from '../src/host/registry.ts'
@@ -94,6 +95,115 @@ async function gitWorkspace(): Promise<string> {
   git('add', '-A')
   git('commit', '-m', 'init')
   return workspace
+}
+
+interface DelayedReviewHost {
+  readonly ctx: Record<string, unknown>
+  readonly agent: Record<string, unknown>
+  /** The digest echoed by each started reviewer's prompt. */
+  readonly digests: string[]
+  /** Release one pending reviewer activation. */
+  readonly releases: Array<() => void>
+  /** Resolves when a released activation is disposed, i.e. teardown is confirmed. */
+  readonly disposed: Promise<void>
+  emit(name: string, ...args: unknown[]): Promise<unknown>
+}
+
+async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+  const started = Date.now()
+  while (!(await check())) {
+    if (Date.now() - started > timeoutMs) throw new Error('the host did not settle in time')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+/** A fake host whose reviewer activations stay pending until each is released. */
+function delayedReviewHost(workspace: string, verdict: 'PASS' | 'FINDINGS'): DelayedReviewHost {
+  const listeners = new Map<string, Listener[]>()
+  const digests: string[] = []
+  const releases: Array<() => void> = []
+  let confirmDispose: (() => void) | undefined
+  const disposed = new Promise<void>((resolve) => {
+    confirmDispose = resolve
+  })
+  const agent = {
+    id: 'session-1',
+    session: { id: 'session-1', header: { origin: 'root' } },
+    ctx: { on: () => () => {} },
+    steer: () => {},
+    inject: () => {},
+  }
+  const ctx = {
+    get(name: string): unknown {
+      if (name === 'agents') return { get: () => agent, list: () => [agent] }
+      if (name === 'workingDirectory') return { get: () => workspace }
+      if (name === 'fs') {
+        return {
+          resolve: async (path: string) => ({ targetKey: path }),
+          watch: async () => async () => {},
+        }
+      }
+      if (name === 'connection') {
+        return { fetch: { register: () => () => {} } }
+      }
+      if (name === 'subagents') {
+        return {
+          getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+          startActivation: async (spec: { prompt: { text: string }[] }) => {
+            const instruction = spec.prompt.map((block) => block.text).join('\n')
+            const digest = /- Digest: ([a-f0-9]{64})/u.exec(instruction)?.[1] ?? ''
+            digests.push(digest)
+            const pending = new Promise<void>((resolve) => {
+              releases.push(resolve)
+            })
+            const findings =
+              verdict === 'FINDINGS'
+                ? [
+                    {
+                      severity: 'P0',
+                      class: 'state-persistence',
+                      title: 'late verdict',
+                      evidence: 'the review ran after the settlement',
+                      fix: 'fence the queued reviewer',
+                    },
+                  ]
+                : []
+            return {
+              childId: `child-${digests.length}`,
+              result: pending.then(() => ({
+                output: [
+                  {
+                    type: 'text',
+                    text: `\`\`\`json\n${JSON.stringify({ digest, verdict, findings })}\n\`\`\``,
+                  },
+                ],
+                stopReason: 'completed',
+              })),
+              dispose: async () => {
+                confirmDispose?.()
+              },
+            }
+          },
+        }
+      }
+      if (name === 'systemPrompt') return { context: () => () => {} }
+      return undefined
+    },
+    provide: () => {},
+    on(name: string, listener: Listener): () => void {
+      const list = listeners.get(name) ?? []
+      list.push(listener)
+      listeners.set(name, list)
+      return () => {}
+    },
+    effect: () => () => {},
+  }
+  const emit = async (name: string, ...args: unknown[]): Promise<unknown> => {
+    let result: unknown
+    for (const listener of listeners.get(name) ?? []) result = await listener(...args)
+    return result
+  }
+  return { ctx, agent, digests, releases, disposed, emit }
 }
 
 describe('native review host admission', () => {
@@ -236,74 +346,10 @@ describe('native review host admission', () => {
       source: 'workflows-test',
       definitions,
     })
-    const listeners = new Map<string, Listener[]>()
-    const activationCalls: string[] = []
-    const releases: (() => void)[] = []
-    const agent = {
-      id: 'session-1',
-      session: { id: 'session-1', header: { origin: 'root' } },
-      ctx: { on: () => () => {} },
-      steer: () => {},
-      inject: () => {},
-    }
-    const ctx = {
-      get(name: string): unknown {
-        if (name === 'agents') return { get: () => agent, list: () => [agent] }
-        if (name === 'workingDirectory') return { get: () => workspace }
-        if (name === 'fs') {
-          return {
-            resolve: async (path: string) => ({ targetKey: path }),
-            watch: async () => async () => {},
-          }
-        }
-        if (name === 'connection') {
-          return { fetch: { register: () => () => {} } }
-        }
-        if (name === 'subagents') {
-          return {
-            getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
-            startActivation: async (spec: { prompt: { text: string }[] }) => {
-              const instruction = spec.prompt.map((block) => block.text).join('\n')
-              const digest = /- Digest: ([a-f0-9]{64})/u.exec(instruction)?.[1] ?? ''
-              activationCalls.push(digest)
-              const pending = new Promise<void>((resolve) => {
-                releases.push(resolve)
-              })
-              return {
-                childId: `child-${activationCalls.length}`,
-                result: pending.then(() => ({
-                  output: [
-                    {
-                      type: 'text',
-                      text: `\`\`\`json\n${JSON.stringify({ digest, verdict: 'PASS', findings: [] })}\n\`\`\``,
-                    },
-                  ],
-                  stopReason: 'completed',
-                })),
-                dispose: async () => undefined,
-              }
-            },
-          }
-        }
-        if (name === 'systemPrompt') return { context: () => () => {} }
-        return undefined
-      },
-      provide: () => {},
-      on(name: string, listener: Listener): () => void {
-        const list = listeners.get(name) ?? []
-        list.push(listener)
-        listeners.set(name, list)
-        return () => {}
-      },
-      effect: () => () => {},
-    }
-    const emit = async (name: string, ...args: unknown[]): Promise<unknown> => {
-      let result: unknown
-      for (const listener of listeners.get(name) ?? []) result = await listener(...args)
-      return result
-    }
+    const host = delayedReviewHost(workspace, 'PASS')
+    const { emit, agent } = host
     try {
-      apply(ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
       const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
       for (const definition of definitions) {
         const run = createRun({
@@ -320,11 +366,9 @@ describe('native review host admission', () => {
       await emit('agent/turn-stopping', { agent, turn: 1 })
       // Both admissions must start before either result arrives; with the host
       // phase omitted the second dedupes and only one activation starts.
-      for (let attempt = 0; attempt < 250 && releases.length < 2; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      }
-      expect(releases).toHaveLength(2)
-      for (const release of releases) release()
+      await waitFor(() => host.releases.length >= 2)
+      expect(host.releases).toHaveLength(2)
+      for (const release of host.releases) release()
       const records = await Promise.all(
         definitions.map(async (definition) => {
           const path = join(
@@ -347,4 +391,107 @@ describe('native review host admission', () => {
       unregister()
     }
   })
+
+  it.each(['FINDINGS', 'PASS'] as const)(
+    'fences a delayed %s reviewer after the completed-soft settlement',
+    async (verdict) => {
+      process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+      const workspace = await gitWorkspace()
+      const definition = validateDefinition({
+        v: 1,
+        id: 'native-integration-review',
+        name: 'Native integration review',
+        version: 1,
+        trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+        settings: {
+          allowModelStart: true,
+          risk: 'low',
+          gateOwnership: 'own',
+          maxBlocks: 1,
+          allowIntent: false,
+          gate: 'review',
+          gateIdentity: 'native-integration-review',
+        },
+        steps: [
+          {
+            id: 'review',
+            title: 'Review the worktree',
+            executor: 'review',
+            review: {
+              target: 'codex',
+              instruction: 'review-integration',
+              scope: 'whole',
+              phase: 'integration',
+            },
+            evidence: {
+              kind: 'record',
+              rule: 'native-integration-review',
+              change: '{name}',
+              scope: 'whole',
+              phase: 'integration',
+              verdicts: ['PASS', 'ERROR'],
+              digest: 'current-worktree',
+              path: '.dsh/workflows/records/native-integration-review/{name}/integration.json',
+            },
+            next: 'end',
+            blockTurnClose: true,
+            nonCritical: true,
+          },
+        ],
+      })
+      const unregister = definitionsRegistry.register({
+        source: 'workflows-test',
+        definitions: [definition],
+      })
+      const host = delayedReviewHost(workspace, verdict)
+      try {
+        apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+        const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+        const run = createRun({
+          definition: definition.id,
+          trigger: 'turn.stopping',
+          session: 'session-1',
+          workspace,
+          context: { name: 'auth' },
+          steps: ['review'],
+          now: 1_000,
+        })
+        await writeRun(workspace, run, auth)
+        // The first close refuses once and starts the delayed reviewer.
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+        await waitFor(() => host.digests.length === 1)
+        // The second close exhausts maxBlocks: the optional step settles
+        // completed-soft with one violation and no open required step.
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+        const settled = await readAuthenticatedRun(workspace, run.id, auth)
+        expect(settled?.status).toBe('completed')
+        expect(settled?.reason).toBe(SOFT_SETTLEMENT)
+        expect(settled?.steps[0]?.state).toBe('cancelled')
+        expect(settled?.violations).toHaveLength(1)
+        expect(
+          settled?.steps.some((step) => step.state === 'open' || step.state === 'blocked'),
+        ).toBe(false)
+        // The late verdict is fenced: it publishes no record and never restores
+        // the settled run or its blocking step.
+        host.releases[0]?.()
+        await host.disposed
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        const after = await readAuthenticatedRun(workspace, run.id, auth)
+        expect(after).toEqual(settled)
+        expect(after?.violations).toHaveLength(1)
+        expect(after?.steps[0]?.state).toBe('cancelled')
+        expect(
+          await readFile(
+            join(
+              workspace,
+              '.dsh/workflows/records/native-integration-review/auth/integration.json',
+            ),
+            'utf8',
+          ).catch(() => undefined),
+        ).toBeUndefined()
+      } finally {
+        unregister()
+      }
+    },
+  )
 })

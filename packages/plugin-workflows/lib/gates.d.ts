@@ -29,6 +29,14 @@ export type TurnCloseOutcome = {
  * exhausted: the run closes without its evidence and never counts as a pass.
  */
 export declare const SOFT_SETTLEMENT = "completed-soft";
+/** Whether a run was released by the soft settlement: terminal without a pass. */
+export declare function isSoftSettled(run: WorkflowRun): boolean;
+/**
+ * Whether a stored run may be replaced by an incoming state. A completed-soft
+ * run is terminal without its review: a late reviewer publication must never
+ * restore its open step or drop the recorded settlement violation.
+ */
+export declare function runReplaceable(current: WorkflowRun, incoming: WorkflowRun): boolean;
 export interface TurnCloseInput {
     readonly run: WorkflowRun;
     readonly definition: Definition;

@@ -327,7 +327,7 @@ describe('workflow definition schema', () => {
       digest: ['a'.repeat(64)],
     }
     expect(() => validateDefinition(arrayDigest)).toThrow(
-      /definition "auth-draft" field "steps\[0\]\.evidence\.digest" must be "current" or a 64-hex digest string/u,
+      /definition "auth-draft" field "steps\[0\]\.evidence\.digest" must be "current", "current-worktree", or a 64-hex digest string/u,
     )
   })
 

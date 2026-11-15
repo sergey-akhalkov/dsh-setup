@@ -14,6 +14,7 @@ import type {
 } from './definitions.js'
 import { globMatches } from './evaluate.js'
 import { isInside } from './fs-change.js'
+import { type GitRunner, worktreeDigest } from './git.js'
 import { reviewerBinding, taskReviewCoverage } from './parity.js'
 import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js'
 import type { RunEvidence } from './runs.js'
@@ -123,6 +124,8 @@ export interface EvidenceContext {
    * reads the workflows store; a rolled-back deferred step reads the legacy one.
    */
   readonly reviewOwner?: 'workflows' | 'legacy'
+  /** The host git runner a worktree-bound record digest is recomputed with. */
+  readonly runGit?: GitRunner
 }
 
 /** A validated checkpoint record path a host-computed context value may carry. */
@@ -539,6 +542,30 @@ export async function currentSpecDigest(
   }
 }
 
+/**
+ * The per-scope review digest. A task review binds the frozen snapshot; a whole
+ * review binds the worktree when its evidence declares the worktree digest, so
+ * a code-only edit invalidates a previous whole-worktree PASS.
+ */
+export function reviewDigest(input: {
+  readonly scope: 'whole' | 'task'
+  readonly specDigest: string
+  readonly tree?: string
+  /** The frozen change-artifact digest a task review also binds to. */
+  readonly artifactDigest?: string
+}): string {
+  if (input.scope === 'task') {
+    return hashParts([
+      'task-review-snapshot-v2',
+      input.tree ?? '',
+      input.artifactDigest ?? input.specDigest,
+    ])
+  }
+  return input.tree === undefined
+    ? input.specDigest
+    : hashParts(['whole-review-worktree-v1', input.specDigest, input.tree])
+}
+
 function mismatch(detail: string, path?: string, item?: string): EvidenceCheck {
   return failure('record-mismatch', detail, path, item)
 }
@@ -718,14 +745,36 @@ async function recordCheck(
       )
     }
   }
-  if (evidence.digest === 'current') {
+  if (evidence.digest === 'current' || evidence.digest === 'current-worktree') {
     if (change === undefined) {
       return mismatch('a current digest needs a change name', path.text, item)
     }
-    const current = await currentSpecDigest(context.workspace, change.text)
-    if (current === undefined || record.digest !== current) {
+    const worktreeBound = evidence.digest === 'current-worktree'
+    if (worktreeBound && context.runGit === undefined) {
       return mismatch(
-        'the whole-spec record is stale for the current change artifacts',
+        'a current worktree digest needs the host git runner; the record cannot be verified here',
+        path.text,
+        item,
+      )
+    }
+    const current = await currentSpecDigest(context.workspace, change.text)
+    const tree =
+      worktreeBound && context.runGit !== undefined
+        ? await worktreeDigest(context.workspace, context.runGit).catch(() => undefined)
+        : undefined
+    const currentDigest =
+      current === undefined || (worktreeBound && tree === undefined)
+        ? undefined
+        : reviewDigest({
+            scope: 'whole',
+            specDigest: current,
+            ...(tree === undefined ? {} : { tree }),
+          })
+    if (currentDigest === undefined || record.digest !== currentDigest) {
+      return mismatch(
+        worktreeBound
+          ? 'the whole-worktree record is stale for the current worktree or change artifacts'
+          : 'the whole-spec record is stale for the current change artifacts',
         path.text,
         item,
       )

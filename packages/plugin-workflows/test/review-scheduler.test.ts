@@ -283,6 +283,104 @@ describe('review scheduler', () => {
     release?.()
     scheduler.dispose()
   })
+
+  it('cancels a queued review when its run is fenced before it starts', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const def = definition()
+    const persisted: WorkflowRun[] = []
+    let releaseActive: (() => void) | undefined
+    const activeGate = new Promise<void>((resolve) => {
+      releaseActive = resolve
+    })
+    let activeRunCalls = 0
+    const fencedRunCalls: string[] = []
+    const scheduler = new ReviewScheduler(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 1,
+        baseDelayMs: 0,
+        maxDelayMs: 0,
+        waitTimeoutMs: 10_000,
+      },
+      {
+        persistRun: async (_workspace, run) => {
+          persisted.push(run)
+          return run
+        },
+        discardSnapshot: async () => undefined,
+      },
+    )
+    const activeRunner: SubagentRunner = {
+      run: async () => {
+        activeRunCalls += 1
+        await activeGate
+        return { childId: 'child-1', completed: true, text: fencedPASS(digest) }
+      },
+    }
+    const activeRun = runFor(def)
+    const request = {
+      run: activeRun,
+      definition: def,
+      step: def.steps[0] as Definition['steps'][number],
+      reviewer: reviewers(),
+      runner: activeRunner,
+      context: { workspace: root, values: { name: 'auth' } },
+      change: 'auth',
+      prepared: { specDigest: digest },
+      timeoutMs: 5_000,
+      session: 'session-1',
+    }
+    const active = await scheduler.enqueue({
+      workspace: root,
+      run: activeRun,
+      request,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    expect(active.kind).toBe('accepted')
+    const fencedRun = createRun({
+      definition: def.id,
+      trigger: 'turn.stopping',
+      session: 'session-2',
+      workspace: '/workspace',
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 2_000,
+    })
+    const fencedDigest = 'b'.repeat(64)
+    const queued = await scheduler.enqueue({
+      workspace: root,
+      run: fencedRun,
+      request: {
+        ...request,
+        run: fencedRun,
+        runner: {
+          run: async () => {
+            fencedRunCalls.push('started')
+            return { childId: 'child-2', completed: true, text: fencedPASS(fencedDigest) }
+          },
+        },
+        prepared: { specDigest: fencedDigest },
+        session: 'session-2',
+      },
+      rule: 'spec-review',
+      change: 'auth',
+      digest: fencedDigest,
+    })
+    expect(queued).toEqual({ kind: 'accepted', phase: 'queued' })
+    scheduler.fence(fencedRun.id)
+    await waitFor(async () => scheduler.liveRunById(fencedRun.id) === undefined)
+    expect(fencedRunCalls).toEqual([])
+    expect(persisted.some((run) => run.id === fencedRun.id)).toBe(false)
+    releaseActive?.()
+    await waitFor(async () => persisted.length === 1)
+    expect(persisted[0]?.id).toBe(activeRun.id)
+    expect(activeRunCalls).toBe(1)
+    scheduler.dispose()
+  })
 })
 
 it('retries a transient review start before settling', async () => {

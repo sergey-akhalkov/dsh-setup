@@ -167,8 +167,11 @@ export interface RecordEvidence {
   readonly phase?: string
   readonly scope?: string
   readonly task?: string
-  /** `current` compares the record's digest with the change's current digest. */
-  readonly digest?: 'current' | string
+  /**
+   * `current` compares the record's digest with the change's current digest;
+   * `current-worktree` also binds the current worktree digest.
+   */
+  readonly digest?: 'current' | 'current-worktree' | string
   /** `review` (default) or the goal-continuity checkpoint record. */
   readonly source?: 'review' | 'checkpoint'
 }
@@ -691,9 +694,15 @@ function evidence(raw: unknown, definition: string, field: string): Evidence {
       if (raw.digest !== undefined) {
         if (
           typeof raw.digest !== 'string' ||
-          (raw.digest !== 'current' && !/^[a-f0-9]{64}$/u.test(raw.digest))
+          (raw.digest !== 'current' &&
+            raw.digest !== 'current-worktree' &&
+            !/^[a-f0-9]{64}$/u.test(raw.digest))
         ) {
-          fail(definition, `${field}.digest`, 'must be "current" or a 64-hex digest string')
+          fail(
+            definition,
+            `${field}.digest`,
+            'must be "current", "current-worktree", or a 64-hex digest string',
+          )
         }
         return { ...record, digest: raw.digest }
       }
@@ -1270,11 +1279,15 @@ export function validateDefinition(raw: unknown, source = 'definition'): Definit
     if (scope !== undefined && reviewEvidence.scope !== scope) {
       fail(definition, `${reviewField}.scope`, `must match the review scope "${scope}"`)
     }
-    if (scope === 'whole' && reviewEvidence.digest !== 'current') {
+    if (
+      scope === 'whole' &&
+      reviewEvidence.digest !== 'current' &&
+      reviewEvidence.digest !== 'current-worktree'
+    ) {
       fail(
         definition,
         `${reviewField}.digest`,
-        'must be "current" so a whole-spec verdict is bound to the current artifacts',
+        'must be "current" or "current-worktree" so a whole-scope verdict is bound to the current inputs',
       )
     }
     // The contract is bound to the run's own change and task: a literal id

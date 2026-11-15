@@ -188,6 +188,21 @@ export class ReviewScheduler {
   private readonly liveRuns = new Map<string, WorkflowRun>()
   private readonly liveKeys = new Map<string, string>()
   private readonly liveByRun = new Map<string, WorkflowRun>()
+  /** Runs fenced by a completed-soft settlement; their late verdict is discarded. */
+  private readonly fenced = new Set<string>()
+
+  /**
+   * Fence a run that settled without its review (completed-soft): a queued
+   * attempt is cancelled before it starts, and a late verdict is discarded
+   * instead of publishing over the terminal run.
+   */
+  fence(runId: string): void {
+    if (this.disposed) return
+    this.fenced.add(runId)
+    const entry = this.admitted.get(runId)
+    if (entry === undefined || entry.started) return
+    void this.queue.cancel(entry.file.id).catch(() => undefined)
+  }
 
   /** The live review of this workflow run, regardless of current input changes. */
   liveRunById(runId: string): WorkflowRun | undefined {
@@ -257,6 +272,7 @@ export class ReviewScheduler {
         })
       },
       settled: (entry, state, info) => {
+        this.fenced.delete(entry.run.id)
         const settled = this.lastSettled.get(entry.run.id)
         // A quarantined run keeps its slot, key, live dedupe entry, and
         // snapshot until teardown confirms; the quarantine callback releases
@@ -381,6 +397,13 @@ export class ReviewScheduler {
     // A start failure, cancellation, or re-preparation collision already
     // settled this entry; its attempt must not publish a second verdict.
     if (!this.queue.owns(entry.file.id)) return
+    if (this.fenced.has(entry.run.id)) {
+      // The run settled completed-soft without its review: the late verdict is
+      // discarded, never published over the terminal state or retried.
+      if (await this.teardownConfirmed(entry)) await this.queue.complete(entry, 'discarded')
+      else this.quarantine(entry, 'discarded')
+      return
+    }
     const result = outcome.result
     if (
       result.kind === 'failure' &&

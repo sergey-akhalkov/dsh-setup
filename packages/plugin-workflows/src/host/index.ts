@@ -54,7 +54,13 @@ import {
   type ToolRunner,
 } from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
-import { authorizationWriteDecision, evaluateIntakeGate, evaluateTurnClose } from './gates.js'
+import {
+  authorizationWriteDecision,
+  evaluateIntakeGate,
+  evaluateTurnClose,
+  isSoftSettled,
+  runReplaceable,
+} from './gates.js'
 import { defaultGit, worktreeDigest } from './git.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
@@ -2558,6 +2564,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (replacement !== current) await writeCommit(workspace, replacement, auth)
         return replacement
       }
+      // A completed-soft run is terminal without its review: a late reviewer
+      // publication must never restore its open step or drop the violation.
+      if (!runReplaceable(current, run)) return current
       // A resume replaced this snapshot's lifecycle; its stale advance must not
       // touch the resumed state.
       if (generation !== undefined && generation !== runGeneration(run.id)) return current
@@ -2714,6 +2723,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         toolCalls,
         shellResults,
         checkCommands: verifySettings.commands,
+        runGit: defaultGit,
         ...(lastCodeWriteAt(toolCalls, workspace) === undefined &&
         writeMetrics?.lastWriteAt === undefined
           ? {}
@@ -2733,6 +2743,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       reviewStep: async ({ run: reviewRun, definition: reviewDefinition, step, context }) => {
         const spec = step.review
         if (spec === undefined) return undefined
+        // A review whose evidence declares the worktree digest binds its verdict
+        // to the current worktree as well as the change artifacts.
+        const bindsWorktree =
+          step.evidence?.kind === 'record' && step.evidence.digest === 'current-worktree'
         const resolved = resolveReviewer(reviewers, spec.target)
         const reviewRunner = hostSubagentRunner(agent)
         const change = reviewRun.context.name
@@ -2753,7 +2767,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             : undefined
         const failurePrepared = async (): Promise<ReviewRunInput['prepared']> => {
           const liveTree =
-            spec.scope === 'task'
+            spec.scope === 'task' || bindsWorktree
               ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
               : undefined
           return {
@@ -2802,21 +2816,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         let startEpoch = mutationEpochs.get(workspace) ?? 0
         const reviewRule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id
-        // The pre-snapshot admission identity names the task worktree content,
-        // so two different task snapshots are not conflated before preparation.
-        const taskLiveTree =
-          spec.scope === 'task'
+        // The pre-snapshot admission identity names the reviewed worktree
+        // content, so two different snapshots are not conflated beforehand.
+        const admissionTree =
+          spec.scope === 'task' || bindsWorktree
             ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
             : undefined
         const liveDigest =
-          taskLiveTree === undefined
+          admissionTree === undefined
             ? reviewDigest({ scope: spec.scope, specDigest })
-            : reviewDigest({ scope: 'task', specDigest, tree: taskLiveTree })
+            : reviewDigest({ scope: spec.scope, specDigest, tree: admissionTree })
         if (reviewQueue.enabled) {
           // The same workflow run must keep its one admission even when live
           // inputs changed; a new digest does not license a second snapshot.
-          const sameRun = reviewScheduler?.liveRunById(reviewRun.id)
-          if (sameRun !== undefined) return sameRun
+          // The step stays open and the background settlement writes the record.
+          if (reviewScheduler?.liveRunById(reviewRun.id) !== undefined) return undefined
           const live = reviewScheduler?.liveRun({
             workspace,
             rule: reviewRule,
@@ -2873,15 +2887,22 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const taskScope =
             spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
           if (!taskScope) {
-            const tree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+            const tree = bindsWorktree
+              ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+              : undefined
+            const digest = reviewDigest({
+              scope: spec.scope,
+              specDigest,
+              ...(tree === undefined ? {} : { tree }),
+            })
             return {
               prepared: {
                 specDigest,
                 ...(tree === undefined ? {} : { tree }),
                 liveGuard: guardFor(signature, tree),
               },
-              digest: reviewDigest({ scope: spec.scope, specDigest }),
-              liveDigest: reviewDigest({ scope: spec.scope, specDigest }),
+              digest,
+              liveDigest: digest,
             }
           }
           // The snapshot freezes the reviewed tree; when it cannot be built,
@@ -4009,6 +4030,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             onError: (error) => publishListenerError(workspace, error),
           })
           if (outcome.run !== current) {
+            // A completed-soft settlement is final: fence its queued or late
+            // reviewer before persisting so no verdict can publish over it.
+            if (isSoftSettled(outcome.run)) reviewScheduler.fence(run.id)
             await persistRun(
               workspace,
               outcome.run,
@@ -4145,6 +4169,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           toolCalls: calls,
           shellResults: sessionShellResults.get(sessionId) ?? [],
           checkCommands: verifySettings.commands,
+          runGit: defaultGit,
           ...(lastWrite === undefined ? {} : { lastWriteAt: lastWrite }),
           ...(metrics?.lastWritePath === undefined ? {} : { lastWritePath: metrics.lastWritePath }),
           ...(metrics?.lastCheckAt === undefined ? {} : { lastCheckAt: metrics.lastCheckAt }),

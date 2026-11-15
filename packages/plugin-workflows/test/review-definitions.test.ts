@@ -12,7 +12,13 @@ import {
   shippedDefinitionsDirectory,
   validateDefinition,
 } from '../src/host/definitions.ts'
-import { evaluateArchiveGate, evaluateTurnClose, SOFT_SETTLEMENT } from '../src/host/gates.ts'
+import {
+  evaluateArchiveGate,
+  evaluateTurnClose,
+  isSoftSettled,
+  runReplaceable,
+  SOFT_SETTLEMENT,
+} from '../src/host/gates.ts'
 import { createRun, type WorkflowRun } from '../src/host/runs.ts'
 
 /**
@@ -214,7 +220,7 @@ describe('shipped review definitions', () => {
       phase: 'integration',
       scope: 'whole',
       verdicts: ['PASS', 'ERROR'],
-      digest: 'current',
+      digest: 'current-worktree',
       path: '.dsh/workflows/records/integration-review/{name}/integration.json',
     })
     expect(step.blockTurnClose).toBe(true)
@@ -256,10 +262,22 @@ describe('integration soft settlement', () => {
     expect(step?.state).toBe('cancelled')
     expect(step?.reason).toContain(SOFT_SETTLEMENT)
     expect(step?.evidence).toBeUndefined()
-    expect(settled.steps.every((entry) => entry.state !== 'open')).toBe(true)
+    expect(
+      settled.steps.every((entry) => entry.state !== 'open' && entry.state !== 'blocked'),
+    ).toBe(true)
     expect(settled.violations).toHaveLength(1)
     expect(settled.violations[0]?.reason).toContain('VIOLATION')
     expect(settled.violations[0]?.reason).toContain(SOFT_SETTLEMENT)
+
+    // The settlement is terminal: a late reviewer's snapshot (the original
+    // running state with its open step and no violation) must never replace it.
+    expect(isSoftSettled(settled)).toBe(true)
+    const late = integrationRun()
+    expect(late.status).toBe('running')
+    expect(late.steps[0]?.state).toBe('open')
+    expect(late.violations).toHaveLength(0)
+    expect(runReplaceable(settled, late)).toBe(false)
+    expect(runReplaceable(settled, settled)).toBe(true)
 
     // The exhausted soft run is closed without an approval and does not block
     // an otherwise authorized archive.

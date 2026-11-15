@@ -1,4 +1,5 @@
 import type { Evidence } from './definitions.js';
+import { type GitRunner } from './git.js';
 import type { RunEvidence } from './runs.js';
 /**
  * The evidence verifier. It is a pure-ish function over the workspace and the
@@ -87,6 +88,8 @@ export interface EvidenceContext {
      * reads the workflows store; a rolled-back deferred step reads the legacy one.
      */
     readonly reviewOwner?: 'workflows' | 'legacy';
+    /** The host git runner a worktree-bound record digest is recomputed with. */
+    readonly runGit?: GitRunner;
 }
 /** Interpolate every placeholder in a free-form string with a validated value. */
 export declare function resolveEvidenceText(value: string, context: EvidenceContext, item?: string): {
@@ -119,6 +122,18 @@ export declare function expandGlob(root: string, pattern: string): Promise<GlobE
 export declare function specDigest(changeDir: string): Promise<string>;
 /** The current digest of one change, or undefined when it does not exist. */
 export declare function currentSpecDigest(workspace: string, change: string): Promise<string | undefined>;
+/**
+ * The per-scope review digest. A task review binds the frozen snapshot; a whole
+ * review binds the worktree when its evidence declares the worktree digest, so
+ * a code-only edit invalidates a previous whole-worktree PASS.
+ */
+export declare function reviewDigest(input: {
+    readonly scope: 'whole' | 'task';
+    readonly specDigest: string;
+    readonly tree?: string;
+    /** The frozen change-artifact digest a task review also binds to. */
+    readonly artifactDigest?: string;
+}): string;
 /**
  * Resolve the record path its step's ownership selects. The new shipped
  * definitions name the workflows store; under a rolled-back switch the same

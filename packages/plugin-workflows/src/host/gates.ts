@@ -38,6 +38,20 @@ export type TurnCloseOutcome =
  */
 export const SOFT_SETTLEMENT = 'completed-soft'
 
+/** Whether a run was released by the soft settlement: terminal without a pass. */
+export function isSoftSettled(run: WorkflowRun): boolean {
+  return run.status === 'completed' && run.reason === SOFT_SETTLEMENT
+}
+
+/**
+ * Whether a stored run may be replaced by an incoming state. A completed-soft
+ * run is terminal without its review: a late reviewer publication must never
+ * restore its open step or drop the recorded settlement violation.
+ */
+export function runReplaceable(current: WorkflowRun, incoming: WorkflowRun): boolean {
+  return !isSoftSettled(current) || isSoftSettled(incoming)
+}
+
 /** Release an optional step and finish the run: no open required step, no pass. */
 function releaseSoft(run: WorkflowRun, stepId: string, at: number): WorkflowRun {
   const reason = `${SOFT_SETTLEMENT}: the refusal budget was exhausted; the run closed without its evidence and never counts as a pass`
