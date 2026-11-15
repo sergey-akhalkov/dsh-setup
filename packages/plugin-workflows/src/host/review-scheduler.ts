@@ -16,7 +16,7 @@ import {
   ReviewQueue,
   type SettledRunState,
 } from './review-queue.js'
-import type { WorkflowRun } from './runs.js'
+import { settleStep, type WorkflowRun } from './runs.js'
 
 /**
  * The engine-side review scheduler: it admits one prepared review through the
@@ -309,7 +309,14 @@ export class ReviewScheduler {
     const replaced = await this.queue.replaceIdentity(entry, identity)
     if (!replaced.replaced) {
       // A live successor already holds the new identity; the queue settled
-      // this entry as its duplicate and its follower proceeds.
+      // this entry as its duplicate and its follower proceeds. Persist a
+      // terminal durable state so the discarded run cannot be advanced again.
+      const settled = settleStep(entry.request.run, entry.request.step.id, 'failed', {
+        at: Date.now(),
+        reason:
+          'a live successor already holds this review identity; this queued entry was discarded without replacing its record',
+      })
+      await this.host.persistRun(entry.workspace, settled).catch(() => undefined)
       return
     }
     entry.reprepared = true

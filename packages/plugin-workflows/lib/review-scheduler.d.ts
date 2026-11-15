@@ -1,6 +1,6 @@
 import { type ReviewRunInput } from './review.js';
 import { type QueueLimits, type SettledRunState } from './review-queue.js';
-import type { WorkflowRun } from './runs.js';
+import { type WorkflowRun } from './runs.js';
 /**
  * The engine-side review scheduler: it admits one prepared review through the
  * bounded queue, runs the review executor in the background, persists the

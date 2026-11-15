@@ -2437,7 +2437,18 @@ export function apply(ctx, config = {}) {
                             : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
                     };
                 };
-                let current = await prepareInputs(captured);
+                let current;
+                try {
+                    current = await prepareInputs(captured);
+                }
+                catch (error) {
+                    // A snapshot rejected before admission must not keep renewing its lease.
+                    await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined);
+                    return settleStep(reviewRun, step.id, 'failed', {
+                        at: journal.time(),
+                        reason: error instanceof Error ? error.message : String(error),
+                    });
+                }
                 // A queued entry re-checks the live source set when a slot frees; one
                 // re-preparation replaces the identity atomically before the start.
                 const reprepare = async (alreadyReprepared) => {

@@ -1,5 +1,6 @@
 import { beginReviewAttempt, publishReviewOutcome, recordReviewFailure, } from './review.js';
 import { ReviewQueue, } from './review-queue.js';
+import { settleStep } from './runs.js';
 function liveIdentity(input) {
     return `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}\u0000${input.digest ?? ''}\u0000${input.reviewer ?? ''}`;
 }
@@ -192,7 +193,13 @@ export class ReviewScheduler {
         const replaced = await this.queue.replaceIdentity(entry, identity);
         if (!replaced.replaced) {
             // A live successor already holds the new identity; the queue settled
-            // this entry as its duplicate and its follower proceeds.
+            // this entry as its duplicate and its follower proceeds. Persist a
+            // terminal durable state so the discarded run cannot be advanced again.
+            const settled = settleStep(entry.request.run, entry.request.step.id, 'failed', {
+                at: Date.now(),
+                reason: 'a live successor already holds this review identity; this queued entry was discarded without replacing its record',
+            });
+            await this.host.persistRun(entry.workspace, settled).catch(() => undefined);
             return;
         }
         entry.reprepared = true;
