@@ -160,11 +160,9 @@ export async function buildConditionContext(
       input.workspace,
       `.dsh/workflows/records/spec-review/${change}/spec.json`,
     )
-    const legacySpec =
-      workflowSpec === undefined
-        ? await readRecord(input.workspace, `.dsh/delegation/spec-review/${change}/spec.json`)
-        : undefined
-    const record = workflowSpec ?? legacySpec
+    // Owned whole-spec review reads the workflows store only; a legacy PASS
+    // must not suppress the owned definition.
+    const record = workflowSpec
     if (
       record !== undefined &&
       localRecordError(record) === undefined &&
