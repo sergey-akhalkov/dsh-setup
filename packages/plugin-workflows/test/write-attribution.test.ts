@@ -761,6 +761,21 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('concatenates adjacent POSIX single-quoted fragments', () => {
+    for (const command of [
+      "tee 'openspec/changes/''auth/design.md'",
+      "echo x>'openspec/changes/''auth/design.md'",
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'a', name: 'bash', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+  })
   it('keeps escaped spaces inside a destination word', () => {
     const spaced = 'C:/repo space'
     expect(

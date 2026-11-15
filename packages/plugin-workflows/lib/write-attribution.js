@@ -85,7 +85,7 @@ function maskQuoted(text, powershell) {
             index += 1;
             while (index < text.length) {
                 const inner = text[index] ?? '';
-                if (inner === "'" && text[index + 1] === "'") {
+                if (inner === "'" && text[index + 1] === "'" && powershell) {
                     content += "'";
                     index += 2;
                     continue;
@@ -257,7 +257,7 @@ function splitSegments(text, powershell) {
             index += 1;
             continue;
         }
-        if (quote === "'" && char === "'" && text[index + 1] === "'") {
+        if (quote === "'" && char === "'" && text[index + 1] === "'" && powershell) {
             current += "''";
             index += 1;
             continue;
@@ -314,7 +314,7 @@ function stripComments(text, powershell) {
             index += 1;
             continue;
         }
-        if (quote === "'" && char === "'" && text[index + 1] === "'") {
+        if (quote === "'" && char === "'" && text[index + 1] === "'" && powershell) {
             output += "''";
             index += 1;
             continue;
@@ -354,7 +354,7 @@ function executedText(text, powershell) {
             index += 1;
             continue;
         }
-        if (quote === "'" && char === "'" && text[index + 1] === "'") {
+        if (quote === "'" && char === "'" && text[index + 1] === "'" && powershell) {
             index += 1;
             continue;
         }
