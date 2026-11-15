@@ -129,7 +129,11 @@ function executedText(text: string): string {
       continue
     }
     if (char === '#' && (index === 0 || /[\s;&|]/u.test(text[index - 1] ?? ''))) {
-      break
+      // A comment runs to the end of its line; later lines still execute.
+      const newline = text.indexOf('\n', index)
+      if (newline === -1) break
+      index = newline
+      continue
     }
     output += char
   }
@@ -182,12 +186,16 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
   }
   const executed = executedText(normalized).trim()
   if (executed === '') return [...changes]
-  const creationPattern = new RegExp(CHANGE_CREATION.source, 'gu')
-  for (const match of executed.matchAll(creationPattern)) addChange(match[1])
-  // One shell call may execute several writes; each destination counts.
+  // One shell call may execute several writes; each segment counts, and a
+  // creation command can follow a read or a comment on an earlier line.
   for (const segment of splitSegments(normalized)) {
     const executedSegment = executedText(segment).trim()
     if (executedSegment === '') continue
+    const creation = CHANGE_CREATION.exec(executedSegment)
+    if (creation !== null) {
+      addChange(creation[1])
+      continue
+    }
     if (!WRITE_COMMAND.test(executedSegment) && !REDIRECT.test(executedSegment)) continue
     // The destination is parsed from the original text so a quoted path is kept.
     const raw = shellDestination(segment)
