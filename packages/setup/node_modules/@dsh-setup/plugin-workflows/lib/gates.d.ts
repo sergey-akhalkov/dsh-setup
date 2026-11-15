@@ -24,6 +24,11 @@ export type TurnCloseOutcome = {
     readonly run: WorkflowRun;
     readonly detail: string;
 };
+/**
+ * The label a `nonCritical` step records when its turn-close budget is
+ * exhausted: the run closes without its evidence and never counts as a pass.
+ */
+export declare const SOFT_SETTLEMENT = "completed-soft";
 export interface TurnCloseInput {
     readonly run: WorkflowRun;
     readonly definition: Definition;

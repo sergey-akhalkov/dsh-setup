@@ -163,6 +163,44 @@ export async function buildConditionContext(input) {
         },
     };
 }
+/**
+ * Whether any predicate reads `digests.worktree`. The worktree digest runs git,
+ * so a close whose conditional definitions never read it skips that cost.
+ */
+export function conditionNeedsWorktree(condition) {
+    if (condition === undefined)
+        return false;
+    let found = false;
+    const walk = (value) => {
+        if (found)
+            return;
+        if (Array.isArray(value)) {
+            for (const entry of value)
+                walk(entry);
+            return;
+        }
+        if (typeof value !== 'object' || value === null)
+            return;
+        const record = value;
+        const raw = record.var;
+        const path = Array.isArray(raw) ? raw[0] : raw;
+        if (path === 'digests.worktree') {
+            found = true;
+            return;
+        }
+        // `missing` and `missing_some` name fields as literals, not var operands.
+        const missing = record.missing ?? record.missing_some;
+        if (Array.isArray(missing) &&
+            missing.flatMap((name) => (Array.isArray(name) ? name : [name])).includes('digests.worktree')) {
+            found = true;
+            return;
+        }
+        for (const entry of Object.values(record))
+            walk(entry);
+    };
+    walk(condition);
+    return found;
+}
 /** Evaluate one definition's condition over the built context; false starts no run. */
 export function evaluateCondition(condition, context) {
     if (condition === undefined)

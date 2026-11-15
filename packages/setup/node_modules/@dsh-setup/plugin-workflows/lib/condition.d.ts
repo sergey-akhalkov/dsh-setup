@@ -71,6 +71,11 @@ export interface ConditionContextInput {
 }
 /** Build the one bounded context every condition for this event evaluates over. */
 export declare function buildConditionContext(input: ConditionContextInput): Promise<ConditionContext>;
+/**
+ * Whether any predicate reads `digests.worktree`. The worktree digest runs git,
+ * so a close whose conditional definitions never read it skips that cost.
+ */
+export declare function conditionNeedsWorktree(condition: Readonly<Record<string, unknown>> | undefined): boolean;
 /** Evaluate one definition's condition over the built context; false starts no run. */
 export declare function evaluateCondition(condition: Readonly<Record<string, unknown>> | undefined, context: ConditionContext): boolean;
 /** Every condition-bearing definition's decision for one event context. */

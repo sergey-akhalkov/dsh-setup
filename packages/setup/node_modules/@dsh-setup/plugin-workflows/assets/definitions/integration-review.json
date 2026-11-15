@@ -1,0 +1,52 @@
+{
+  "v": 1,
+  "id": "integration-review",
+  "name": "Integration review",
+  "description": "Suggest the whole-worktree integration review once the change's task list is complete; the soft rule refuses one close, then releases the run without a pass.",
+  "version": 1,
+  "trigger": {
+    "kind": "turn.stopping",
+    "match": {},
+    "mode": "active",
+    "dedupe": "turn",
+    "condition": {
+      "and": [{ "var": "session.involved" }, { "var": "session.completed" }]
+    }
+  },
+  "settings": {
+    "allowModelStart": false,
+    "risk": "low",
+    "gateOwnership": "own",
+    "maxBlocks": 1,
+    "allowIntent": false,
+    "gate": "review",
+    "gateIdentity": "integration-review",
+    "legacy": { "plugin": "delegation-rules", "signal": "integration-review" }
+  },
+  "steps": [
+    {
+      "id": "review",
+      "title": "Review the whole worktree",
+      "executor": "review",
+      "review": {
+        "target": "codex",
+        "instruction": "review-integration",
+        "scope": "whole",
+        "phase": "integration"
+      },
+      "evidence": {
+        "kind": "record",
+        "rule": "integration-review",
+        "change": "{name}",
+        "phase": "integration",
+        "scope": "whole",
+        "verdicts": ["PASS", "ERROR"],
+        "digest": "current",
+        "path": ".dsh/workflows/records/integration-review/{name}/integration.json"
+      },
+      "next": "end",
+      "blockTurnClose": true,
+      "nonCritical": true
+    }
+  ]
+}
