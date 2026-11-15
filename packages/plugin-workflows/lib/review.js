@@ -4,7 +4,7 @@ import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'nod
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHANGE_NAME } from './command-parse.js';
-import { reviewIdentityOf, reviewStoreOf } from './definitions.js';
+import { reviewIdentityOf, reviewStoreOf, } from './definitions.js';
 import { reviewDigest, verifyEvidence } from './evidence.js';
 import { isInside } from './fs-change.js';
 import { classifyFailure } from './review-queue.js';
@@ -656,9 +656,17 @@ function baseRecord(input, now) {
         time: new Date(now).toISOString(),
     };
 }
+/** The step's record contract narrowed to the ERROR verdict, when it is one. */
+function errorContractOf(evidence) {
+    if (evidence.kind !== 'record')
+        return undefined;
+    const { verdict: _verdict, verdicts: _verdicts, ...rest } = evidence;
+    return { ...rest, verdict: 'ERROR' };
+}
 /** Settle a review step from the record it just wrote. */
 async function settleFromRecord(input, record, recordPath, now) {
-    const check = await verifyEvidence(input.step.evidence ?? { kind: 'declaration' }, input.context);
+    const declared = input.step.evidence ?? { kind: 'declaration' };
+    const check = await verifyEvidence(declared, input.context);
     // The step settles only from the record this run just wrote, never from an
     // older PASS the declared evidence happens to satisfy. The published file
     // must still be this run's own verdict: a concurrent review with the same
@@ -680,6 +688,23 @@ async function settleFromRecord(input, record, recordPath, now) {
         samePublication;
     if (bound) {
         return settleStep(input.run, input.step.id, 'done', { at: now, evidence: check.evidence });
+    }
+    // An ERROR that otherwise matches the step's record contract is provisional
+    // turn-close evidence: only a PASS completes the step, so the close stays
+    // allowed with the failure visible, approval and completion stay unavailable,
+    // and the next advance retries the review. FINDINGS and a stale or foreign
+    // record stay blocked.
+    const errorContract = !check.ok && samePublication && record.verdict === 'ERROR'
+        ? errorContractOf(declared)
+        : undefined;
+    const provisional = errorContract === undefined ? undefined : await verifyEvidence(errorContract, input.context);
+    if (provisional?.ok === true) {
+        const detail = record.error ?? (check.ok ? '' : check.failure.detail);
+        return settleStep(input.run, input.step.id, 'failed', {
+            at: now,
+            reason: `the review returned ERROR; the step stays incomplete without approval or completion, the close is allowed with the failure visible, and the next close retries the review: ${detail.slice(0, 160)}`,
+            evidence: { kind: 'record', path: recordPath, digest: record.digest },
+        });
     }
     const reason = !check.ok
         ? record.verdict === 'FINDINGS'

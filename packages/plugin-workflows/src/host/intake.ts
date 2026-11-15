@@ -125,15 +125,19 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
   const at = input.now ?? Date.now()
   let run = input.run
   const resolved = resolveOwnership(input.definition, input.installedLegacy, input.enabledLegacy)
+  // A review ERROR settles its step as failed so the close is allowed; the next
+  // advance retries the review once, never twice in the same close.
+  let reviewRetried = false
   for (let guard = 0; guard < input.definition.steps.length + 1; guard += 1) {
     const pending = firstPending(run, input.definition)
     // Only a fully done definition completes; a failed or cancelled step stops
     // the walk instead of being skipped.
     if (pending === undefined) {
       // A review step marked done must still hold its declared current
-      // evidence: an ERROR or a stale PASS reopens it, so the next close
-      // re-runs the review instead of completing the run on it. A completed
-      // run is terminal and is never reopened.
+      // evidence: a stale PASS reopens it, so the next close re-runs the review
+      // instead of completing the run on it. (A matching ERROR never completes
+      // the step at all; it stays failed and is retried above.) A completed run
+      // is terminal and is never reopened.
       let staleReview = false
       if (run.status !== 'completed') {
         for (const reviewStep of input.definition.steps) {
@@ -245,6 +249,11 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
             : entry,
         ),
       }
+    } else if (pending.state === 'failed' && pending.step.executor === 'review' && !reviewRetried) {
+      // A failed review step is provisional: the close was allowed, nothing
+      // approved or completed, and this advance retries the review exactly once.
+      reviewRetried = true
+      run = settleStep(run, pending.step.id, 'open', { at })
     } else if (
       pending.state === 'failed' ||
       pending.state === 'cancelled' ||

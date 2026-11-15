@@ -25,21 +25,24 @@ function releaseSoft(run, stepId, at) {
     const reason = `${SOFT_SETTLEMENT}: the refusal budget was exhausted; the run closed without its evidence and never counts as a pass`;
     return setRunStatus(settleStep(run, stepId, 'cancelled', { at, reason }), 'completed', at, SOFT_SETTLEMENT);
 }
-function stepIsOpen(run, stepId) {
-    const state = run.steps.find((step) => step.id === stepId)?.state;
-    return state === 'open' || state === 'blocked';
-}
 /**
  * The first open `blockTurnClose` owned step, unless an earlier open step is
- * deferred: an unresolved deferred prerequisite stops the selection no matter
- * whether it blocks the turn close itself, because the legacy gate is the only
- * steer for it.
+ * deferred or a failed review step holds the sequence: an unresolved deferred
+ * prerequisite stops the selection (the legacy gate is the only steer for it),
+ * and a provisional review failure allows the close without opening a later
+ * step.
  */
 export function selectBlockingStep(run, definition, installedLegacy, enabledLegacy) {
     const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy);
     const ownership = new Map(resolved.steps.map((step) => [step.id, step.ownership]));
     for (const step of definition.steps) {
-        if (!stepIsOpen(run, step.id))
+        const state = run.steps.find((entry) => entry.id === step.id)?.state;
+        // A failed review step is provisional turn-close evidence: the review never
+        // completed, approval and completion stay unrequested, and the next advance
+        // retries it. The walk stops there so a later step is never selected.
+        if (step.executor === 'review' && state === 'failed')
+            return undefined;
+        if (state !== 'open' && state !== 'blocked')
             continue;
         if (ownership.get(step.id) === 'defer')
             return undefined;

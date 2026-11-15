@@ -15,6 +15,7 @@ interface AssetDefinition {
     id: string
     executor?: string
     ownership?: string
+    legacy?: { plugin?: string; signal?: string }
     review?: Record<string, string>
     evidence?: { kind?: string; rule?: string; path?: string; digest?: string }
   }>
@@ -100,6 +101,8 @@ describe('OpenSpec workflow contribution', () => {
     const step = definition.steps.find((entry) => entry.id === 'spec-review')
     expect(step?.executor).toBe('review')
     expect(step?.ownership).toBe('own')
+    // The declared own ownership resolves defer while the signal is enabled.
+    expect(step?.legacy).toEqual({ plugin: 'delegation-rules', signal: 'spec-review' })
     expect(step?.review).toEqual({
       target: 'codex',
       instruction: 'review-spec',

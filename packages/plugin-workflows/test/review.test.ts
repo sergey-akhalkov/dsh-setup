@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   type Definition,
+  type RecordEvidence,
   resolveOwnership,
   reviewIdentityOf,
   reviewStoreOf,
@@ -347,6 +348,40 @@ describe('runReviewStep', () => {
     ) as ReviewRecord
     expect(record.verdict).toBe('ERROR')
     expect(record.failureClass).toBe('timeout')
+  })
+
+  it('settles a matching ERROR as provisional when the step accepts only PASS', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('the task definition has no review step')
+    const provisionalStep = {
+      ...step,
+      evidence: { ...(step.evidence as RecordEvidence), verdict: 'PASS', verdicts: undefined },
+    }
+    const result = await invoke(
+      root,
+      runnerFor(() => Promise.reject(new Error('provider down'))),
+      { step: provisionalStep },
+    )
+    expect(result.record?.verdict).toBe('ERROR')
+    const recordPath = localReviewRecordPath({
+      definition: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId: TASK_ID,
+    })
+    // Only a PASS completes a PASS-only step; the matching ERROR leaves it
+    // failed with its record visible so the close stays allowed and retries.
+    const settled = result.run.steps[0]
+    expect(settled?.state).toBe('failed')
+    expect(settled?.evidence?.path).toBe(recordPath)
+    expect(settled?.reason).toContain('ERROR')
+    expect(settled?.reason).toContain('retries the review')
+    await expect(
+      readFile(join(root, portableApprovalPath('auth', TASK_ID)), 'utf8'),
+    ).rejects.toThrow()
   })
 
   it('publishes no PASS when the committed approval cannot be written', async () => {

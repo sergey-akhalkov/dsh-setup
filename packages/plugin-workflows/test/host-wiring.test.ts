@@ -135,6 +135,8 @@ function fakeHost(
     readonly answer?: string
     readonly workspaces?: Readonly<Record<string, string>>
     readonly automation?: boolean
+    /** Default true: the retained whole-spec signal; false restores the owned step. */
+    readonly specReview?: boolean
     readonly delegateBarrier?: Promise<void>
   } = {},
 ): {
@@ -288,8 +290,10 @@ function fakeHost(
       if (name === 'connection') return { fetch: { register: () => () => {} } }
       if (name === 'tools') return tools
       // The migrated profile: the workflow-owned legacy gates are off while the
-      // spec-review, progress, and lane signals stay enabled.
-      if (name === 'delegationRulesStatus') return { workflowOwned: false, specReview: true }
+      // spec-review, progress, and lane signals follow their switches.
+      if (name === 'delegationRulesStatus') {
+        return { workflowOwned: false, specReview: options.specReview ?? true }
+      }
       if (name === 'goalContinuityStatus') return { automation: options.automation ?? false }
       if (name === 'verificationGateStatus') return { steering: false }
       if (name === 'userQuestions' && options.userQuestions === true) {
@@ -3899,10 +3903,11 @@ describe('main-step ownership across turns', () => {
 })
 
 describe('owned review at runtime', () => {
-  it('starts the owned whole-spec review and never completes it from a legacy record', async () => {
+  it('allows the close on a provisional review ERROR and never completes it', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
-    const host = fakeHost(workspace)
+    // The spec-review signal is off, so the intake owns its step.
+    const host = fakeHost(workspace, { specReview: false })
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
@@ -3946,21 +3951,27 @@ describe('owned review at runtime', () => {
       run = runs.settleStep(run, step, 'done', { at: 1_100 })
     }
     await runs.writeRun(workspace, run, auth)
+    const recordPath = join(
+      workspace,
+      '.dsh',
+      'workflows',
+      'records',
+      'spec-review',
+      'auth',
+      'spec.json',
+    )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const stored = await runs.readAuthenticatedRun(workspace, 'run-owned-review', auth)
     const review = stored?.steps.find((step) => step.id === 'spec-review')
     // The unconfigured reviewer writes the engine's own ERROR record; the
     // legacy PASS is ignored, and the ERROR never completes the PASS-only step.
-    // The gate keeps the step requested for the retry, with the failure visible.
-    expect(review?.state).not.toBe('done')
-    expect(review?.reason).toContain('not one of: PASS')
+    // The step stays failed with the record visible, which the gate allows as an
+    // intermediate close: no steer, no approval, no completion.
+    expect(review?.state).toBe('failed')
+    expect(review?.reason).toContain('ERROR')
+    expect(review?.reason).toContain('retries the review')
     expect(review?.evidence?.path).toBe('.dsh/workflows/records/spec-review/auth/spec.json')
-    const record = JSON.parse(
-      await readFile(
-        join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json'),
-        'utf8',
-      ),
-    ) as Record<string, unknown>
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
     expect(record).toMatchObject({
       definition: 'spec-review',
       rule: 'spec-review',
@@ -3970,9 +3981,21 @@ describe('owned review at runtime', () => {
       verdict: 'ERROR',
       digest,
     })
-    // Approval is never reached from an ERROR record.
+    // Approval and completion stay unavailable.
     expect(stored?.steps.find((step) => step.id === 'approval')?.state).not.toBe('done')
-    await waitFor(async () => host.steers.length === 1)
+    expect(stored?.status).not.toBe('completed')
+    expect(host.steers).toHaveLength(0)
+    expect(stored?.steps.find((step) => step.id === 'spec-review')?.at).toBeDefined()
+    const firstAt = review?.at ?? 0
+
+    // The next close retries the review exactly once, still with no steer.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    const retried = await runs.readAuthenticatedRun(workspace, 'run-owned-review', auth)
+    const retriedReview = retried?.steps.find((step) => step.id === 'spec-review')
+    expect(retriedReview?.state).toBe('failed')
+    expect(retriedReview?.at ?? 0).toBeGreaterThan(firstAt)
+    expect(host.steers).toHaveLength(0)
   })
 })
 
@@ -4071,7 +4094,7 @@ describe('intake runtime', () => {
   it('dispatches create-change through the tool service and completes approval with a receipt', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
-    const host = fakeHost(workspace, { toolExecute: true, userQuestions: true })
+    const host = fakeHost(workspace, { toolExecute: true, userQuestions: true, specReview: false })
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
@@ -4304,7 +4327,7 @@ describe('intake end-to-end in a fake host', () => {
   it('runs a refused creation through drafts, dispatch, validation, review, approval, and receipt', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
-    const host = fakeHost(workspace, { toolExecute: true, userQuestions: true })
+    const host = fakeHost(workspace, { toolExecute: true, userQuestions: true, specReview: false })
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
@@ -4360,7 +4383,11 @@ describe('intake end-to-end in a fake host', () => {
     // 3. A fresh host recovers the persisted run; a restart resumes at spec
     //    without recreating the directory, adopting, or dispatching again.
     const metadata = await readFile(join(changeDir, '.openspec.yaml'), 'utf8')
-    const fresh = fakeHost(workspace, { toolExecute: true, userQuestions: true })
+    const fresh = fakeHost(workspace, {
+      toolExecute: true,
+      userQuestions: true,
+      specReview: false,
+    })
     apply(fresh.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
     const resumed = (await fresh.emit(
@@ -4449,7 +4476,7 @@ describe('intake end-to-end in a fake host', () => {
   it('leaves a no answer open without a receipt', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
-    const host = fakeHost(workspace, { userQuestions: true, answer: 'no' })
+    const host = fakeHost(workspace, { userQuestions: true, answer: 'no', specReview: false })
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
@@ -4500,6 +4527,82 @@ describe('intake end-to-end in a fake host', () => {
     expect(approval?.state).not.toBe('done')
     expect(approval?.reason).toContain('no')
     expect(await receipts.readReceipt(workspace, 'auth', auth)).toBeUndefined()
+  })
+
+  it('defers the registered spec-review step to the enabled legacy signal', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    // The switch alone restores the legacy owner for the contributed step.
+    const host = fakeHost(workspace, { userQuestions: true, specReview: true })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const { resolveOwnership } = await import('../src/host/definitions.ts')
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = definitionsRegistry.installed('change-intake')?.definition
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    const resolved = resolveOwnership(
+      intake,
+      new Set(['delegation-rules']),
+      new Set(['delegation-rules/spec-review']),
+    )
+    expect(resolved.issues).toEqual([])
+    expect(resolved.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('defer')
+
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    for (const [file, text] of [
+      ['proposal.md', '# artifact\n'],
+      ['design.md', '# artifact\n'],
+      ['tasks.md', '# artifact\n'],
+      ['specs/auth/spec.md', '# spec\n'],
+    ] as const) {
+      await writeFile(join(change, file), text, 'utf8')
+    }
+    const digest = await currentSpecDigest(workspace, 'auth')
+    if (digest === undefined) throw new Error('the auth change artifacts are unreadable')
+    const legacy = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    await mkdir(legacy, { recursive: true })
+    await writeFile(
+      join(legacy, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-intake-deferred',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    await runs.writeRun(workspace, run, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-intake-deferred', auth)
+    const review = stored?.steps.find((step) => step.id === 'spec-review')
+    // The legacy record is the evidence; the native executor never dispatched.
+    expect(review?.state).toBe('done')
+    expect(review?.evidence?.path).toBe('.dsh/delegation/spec-review/auth/spec.json')
+    expect(review?.evidence?.digest).toBe(digest)
+    await expect(
+      readFile(join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json')),
+    ).rejects.toThrow()
+    // The deferred step adds no steer; approval completes and the run receipts.
+    expect(host.steers).toHaveLength(0)
+    expect(stored?.status).toBe('completed')
+    expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
+      kind: 'intake',
+      change: 'auth',
+    })
   })
 })
 
@@ -5459,7 +5562,7 @@ describe('session disposal', () => {
   it('rejects an intake completion that races a disposal and issues no receipt', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
-    const host = fakeHost(workspace)
+    const host = fakeHost(workspace, { specReview: false })
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 200))
     const runs = await import('../src/host/runs.ts')
