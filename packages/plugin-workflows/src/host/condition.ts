@@ -191,23 +191,23 @@ export async function buildConditionContext(
   // A condition may not read a filesystem path out of the workspace: an
   // absolute or traversing lane/path value would leak it into a predicate.
   const startsPath = /^(?:[A-Za-z]:|[\\/])/u
-  // Task and lane text is prose; an absolute path anywhere in it still leaks.
-  const containsPath = /(?:^|[\s"'`=(])(?:[A-Za-z]:|[\\/])/u
-  const traverses = (value: string): boolean => /(?:^|[\s"'`=(\\/])\.\.(?:[\\/]|\s|$)/u.test(value)
-  const assertNoPath = (value: string | undefined, anywhere = false): void => {
+  // Anywhere in prose, including inside Markdown emphasis or brackets.
+  const drivePath = /(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]?/u
+  const traverses = /(?:^|[^A-Za-z0-9])\.\.(?:[\\/]|$)/u
+  const assertNoPath = (value: string | undefined): void => {
     if (
       value !== undefined &&
-      (startsPath.test(value) || traverses(value) || (anywhere && containsPath.test(value)))
+      (startsPath.test(value) || drivePath.test(value) || traverses.test(value))
     ) {
       throw new Error('condition context contains a filesystem path')
     }
   }
   assertNoPath(input.event.path)
   for (const lane of lanes) {
-    assertNoPath(lane.title, true)
+    assertNoPath(lane.title)
     for (const owned of lane.owned) assertNoPath(owned)
   }
-  for (const task of tasks) assertNoPath(task.text, true)
+  for (const task of tasks) assertNoPath(task.text)
   return {
     event: input.event,
     change: {

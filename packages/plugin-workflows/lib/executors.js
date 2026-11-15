@@ -173,7 +173,7 @@ function operands(args) {
 }
 export const MAX_LOGIC_EVALUATIONS = 10_000;
 /** Intermediate values are bounded before they can exhaust host memory. */
-export const MAX_LOGIC_COLLECTION = 1_000;
+export const MAX_LOGIC_COLLECTION = 10_000;
 export const MAX_LOGIC_STRING = 1_000_000;
 function guardLogicSize(value) {
     let nodes = 0;
@@ -238,7 +238,12 @@ export function evaluateJsonLogic(rule, data, depth = 0, budget = { used: 0 }) {
     const operator = keys[0] ?? '';
     const raw = rule[operator];
     const args = operands(raw);
-    const value = (entry) => evaluateJsonLogic(entry, data, depth + 1, budget);
+    const value = (entry) => {
+        const result = evaluateJsonLogic(entry, data, depth + 1, budget);
+        // Every operand is checked before an operator can coerce it implicitly.
+        guardLogicString(result);
+        return result;
+    };
     switch (operator) {
         case 'var': {
             const rawPath = typeof args[0] === 'string' || typeof args[0] === 'number'
