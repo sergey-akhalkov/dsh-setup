@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -273,6 +274,27 @@ describe('composed Release A profile', () => {
 
     // The session is involved in the change, then the final task is checked and
     // delivered through the shipped fs.change task-review trigger.
+    // Seed the legacy runtime's own involvement store too, so its review
+    // branches actually evaluate this change (and stay silent with the
+    // switches off) instead of being skipped for lack of involvement.
+    const legacyName = createHash('sha256').update(SESSION).digest('hex').slice(0, 16)
+    const legacyDir = join(workspace, '.dsh', 'delegation', 'sessions')
+    await mkdir(legacyDir, { recursive: true })
+    await writeFile(
+      join(legacyDir, `${legacyName}.json`),
+      JSON.stringify({
+        session: SESSION,
+        changes: {
+          [CHANGE]: {
+            created: true,
+            specChanged: true,
+            tasks: [TASK_ID],
+            completed: true,
+          },
+        },
+      }),
+      'utf8',
+    )
     await writeInvolvement(workspace, SESSION, [CHANGE])
     await writeFile(join(change, 'tasks.md'), CHECKED_TASKS, 'utf8')
     for (const changed of [...host.watch]) changed()

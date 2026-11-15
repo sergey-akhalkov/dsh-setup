@@ -153,6 +153,18 @@ describe('configuration validation', () => {
       'taskProgress',
       'workflowOwned',
     ])
+    expect(config.gates).toEqual({
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: false,
+    })
+    expect(config.rules.find((rule) => rule.id === 'implementation-work')).toMatchObject({
+      when: 'implementation-work',
+      contract: 'note',
+      gate: 'strict',
+    })
     expect(config.rules.find((rule) => rule.id === 'lane-fanout')).toMatchObject({
       when: 'lane-assignment',
       contract: 'note',
