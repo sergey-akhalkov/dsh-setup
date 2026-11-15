@@ -1408,21 +1408,30 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       ): Promise<ReadonlyMap<string, boolean> | undefined> => {
         if (conditionalDefinitions.length === 0) return undefined
         const conditionChange = definitionEvent.name ?? change
-        const conditionContext = await buildConditionContext({
-          workspace,
-          ...(conditionChange === undefined ? {} : { change: conditionChange }),
-          event: {
-            kind: definitionEvent.kind,
-            ...(definitionEvent.tool === undefined ? {} : { tool: definitionEvent.tool }),
-            ...(definitionEvent.command === undefined ? {} : { command: definitionEvent.command }),
-            ...(definitionEvent.path === undefined ? {} : { path: definitionEvent.path }),
-          },
-          runGit: defaultGit,
-          // Involvement is retained by session and change: a review condition
-          // must still fire on a later turn that writes nothing new.
-          involved: conditionChange !== undefined,
-          changedSpec: changedSpecFor(change),
-        })
+        let conditionContext: Awaited<ReturnType<typeof buildConditionContext>>
+        try {
+          conditionContext = await buildConditionContext({
+            workspace,
+            ...(conditionChange === undefined ? {} : { change: conditionChange }),
+            event: {
+              kind: definitionEvent.kind,
+              ...(definitionEvent.tool === undefined ? {} : { tool: definitionEvent.tool }),
+              ...(definitionEvent.command === undefined
+                ? {}
+                : { command: definitionEvent.command }),
+              ...(definitionEvent.path === undefined ? {} : { path: definitionEvent.path }),
+            },
+            runGit: defaultGit,
+            // Involvement is retained by session and change: a review condition
+            // must still fire on a later turn that writes nothing new.
+            involved: conditionChange !== undefined,
+            changedSpec: changedSpecFor(change),
+          })
+        } catch {
+          // A malformed context only disables the conditional definitions; an
+          // unconditional one must still be evaluated for this event.
+          return new Map(conditionalDefinitions.map((definition) => [definition.id, false]))
+        }
         return evaluateConditions(conditionalDefinitions, conditionContext)
       }
       const evaluationChanges = involvedChanges.length === 0 ? [undefined] : involvedChanges

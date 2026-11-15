@@ -190,9 +190,10 @@ export async function buildConditionContext(
   }
   // A condition may not read a filesystem path out of the workspace: an
   // absolute or traversing lane/path value would leak it into a predicate.
-  const pathEscape = /(?:^[A-Za-z]:[\\\\/]|^[\\\\/]|(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))/u
+  const pathEscape = /(?:^[A-Za-z]:[\\/]|^[\\/])/u
+  const traverses = (value: string): boolean => value.split(/[\\/]/u).includes('..')
   const assertNoPath = (value: string | undefined): void => {
-    if (value !== undefined && pathEscape.test(value)) {
+    if (value !== undefined && (pathEscape.test(value) || traverses(value))) {
       throw new Error('condition context contains a filesystem path')
     }
   }
