@@ -410,6 +410,9 @@ export class ReviewScheduler {
         return
       }
       const reason = await this.recheckGuard(entry)
+      // The guard may await a filesystem or lock check; disposal or a successor
+      // can land in that window, so ownership is checked again before writing.
+      if (this.disposed || !this.queue.owns(entry.file.id)) return
       if (reason !== undefined) {
         const failure = await recordReviewFailure({
           ...entry.request,
