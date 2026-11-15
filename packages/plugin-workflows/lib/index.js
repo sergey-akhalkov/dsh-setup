@@ -2346,13 +2346,17 @@ export function apply(ctx, config = {}) {
                     if ((mutationEpochs.get(workspace) ?? 0) !== startEpoch) {
                         return 'a watched change-tree mutation was observed during the run';
                     }
-                    const current = await reviewedInputs(workspace, changeDir, defaultGit).catch(() => undefined);
-                    if (current !== undefined) {
-                        const changed = changedInputPaths(signature, current);
-                        if (changed.length > 0) {
-                            const sample = changed.slice(0, 5).join(', ');
-                            return `${String(changed.length)} changed: ${sample}${changed.length > 5 ? ', …' : ''}`;
-                        }
+                    let current;
+                    try {
+                        current = await reviewedInputs(workspace, changeDir, defaultGit);
+                    }
+                    catch (error) {
+                        return `the reviewed inputs could not be re-read (${error instanceof Error ? error.message : String(error)})`;
+                    }
+                    const changed = changedInputPaths(signature, current);
+                    if (changed.length > 0) {
+                        const sample = changed.slice(0, 5).join(', ');
+                        return `${String(changed.length)} changed: ${sample}${changed.length > 5 ? ', …' : ''}`;
                     }
                     if ((await currentSpecDigest(workspace, change)) !== specDigest) {
                         return 'the change digest changed';
