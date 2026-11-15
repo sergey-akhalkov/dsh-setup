@@ -444,6 +444,64 @@ it('stops transient retries at maxAttempts', async () => {
   expect(calls).toBe(1)
   scheduler.dispose()
 })
+
+it('rechecks the live guard after teardown and refuses a PASS', async () => {
+  const { root, digest } = await reviewWorkspace()
+  const def = definition()
+  let changed = false
+  const persisted: WorkflowRun[] = []
+  const scheduler = new ReviewScheduler(
+    {
+      enabled: true,
+      concurrency: 1,
+      maxQueued: 2,
+      maxAttempts: 1,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      waitTimeoutMs: 10_000,
+    },
+    {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async () => undefined,
+    },
+  )
+  const runner: SubagentRunner = {
+    run: async () => ({ childId: 'child-1', completed: true, text: fencedPASS(digest) }),
+    waitForTeardown: async () => {
+      changed = true
+    },
+  }
+  const run = runFor(def)
+  const request = {
+    run,
+    definition: def,
+    step: def.steps[0] as Definition['steps'][number],
+    reviewer: reviewers(),
+    runner,
+    context: { workspace: root, values: { name: 'auth' } },
+    change: 'auth',
+    prepared: {
+      specDigest: digest,
+      liveGuard: async () => (changed ? 'changed: src/engine.ts' : undefined),
+    },
+    timeoutMs: 5_000,
+    session: 'session-1',
+  }
+  await scheduler.enqueue({
+    workspace: root,
+    run,
+    request,
+    rule: 'spec-review',
+    change: 'auth',
+    digest,
+  })
+  await waitFor(async () => persisted.length === 1)
+  expect(persisted[0]?.status).not.toBe('completed')
+  scheduler.dispose()
+})
 describe('review snapshot', () => {
   it('builds a frozen checkout, copies the change, and discards it', async () => {
     const root = await workspace()

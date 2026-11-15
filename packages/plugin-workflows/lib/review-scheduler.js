@@ -233,6 +233,23 @@ export class ReviewScheduler {
     /** Publish the settled attempt, then release or quarantine the slot. */
     async publishAndSettle(entry, outcome, now) {
         const teardownConfirmed = await this.teardownConfirmed(entry);
+        // Teardown can take up to 30 seconds; recheck the reviewed inputs after it
+        // and immediately before publishing a verdict, failing closed on change.
+        if (teardownConfirmed && outcome.result.kind === 'verdict') {
+            const reason = await this.recheckGuard(entry);
+            if (reason !== undefined) {
+                const failure = await recordReviewFailure({
+                    ...entry.request,
+                    error: `reviewed inputs changed after the reviewer finished: ${reason}`,
+                    failureClass: 'reviewed-inputs-changed',
+                }).catch(() => undefined);
+                if (failure !== undefined) {
+                    await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined);
+                }
+                await this.queue.complete(entry, 'failed');
+                return;
+            }
+        }
         const finalOutcome = teardownConfirmed ? outcome : withUnconfirmedTeardown(outcome);
         const result = await this.publish(entry, finalOutcome, now);
         const state = result.record?.verdict === 'PASS' ? 'completed' : 'failed';
@@ -241,6 +258,18 @@ export class ReviewScheduler {
             return;
         }
         await this.queue.complete(entry, state);
+    }
+    /** The request's live-input guard, treated as a failure when it throws. */
+    async recheckGuard(entry) {
+        const guard = entry.request.prepared.liveGuard;
+        if (guard === undefined)
+            return undefined;
+        try {
+            return await guard();
+        }
+        catch (error) {
+            return `the live-input recheck failed (${error instanceof Error ? error.message : String(error)})`;
+        }
     }
     /** Publish a terminal attempt whose child teardown is not yet confirmed. */
     async publishAndQuarantine(entry, outcome, now) {

@@ -89,6 +89,8 @@ export declare class ReviewScheduler {
     private finish;
     /** Publish the settled attempt, then release or quarantine the slot. */
     private publishAndSettle;
+    /** The request's live-input guard, treated as a failure when it throws. */
+    private recheckGuard;
     /** Publish a terminal attempt whose child teardown is not yet confirmed. */
     private publishAndQuarantine;
     private publish;
