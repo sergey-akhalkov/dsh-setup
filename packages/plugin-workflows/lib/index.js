@@ -27,7 +27,7 @@ import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { InputMutationError, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, TASK_ID_PATTERN, } from './review.js';
+import { InputMutationError, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
@@ -2323,6 +2323,7 @@ export function apply(ctx, config = {}) {
                         rule: reviewRule,
                         change,
                         ...(task === undefined ? {} : { taskId: task.id }),
+                        phase: reviewPhase(spec.scope, spec.phase),
                         digest: liveDigest,
                         reviewer: resolved.reviewer.id,
                     });

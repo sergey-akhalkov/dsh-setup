@@ -48,6 +48,8 @@ export interface ScheduledReview {
   readonly rule: string
   readonly change: string
   readonly taskId?: string
+  /** The whole-scope record phase (`spec`, `integration`, ...). */
+  readonly phase?: string
   readonly digest: string
   /** The digest known before the snapshot exists, for the live-admission key. */
   readonly liveDigest?: string
@@ -65,6 +67,7 @@ interface ScheduledEntry extends QueueRun {
   readonly rule: string
   readonly change: string
   readonly taskId?: string
+  readonly phase?: string
   request: ReviewRunInput
   /** The live-admission key, kept through quarantine until teardown confirms. */
   liveKey?: string
@@ -103,10 +106,11 @@ function liveIdentity(input: {
   rule: string
   change: string
   taskId?: string
+  phase?: string
   digest?: string
   reviewer?: string
 }): string {
-  return `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}\u0000${input.digest ?? ''}\u0000${input.reviewer ?? ''}`
+  return `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}\u0000${input.phase ?? ''}\u0000${input.digest ?? ''}\u0000${input.reviewer ?? ''}`
 }
 
 function queueIdentity(input: {
@@ -114,22 +118,27 @@ function queueIdentity(input: {
   rule: string
   change: string
   taskId?: string
+  phase?: string
   digest: string
   reviewer: string
 }): string {
-  const task = input.taskId ?? 'whole'
-  return `${input.workspace}/${input.rule}/${input.change}/${task}/${input.digest}/${input.reviewer}`
+  const scope = input.taskId ?? input.phase ?? 'whole'
+  return `${input.workspace}/${input.rule}/${input.change}/${scope}/${input.digest}/${input.reviewer}`
 }
 
 function queueFile(input: ScheduledReview): QueueRunFile {
+  const scope = input.taskId ?? input.phase ?? 'whole'
   return {
-    id: `${input.workspace}:${input.run.id}:${input.rule}:${input.change}:${input.taskId ?? 'whole'}`,
-    key: `${input.workspace}/${input.rule}/${input.change}/${input.taskId ?? 'whole'}`,
+    id: `${input.workspace}:${input.run.id}:${input.rule}:${input.change}:${scope}`,
+    // The rule stays in the identity, not the serialization key: different
+    // rules on the same task share one conversation and must run serially.
+    key: `${input.workspace}/${input.change}/${scope}`,
     identity: queueIdentity({
       workspace: input.workspace,
       rule: input.rule,
       change: input.change,
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+      ...(input.phase === undefined ? {} : { phase: input.phase }),
       digest: input.digest,
       reviewer: input.request.reviewer.id,
     }),
@@ -191,6 +200,7 @@ export class ReviewScheduler {
     rule: string
     change: string
     taskId?: string
+    phase?: string
     digest?: string
     reviewer?: string
   }): WorkflowRun | undefined {
@@ -339,6 +349,7 @@ export class ReviewScheduler {
       rule: entry.rule,
       change: entry.change,
       ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
+      ...(entry.phase === undefined ? {} : { phase: entry.phase }),
       digest: outcome.digest,
       reviewer: entry.request.reviewer.id,
     })
@@ -574,6 +585,7 @@ export class ReviewScheduler {
       rule: entry.rule,
       change: entry.change,
       ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
+      ...(entry.phase === undefined ? {} : { phase: entry.phase }),
       digest: liveDigest,
       reviewer: entry.request.reviewer.id,
     })
@@ -647,6 +659,7 @@ export class ReviewScheduler {
       rule: input.rule,
       change: input.change,
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+      ...(input.phase === undefined ? {} : { phase: input.phase }),
       digest: input.liveDigest ?? input.digest,
       reviewer,
     })
@@ -665,6 +678,7 @@ export class ReviewScheduler {
       change: input.change,
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
       request: input.request,
+      ...(input.phase === undefined ? {} : { phase: input.phase }),
       liveKey: key,
       waited: false,
       reprepared: false,

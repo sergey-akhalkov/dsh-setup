@@ -27,6 +27,8 @@ export interface ScheduledReview {
     readonly rule: string;
     readonly change: string;
     readonly taskId?: string;
+    /** The whole-scope record phase (`spec`, `integration`, ...). */
+    readonly phase?: string;
     readonly digest: string;
     /** The digest known before the snapshot exists, for the live-admission key. */
     readonly liveDigest?: string;
@@ -81,6 +83,7 @@ export declare class ReviewScheduler {
         rule: string;
         change: string;
         taskId?: string;
+        phase?: string;
         digest?: string;
         reviewer?: string;
     }): WorkflowRun | undefined;

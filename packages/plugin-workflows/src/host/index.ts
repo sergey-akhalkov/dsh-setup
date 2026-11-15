@@ -92,6 +92,7 @@ import {
   resolveReviewQueue,
   resolveReviewTimeout,
   reviewDigest,
+  reviewPhase,
   TASK_ID_PATTERN,
 } from './review.js'
 import { type ReviewReprepareOutcome, ReviewScheduler } from './review-scheduler.js'
@@ -2816,6 +2817,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             rule: reviewRule,
             change,
             ...(task === undefined ? {} : { taskId: task.id }),
+            phase: reviewPhase(spec.scope, spec.phase),
             digest: liveDigest,
             reviewer: resolved.reviewer.id,
           })
