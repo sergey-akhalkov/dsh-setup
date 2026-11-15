@@ -2295,12 +2295,15 @@ export function apply(ctx, config = {}) {
                 }
                 const startEpoch = mutationEpochs.get(workspace) ?? 0;
                 const reviewRule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id;
+                const liveDigest = reviewDigest({ scope: spec.scope, specDigest });
                 if (reviewQueue.enabled) {
                     const live = reviewScheduler?.liveRun({
                         workspace,
                         rule: reviewRule,
                         change,
                         ...(task === undefined ? {} : { taskId: task.id }),
+                        digest: liveDigest,
+                        reviewer: resolved.reviewer.id,
                     });
                     if (live !== undefined)
                         return live;
@@ -2374,6 +2377,7 @@ export function apply(ctx, config = {}) {
                     rule,
                     change,
                     ...(task === undefined ? {} : { taskId: task.id }),
+                    liveDigest,
                     digest: reviewDigest({
                         scope: spec.scope,
                         specDigest,

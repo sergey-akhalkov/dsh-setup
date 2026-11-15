@@ -19,11 +19,20 @@ export class ReviewScheduler {
     liveRuns = new Map();
     liveKeys = new Map();
     liveKey(input) {
-        return `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}`;
+        return `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}\u0000${input.digest ?? ''}\u0000${input.reviewer ?? ''}`;
     }
     /** The run already covering this review, before any snapshot is prepared. */
     liveRun(input) {
-        return this.liveRuns.get(this.liveKey(input));
+        const exact = this.liveRuns.get(this.liveKey(input));
+        if (exact !== undefined)
+            return exact;
+        // A precheck may omit facts that are not prepared yet; match the task.
+        const prefix = `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}\u0000`;
+        for (const [key, run] of this.liveRuns) {
+            if (key.startsWith(prefix))
+                return run;
+        }
+        return undefined;
     }
     constructor(limits, host) {
         this.host = host;
@@ -61,6 +70,11 @@ export class ReviewScheduler {
                 this.lastSettled.set(entry.run.id, { state: 'failed' });
             },
             settled: (entry, state) => {
+                const key = this.liveKeys.get(entry.run.id);
+                if (key !== undefined) {
+                    this.liveRuns.delete(key);
+                    this.liveKeys.delete(entry.run.id);
+                }
                 void this.host.discardSnapshot(entry.workspace, entry.run.id);
                 const settled = this.lastSettled.get(entry.run.id);
                 this.host.onSettled?.({
@@ -89,7 +103,9 @@ export class ReviewScheduler {
         const failureClass = result.record?.failureClass;
         if (failureClass !== undefined &&
             transientFailures.has(failureClass) &&
-            this.queue.attemptsOf(entry.run.id) < this.maxAttempts) {
+            this.queue.attemptsOf(entry.file.id) < this.maxAttempts) {
+            // Keep the capacity slot until the timed-out reviewer is torn down.
+            await entry.request.runner.waitForTeardown?.().catch(() => undefined);
             await this.queue.scheduleRetry(entry, {
                 failureClass: failureClass,
                 transient: true,
@@ -123,7 +139,11 @@ export class ReviewScheduler {
         this.queue.dispose();
     }
     async enqueue(input) {
-        const key = this.liveKey(input);
+        const key = this.liveKey({
+            ...input,
+            digest: input.liveDigest ?? input.digest,
+            reviewer: input.request.reviewer.id,
+        });
         const existing = this.liveRuns.get(key);
         if (existing !== undefined)
             return { kind: 'duplicate', runId: existing.id };

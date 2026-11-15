@@ -17,6 +17,8 @@ export interface ScheduledReview {
     readonly change: string;
     readonly taskId?: string;
     readonly digest: string;
+    /** The digest known before the snapshot exists, for the live-admission key. */
+    readonly liveDigest?: string;
 }
 /** The host-owned operations the scheduler cannot perform alone. */
 export interface ReviewSchedulerHost {
@@ -56,6 +58,8 @@ export declare class ReviewScheduler {
         rule: string;
         change: string;
         taskId?: string;
+        digest?: string;
+        reviewer?: string;
     }): WorkflowRun | undefined;
     constructor(limits: QueueLimits, host: ReviewSchedulerHost);
     private launch;
