@@ -37,6 +37,10 @@
             when: lane-assignment
             contract: note
             gate: strict
+          - id: implementation-work
+            when: implementation-work
+            contract: note
+            gate: strict
         timeouts:
           review: 600000
         gates:

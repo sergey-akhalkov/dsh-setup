@@ -37,6 +37,37 @@ describe('setup release composition', () => {
     return last.config
   }
 
+  it('composes a dormant Release A profile with the native review configuration', async () => {
+    const delegation = await configFor('dsh-setup-delegation-rules')
+    const rules = delegation.rules as Array<Record<string, unknown>>
+    expect(rules.find((rule) => rule.when === 'implementation-work')).toMatchObject({
+      contract: 'note',
+    })
+    expect(delegation.gates).toEqual({
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: false,
+    })
+    const workflows = await configFor('dsh-setup-workflows')
+    expect(workflows.reviewers).toMatchObject({
+      codex: {
+        provider: 'codex-subagent',
+        model: 'gpt-6-astra',
+        reasoningEffort: 'xhigh',
+      },
+    })
+    const shipped = loadShippedDefinitions()
+    const reviewSteps = shipped.flatMap((definition) =>
+      definition.steps.filter((step) => step.executor === 'review'),
+    )
+    expect(reviewSteps.map((step) => step.review?.scope).sort()).toEqual(['task', 'whole', 'whole'])
+    const identities = shipped
+      .map((definition) => definition.settings.gateIdentity)
+      .filter((identity): identity is string => identity !== undefined)
+    expect(new Set(identities).size).toBe(identities.length)
+  })
   it('composes the retained review rules and the retired switches', async () => {
     const delegation = await configFor('dsh-setup-delegation-rules')
     const rules = delegation.rules as Array<Record<string, unknown>>

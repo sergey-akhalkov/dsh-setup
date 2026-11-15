@@ -472,7 +472,7 @@ describe('target resolution', () => {
     const shipped = fragment.rows[0]?.config
     if (shipped === undefined) throw new Error('missing shipped config')
     const shippedRules = shipped.rules ?? []
-    expect(shippedRules.map((rule) => rule.when)).not.toContain('implementation-work')
+    expect(shippedRules.map((rule) => rule.when)).toContain('implementation-work')
     expect(shippedRules.find((rule) => rule.id === 'lane-fanout')).toMatchObject({
       when: 'lane-assignment',
       contract: 'note',
@@ -481,10 +481,7 @@ describe('target resolution', () => {
     const harness = harnessFor(root, {
       ...shipped,
       gates: { ...(shipped.gates ?? {}), taskProgress: true },
-      rules: [
-        ...shippedRules,
-        { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },
-      ],
+      rules: shippedRules,
     })
     await harness.preStep(1)
     await harness.writeResult(

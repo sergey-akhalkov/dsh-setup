@@ -108,7 +108,7 @@ describe('model-facing budget', () => {
     // rule stays a profile option.
     expect(fragment).toContain('- id: lane-fanout')
     expect(fragment).toContain('when: lane-assignment')
-    expect(fragment).not.toContain('when: implementation-work')
+    expect(fragment).toContain('when: implementation-work')
     expect(fragment).not.toContain('when: lane-boundary')
     // The task-completion requirement belongs to a profile that configures the
     // implementation-work rule, never to the shipped defaults.

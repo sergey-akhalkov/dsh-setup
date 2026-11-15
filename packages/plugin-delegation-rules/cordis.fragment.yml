@@ -55,6 +55,12 @@ rows:
           when: lane-assignment
           contract: note
           gate: strict
+        # Dormant for Release A: the five switches below turn the legacy gate
+        # off; re-enabling taskProgress uses this note rule for rollback.
+        - id: implementation-work
+          when: implementation-work
+          contract: note
+          gate: strict
       timeouts:
         review: 600000
       gates:

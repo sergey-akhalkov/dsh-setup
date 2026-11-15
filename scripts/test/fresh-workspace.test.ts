@@ -114,7 +114,7 @@ describe('fresh-workspace migration', () => {
     ]) {
       expect(delegationFragment).toContain(`${name}: false`)
     }
-    expect(delegationFragment).not.toContain('when: implementation-work')
+    expect(delegationFragment).toContain('when: implementation-work')
   })
 
   it('accepts two profile verify settings, including a cap above 128', () => {
