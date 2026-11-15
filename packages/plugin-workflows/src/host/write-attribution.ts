@@ -417,7 +417,7 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
     const rawSegment = stripComments(segment.text, powershell)
     // A creation command may quote its name; parse it with the quotes intact.
     const quotedCreation =
-      /(?:^|[;&|])\s*openspec(?:\.cmd|\.exe)?\s+new\s+change\s+["']?([a-z0-9][a-z0-9-]*)["']?/iu.exec(
+      /^\s*openspec(?:\.cmd|\.exe)?\s+new\s+change\s+["']?([a-z0-9][a-z0-9-]*)["']?/iu.exec(
         rawSegment,
       )
     if (quotedCreation !== null) {

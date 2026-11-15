@@ -761,6 +761,41 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('does not attribute a quoted creation example', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command: "Write-Output '; openspec new change phantom'",
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'pwsh',
+            arguments: {
+              command:
+                "Set-Content -Value '; openspec new change phantom' -Path openspec/changes/auth/design.md",
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual(['auth'])
+  })
   it('handles literal-false branches, standard options, and quoted creation', () => {
     expect(
       attributedChangeName(

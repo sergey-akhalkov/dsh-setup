@@ -397,7 +397,7 @@ function changesOfCall(workspace, call) {
             continue;
         const rawSegment = stripComments(segment.text, powershell);
         // A creation command may quote its name; parse it with the quotes intact.
-        const quotedCreation = /(?:^|[;&|])\s*openspec(?:\.cmd|\.exe)?\s+new\s+change\s+["']?([a-z0-9][a-z0-9-]*)["']?/iu.exec(rawSegment);
+        const quotedCreation = /^\s*openspec(?:\.cmd|\.exe)?\s+new\s+change\s+["']?([a-z0-9][a-z0-9-]*)["']?/iu.exec(rawSegment);
         if (quotedCreation !== null) {
             addChange(quotedCreation[1]);
             continue;
