@@ -235,7 +235,20 @@ export class ReviewScheduler {
         const teardownConfirmed = await this.teardownConfirmed(entry);
         // Teardown can take up to 30 seconds; recheck the reviewed inputs after it
         // and immediately before publishing a verdict, failing closed on change.
-        if (teardownConfirmed && outcome.result.kind === 'verdict') {
+        // A verdict from a reviewer that may still be alive is never published.
+        if (outcome.result.kind === 'verdict') {
+            if (!teardownConfirmed) {
+                const failure = await recordReviewFailure({
+                    ...entry.request,
+                    error: 'the reviewer teardown could not be confirmed, so its verdict is not published; the review slot stays held until teardown completes',
+                    failureClass: 'timeout',
+                }).catch(() => undefined);
+                if (failure !== undefined) {
+                    await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined);
+                }
+                this.quarantine(entry, 'failed');
+                return;
+            }
             const reason = await this.recheckGuard(entry);
             if (reason !== undefined) {
                 const failure = await recordReviewFailure({
