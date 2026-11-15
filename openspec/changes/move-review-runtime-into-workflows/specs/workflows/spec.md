@@ -437,6 +437,11 @@ A false condition SHALL produce no run and no steer.
 - **WHEN** a condition references `records.spec.pass` and `digests.spec`
 - **THEN** it evaluates against the current whole-spec record and the current change artifact digest
 
+#### Scenario: Involvement sources are bounded
+
+- **WHEN** a condition reads `session.involved`
+- **THEN** it is true for the session's own write/edit, change creation, persisted involvement, or a supported shell write, and other file changes are attributed by the filesystem watcher
+
 #### Scenario: Invalid condition fails load
 
 - **WHEN** a definition's `condition` is not JSONLogic or names an unknown context field

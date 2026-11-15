@@ -175,8 +175,8 @@ function shellDestinations(command, powershell) {
                     skipValue = false;
                     continue;
                 }
-                if (/^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType)\b/iu.test(token)) {
-                    skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType)\b/iu.test(token);
+                if (/^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject)\b/iu.test(token)) {
+                    skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject)\b/iu.test(token);
                     continue;
                 }
                 if (token.startsWith('-'))

@@ -761,6 +761,40 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('skips -InputObject before a positional output', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command: 'Out-File -InputObject hello openspec/changes/auth/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'pwsh',
+            arguments: {
+              command: 'Out-File -InputObject openspec/changes/fake/design.md output.txt',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+  })
   it('recognizes Out-File -FilePath and ignores its -InputObject value', () => {
     expect(
       attributedChangeName(

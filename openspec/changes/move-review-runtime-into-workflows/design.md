@@ -153,6 +153,23 @@ the only producer of a committed approval, with the same format and ordering. A 
 allows an intermediate close with the failure visible and never approves; the next close retries the
 review.
 
+### D14 — Release A involvement and path boundaries (owner decision)
+
+The condition's involvement is established from the session's own successful `write`/`edit`
+calls under `openspec/changes/<name>/`, a successful `openspec new change <name>`, the persisted
+per-session involvement, and supported shell writes: `Set-Content`, `Add-Content`, `Out-File`,
+`New-Item`, and `tee` stages with a named `-Path`/`-LiteralPath`/`-FilePath` destination or one
+positional destination after standard option values, output redirections (`>`/`>>`), pipelines,
+and PowerShell or POSIX quoting/escapes. File changes made by a shell form outside this list are
+still attributed by the filesystem watcher and the persisted involvement record; parsing every
+shell grammar is not a Release A goal.
+
+The condition context rejects absolute drive paths, `..` traversal, UNC paths, delimiter-adjacent
+absolute POSIX paths, and `event.command` paths after `>`/`>>`. A POSIX path wrapped in Markdown
+emphasis is treated as a glob and is not rejected; task prose is owner-authored plan text, not
+untrusted input. Shell parsing hardening beyond these boundaries is follow-up work, not a load or
+condition contract.
+
 ## Release, migration, and rollback
 
 1. Release A: engine + definitions + cards + switches + parity; the delegation row keeps its rules

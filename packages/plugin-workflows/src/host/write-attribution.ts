@@ -186,11 +186,11 @@ function shellDestinations(command: string, powershell: boolean): string[] {
           continue
         }
         if (
-          /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType)\b/iu.test(
+          /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject)\b/iu.test(
             token,
           )
         ) {
-          skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType)\b/iu.test(token)
+          skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject)\b/iu.test(token)
           continue
         }
         if (token.startsWith('-')) continue
