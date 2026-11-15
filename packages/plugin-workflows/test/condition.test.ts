@@ -646,6 +646,17 @@ describe('condition context path boundary', () => {
       }),
     ).rejects.toThrow(/filesystem path/u)
   })
+
+  it('refuses a path in the event command', async () => {
+    const root = await workspace()
+    await expect(
+      buildConditionContext({
+        workspace: root,
+        change: 'auth',
+        event: { kind: 'tool.pre-execute', command: 'cat /etc/private/token.txt' },
+      }),
+    ).rejects.toThrow(/filesystem path/u)
+  })
   it('refuses an embedded absolute POSIX path', async () => {
     const root = await workspace()
     await writeFile(

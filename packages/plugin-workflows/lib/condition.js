@@ -119,6 +119,7 @@ export async function buildConditionContext(input) {
         }
     };
     assertNoPath(input.event.path);
+    assertNoPath(input.event.command);
     for (const lane of lanes) {
         assertNoPath(lane.title);
         for (const owned of lane.owned)
