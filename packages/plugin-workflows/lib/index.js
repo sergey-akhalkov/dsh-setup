@@ -32,7 +32,7 @@ import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
-import { checkedTaskIds, taskOf } from './tasks.js';
+import { checkedTaskIds, checkedTaskIdsOf, taskOf } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, obligationDedupeKey, } from './triggers.js';
 import { attributedChangeNames } from './write-attribution.js';
@@ -2435,6 +2435,10 @@ export function apply(ctx, config = {}) {
                     const nextTask = task === undefined ? undefined : taskOf(workspace, change, task.id);
                     if (task !== undefined && nextTask === undefined) {
                         throw new InputMutationError(`task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" changed while the review was queued in change "${change}"; finish the writes and start a fresh review`);
+                    }
+                    if (nextTask !== undefined &&
+                        !(checkedTaskIdsOf(workspace, change)?.includes(nextTask.id) ?? false)) {
+                        throw new InputMutationError(`task "${nextTask.number === undefined ? nextTask.id : `${nextTask.number} ${nextTask.text}`}" is no longer checked in change "${change}"; a queued review never starts for an unchecked task`);
                     }
                     if (current.prepared.reviewCwd !== undefined) {
                         await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined);

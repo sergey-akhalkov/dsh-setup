@@ -125,7 +125,7 @@ import {
   writeRunSync,
 } from './runs.js'
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js'
-import { checkedTaskIds, taskOf } from './tasks.js'
+import { checkedTaskIds, checkedTaskIdsOf, taskOf } from './tasks.js'
 import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
 import {
   checkpointRequired,
@@ -2943,6 +2943,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           if (task !== undefined && nextTask === undefined) {
             throw new InputMutationError(
               `task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" changed while the review was queued in change "${change}"; finish the writes and start a fresh review`,
+            )
+          }
+          if (
+            nextTask !== undefined &&
+            !(checkedTaskIdsOf(workspace, change)?.includes(nextTask.id) ?? false)
+          ) {
+            throw new InputMutationError(
+              `task "${nextTask.number === undefined ? nextTask.id : `${nextTask.number} ${nextTask.text}`}" is no longer checked in change "${change}"; a queued review never starts for an unchecked task`,
             )
           }
           if (current.prepared.reviewCwd !== undefined) {

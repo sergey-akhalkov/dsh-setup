@@ -468,6 +468,7 @@ export class ReviewScheduler {
     this.liveRuns.set(key, entry.run)
     this.liveKeys.set(entry.run.id, key)
     this.liveByRun.set(entry.run.id, entry.run)
+    entry.liveKey = key
   }
 
   private forgetLive(runId: string): void {
