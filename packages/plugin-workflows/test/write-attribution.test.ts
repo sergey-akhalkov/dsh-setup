@@ -761,6 +761,56 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('attributes copy and move destinations', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command: 'Copy-Item draft.md -Destination openspec/changes/auth/proposal.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'bash',
+            arguments: {
+              command: 'cp draft.md openspec/changes/auth/proposal.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'bash',
+            arguments: {
+              command: 'mv draft.md openspec/changes/billing/proposal.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('billing')
+  })
   it('does not attribute a quoted creation example', () => {
     expect(
       attributedChangeNames(

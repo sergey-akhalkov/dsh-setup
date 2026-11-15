@@ -143,16 +143,19 @@ function resolveMasked(token, values) {
     const match = /^\u0000(\d+)\u0000$/u.exec(token);
     return match === null ? token : (values[Number(match[1])] ?? '');
 }
+const WRITER_AT_START = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee|Copy-Item|Move-Item|Rename-Item|Remove-Item|cp|mv|rm|touch)\b/iu;
+// copy/move/rename/touch target the last positional; others target the first.
+const LAST_DESTINATION = new Set(['copy-item', 'move-item', 'rename-item', 'cp', 'mv', 'touch']);
 function shellDestinations(command, powershell) {
     const { masked, values } = maskQuoted(command, powershell);
     const destinations = [];
     // Only a writer that starts the stage executes; a printed writer name does not.
     const atStart = masked.trimStart();
-    const writer = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(atStart);
-    const writerName = /^(Set-Content|Add-Content|Out-File|New-Item|tee)/iu.exec(atStart)?.[1]?.toLowerCase() ?? '';
+    const writer = WRITER_AT_START.exec(atStart);
     if (writer !== null) {
-        const rest = writer[1] ?? '';
-        const named = /-(?:Path|LiteralPath|FilePath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest);
+        const writerName = writer[0].toLowerCase();
+        const rest = atStart.slice(writer[0].length);
+        const named = /-(?:Path|LiteralPath|FilePath|Destination)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest);
         if (named !== null) {
             destinations.push(resolveMasked(named[1] ?? '', values));
         }
@@ -160,7 +163,7 @@ function shellDestinations(command, powershell) {
             const tokens = rest.match(/\u0000\d+\u0000|\d*[<>]+|[^><\s]+/gu) ?? [];
             let skipValue = false;
             let skipOperand = false;
-            let positionals = 0;
+            const positionals = [];
             for (const token of tokens) {
                 if (/^\d*[<>]/u.test(token)) {
                     // A redirection operand belongs to the operator, not the writer.
@@ -182,12 +185,14 @@ function shellDestinations(command, powershell) {
                 }
                 if (token.startsWith('-'))
                     continue;
-                // tee accepts several positional outputs; other writers take one path
-                // and treat the remaining positionals as content or property values.
-                if (writerName === 'tee' || positionals === 0) {
-                    destinations.push(resolveMasked(token, values));
-                }
-                positionals += 1;
+                positionals.push(resolveMasked(token, values));
+            }
+            if (writerName === 'tee')
+                destinations.push(...positionals);
+            else if (positionals.length > 0) {
+                const destination = LAST_DESTINATION.has(writerName) ? positionals.at(-1) : positionals[0];
+                if (destination !== undefined)
+                    destinations.push(destination);
             }
         }
     }
@@ -415,7 +420,7 @@ function changesOfCall(workspace, call) {
         // Decode escaped letters before deciding whether a writer starts the stage
         // (`t\ee` and Set-C`ontent resolve to supported writers).
         const decodedSegment = executedSegment.replace(/\\(.)/gu, '$1').replace(/`(.)/gu, '$1');
-        const writerAtStart = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b/iu.test(decodedSegment);
+        const writerAtStart = WRITER_AT_START.test(decodedSegment);
         const hasRedirect = />/u.test(executedSegment);
         if (!writerAtStart && !hasRedirect)
             continue;
