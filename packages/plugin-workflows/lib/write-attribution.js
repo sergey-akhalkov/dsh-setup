@@ -154,19 +154,41 @@ function shellDestinations(command, powershell) {
     if (writer !== null) {
         const writerName = writer[0].toLowerCase();
         const rest = atStart.slice(writer[0].length);
-        const namedPattern = LAST_DESTINATION.has(writerName)
-            ? /-Destination[:\s]+(\u0000\d+\u0000|\S+)/iu
-            : /-(?:Path|LiteralPath|FilePath|Destination)[:\s]+(\u0000\d+\u0000|\S+)/iu;
-        const named = namedPattern.exec(rest);
-        if (named !== null) {
-            destinations.push(resolveMasked(named[1] ?? '', values));
+        const tokens = rest.match(/\u0000\d+\u0000|\d*[<>]+|[^><\s]+/gu) ?? [];
+        const consumed = new Set();
+        const namedTokens = LAST_DESTINATION.has(writerName)
+            ? ['destination']
+            : ['path', 'literalpath', 'filepath', 'destination'];
+        const namedValues = [];
+        for (let index = 0; index < tokens.length; index += 1) {
+            const token = tokens[index] ?? '';
+            const inline = new RegExp(`^-(?:${namedTokens.join('|')}):(.+)$`, 'iu').exec(token);
+            if (inline !== null) {
+                namedValues.push(resolveMasked(inline[1] ?? '', values));
+                consumed.add(index);
+                continue;
+            }
+            const bare = new RegExp(`^-(?:${namedTokens.join('|')})$`, 'iu').exec(token);
+            if (bare !== null) {
+                consumed.add(index);
+                const next = tokens[index + 1];
+                if (next !== undefined) {
+                    namedValues.push(resolveMasked(next, values));
+                    consumed.add(index + 1);
+                    index += 1;
+                }
+            }
+        }
+        if (namedValues.length > 0) {
+            destinations.push(...namedValues);
         }
         else {
-            const tokens = rest.match(/\u0000\d+\u0000|\d*[<>]+|[^><\s]+/gu) ?? [];
             let skipValue = false;
             let skipOperand = false;
             const positionals = [];
-            for (const token of tokens) {
+            for (const [index, token] of tokens.entries()) {
+                if (consumed.has(index))
+                    continue;
                 if (/^\d*[<>]/u.test(token)) {
                     // A redirection operand belongs to the operator, not the writer.
                     skipOperand = true;
@@ -180,10 +202,10 @@ function shellDestinations(command, powershell) {
                     skipValue = false;
                     continue;
                 }
-                if (/^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable|Filter|NewName|ea|ev|wa|wv|ov|ob|pv|ia|iv)\b/iu.test(token)) {
+                if (/^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable|Filter|Include|Exclude|NewName|ea|ev|wa|wv|ov|ob|pv|ia|iv)\b/iu.test(token)) {
                     skipValue =
                         !token.includes(':') &&
-                            /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable|Filter|NewName|ea|ev|wa|wv|ov|ob|pv|ia|iv)\b/iu.test(token);
+                            /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable|Filter|Include|Exclude|NewName|ea|ev|wa|wv|ov|ob|pv|ia|iv)\b/iu.test(token);
                     continue;
                 }
                 if (token.startsWith('-'))

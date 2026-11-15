@@ -761,6 +761,22 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('consumes -Include/-Exclude and reads named destinations at token starts', () => {
+    for (const command of [
+      'Set-Content -Include *.md openspec/changes/auth/design.md x',
+      'Set-Content -Exclude *.md openspec/changes/auth/design.md x',
+      'Set-Content -Value:example-Path:openspec/changes/phantom/tasks.md -Path openspec/changes/auth/tasks.md',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'a', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+  })
   it('supports inline named parameters and -NewName ordering', () => {
     for (const command of [
       'Set-Content -Path:openspec/changes/auth/design.md -Value x',
