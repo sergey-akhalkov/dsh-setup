@@ -578,6 +578,33 @@ describe('condition context path boundary', () => {
     }
   })
 
+  it('refuses a path after punctuation or a traversing token in prose', async () => {
+    for (const text of ['Read path=C:/private/token.txt', 'Read ../private/token.txt']) {
+      const root = await workspace()
+      await writeFile(
+        join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+        `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 ${text}\n`,
+        'utf8',
+      )
+      await expect(
+        buildConditionContext({
+          workspace: root,
+          change: 'auth',
+          event: { kind: 'turn.stopping' },
+        }),
+      ).rejects.toThrow(/filesystem path/u)
+    }
+  })
+
+  it('bounds an aggregate cat before joining', () => {
+    const context = {
+      change: { tasks: { items: [{ text: 'x'.repeat(1_000_000) }] } },
+    }
+    const condition = {
+      cat: Array.from({ length: 16 }, () => ({ var: 'change.tasks.items.0.text' })),
+    }
+    expect(() => evaluateCondition(condition, context as never)).toThrow(/oversized string/u)
+  })
   it('bounds a substr coercion of many repeated strings', async () => {
     const root = await workspace()
     await writeFile(

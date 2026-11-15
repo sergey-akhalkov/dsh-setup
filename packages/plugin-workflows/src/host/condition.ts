@@ -192,8 +192,8 @@ export async function buildConditionContext(
   // absolute or traversing lane/path value would leak it into a predicate.
   const startsPath = /^(?:[A-Za-z]:|[\\/])/u
   // Task and lane text is prose; an absolute path anywhere in it still leaks.
-  const containsPath = /(?:^|[\s"'`(])(?:[A-Za-z]:|[\\/])/u
-  const traverses = (value: string): boolean => value.split(/[\\/]/u).includes('..')
+  const containsPath = /(?:^|[\s"'`=(])(?:[A-Za-z]:|[\\/])/u
+  const traverses = (value: string): boolean => /(?:^|[\s"'`=(\\/])\.\.(?:[\\/]|\s|$)/u.test(value)
   const assertNoPath = (value: string | undefined, anywhere = false): void => {
     if (
       value !== undefined &&

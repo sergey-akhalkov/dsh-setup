@@ -70,7 +70,7 @@ function shellDestination(command: string): string | undefined {
     if (
       /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType)\b/iu.test(token)
     ) {
-      skipValue = /^-(?:Value|Credential)\b/iu.test(token)
+      skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType)\b/iu.test(token)
       continue
     }
     if (token.startsWith('-')) continue

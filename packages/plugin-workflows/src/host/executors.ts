@@ -432,11 +432,17 @@ export function evaluateJsonLogic(
     case 'max':
       return Math.max(...args.map((entry) => Number(value(entry))))
     case 'cat': {
+      let total = 0
       const joined = args
         .map((entry) => {
           const evaluated = value(entry)
           guardLogicString(evaluated)
-          return String(evaluated ?? '')
+          const text = String(evaluated ?? '')
+          total += text.length
+          if (total > MAX_LOGIC_STRING) {
+            throw new Error('invalid JSONLogic: evaluation produced an oversized string')
+          }
+          return text
         })
         .join('')
       guardLogicSize(joined)

@@ -346,6 +346,22 @@ describe('multi-change attribution', () => {
       },
     ]
     expect(attributedChangeNames(WORKSPACE, calls, 1)).toEqual(['auth', 'billing'])
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'e',
+            name: 'pwsh',
+            arguments: {
+              command: 'Set-Content -Encoding utf8 openspec/changes/auth/design.md -Value x',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
   })
 })
 
@@ -363,6 +379,22 @@ describe('multi-write shell attribution', () => {
       },
     ]
     expect(attributedChangeNames(WORKSPACE, calls, 1)).toEqual(['auth', 'billing'])
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'e',
+            name: 'pwsh',
+            arguments: {
+              command: 'Set-Content -Encoding utf8 openspec/changes/auth/design.md -Value x',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
   })
 })
 
