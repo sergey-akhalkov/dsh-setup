@@ -612,3 +612,19 @@ describe('Windows path separators', () => {
     ).toBe('auth')
   })
 })
+
+describe('single-quoted PowerShell values', () => {
+  it('attributes a write after a trailing backslash or backtick in single quotes', () => {
+    for (const value of ["'ends with \\'", "'ends with `'"]) {
+      const command = `Write-Output ${value}; Set-Content -Path openspec/changes/auth/design.md -Value x`
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'c', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+  })
+})

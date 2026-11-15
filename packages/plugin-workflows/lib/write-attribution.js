@@ -160,8 +160,13 @@ function splitSegments(text) {
     let quote;
     for (let index = 0; index < text.length; index += 1) {
         const char = text[index] ?? '';
-        if (char === '\\' || char === '`') {
+        if (quote !== "'" && (char === '\\' || char === '`')) {
             current += char + (text[index + 1] ?? '');
+            index += 1;
+            continue;
+        }
+        if (quote === "'" && char === "'" && text[index + 1] === "'") {
+            current += "''";
             index += 1;
             continue;
         }
@@ -200,8 +205,13 @@ function stripComments(text) {
     let quote;
     for (let index = 0; index < text.length; index += 1) {
         const char = text[index] ?? '';
-        if (char === '\\' || char === '`') {
+        if (quote !== "'" && (char === '\\' || char === '`')) {
             output += char + (text[index + 1] ?? '');
+            index += 1;
+            continue;
+        }
+        if (quote === "'" && char === "'" && text[index + 1] === "'") {
+            output += "''";
             index += 1;
             continue;
         }
@@ -234,9 +244,13 @@ function executedText(text) {
     let quote;
     for (let index = 0; index < text.length; index += 1) {
         const char = text[index] ?? '';
-        if (char === '\\' || char === '`') {
+        if (quote !== "'" && (char === '\\' || char === '`')) {
             if (quote === undefined)
                 output += char + (text[index + 1] ?? '');
+            index += 1;
+            continue;
+        }
+        if (quote === "'" && char === "'" && text[index + 1] === "'") {
             index += 1;
             continue;
         }
