@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -182,6 +182,157 @@ describe('native review host admission', () => {
       // Its checkout and lease are gone, not left renewing.
       const snapshots = await readdir(join(workspace, SNAPSHOTS)).catch(() => [] as string[])
       expect(snapshots).toEqual([])
+    } finally {
+      unregister()
+    }
+  })
+
+  it('admits whole-scope phases separately through the host', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const definitions = ['spec', 'integration'].map((phase) =>
+      validateDefinition({
+        v: 1,
+        id: `phase-${phase}`,
+        name: `Phase ${phase}`,
+        version: 1,
+        trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+        settings: {
+          allowModelStart: true,
+          risk: 'low',
+          gateOwnership: 'own',
+          maxBlocks: 3,
+          allowIntent: false,
+          gate: 'review',
+          gateIdentity: `phase-${phase}`,
+        },
+        steps: [
+          {
+            id: 'review',
+            title: 'Whole review',
+            executor: 'review',
+            review: {
+              target: 'codex',
+              instruction: phase === 'spec' ? 'review-spec' : 'review-integration',
+              scope: 'whole',
+              phase,
+            },
+            evidence: {
+              kind: 'record',
+              rule: `phase-${phase}`,
+              change: '{name}',
+              scope: 'whole',
+              verdicts: ['PASS', 'ERROR'],
+              digest: 'current',
+              path: `.dsh/workflows/records/phase-${phase}/{name}/${phase}.json`,
+            },
+            next: 'end',
+            blockTurnClose: true,
+          },
+        ],
+      }),
+    )
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions,
+    })
+    const listeners = new Map<string, Listener[]>()
+    const activationCalls: string[] = []
+    const agent = {
+      id: 'session-1',
+      session: { id: 'session-1', header: { origin: 'root' } },
+      ctx: { on: () => () => {} },
+      steer: () => {},
+      inject: () => {},
+    }
+    const ctx = {
+      get(name: string): unknown {
+        if (name === 'agents') return { get: () => agent, list: () => [agent] }
+        if (name === 'workingDirectory') return { get: () => workspace }
+        if (name === 'fs') {
+          return {
+            resolve: async (path: string) => ({ targetKey: path }),
+            watch: async () => async () => {},
+          }
+        }
+        if (name === 'connection') {
+          return { fetch: { register: () => () => {} } }
+        }
+        if (name === 'subagents') {
+          return {
+            getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+            startActivation: async (spec: { prompt: { text: string }[] }) => {
+              const instruction = spec.prompt.map((block) => block.text).join('\n')
+              const digest = /- Digest: ([a-f0-9]{64})/u.exec(instruction)?.[1] ?? ''
+              activationCalls.push(digest)
+              return {
+                childId: `child-${activationCalls.length}`,
+                result: Promise.resolve({
+                  output: [
+                    {
+                      type: 'text',
+                      text: `\`\`\`json\n${JSON.stringify({ digest, verdict: 'PASS', findings: [] })}\n\`\`\``,
+                    },
+                  ],
+                  stopReason: 'completed',
+                }),
+                dispose: async () => undefined,
+              }
+            },
+          }
+        }
+        if (name === 'systemPrompt') return { context: () => () => {} }
+        return undefined
+      },
+      provide: () => {},
+      on(name: string, listener: Listener): () => void {
+        const list = listeners.get(name) ?? []
+        list.push(listener)
+        listeners.set(name, list)
+        return () => {}
+      },
+      effect: () => () => {},
+    }
+    const emit = async (name: string, ...args: unknown[]): Promise<unknown> => {
+      let result: unknown
+      for (const listener of listeners.get(name) ?? []) result = await listener(...args)
+      return result
+    }
+    try {
+      apply(ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      for (const definition of definitions) {
+        const run = createRun({
+          definition: definition.id,
+          trigger: 'turn.stopping',
+          session: 'session-1',
+          workspace,
+          context: { name: 'auth' },
+          steps: ['review'],
+          now: 1_000,
+        })
+        await writeRun(workspace, run, auth)
+      }
+      await emit('agent/turn-stopping', { agent, turn: 1 })
+      const records = await Promise.all(
+        definitions.map(async (definition) => {
+          const path = join(
+            workspace,
+            '.dsh/workflows/records',
+            definition.id,
+            'auth',
+            `${definition.steps[0]?.review?.phase ?? ''}.json`,
+          )
+          for (let attempt = 0; attempt < 250; attempt += 1) {
+            const text = await readFile(path, 'utf8').catch(() => undefined)
+            if (text !== undefined) return JSON.parse(text) as { verdict: string }
+            await new Promise((resolve) => setTimeout(resolve, 20))
+          }
+          throw new Error(`no record for ${definition.id}`)
+        }),
+      )
+      expect(records.map((record) => record.verdict)).toEqual(['PASS', 'PASS'])
+      expect(activationCalls).toHaveLength(2)
     } finally {
       unregister()
     }
