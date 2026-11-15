@@ -167,17 +167,18 @@ function shellDestinations(command: string, powershell: boolean): string[] {
     if (named !== null) {
       destinations.push(resolveMasked(named[1] ?? '', values))
     } else {
-      const tokens = rest.match(/\u0000\d+\u0000|[<>]+|[^><\s]+/gu) ?? []
+      const tokens = rest.match(/\u0000\d+\u0000|\d*[<>]+|[^><\s]+/gu) ?? []
       let skipValue = false
-      let skipInput = false
+      let skipOperand = false
       let positionals = 0
       for (const token of tokens) {
         if (/^\d*[<>]/u.test(token)) {
-          skipInput = /^\d*</u.test(token)
+          // A redirection operand belongs to the operator, not the writer.
+          skipOperand = true
           continue
         }
-        if (skipInput) {
-          skipInput = false
+        if (skipOperand) {
+          skipOperand = false
           continue
         }
         if (skipValue) {
@@ -417,8 +418,11 @@ function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
     }
     // A writer must start the stage or follow a redirect; a printed writer name
     // in an argument does not execute anything.
+    // Decode escaped letters before deciding whether a writer starts the stage
+    // (`t\ee` and Set-C`ontent resolve to supported writers).
+    const decodedSegment = executedSegment.replace(/\\(.)/gu, '$1').replace(/`(.)/gu, '$1')
     const writerAtStart = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b/iu.test(
-      executedSegment,
+      decodedSegment,
     )
     const hasRedirect = />/u.test(executedSegment)
     if (!writerAtStart && !hasRedirect) continue

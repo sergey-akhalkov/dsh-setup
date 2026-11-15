@@ -761,6 +761,49 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('ignores redirection operands and decodes escaped writer names', () => {
+    for (const command of [
+      'Set-Content >log.txt openspec/changes/auth/tasks.md x',
+      'Set-Content 2>&1 openspec/changes/auth/tasks.md x',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'a', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'bash',
+            arguments: { command: 't\\ee openspec/changes/auth/tasks.md' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'pwsh',
+            arguments: { command: 'Set-C`ontent openspec/changes/auth/tasks.md x' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('treats the second positional of Set-Content as content', () => {
     expect(
       attributedChangeNames(
