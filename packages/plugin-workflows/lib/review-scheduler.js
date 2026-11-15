@@ -5,13 +5,14 @@ function liveIdentity(input) {
 }
 function queueIdentity(input) {
     const task = input.taskId ?? 'whole';
-    return `${input.rule}/${input.change}/${task}/${input.digest}/${input.reviewer}`;
+    return `${input.workspace}/${input.rule}/${input.change}/${task}/${input.digest}/${input.reviewer}`;
 }
 function queueFile(input) {
     return {
-        id: `${input.run.id}:${input.rule}:${input.change}:${input.taskId ?? 'whole'}`,
-        key: `${input.rule}/${input.change}/${input.taskId ?? 'whole'}`,
+        id: `${input.workspace}:${input.run.id}:${input.rule}:${input.change}:${input.taskId ?? 'whole'}`,
+        key: `${input.workspace}/${input.rule}/${input.change}/${input.taskId ?? 'whole'}`,
         identity: queueIdentity({
+            workspace: input.workspace,
             rule: input.rule,
             change: input.change,
             ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
@@ -181,6 +182,7 @@ export class ReviewScheduler {
         if (outcome.kind === 'unchanged')
             return;
         const identity = queueIdentity({
+            workspace: entry.workspace,
             rule: entry.rule,
             change: entry.change,
             ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
@@ -360,6 +362,7 @@ export class ReviewScheduler {
             change: input.change,
             ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
             request: input.request,
+            liveKey: key,
             waited: false,
             reprepared: false,
             ...(input.reprepare === undefined ? {} : { reprepare: input.reprepare }),
