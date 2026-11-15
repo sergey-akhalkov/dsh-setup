@@ -128,7 +128,9 @@ scope, the verdict schema, and the reuse policy.
 
 `reviewQueue` (concurrency 2, `maxQueued`, `maxAttempts`, backoff, `waitTimeoutMs`) and the
 `.dsh/workflows/snapshots/<runId>` checkout move into the workflows row config and engine. Review
-runs are admitted through that queue rather than the step dispatch. The settlement rule is unchanged:
+runs are admitted through that queue rather than the step dispatch; Release A requires the queue, so a
+disabled eviewQueue fails the review step loud with a config ERROR instead of starting an
+unmanaged reviewer. The settlement rule is unchanged:
 records are authoritative, runs are the process, `ERROR` allows an intermediate close and never
 approves.
 

@@ -83,9 +83,7 @@ import { issueCompletionReceipt, listReceipts } from './receipts.js'
 import { definitionsRegistry, type WorkflowsDefinitionsService } from './registry.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
-  beginReviewAttempt,
   InputMutationError,
-  publishReviewOutcome,
   type ReviewerMap,
   type ReviewRunInput,
   recordReviewFailure,
@@ -3012,49 +3010,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           now: journal.time(),
         }
         if (!reviewQueue.enabled) {
-          let keepSnapshot = false
-          try {
-            const attempt = beginReviewAttempt(request)
-            const outcome = await attempt.result
-            let tornDown = true
-            try {
-              await request.runner.waitForTeardown?.()
-            } catch {
-              tornDown = false
-            }
-            if (outcome.result.kind === 'verdict') {
-              let reason: string | undefined
-              if (!tornDown) {
-                keepSnapshot = true
-                reason =
-                  'the reviewer teardown could not be confirmed, so its verdict is not published; the frozen checkout stays for the stale-snapshot sweep'
-              } else {
-                try {
-                  reason = await request.prepared.liveGuard?.()
-                } catch (error) {
-                  reason = `the live-input recheck failed (${error instanceof Error ? error.message : String(error)})`
-                }
-              }
-              if (reason !== undefined) {
-                const failure = await recordReviewFailure({
-                  ...request,
-                  error: reason,
-                  failureClass: tornDown ? 'reviewed-inputs-changed' : 'timeout',
-                }).catch(() => undefined)
-                return failure?.run ?? reviewRun
-              }
-            }
-            const result = await publishReviewOutcome(request, outcome, attempt.now)
-            return result.run
-          } finally {
-            // A directly executed review must not leak its frozen checkout; a
-            // child that is not confirmed torn down keeps it for the sweep.
-            if (!keepSnapshot && current.prepared.reviewCwd !== undefined) {
-              await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(
-                () => undefined,
-              )
-            }
+          // Release A runs native reviews only through the engine queue; a
+          // disabled queue fails loud instead of starting an unmanaged child.
+          const failure = await recordReviewFailure({
+            ...request,
+            error:
+              'the native review queue is disabled; Release A runs reviews only through reviewQueue — enable it in the workflows row config and re-run',
+            failureClass: 'config',
+          }).catch(() => undefined)
+          if (current.prepared.reviewCwd !== undefined) {
+            await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined)
           }
+          return failure?.run ?? reviewRun
         }
         const admission = await reviewScheduler.enqueue({
           workspace,

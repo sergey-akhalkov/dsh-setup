@@ -27,7 +27,7 @@ import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { beginReviewAttempt, InputMutationError, publishReviewOutcome, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, TASK_ID_PATTERN, } from './review.js';
+import { InputMutationError, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
@@ -2492,51 +2492,17 @@ export function apply(ctx, config = {}) {
                     now: journal.time(),
                 };
                 if (!reviewQueue.enabled) {
-                    let keepSnapshot = false;
-                    try {
-                        const attempt = beginReviewAttempt(request);
-                        const outcome = await attempt.result;
-                        let tornDown = true;
-                        try {
-                            await request.runner.waitForTeardown?.();
-                        }
-                        catch {
-                            tornDown = false;
-                        }
-                        if (outcome.result.kind === 'verdict') {
-                            let reason;
-                            if (!tornDown) {
-                                keepSnapshot = true;
-                                reason =
-                                    'the reviewer teardown could not be confirmed, so its verdict is not published; the frozen checkout stays for the stale-snapshot sweep';
-                            }
-                            else {
-                                try {
-                                    reason = await request.prepared.liveGuard?.();
-                                }
-                                catch (error) {
-                                    reason = `the live-input recheck failed (${error instanceof Error ? error.message : String(error)})`;
-                                }
-                            }
-                            if (reason !== undefined) {
-                                const failure = await recordReviewFailure({
-                                    ...request,
-                                    error: reason,
-                                    failureClass: tornDown ? 'reviewed-inputs-changed' : 'timeout',
-                                }).catch(() => undefined);
-                                return failure?.run ?? reviewRun;
-                            }
-                        }
-                        const result = await publishReviewOutcome(request, outcome, attempt.now);
-                        return result.run;
+                    // Release A runs native reviews only through the engine queue; a
+                    // disabled queue fails loud instead of starting an unmanaged child.
+                    const failure = await recordReviewFailure({
+                        ...request,
+                        error: 'the native review queue is disabled; Release A runs reviews only through reviewQueue — enable it in the workflows row config and re-run',
+                        failureClass: 'config',
+                    }).catch(() => undefined);
+                    if (current.prepared.reviewCwd !== undefined) {
+                        await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined);
                     }
-                    finally {
-                        // A directly executed review must not leak its frozen checkout; a
-                        // child that is not confirmed torn down keeps it for the sweep.
-                        if (!keepSnapshot && current.prepared.reviewCwd !== undefined) {
-                            await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined);
-                        }
-                    }
+                    return failure?.run ?? reviewRun;
                 }
                 const admission = await reviewScheduler.enqueue({
                     workspace,

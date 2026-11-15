@@ -419,6 +419,11 @@ digest mismatch, a target failure, or a timeout SHALL write an `ERROR` record an
 - **WHEN** a git-visible reviewed input changes while a whole-scope review runs
 - **THEN** the verdict is discarded, no `PASS` is published, and the error names the changed paths
 
+#### Scenario: Disabled queue fails loud
+
+- **WHEN** the row sets `reviewQueue.enabled` to false
+- **THEN** the review step publishes one `config` `ERROR` explaining that Release A runs reviews only through the queue, starts no reviewer, and discards any prepared snapshot
+
 ### Requirement: Review condition
 
 A trigger MAY declare a `condition`: a bounded JSONLogic predicate over the event, the change's
