@@ -108,18 +108,21 @@ export async function buildConditionContext(input) {
     // `..` counts only as a whole path segment, never as the ellipsis in
     // ".../tasks/<taskId>.json".
     const traverses = /(?:^|[^A-Za-z0-9.])\.\.(?:[^A-Za-z0-9.]|$)/u;
-    const assertNoPath = (value) => {
+    // In a shell command a redirection operator can touch an absolute path.
+    const redirectedPath = />{1,2}\/[^\s'"`*]/u;
+    const assertNoPath = (value, redirection = false) => {
         if (value !== undefined &&
             (startsPath.test(value) ||
                 drivePath.test(value) ||
                 absolutePath.test(value) ||
+                (redirection && redirectedPath.test(value)) ||
                 uncPath.test(value) ||
                 traverses.test(value))) {
             throw new Error('condition context contains a filesystem path');
         }
     };
     assertNoPath(input.event.path);
-    assertNoPath(input.event.command);
+    assertNoPath(input.event.command, true);
     for (const lane of lanes) {
         assertNoPath(lane.title);
         for (const owned of lane.owned)

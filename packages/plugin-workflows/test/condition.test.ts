@@ -647,6 +647,18 @@ describe('condition context path boundary', () => {
     ).rejects.toThrow(/filesystem path/u)
   })
 
+  it('refuses an absolute path after a redirection in event.command', async () => {
+    const root = await workspace()
+    for (const command of ['echo x>/etc/private/token.txt', 'echo x>>/etc/private/token.txt']) {
+      await expect(
+        buildConditionContext({
+          workspace: root,
+          change: 'auth',
+          event: { kind: 'tool.pre-execute', command },
+        }),
+      ).rejects.toThrow(/filesystem path/u)
+    }
+  })
   it('refuses a path in the event command', async () => {
     const root = await workspace()
     await expect(
