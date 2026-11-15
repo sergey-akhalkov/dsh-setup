@@ -83,6 +83,8 @@ export declare class ReviewScheduler {
      * instead of publishing over the terminal run.
      */
     fence(runId: string): void;
+    /** Remove a PASS record/approval a fenced settlement must not leave behind. */
+    private discardFencedRecord;
     /** The live review of this workflow run, regardless of current input changes. */
     liveRunById(runId: string): WorkflowRun | undefined;
     /** The run already covering this review, before any snapshot is prepared. */

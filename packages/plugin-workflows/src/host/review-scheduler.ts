@@ -1,3 +1,5 @@
+import { unlink } from 'node:fs/promises'
+import { join } from 'node:path'
 import {
   beginReviewAttempt,
   publishReviewOutcome,
@@ -200,8 +202,27 @@ export class ReviewScheduler {
     if (this.disposed) return
     this.fenced.add(runId)
     const entry = this.admitted.get(runId)
-    if (entry === undefined || entry.started) return
+    if (entry === undefined) return
+    void this.discardFencedRecord(entry)
+    if (entry.started) return
     void this.queue.cancel(entry.file.id).catch(() => undefined)
+  }
+
+  /** Remove a PASS record/approval a fenced settlement must not leave behind. */
+  private async discardFencedRecord(entry: ScheduledEntry): Promise<void> {
+    const definition = entry.request.definition.settings.gateIdentity ?? entry.request.definition.id
+    const scope = entry.request.step.review?.scope ?? 'whole'
+    const phase = entry.request.step.review?.phase
+    const taskId = entry.request.task?.id
+    const suffix = scope === 'task' ? `tasks/${taskId ?? ''}.json` : `${phase ?? 'spec'}.json`
+    await unlink(
+      join(entry.workspace, '.dsh', 'workflows', 'records', definition, entry.change, suffix),
+    ).catch(() => undefined)
+    if (taskId !== undefined) {
+      await unlink(
+        join(entry.workspace, 'openspec', 'changes', entry.change, 'reviews', `${taskId}.json`),
+      ).catch(() => undefined)
+    }
   }
 
   /** The live review of this workflow run, regardless of current input changes. */
@@ -489,6 +510,13 @@ export class ReviewScheduler {
     }
     const finalOutcome = teardownConfirmed ? outcome : withUnconfirmedTeardown(outcome)
     const result = await this.publish(entry, finalOutcome, now)
+    // The fence can land while the record is being verified/written; remove
+    // any surviving PASS for the settled run before reporting completion.
+    if (this.fenced.has(entry.run.id)) {
+      await this.discardFencedRecord(entry)
+      await this.queue.complete(entry, 'discarded')
+      return
+    }
     const state: SettledRunState =
       result.discarded === true
         ? 'discarded'
