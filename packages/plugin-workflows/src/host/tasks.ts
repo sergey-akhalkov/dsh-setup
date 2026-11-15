@@ -34,6 +34,11 @@ export function checkedTaskIdsOf(workspace: string, change: string): string[] | 
   }
 }
 
+/** True only while the task is checked in the live tasks.md. */
+export function isTaskChecked(workspace: string, change: string, taskId: string): boolean {
+  return checkedTaskIdsOf(workspace, change)?.includes(taskId) ?? false
+}
+
 export interface NumberedTask {
   readonly id: string
   readonly number: string

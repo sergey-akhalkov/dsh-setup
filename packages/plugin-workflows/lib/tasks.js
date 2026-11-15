@@ -28,6 +28,10 @@ export function checkedTaskIdsOf(workspace, change) {
         return undefined;
     }
 }
+/** True only while the task is checked in the live tasks.md. */
+export function isTaskChecked(workspace, change, taskId) {
+    return checkedTaskIdsOf(workspace, change)?.includes(taskId) ?? false;
+}
 /** One numbered task by its stable id, checked or not. */
 export function findTaskOf(markdown, taskId) {
     for (const match of markdown.matchAll(/^\s*-\s*\[[ xX]\]\s+(\d+(?:\.\d+)*)\s+(\S.*?)\s*$/gmu)) {

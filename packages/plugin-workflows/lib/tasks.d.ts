@@ -10,6 +10,8 @@ export declare function taskIdOf(text: string): string;
 export declare function checkedTaskIds(markdown: string): string[];
 /** The checked task ids of one change, or undefined when its tasks.md is unreadable. */
 export declare function checkedTaskIdsOf(workspace: string, change: string): string[] | undefined;
+/** True only while the task is checked in the live tasks.md. */
+export declare function isTaskChecked(workspace: string, change: string, taskId: string): boolean;
 export interface NumberedTask {
     readonly id: string;
     readonly number: string;
