@@ -256,6 +256,10 @@ export class ReviewScheduler {
     /** Publish the settled attempt, then release or quarantine the slot. */
     async publishAndSettle(entry, outcome, now) {
         const teardownConfirmed = await this.teardownConfirmed(entry);
+        // Disposal or a superseded admission during the awaited teardown must not
+        // publish; ownership is rechecked immediately before any record write.
+        if (this.disposed || !this.queue.owns(entry.file.id))
+            return;
         // Teardown can take up to 30 seconds; recheck the reviewed inputs after it
         // and immediately before publishing a verdict, failing closed on change.
         // A verdict from a reviewer that may still be alive is never published.

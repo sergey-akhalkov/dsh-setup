@@ -2419,6 +2419,9 @@ export function apply(ctx, config = {}) {
                                 : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
                         };
                     }
+                    if (task !== undefined && !isTaskChecked(workspace, change, task.id)) {
+                        throw new InputMutationError(`task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" is no longer checked in change "${change}"; a live-fallback review never starts for an unchecked task`);
+                    }
                     return {
                         prepared: {
                             specDigest,
