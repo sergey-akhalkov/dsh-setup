@@ -163,7 +163,7 @@ function shellDestinations(command: string, powershell: boolean): string[] {
     /^(Set-Content|Add-Content|Out-File|New-Item|tee)/iu.exec(atStart)?.[1]?.toLowerCase() ?? ''
   if (writer !== null) {
     const rest = writer[1] ?? ''
-    const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest)
+    const named = /-(?:Path|LiteralPath|FilePath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest)
     if (named !== null) {
       destinations.push(resolveMasked(named[1] ?? '', values))
     } else {
