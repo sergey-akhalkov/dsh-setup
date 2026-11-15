@@ -166,8 +166,8 @@ function shellDestinations(command: string, powershell: boolean): string[] {
     const writerName = writer[0].toLowerCase()
     const rest = atStart.slice(writer[0].length)
     const namedPattern = LAST_DESTINATION.has(writerName)
-      ? /-Destination\s+(\u0000\d+\u0000|\S+)/iu
-      : /-(?:Path|LiteralPath|FilePath|Destination)\s+(\u0000\d+\u0000|\S+)/iu
+      ? /-Destination[:\s]+(\u0000\d+\u0000|\S+)/iu
+      : /-(?:Path|LiteralPath|FilePath|Destination)[:\s]+(\u0000\d+\u0000|\S+)/iu
     const named = namedPattern.exec(rest)
     if (named !== null) {
       destinations.push(resolveMasked(named[1] ?? '', values))
@@ -191,13 +191,13 @@ function shellDestinations(command: string, powershell: boolean): string[] {
           continue
         }
         if (
-          /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable|Filter|ea|ev|wa|wv|ov|ob|pv|ia|iv)\b/iu.test(
+          /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable|Filter|NewName|ea|ev|wa|wv|ov|ob|pv|ia|iv)\b/iu.test(
             token,
           )
         ) {
           skipValue =
             !token.includes(':') &&
-            /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable|Filter|ea|ev|wa|wv|ov|ob|pv|ia|iv)\b/iu.test(
+            /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable|Filter|NewName|ea|ev|wa|wv|ov|ob|pv|ia|iv)\b/iu.test(
               token,
             )
           continue
