@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { type Definition, resolveOwnership } from '../src/host/definitions.ts'
 import { evaluateTurnClose, runDeferredStep, selectBlockingStep } from '../src/host/gates.ts'
 import { createRun, settleStep, type WorkflowRun } from '../src/host/runs.ts'
-import { contributedIntake } from './intake-definition.ts'
+import { deferredIntake } from './intake-definition.ts'
 
 const INSTALLED: ReadonlySet<string> = new Set(['delegation-rules', 'goal-continuity'])
 
+/**
+ * The contributed intake is owned by the review executor now, so the deferred
+ * mechanism is exercised on a synthetic copy with its retired deferred step.
+ */
 function intakeDefinition(): Definition {
-  return contributedIntake()
+  return deferredIntake()
 }
 
 function intakeRun(): WorkflowRun {
@@ -29,7 +33,7 @@ function intakeRun(): WorkflowRun {
 }
 
 describe('legacy composition', () => {
-  it('keeps the shipped intake owned except for its deferred spec-review step', () => {
+  it('keeps the synthetic intake owned except for its deferred spec-review step', () => {
     const definition = intakeDefinition()
     const resolved = resolveOwnership(definition, INSTALLED)
     expect(resolved.issues).toEqual([])

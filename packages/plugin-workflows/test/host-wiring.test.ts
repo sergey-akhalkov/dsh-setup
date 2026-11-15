@@ -3898,8 +3898,8 @@ describe('main-step ownership across turns', () => {
   })
 })
 
-describe('deferred step at runtime', () => {
-  it('reads the legacy review record and never steers past a pending deferred step', async () => {
+describe('owned review at runtime', () => {
+  it('starts the owned whole-spec review and never completes it from a legacy record', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const host = fakeHost(workspace)
@@ -3911,28 +3911,10 @@ describe('deferred step at runtime', () => {
     const intake = definitionsRegistry.installed('change-intake')?.definition
     expect(intake).toBeDefined()
     if (intake === undefined) return
-    let run = runs.createRun({
-      definition: 'change-intake',
-      trigger: 'tool.pre-execute',
-      session: 'session-1',
-      workspace,
-      context: { name: 'auth' },
-      steps: intake.steps.map((step) => step.id),
-      id: 'run-deferred-review',
-      now: 1_000,
-    })
-    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
-      run = runs.settleStep(run, step, 'done', { at: 1_100 })
-    }
-    await runs.writeRun(workspace, run, auth)
-    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    const blocked = await runs.readAuthenticatedRun(workspace, 'run-deferred-review', auth)
-    expect(blocked?.steps.find((step) => step.id === 'spec-review')?.state).toBe('blocked')
-    expect(blocked?.status).toBe('blocked')
-    expect(host.steers).toHaveLength(0)
+    expect(intake.steps.find((step) => step.id === 'spec-review')?.executor).toBe('review')
 
-    // A current whole-spec PASS record lets the deferred step complete; only
-    // then may the next owned step (approval) steer.
+    // A current legacy PASS exists before the owned step runs; it must not be
+    // read as the step's evidence.
     const change = join(workspace, 'openspec', 'changes', 'auth')
     await mkdir(join(change, 'specs', 'auth'), { recursive: true })
     for (const file of ['proposal.md', 'design.md', 'tasks.md']) {
@@ -3942,16 +3924,52 @@ describe('deferred step at runtime', () => {
     const { currentSpecDigest } = await import('../src/host/evidence.ts')
     const digest = await currentSpecDigest(workspace, 'auth')
     expect(digest).toBeDefined()
-    const record = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
-    await mkdir(record, { recursive: true })
+    const legacy = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    await mkdir(legacy, { recursive: true })
     await writeFile(
-      join(record, 'spec.json'),
+      join(legacy, 'spec.json'),
       `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
       'utf8',
     )
-    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
-    const reviewed = await runs.readAuthenticatedRun(workspace, 'run-deferred-review', auth)
-    expect(reviewed?.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
+
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-owned-review',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    await runs.writeRun(workspace, run, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-owned-review', auth)
+    const review = stored?.steps.find((step) => step.id === 'spec-review')
+    // The unconfigured reviewer writes the engine's own ERROR record; the
+    // legacy PASS is ignored, and the native step settles from that record.
+    expect(review?.state).toBe('done')
+    expect(review?.evidence?.path).toBe('.dsh/workflows/records/change-intake/auth/spec.json')
+    const record = JSON.parse(
+      await readFile(
+        join(workspace, '.dsh', 'workflows', 'records', 'change-intake', 'auth', 'spec.json'),
+        'utf8',
+      ),
+    ) as Record<string, unknown>
+    expect(record).toMatchObject({
+      definition: 'change-intake',
+      rule: 'change-intake',
+      change: 'auth',
+      phase: 'spec',
+      scope: 'whole',
+      verdict: 'ERROR',
+      digest,
+    })
+    // Approval is the next owned step; it is steered while no user answer exists.
+    expect(stored?.steps.find((step) => step.id === 'approval')?.state).not.toBe('done')
     await waitFor(async () => host.steers.length === 1)
   })
 })
@@ -4078,7 +4096,7 @@ describe('intake runtime', () => {
       at: 1_100,
       evidence: {
         kind: 'record',
-        path: '.dsh/delegation/spec-review/auth/spec.json',
+        path: '.dsh/workflows/records/change-intake/auth/spec.json',
         digest: 'a'.repeat(64),
       },
     })
@@ -4338,7 +4356,8 @@ describe('intake end-to-end in a fake host', () => {
     expect(await readFile(join(changeDir, '.openspec.yaml'), 'utf8')).toBe(metadata)
     expect(await intakeRuns()).toHaveLength(1)
 
-    // 4. Artifacts and a canonical strict-validation result complete spec.
+    // 4. Artifacts, a canonical strict-validation result, and a current native
+    //    whole-spec PASS complete spec and let the owned review reuse it.
     for (const [file, text] of [
       ['proposal.md', '# proposal\n'],
       ['design.md', '# design\n'],
@@ -4348,6 +4367,15 @@ describe('intake end-to-end in a fake host', () => {
       await mkdir(dirname(join(changeDir, file)), { recursive: true })
       await writeFile(join(changeDir, file), text, 'utf8')
     }
+    const digest = await currentSpecDigest(workspace, 'auth')
+    expect(digest).toBeDefined()
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'change-intake', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(recordDir, 'spec.json'),
+      `${JSON.stringify({ definition: 'change-intake', rule: 'change-intake', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
     await fresh.emit(
       'tools/result',
       {
@@ -4373,18 +4401,6 @@ describe('intake end-to-end in a fake host', () => {
       },
     )
     await fresh.emit('agent/turn-stopping', { agent: fresh.agent, turn: 4 })
-
-    // 5. The current whole-spec PASS record completes the deferred review.
-    const digest = await currentSpecDigest(workspace, 'auth')
-    expect(digest).toBeDefined()
-    const recordDir = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
-    await mkdir(recordDir, { recursive: true })
-    await writeFile(
-      join(recordDir, 'spec.json'),
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
-      'utf8',
-    )
-    await fresh.emit('agent/turn-stopping', { agent: fresh.agent, turn: 5 })
     const completed = await runs.readAuthenticatedRun(workspace, created?.id ?? '', auth)
     expect(completed?.status).toBe('completed')
     expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
@@ -4392,7 +4408,7 @@ describe('intake end-to-end in a fake host', () => {
       change: 'auth',
     })
 
-    // 6. A repeated creation is allowed and starts no second run.
+    // 5. A repeated creation is allowed and starts no second run.
     const repeated = (await fresh.emit(
       'tools/pre-execute',
       {
@@ -4446,11 +4462,11 @@ describe('intake end-to-end in a fake host', () => {
     const { currentSpecDigest } = await import('../src/host/evidence.ts')
     const digest = await currentSpecDigest(workspace, 'auth')
     expect(digest).toBeDefined()
-    const recordDir = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'change-intake', 'auth')
     await mkdir(recordDir, { recursive: true })
     await writeFile(
       join(recordDir, 'spec.json'),
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      `${JSON.stringify({ definition: 'change-intake', rule: 'change-intake', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
       'utf8',
     )
     await runs.writeRun(workspace, run, auth)
@@ -5451,7 +5467,7 @@ describe('session disposal', () => {
           ? {
               evidence: {
                 kind: 'record',
-                path: '.dsh/delegation/spec-review/auth/spec.json',
+                path: '.dsh/workflows/records/change-intake/auth/spec.json',
                 digest: 'a'.repeat(64),
               },
             }

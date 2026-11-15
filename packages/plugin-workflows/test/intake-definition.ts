@@ -9,21 +9,52 @@ import { type Definition, validateDefinition } from '../src/host/definitions.ts'
  * exactly as the registry contribution does.
  */
 export function contributedIntake(): Definition {
-  return validateDefinition(
-    JSON.parse(
-      readFileSync(
-        join(
-          fileURLToPath(new URL('.', import.meta.url)),
-          '..',
-          '..',
-          'plugin-openspec',
-          'assets',
-          'workflows',
-          'change-intake.json',
-        ),
-        'utf8',
+  return validateDefinition(readIntakeAsset())
+}
+
+/**
+ * The same intake with its `spec-review` step returned to the retired deferred
+ * shape: tests that need a deferred step beside owned steps use this synthetic
+ * copy instead of the shipped definition, which is owned by the review executor.
+ */
+export function deferredIntake(): Definition {
+  const raw = readIntakeAsset() as { steps: Array<Record<string, unknown>> }
+  const review = raw.steps.find((step) => step.id === 'spec-review')
+  if (review === undefined) throw new Error('the contributed intake has no spec-review step')
+  Object.assign(review, {
+    executor: 'tool',
+    ownership: 'defer',
+    legacy: { plugin: 'delegation-rules', signal: 'spec-review' },
+    tool: { name: 'delegate', args: { rule: 'spec-review', change: '{name}' } },
+    evidence: {
+      kind: 'record',
+      path: '.dsh/delegation/spec-review/{name}/spec.json',
+      rule: 'spec-review',
+      change: '{name}',
+      phase: 'spec',
+      scope: 'whole',
+      verdict: 'PASS',
+      digest: 'current',
+    },
+  })
+  delete review.review
+  return validateDefinition(raw)
+}
+
+function readIntakeAsset(): unknown {
+  return JSON.parse(
+    readFileSync(
+      join(
+        fileURLToPath(new URL('.', import.meta.url)),
+        '..',
+        '..',
+        'plugin-openspec',
+        'assets',
+        'workflows',
+        'change-intake.json',
       ),
-    ) as unknown,
+      'utf8',
+    ),
   )
 }
 

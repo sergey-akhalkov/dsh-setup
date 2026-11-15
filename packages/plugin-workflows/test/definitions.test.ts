@@ -14,6 +14,7 @@ import {
   validateDefinition,
 } from '../src/host/definitions.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
+import { deferredIntake } from './intake-definition.ts'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const TEMP_DIRECTORIES: string[] = []
@@ -129,14 +130,22 @@ describe('workflow definition schema', () => {
     expect(specItems).toHaveLength(5)
     expect(specItems.map((item) => item.kind)).toEqual(['file', 'file', 'file', 'file', 'check'])
     const review = definition.steps.find((step) => step.id === 'spec-review')
-    expect(review?.ownership).toBe('defer')
-    expect(review?.legacy).toEqual({ plugin: 'delegation-rules', signal: 'spec-review' })
+    expect(review?.executor).toBe('review')
+    expect(review?.ownership).toBe('own')
+    expect(review?.legacy).toBeUndefined()
+    expect(review?.review).toEqual({
+      target: 'codex',
+      instruction: 'review-spec',
+      scope: 'whole',
+      phase: 'spec',
+    })
     expect(review?.evidence).toMatchObject({
       kind: 'record',
-      rule: 'spec-review',
+      rule: 'change-intake',
+      path: '.dsh/workflows/records/change-intake/{name}/spec.json',
       phase: 'spec',
       scope: 'whole',
-      verdict: 'PASS',
+      verdicts: ['PASS', 'ERROR'],
       digest: 'current',
     })
     expect(definition.steps.at(-1)?.executor).toBe('human')
@@ -390,7 +399,7 @@ describe('workflow definition schema', () => {
 })
 
 describe('ownership and the installed legacy profile', () => {
-  it('keeps the contributed intake own for its own steps and defers only spec-review', () => {
+  it('keeps the contributed intake owned for every step', () => {
     const intake = contributedIntake()
     const resolved = resolveOwnership(
       intake as Definition,
@@ -398,25 +407,23 @@ describe('ownership and the installed legacy profile', () => {
     )
     expect(resolved.issues).toEqual([])
     const byId = new Map(resolved.steps.map((step) => [step.id, step]))
-    expect(byId.get('spec-review')?.ownership).toBe('defer')
-    expect(byId.get('spec-review')?.legacy).toEqual({
-      plugin: 'delegation-rules',
-      signal: 'spec-review',
-    })
+    expect(byId.get('spec-review')?.ownership).toBe('own')
+    expect(byId.get('spec-review')?.legacy).toBeUndefined()
     for (const id of [
       'requirements',
       'architecture',
       'interface',
       'create-change',
       'spec',
+      'spec-review',
       'approval',
     ]) {
       expect(byId.get(id)?.ownership).toBe('own')
     }
   })
 
-  it('refuses a deferred step when its legacy source is not installed', async () => {
-    const intake = contributedIntake()
+  it('refuses a deferred synthetic step when its legacy source is not installed', async () => {
+    const intake = deferredIntake()
     const missing = resolveOwnership(intake, profile())
     expect(missing.issues.join('\n')).toMatch(
       /step "spec-review".*"delegation-rules\/spec-review" is not installed.*retire-legacy-gates/u,
@@ -508,10 +515,7 @@ it('resolves the shipped intake against the shipped strict spec-review rule', ()
   const resolved = resolveOwnership(intake, profile('delegation-rules', 'goal-continuity'))
   expect(resolved.issues).toEqual([])
   const byId = new Map(resolved.steps.map((step) => [step.id, step]))
-  expect(byId.get('spec-review')).toMatchObject({
-    ownership: 'defer',
-    legacy: { plugin: 'delegation-rules', signal: 'spec-review' },
-  })
+  expect(byId.get('spec-review')).toMatchObject({ ownership: 'own' })
   expect(byId.get('requirements')?.ownership).toBe('own')
 })
 

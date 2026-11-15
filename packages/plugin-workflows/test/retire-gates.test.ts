@@ -107,13 +107,18 @@ describe('parity load gate and verify settings', () => {
     expect(verify.settings.maxBlocks).toBe(8)
   })
 
-  it('accepts the intake spec-review defer only while that signal is real', () => {
+  it('loads the owned intake with the retained spec-review signal in either state', () => {
     const intake = shipped('change-intake')
     const enabled = new Set(['delegation-rules/spec-review'])
     expect(resolveOwnership(intake, new Set(['delegation-rules']), enabled).issues).toEqual([])
-    const disabled = resolveOwnership(intake, new Set(['delegation-rules']), new Set())
-    expect(disabled.issues.join('\n')).toMatch(/spec-review/u)
-    expect(disabled.issues.join('\n')).toMatch(/gate-only switch is off|no enforcing legacy gate/u)
+    expect(resolveOwnership(intake, new Set(['delegation-rules']), new Set()).issues).toEqual([])
+    const byId = new Map(
+      resolveOwnership(intake, new Set(['delegation-rules']), enabled).steps.map((step) => [
+        step.id,
+        step.ownership,
+      ]),
+    )
+    expect(byId.get('spec-review')).toBe('own')
   })
 
   it('keeps the rollback switch inside the bounded 300-character diagnostic', () => {
