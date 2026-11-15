@@ -724,3 +724,35 @@ describe('skipped branches and compact redirection', () => {
     ).toBe('auth')
   })
 })
+
+describe('writer with output redirection', () => {
+  it('keeps the writer destination beside stream or file redirection', () => {
+    for (const command of [
+      'Set-Content -Path openspec/changes/auth/design.md -Value x 2>&1',
+      'Set-Content -Path openspec/changes/auth/design.md -Value x > log.txt',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'c', name: 'bash', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'bash',
+            arguments: { command: 'echo x 2>&1' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+  })
+})

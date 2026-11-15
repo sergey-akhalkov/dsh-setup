@@ -142,28 +142,38 @@ function resolveMasked(token: string, values: readonly string[]): string {
 
 function shellDestination(command: string, powershell: boolean): string | undefined {
   const { masked, values } = maskQuoted(command, powershell)
-  const redirect = />{1,2}\s*(\u0000\d+\u0000|\S+)/u.exec(masked)
-  if (redirect !== null) return resolveMasked(redirect[1] ?? '', values)
+  // A writer's own destination wins over any output redirection on the line.
   const write = /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(masked)
-  if (write === null) return undefined
-  const rest = write[1] ?? ''
-  const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest)
-  if (named !== null) return resolveMasked(named[1] ?? '', values)
-  const tokens = rest.match(/\u0000\d+\u0000|\S+/gu) ?? []
-  let skipValue = false
-  for (const token of tokens) {
-    if (skipValue) {
-      skipValue = false
-      continue
+  if (write !== null) {
+    const rest = write[1] ?? ''
+    const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest)
+    if (named !== null) return resolveMasked(named[1] ?? '', values)
+    const tokens = rest.match(/\u0000\d+\u0000|\S+/gu) ?? []
+    let skipValue = false
+    for (const token of tokens) {
+      if (/^\d*>/u.test(token)) break
+      if (skipValue) {
+        skipValue = false
+        continue
+      }
+      if (
+        /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType)\b/iu.test(
+          token,
+        )
+      ) {
+        skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType)\b/iu.test(token)
+        continue
+      }
+      if (token.startsWith('-')) continue
+      return resolveMasked(token, values)
     }
-    if (
-      /^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType)\b/iu.test(token)
-    ) {
-      skipValue = /^-(?:Value|Credential|Encoding|Stream|ItemType)\b/iu.test(token)
-      continue
-    }
-    if (token.startsWith('-')) continue
-    return resolveMasked(token, values)
+  }
+  const redirect = />{1,2}\s*(\u0000\d+\u0000|\S+)/u.exec(masked)
+  if (redirect !== null) {
+    const target = resolveMasked(redirect[1] ?? '', values)
+    // Stream duplication (`2>&1`) and the null device are not destinations.
+    if (/^&\d+$/u.test(target) || target === 'NUL' || target === '/dev/null') return undefined
+    return target
   }
   return undefined
 }
