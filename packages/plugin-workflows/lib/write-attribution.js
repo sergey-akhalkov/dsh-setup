@@ -410,7 +410,8 @@ function changesOfCall(workspace, call) {
     const command = call.arguments.command;
     if (typeof command !== 'string')
         return [...changes];
-    const normalized = command.replace(/\b(?:rtk|pnpm exec)\s+/gu, '').trim();
+    // Strip wrappers only at the executable start; a quoted path may contain them.
+    const normalized = command.replace(/^(?:(?:rtk|pnpm exec)\s+)+/u, '').trim();
     const workdir = typeof call.arguments.workdir === 'string'
         ? call.arguments.workdir
         : typeof call.arguments.cwd === 'string'

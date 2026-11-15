@@ -761,6 +761,38 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('strips wrappers only at the executable start', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command: "Set-Content -LiteralPath 'rtk openspec/changes/auth/design.md' -Value x",
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'pwsh',
+            arguments: { command: 'rtk openspec new change auth' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('concatenates adjacent POSIX single-quoted fragments', () => {
     for (const command of [
       "tee 'openspec/changes/''auth/design.md'",
