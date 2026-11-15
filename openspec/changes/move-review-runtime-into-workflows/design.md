@@ -174,6 +174,14 @@ emphasis is treated as a glob and is not rejected; task prose is owner-authored 
 untrusted input. Shell parsing hardening beyond these boundaries is follow-up work, not a load or
 condition contract.
 
+### D15 — Parity replay uses the production decision tables
+
+The executable parity fixtures for work-progress and lane call the exported
+`evaluateProgressParity` and `evaluateLaneParity` decisions from the engine (`src/host/gates.ts`),
+not fixture-local copies, so removing or changing a production evaluator fails the replay instead of
+certifying a stale table. The engine-owned gate bodies land with tasks 1.6/1.9 and reuse the same
+decisions; the parity report records the replay counts and the declared integration difference.
+
 ## Release, migration, and rollback
 
 1. Release A: engine + definitions + cards + switches + parity; the delegation row keeps its rules
