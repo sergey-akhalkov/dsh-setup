@@ -49,7 +49,7 @@ describe('retirement parity report', () => {
     }
   })
 
-  it('passes every retired gate and records the retained legacy cases', async () => {
+  it('passes every replayed gate and records the replay counts', async () => {
     const report = await buildParityReport(new Date('2026-11-08T00:00:00.000Z'))
     expect(report.change).toBe('retire-legacy-gates')
     expect(report.mismatches).toEqual([])
@@ -57,15 +57,34 @@ describe('retirement parity report', () => {
       expect(report.gates[gate]?.status).toBe('pass')
       expect(report.gates[gate]?.mismatches).toBe(0)
     }
-    expect(Object.keys(report.templates).sort()).toEqual(['retro', 'task-review', 'verify'])
+    expect(Object.keys(report.templates).sort()).toEqual([
+      'integration-review',
+      'retro',
+      'spec-review',
+      'task-review',
+      'verify',
+    ])
     expect(report.settings['verify.maxBlocks']?.cases).toContain(129)
     expect(report.settings['verify.commands']?.cases.length).toBeGreaterThanOrEqual(2)
-    expect(report.retained['spec-review']?.status).toBe('legacy')
-    expect(report.retained['task-progress']?.status).toBe('legacy')
-    expect(report.retained['lane-assignment']?.status).toBe('legacy')
+    for (const group of ['spec-review', 'integration-review', 'task-progress', 'lane-assignment']) {
+      expect(report.retained[group]?.status).toBe('replayed')
+      expect(report.retained[group]?.replayed).toBe(report.retained[group]?.cases)
+    }
+    expect(report.differences['integration-review']).toMatchObject({
+      case: 'retained-integration-soft-sequence',
+      turn: 2,
+      legacy: 'allow',
+      workflow: 'violation',
+    })
     for (const retained of PARITY_CASES.filter((entry) => entry.gate === 'retained')) {
       expect(retained.legacy.decision).toMatch(/allow|refuse/u)
       expect(retained.retained).toBeDefined()
+      expect(retained.legacyCheck !== undefined || retained.sequence?.legacy !== undefined).toBe(
+        true,
+      )
+      expect(retained.workflow !== undefined || retained.sequence?.workflow !== undefined).toBe(
+        true,
+      )
     }
   })
 
@@ -102,6 +121,9 @@ describe('retirement parity report', () => {
       'verify-cap-129-allows-at-cap',
       'retained-spec-review-missing',
       'retained-spec-review-stale',
+      'retained-spec-review-current',
+      'retained-integration-soft-sequence',
+      'retained-integration-archive',
       'retained-progress-current-note',
       'retained-progress-stale-note',
       'retained-progress-unchecked-missing-note',
@@ -115,7 +137,10 @@ describe('retirement parity report', () => {
     for (const entry of PARITY_CASES) {
       if (entry.gate === 'retained') {
         expect(entry.retained).toBeDefined()
-        expect(entry.workflow).toBeUndefined()
+        expect(
+          entry.workflow !== undefined || entry.sequence?.workflow !== undefined,
+          entry.id,
+        ).toBe(true)
       } else {
         expect(entry.workflow).toBeDefined()
         expect(entry.legacy.decision).toMatch(/allow|refuse/u)
@@ -138,6 +163,124 @@ describe('retirement parity report', () => {
     expect(report.gates.checkpoint?.status).toBe('fail')
     expect(parityExitCode(report)).toBe(1)
     expect(parityExitCode({ mismatches: [] })).toBe(0)
+  })
+
+  it('fails the report on a retained decision-sequence mismatch', async () => {
+    const allow = { decision: 'allow' as const, reason: 'the close is allowed' }
+    const refuse = { decision: 'refuse' as const, reason: 'the close is refused' }
+    const mismatch = {
+      id: 'retained-sequence-mismatch',
+      gate: 'retained' as const,
+      retained: { group: 'integration-review' as const },
+      legacy: refuse,
+      sequence: {
+        legacy: async () => [refuse, allow],
+        workflow: async () => [allow, allow],
+      },
+    }
+    const report = await buildParityReport(new Date(), [...PARITY_CASES, mismatch])
+    const text = report.mismatches.join('\n')
+    expect(text).toContain('retained-sequence-mismatch')
+    expect(text).toContain('legacy sequence [refuse, allow]')
+    expect(text).toContain('workflow sequence [allow, allow]')
+    expect(report.retained['integration-review']?.status).toBe('failed')
+    expect(parityExitCode(report)).toBe(1)
+  })
+
+  it('fails the report when a retained evaluator is missing', async () => {
+    const allow = { decision: 'allow' as const, reason: 'the workflow allows' }
+    const missingWorkflow = {
+      id: 'retained-missing-workflow',
+      gate: 'retained' as const,
+      retained: { group: 'lane' as const },
+      legacy: { decision: 'refuse' as const, reason: 'the legacy gate refuses' },
+    }
+    const missingLegacy = {
+      id: 'retained-missing-legacy',
+      gate: 'retained' as const,
+      retained: { group: 'spec-review' as const },
+      legacy: allow,
+      workflow: async () => allow,
+    }
+    const report = await buildParityReport(new Date(), [
+      ...PARITY_CASES,
+      missingWorkflow,
+      missingLegacy,
+    ])
+    const text = report.mismatches.join('\n')
+    expect(text).toContain('retained-missing-workflow: the workflow evaluator is missing')
+    expect(text).toContain('retained-missing-legacy: the legacy evaluator is missing')
+    expect(parityExitCode(report)).toBe(1)
+  })
+
+  it('fails when an exhausted soft run still blocks an authorized archive', async () => {
+    const { evaluateArchiveGate, evaluateTurnClose } = await import(
+      '../../packages/plugin-workflows/lib/gates.js'
+    )
+    const { loadShippedDefinitions } = await import(
+      '../../packages/plugin-workflows/lib/definitions.js'
+    )
+    const { createRun } = await import('../../packages/plugin-workflows/lib/runs.js')
+    const definition = loadShippedDefinitions().find((entry) => entry.id === 'integration-review')
+    if (definition === undefined) throw new Error('the integration-review definition is missing')
+    const receipt = {
+      v: 1 as const,
+      kind: 'intake' as const,
+      change: 'change-a',
+      digest: 'a'.repeat(64),
+      issuedAt: 1,
+      workspaceKey: '/workspace',
+      signature: 'test',
+    }
+    const blockingCase = {
+      id: 'retained-integration-archive-blocked',
+      gate: 'retained' as const,
+      retained: { group: 'integration-review' as const },
+      legacy: { decision: 'allow' as const, reason: 'the legacy archive guard allows' },
+      legacyCheck: async () => ({ decision: 'allow' as const, reason: 'legacy archive allows' }),
+      workflow: async () => {
+        // One refusal leaves the run running with its review step open. If the
+        // exhausted budget did not settle it soft, the archive gate blocks it.
+        const run = createRun({
+          definition: 'integration-review',
+          trigger: 'turn.stopping',
+          session: 'session-1',
+          workspace: '/workspace',
+          context: { name: 'change-a' },
+          steps: ['review'],
+          now: 1_000,
+        })
+        const refused = evaluateTurnClose({
+          run,
+          definition,
+          agent: { steer: () => undefined },
+          evidenceContext: { workspace: '/workspace', values: { name: 'change-a' } },
+          turn: 1,
+          maxBlocks: definition.settings.maxBlocks,
+          installedLegacy: new Set(),
+          enabledLegacy: new Set(),
+        })
+        const decision = evaluateArchiveGate({
+          change: 'change-a',
+          runs: [refused.run],
+          receipts: [receipt],
+          specRecord: {
+            ok: true,
+            evidence: { kind: 'record', path: 'spec.json', digest: 'a'.repeat(64) },
+          },
+          taskReview: { ok: true },
+        })
+        return decision.kind === 'allow'
+          ? { decision: 'allow' as const, reason: 'the archive is allowed' }
+          : { decision: 'refuse' as const, reason: decision.reason }
+      },
+    }
+    const report = await buildParityReport(new Date(), [...PARITY_CASES, blockingCase])
+    const text = report.mismatches.join('\n')
+    expect(text).toContain('retained-integration-archive-blocked')
+    expect(text).toContain('workflow refuse')
+    expect(text).toContain('run')
+    expect(parityExitCode(report)).toBe(1)
   })
 
   it('fails when a required archive form loses recognition', async () => {
@@ -302,16 +445,26 @@ describe('retirement parity report', () => {
     expect(written.mismatches).toEqual([])
     expect((await checkParityReport(file)).ok).toBe(true)
 
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as {
-      templates: Record<string, string>
-      gates: Record<string, { status: string }>
+    const clean = await readFile(file, 'utf8')
+    for (const template of [
+      'retro',
+      'spec-review',
+      'task-review',
+      'integration-review',
+      'verify',
+    ]) {
+      const parsed = JSON.parse(clean) as {
+        templates: Record<string, string>
+        gates: Record<string, { status: string }>
+      }
+      parsed.templates[template] = `sha256-${'a'.repeat(64)}`
+      await writeFile(file, JSON.stringify(parsed), 'utf8')
+      const stale = await checkParityReport(file)
+      expect(stale.ok, template).toBe(false)
+      expect(stale.detail, template).toContain(template)
+      expect(stale.detail, template).toContain('stale')
     }
-    parsed.templates.retro = 'sha256-' + 'a'.repeat(64)
-    await writeFile(file, JSON.stringify(parsed), 'utf8')
-    const stale = await checkParityReport(file)
-    expect(stale.ok).toBe(false)
-    expect(stale.detail).toContain('retro')
-    expect(stale.detail).toContain('stale')
+    await writeFile(file, clean, 'utf8')
 
     await rm(file)
     await rm(join(directory, 'empty'), { recursive: true, force: true })

@@ -23,15 +23,32 @@ import {
   templateHash,
 } from '../packages/plugin-workflows/lib/parity.js'
 import {
+  decisionText,
   PARITY_CASES,
   type ParityCase,
   runParityCase,
+  sequenceReason,
 } from '../packages/plugin-workflows/test/parity-fixtures.ts'
 
 export interface GateSummary {
   cases: number
   mismatches: number
   status: 'pass' | 'fail'
+}
+
+export interface RetainedSummary {
+  cases: number
+  replayed: number
+  status: 'replayed' | 'failed'
+}
+
+/** The declared, documented difference: a workflow VIOLATION is never a pass. */
+export interface DeclaredDifference {
+  case: string
+  turn: number
+  legacy: 'allow'
+  workflow: 'violation'
+  declared: string
 }
 
 export interface BuiltReport {
@@ -41,11 +58,18 @@ export interface BuiltReport {
   templates: Record<string, string>
   settings: Record<string, { type: string; cases: unknown[] }>
   gates: Record<string, GateSummary>
-  retained: Record<string, { cases: number; status: 'legacy' }>
+  retained: Record<string, RetainedSummary>
+  differences: Record<string, DeclaredDifference>
   mismatches: string[]
 }
 
-const TEMPLATE_IDS = ['retro', 'task-review', 'verify'] as const
+const TEMPLATE_IDS = [
+  'retro',
+  'spec-review',
+  'task-review',
+  'integration-review',
+  'verify',
+] as const
 
 /** Two profiles with different commands and caps, one above the legacy 128. */
 const SETTINGS_CASES = [
@@ -96,17 +120,63 @@ export async function buildParityReport(
     verification: { cases: 0, mismatches: 0, status: 'pass' },
   }
   const retained: BuiltReport['retained'] = {
-    'spec-review': { cases: 0, status: 'legacy' },
-    'task-progress': { cases: 0, status: 'legacy' },
-    'lane-assignment': { cases: 0, status: 'legacy' },
+    'spec-review': { cases: 0, replayed: 0, status: 'replayed' },
+    'integration-review': { cases: 0, replayed: 0, status: 'replayed' },
+    'task-progress': { cases: 0, replayed: 0, status: 'replayed' },
+    'lane-assignment': { cases: 0, replayed: 0, status: 'replayed' },
   }
+  const differences: BuiltReport['differences'] = {}
   const mismatches: string[] = []
   for (const parityCase of cases) {
     if (parityCase.gate === 'retained') {
       const group = parityCase.retained?.group
-      if (group === undefined) continue
+      if (group === undefined) {
+        mismatches.push(`${parityCase.id}: the retained case names no group`)
+        continue
+      }
       const key = group === 'lane' ? 'lane-assignment' : group
-      retained[key] = { cases: (retained[key]?.cases ?? 0) + 1, status: 'legacy' }
+      const summary = retained[key]
+      if (summary === undefined) {
+        mismatches.push(`${parityCase.id}: the retained group "${key}" is unknown`)
+        continue
+      }
+      summary.cases += 1
+      const result = await runParityCase(parityCase)
+      if (result.ok) {
+        summary.replayed += 1
+      } else {
+        summary.status = 'failed'
+        if (result.missing !== undefined) {
+          mismatches.push(
+            `${parityCase.id}: the ${result.missing} evaluator is missing; the retained case cannot be certified`,
+          )
+        } else if (result.legacySequence !== undefined || result.workflowSequence !== undefined) {
+          const legacy = result.legacySequence ?? []
+          const workflow = result.workflowSequence ?? []
+          mismatches.push(
+            `${parityCase.id}: recorded ${parityCase.legacy.decision}; legacy sequence ${decisionText(legacy)} (${sequenceReason(legacy)}); workflow sequence ${decisionText(workflow)} (${sequenceReason(workflow)})`,
+          )
+        } else {
+          mismatches.push(
+            `${parityCase.id}: legacy ${parityCase.legacy.decision} (${parityCase.legacy.reason}); replayed ${result.legacyReplay?.decision ?? 'n/a'} (${result.legacyReplay?.reason ?? 'no replay'}); workflow ${result.workflow?.decision ?? 'missing'} (${result.workflow?.reason ?? 'no workflow decision'})`,
+          )
+        }
+      }
+      if (parityCase.violation !== undefined) {
+        if (result.declaredViolation === true) {
+          differences[key] = {
+            case: parityCase.id,
+            turn: parityCase.violation.turn + 1,
+            legacy: 'allow',
+            workflow: 'violation',
+            declared: parityCase.violation.reason,
+          }
+        } else {
+          mismatches.push(
+            `${parityCase.id}: the workflow sequence did not reproduce the declared VIOLATION on turn ${String(parityCase.violation.turn + 1)}`,
+          )
+        }
+      }
       continue
     }
     const gate = gates[parityCase.gate]
@@ -118,7 +188,7 @@ export async function buildParityReport(
     gate.status = 'fail'
     const workflow = result.workflow
     mismatches.push(
-      `${parityCase.id}: legacy ${parityCase.legacy.decision} (${parityCase.legacy.reason}); replayed ${result.legacyReplay?.decision ?? 'n/a'} (${result.legacyReplay?.reason ?? 'no replay'}); workflow ${workflow?.decision ?? 'missing'} (${workflow?.reason ?? 'no workflow decision'})`,
+      `${parityCase.id}: ${result.missing === undefined ? '' : `missing ${result.missing} evaluator; `}legacy ${parityCase.legacy.decision} (${parityCase.legacy.reason}); replayed ${result.legacyReplay?.decision ?? 'n/a'} (${result.legacyReplay?.reason ?? 'no replay'}); workflow ${workflow?.decision ?? 'missing'} (${workflow?.reason ?? 'no workflow decision'})`,
     )
   }
   return {
@@ -129,6 +199,7 @@ export async function buildParityReport(
     settings: settingsMatrix(),
     gates,
     retained,
+    differences,
     mismatches,
   }
 }
@@ -226,12 +297,11 @@ async function main(): Promise<void> {
   const summary = Object.entries(report.gates)
     .map(([gate, entry]) => `${gate} ${String(entry.cases)}`)
     .join(', ')
+  const retained = Object.values(report.retained)
+    .map((entry) => `${String(entry.replayed)}/${String(entry.cases)}`)
+    .join(', ')
   console.log(
-    `workflows-parity: wrote ${PARITY_REPORT_NAME} (${summary}; retained ${Object.values(
-      report.retained,
-    )
-      .map((entry) => String(entry.cases))
-      .reduce((total, count) => total + Number(count), 0)} case(s))`,
+    `workflows-parity: wrote ${PARITY_REPORT_NAME} (${summary}; retained replayed ${retained}; declared difference ${String(Object.keys(report.differences).length)})`,
   )
 }
 

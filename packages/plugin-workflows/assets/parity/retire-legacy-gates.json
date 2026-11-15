@@ -1,10 +1,12 @@
 {
   "v": 1,
   "change": "retire-legacy-gates",
-  "at": "2026-11-11T14:24:15.289Z",
+  "at": "2026-11-15T20:35:53.245Z",
   "templates": {
     "retro": "sha256-e4df72e46947fb54cad338495b65489155da181bb77130158360ae549e1a8566",
+    "spec-review": "sha256-981ecffca4d536b74aebdbda0adbfe27a8107d5768b2517fe408a43746165dfa",
     "task-review": "sha256-69ac0e03f03f732cab5134cac3ad8c001779b4ca12c74659d897d96da429fedb",
+    "integration-review": "sha256-8d4d9a323fadfb6f1602d6de2ebaa974607c18c27ea5877e68b2f7de130e217b",
     "verify": "sha256-d8a15d05d6721c1aa12046499eaae49a1732160b397ed45d652d16c1eebd9b78"
   },
   "settings": {
@@ -47,16 +49,33 @@
   },
   "retained": {
     "spec-review": {
+      "cases": 3,
+      "replayed": 3,
+      "status": "replayed"
+    },
+    "integration-review": {
       "cases": 2,
-      "status": "legacy"
+      "replayed": 2,
+      "status": "replayed"
     },
     "task-progress": {
       "cases": 4,
-      "status": "legacy"
+      "replayed": 4,
+      "status": "replayed"
     },
     "lane-assignment": {
       "cases": 4,
-      "status": "legacy"
+      "replayed": 4,
+      "status": "replayed"
+    }
+  },
+  "differences": {
+    "integration-review": {
+      "case": "retained-integration-soft-sequence",
+      "turn": 2,
+      "legacy": "allow",
+      "workflow": "violation",
+      "declared": "the second close is a recorded VIOLATION on the exhausted soft budget, never a pass"
     }
   },
   "mismatches": []
