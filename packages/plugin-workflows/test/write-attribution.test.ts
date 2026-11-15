@@ -553,3 +553,25 @@ describe('quoted value text', () => {
     ).toBe('auth')
   })
 })
+
+describe('pipeline attribution', () => {
+  it('collects every tee destination in a pipeline', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'pwsh',
+            arguments: {
+              command:
+                'echo x | tee openspec/changes/auth/design.md | tee openspec/changes/billing/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual(['auth', 'billing'])
+  })
+})

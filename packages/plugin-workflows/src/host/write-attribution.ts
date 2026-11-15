@@ -149,7 +149,7 @@ function splitSegments(text: string): string[] {
       char === '\n' ||
       char === '\r' ||
       (char === '&' && text[index + 1] === '&') ||
-      (char === '|' && text[index + 1] === '|')
+      char === '|'
     ) {
       segments.push(current)
       current = ''

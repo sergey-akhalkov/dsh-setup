@@ -145,7 +145,7 @@ function splitSegments(text) {
             char === '\n' ||
             char === '\r' ||
             (char === '&' && text[index + 1] === '&') ||
-            (char === '|' && text[index + 1] === '|')) {
+            char === '|') {
             segments.push(current);
             current = '';
             if ((char === '&' || char === '|') && text[index + 1] === char)
