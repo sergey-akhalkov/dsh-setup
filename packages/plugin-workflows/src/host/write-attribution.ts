@@ -80,8 +80,9 @@ function maskQuoted(
   while (index < text.length) {
     const char = text[index] ?? ''
     if (isEscape(text, index, undefined, powershell)) {
-      // An escaped operator is literal text, not a redirection.
-      masked += '\u0002'
+      // An escaped operator is literal text; an escaped letter stays a letter.
+      const next = text[index + 1] ?? ''
+      masked += /[<>&|;`]/u.test(next) ? '\u0002' : next
       index += 2
       continue
     }
@@ -164,10 +165,18 @@ function shellDestinations(command: string, powershell: boolean): string[] {
     if (named !== null) {
       destinations.push(resolveMasked(named[1] ?? '', values))
     } else {
-      const tokens = rest.match(/\u0000\d+\u0000|[^><\s]+/gu) ?? []
+      const tokens = rest.match(/\u0000\d+\u0000|[<>]+|[^><\s]+/gu) ?? []
       let skipValue = false
+      let skipInput = false
       for (const token of tokens) {
-        if (/^\d*>/u.test(token)) break
+        if (/^\d*[<>]/u.test(token)) {
+          skipInput = /^\d*</u.test(token)
+          continue
+        }
+        if (skipInput) {
+          skipInput = false
+          continue
+        }
         if (skipValue) {
           skipValue = false
           continue
@@ -181,8 +190,8 @@ function shellDestinations(command: string, powershell: boolean): string[] {
           continue
         }
         if (token.startsWith('-')) continue
+        // Every positional output is a destination (tee accepts several).
         destinations.push(resolveMasked(token, values))
-        break
       }
     }
   }

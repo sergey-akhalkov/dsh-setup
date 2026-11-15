@@ -761,6 +761,54 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('distinguishes tee inputs, collects every tee output, and decodes escaped letters', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'bash',
+            arguments: { command: 'tee < openspec/changes/auth/tasks.md' },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'bash',
+            arguments: {
+              command: 'tee openspec/changes/auth/tasks.md openspec/changes/billing/tasks.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual(['auth', 'billing'])
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'bash',
+            arguments: {
+              command: 'echo changed>openspec/changes/\\auth/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('attributes bash command substitution before redirection and later targets', () => {
     expect(
       attributedChangeName(
