@@ -601,6 +601,14 @@ export async function writeReviewFileAtomic(
       )
     }
     await rename(temporary, file)
+    // A fence can land while the rename is in flight; never leave the
+    // committed record behind for a settled integration run.
+    if (cancelled?.() === true) {
+      await unlink(file).catch(() => undefined)
+      throw new Error(
+        'the run settled completed-soft while its record was committed; the late verdict is discarded',
+      )
+    }
   } catch (error) {
     await unlink(temporary).catch(() => undefined)
     throw error
