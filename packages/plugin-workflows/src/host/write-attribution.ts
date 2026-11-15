@@ -142,10 +142,11 @@ function resolveMasked(token: string, values: readonly string[]): string {
 
 function shellDestination(command: string, powershell: boolean): string | undefined {
   const { masked, values } = maskQuoted(command, powershell)
-  // A writer's own destination wins over any output redirection on the line.
-  const write = /(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(masked)
-  if (write !== null) {
-    const rest = write[1] ?? ''
+  // Only a writer that starts the stage executes; a printed writer name does not.
+  const atStart = masked.trimStart()
+  const writer = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(atStart)
+  if (writer !== null) {
+    const rest = writer[1] ?? ''
     const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest)
     if (named !== null) return resolveMasked(named[1] ?? '', values)
     const tokens = rest.match(/\u0000\d+\u0000|\S+/gu) ?? []
@@ -168,11 +169,10 @@ function shellDestination(command: string, powershell: boolean): string | undefi
       return resolveMasked(token, values)
     }
   }
-  const redirect = />{1,2}\s*(\u0000\d+\u0000|\S+)/u.exec(masked)
-  if (redirect !== null) {
-    const target = resolveMasked(redirect[1] ?? '', values)
-    // Stream duplication (`2>&1`) and the null device are not destinations.
-    if (/^&\d+$/u.test(target) || target === 'NUL' || target === '/dev/null') return undefined
+  // Stream duplication and the null device are skipped; a later real target wins.
+  for (const match of masked.matchAll(/>\s*(\u0000\d+\u0000|\S+)/gu)) {
+    const target = resolveMasked(match[1] ?? '', values)
+    if (/^&\d+$/u.test(target) || target === 'NUL' || target === '/dev/null') continue
     return target
   }
   return undefined

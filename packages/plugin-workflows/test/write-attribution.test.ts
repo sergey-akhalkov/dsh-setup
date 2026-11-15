@@ -692,6 +692,41 @@ describe('skipped branches and compact redirection', () => {
       ),
     ).toEqual(['billing'])
   })
+
+  it('ignores a printed writer name with redirection and continues past duplication', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'bash',
+            arguments: {
+              command: 'echo tee openspec/changes/auth/design.md > log.txt',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'bash',
+            arguments: {
+              command: 'echo changed 2>&1 > openspec/changes/auth/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('ignores a writer name that is only printed', () => {
     for (const command of [
       'Write-Output Set-Content openspec/changes/auth/design.md',
