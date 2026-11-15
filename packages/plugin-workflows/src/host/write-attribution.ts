@@ -116,8 +116,12 @@ export function isWorkspaceDirectory(workspace: string, directory: string): bool
  * the documented successful `openspec new change <name>` creation command. A
  * session that creates a change through the shell is involved too.
  */
-/** The change one successful observation touched, or undefined. */
-function changeOfCall(workspace: string, call: ToolCallObservation): string | undefined {
+/** The changes one successful observation touched. */
+function changesOfCall(workspace: string, call: ToolCallObservation): string[] {
+  const changes = new Set<string>()
+  const addChange = (name: string | undefined): void => {
+    if (name !== undefined) changes.add(name)
+  }
   const rawPath = call.arguments.file_path ?? call.arguments.path
   if ((call.name === 'write' || call.name === 'edit') && typeof rawPath === 'string') {
     const rel = normalizedWorkspacePath(workspace, rawPath)
@@ -126,11 +130,11 @@ function changeOfCall(workspace: string, call: ToolCallObservation): string | un
       /^openspec\/changes\/[^/]+\//u.test(rel) &&
       !/\/reviews\//u.test(rel)
     ) {
-      return /^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1]
+      addChange(/^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1])
     }
   }
   const command = call.arguments.command
-  if (typeof command !== 'string') return undefined
+  if (typeof command !== 'string') return [...changes]
   const normalized = command.replace(/\b(?:rtk|pnpm exec)\s+/gu, '').trim()
   const workdir =
     typeof call.arguments.workdir === 'string'
@@ -139,29 +143,36 @@ function changeOfCall(workspace: string, call: ToolCallObservation): string | un
         ? call.arguments.cwd
         : undefined
   if (workdir !== undefined && !isWorkspaceDirectory(workspace, workdir)) {
-    return undefined
+    return [...changes]
   }
   const executed = executedText(normalized).trim()
-  if (executed === '') return undefined
-  const creation = CHANGE_CREATION.exec(executed)
-  if (creation !== null) return creation[1]
-  const startsWrite = WRITE_COMMAND.test(executed)
-  const hasRedirect = REDIRECT.test(executed)
-  if (!startsWrite && !hasRedirect) return undefined
-  // The destination is parsed from the original text so a quoted path is kept.
-  const raw = shellDestination(normalized)
-  if (raw === undefined) return undefined
-  const candidate =
-    isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
-      ? raw
-      : workdir === undefined
+  if (executed === '') return [...changes]
+  const creationPattern = new RegExp(CHANGE_CREATION.source, 'gu')
+  for (const match of executed.matchAll(creationPattern)) addChange(match[1])
+  // One shell call may execute several writes; each destination counts.
+  for (const segment of normalized.split(/(?:;|&&|\|\|)/u)) {
+    const executedSegment = executedText(segment).trim()
+    if (executedSegment === '') continue
+    if (!WRITE_COMMAND.test(executedSegment) && !REDIRECT.test(executedSegment)) continue
+    // The destination is parsed from the original text so a quoted path is kept.
+    const raw = shellDestination(segment)
+    if (raw === undefined) continue
+    const candidate =
+      isAbsolute(raw) || /^[A-Za-z]:[\\/]/u.test(raw)
         ? raw
-        : resolve(workdir, raw)
-  const rel = normalizedWorkspacePath(workspace, candidate)
-  if (rel !== undefined && /^openspec\/changes\/[^/]+\//u.test(rel) && !/\/reviews\//u.test(rel)) {
-    return /^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1]
+        : workdir === undefined
+          ? raw
+          : resolve(workdir, raw)
+    const rel = normalizedWorkspacePath(workspace, candidate)
+    if (
+      rel !== undefined &&
+      /^openspec\/changes\/[^/]+\//u.test(rel) &&
+      !/\/reviews\//u.test(rel)
+    ) {
+      addChange(/^openspec\/changes\/([^/]+)\//u.exec(rel)?.[1])
+    }
   }
-  return undefined
+  return [...changes]
 }
 
 /**
@@ -177,8 +188,7 @@ export function attributedChangeNames(
   for (const call of calls) {
     if (turn !== undefined && call.turn !== undefined && call.turn !== turn) continue
     if (call.ok === false) continue
-    const change = changeOfCall(workspace, call)
-    if (change !== undefined) changes.add(change)
+    for (const change of changesOfCall(workspace, call)) changes.add(change)
   }
   return [...changes]
 }

@@ -348,3 +348,20 @@ describe('multi-change attribution', () => {
     expect(attributedChangeNames(WORKSPACE, calls, 1)).toEqual(['auth', 'billing'])
   })
 })
+
+describe('multi-write shell attribution', () => {
+  it('collects every destination in one shell observation', () => {
+    const calls = [
+      {
+        callId: 'c',
+        name: 'pwsh',
+        arguments: {
+          command:
+            'Set-Content -Path openspec/changes/auth/design.md -Value x; Set-Content -Path openspec/changes/billing/design.md -Value y',
+        },
+        ok: true,
+      },
+    ]
+    expect(attributedChangeNames(WORKSPACE, calls, 1)).toEqual(['auth', 'billing'])
+  })
+})
