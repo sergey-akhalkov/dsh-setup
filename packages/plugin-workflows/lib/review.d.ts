@@ -170,9 +170,9 @@ export type ReviewWrite = {
     readonly error: string;
 };
 /** Write the local review record; the path is derived from the record. */
-export declare function writeLocalReviewRecord(workspace: string, record: ReviewRecord): Promise<ReviewWrite>;
+export declare function writeLocalReviewRecord(workspace: string, record: ReviewRecord, cancelled?: () => boolean): Promise<ReviewWrite>;
 /** Write the committed approval before the local record; a task PASS only. */
-export declare function writePortableApproval(workspace: string, record: ReviewRecord): Promise<ReviewWrite>;
+export declare function writePortableApproval(workspace: string, record: ReviewRecord, cancelled?: () => boolean): Promise<ReviewWrite>;
 /** A review's runner: it can report when the target actually started. */
 export interface ReviewSubagentRunner extends SubagentRunner {
     /** Resolves once the most recent target activation is published; rejects on a start failure. */

@@ -500,10 +500,18 @@ export function portableApprovalOf(record) {
     };
 }
 /** Write the local review record; the path is derived from the record. */
-export async function writeLocalReviewRecord(workspace, record) {
+export async function writeLocalReviewRecord(workspace, record, cancelled) {
     try {
         const path = localReviewRecordPath(record);
-        await writeReviewFileAtomic(await containedRecordTarget(workspace, path), jsonText(record));
+        const target = await containedRecordTarget(workspace, path);
+        // The run may have settled completed-soft while the target was resolved.
+        if (cancelled?.() === true) {
+            return {
+                ok: false,
+                error: 'the run settled completed-soft before its record was written; the late verdict is discarded',
+            };
+        }
+        await writeReviewFileAtomic(target, jsonText(record));
         return { ok: true, path };
     }
     catch (error) {
@@ -514,9 +522,15 @@ export async function writeLocalReviewRecord(workspace, record) {
     }
 }
 /** Write the committed approval before the local record; a task PASS only. */
-export async function writePortableApproval(workspace, record) {
+export async function writePortableApproval(workspace, record, cancelled) {
     if (record.scope !== 'task' || record.taskId === undefined) {
         return { ok: false, error: 'a committed approval is written only for a task-scoped PASS' };
+    }
+    if (cancelled?.() === true) {
+        return {
+            ok: false,
+            error: 'the run settled completed-soft before its approval was written; the late verdict is discarded',
+        };
     }
     if (record.verdict !== 'PASS') {
         return { ok: false, error: 'a committed approval requires a PASS verdict' };
@@ -909,13 +923,15 @@ export async function publishReviewOutcome(input, outcome, now = input.now ?? Da
     const published = { ...record, verdict: result.verdict, findings: result.findings };
     if (published.scope === 'task' && published.verdict === 'PASS') {
         // The committed approval is written first; a failed publish publishes no PASS.
-        const writePortable = input.writePortable ?? writePortableApproval;
+        const writePortable = input.writePortable ??
+            ((workspace, record) => writePortableApproval(workspace, record, input.cancelled));
         const approval = await writePortable(input.context.workspace, published);
         if (!approval.ok) {
             return await writeErrorRecord(input, record, `the committed approval at ${portableApprovalPath(published.change, published.taskId ?? '')} could not be written: ${approval.error}`, 'unknown', now);
         }
     }
-    const writeLocal = input.writeLocal ?? writeLocalReviewRecord;
+    const writeLocal = input.writeLocal ??
+        ((workspace, record) => writeLocalReviewRecord(workspace, record, input.cancelled));
     const local = await writeLocal(input.context.workspace, published);
     if (!local.ok) {
         return {
