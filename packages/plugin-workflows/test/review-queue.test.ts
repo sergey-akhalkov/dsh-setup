@@ -45,6 +45,32 @@ async function waitFor(check: () => boolean, timeoutMs = 2_000): Promise<void> {
 }
 
 describe('review queue admission', () => {
+  it('starts independent keys concurrently and promotes when a slot frees', async () => {
+    const started: string[] = []
+    const queue = new ReviewQueue<TestRun>(limits({ concurrency: 2 }), {
+      start: async (entry) => {
+        started.push(entry.label)
+      },
+      persist: () => undefined,
+      fail: async () => undefined,
+      timeout: async () => undefined,
+      settled: () => undefined,
+      now: () => new Date(),
+    })
+    const a = run('a')
+    const b = run('b')
+    const c = run('c')
+    await queue.submit(a)
+    await queue.submit(b)
+    expect(started).toEqual(['a', 'b'])
+    await queue.submit(c)
+    expect(started).toEqual(['a', 'b'])
+    await queue.complete(a, 'completed')
+    await waitFor(() => started.includes('c'))
+    expect(started).toEqual(['a', 'b', 'c'])
+    queue.dispose()
+  })
+
   it('backs off exponentially with a cap and honors retry-after', () => {
     const limits = {
       enabled: true,

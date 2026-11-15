@@ -206,6 +206,11 @@ export class ReviewScheduler {
         if (!entry.waited || entry.reprepare === undefined)
             return;
         const outcome = await entry.reprepare(entry.reprepared);
+        if (this.disposed || !this.queue.owns(entry.file.id)) {
+            // A replacement snapshot may have been built after disposal; release it.
+            await this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
+            return;
+        }
         if (outcome.kind === 'unchanged')
             return;
         const identity = queueIdentity({
@@ -477,6 +482,11 @@ export class ReviewScheduler {
         await this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
     }
     async enqueue(input) {
+        if (this.disposed) {
+            // Snapshot preparation can outlive disposal; never admit it.
+            void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
+            return { kind: 'full', depth: 0, maxQueued: 0 };
+        }
         const reviewer = input.request.reviewer.id;
         const key = liveIdentity({
             workspace: input.workspace,
