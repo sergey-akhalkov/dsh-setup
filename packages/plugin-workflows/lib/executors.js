@@ -176,12 +176,25 @@ export const MAX_LOGIC_EVALUATIONS = 10_000;
 export const MAX_LOGIC_COLLECTION = 1_000;
 export const MAX_LOGIC_STRING = 1_000_000;
 function guardLogicSize(value) {
-    if (Array.isArray(value) && value.length > MAX_LOGIC_COLLECTION) {
-        throw new Error('invalid JSONLogic: evaluation produced an oversized collection');
-    }
-    if (typeof value === 'string' && value.length > MAX_LOGIC_STRING) {
-        throw new Error('invalid JSONLogic: evaluation produced an oversized string');
-    }
+    let nodes = 0;
+    const visit = (entry, depth) => {
+        if (depth > 32)
+            throw new Error('invalid JSONLogic: evaluation nesting is too deep');
+        if (Array.isArray(entry)) {
+            for (const item of entry) {
+                nodes += 1;
+                if (nodes > MAX_LOGIC_COLLECTION) {
+                    throw new Error('invalid JSONLogic: evaluation produced an oversized collection');
+                }
+                visit(item, depth + 1);
+            }
+            return;
+        }
+        if (typeof entry === 'string' && entry.length > MAX_LOGIC_STRING) {
+            throw new Error('invalid JSONLogic: evaluation produced an oversized string');
+        }
+    };
+    visit(value, 0);
 }
 export function evaluateJsonLogic(rule, data, depth = 0, budget = { used: 0 }) {
     budget.used += 1;

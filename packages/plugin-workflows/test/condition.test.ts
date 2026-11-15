@@ -529,6 +529,23 @@ describe('reduce predicate scope', () => {
 })
 
 describe('condition size bound', () => {
+  it('stops a nested reducer that would expand into a huge string', async () => {
+    const root = await workspace()
+    const context = await buildConditionContext({
+      workspace: root,
+      event: { kind: 'turn.stopping' },
+    })
+    const items = Array.from({ length: 20 }, (_, index) => index + 1)
+    const condition = {
+      substr: [
+        {
+          reduce: [items, [{ var: 'accumulator' }, { var: 'accumulator' }], 'x'],
+        },
+        0,
+      ],
+    }
+    expect(() => evaluateCondition(condition, context)).toThrow(/oversized collection/u)
+  })
   it('stops a reducer that doubles its accumulator', async () => {
     const root = await workspace()
     const context = await buildConditionContext({
