@@ -584,11 +584,22 @@ function hashParts(parts: readonly string[]): string {
 export { reviewDigest } from './evidence.js'
 
 /** Write one file atomically: temp beside the target, then rename. */
-export async function writeReviewFileAtomic(file: string, bytes: string): Promise<void> {
+export async function writeReviewFileAtomic(
+  file: string,
+  bytes: string,
+  cancelled?: () => boolean,
+): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
   const temporary = `${file}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
   await writeFile(temporary, bytes)
   try {
+    // The run may settle completed-soft while the temporary file is prepared;
+    // the commit must not land in that window.
+    if (cancelled?.() === true) {
+      throw new Error(
+        'the run settled completed-soft before its record was committed; the late verdict is discarded',
+      )
+    }
     await rename(temporary, file)
   } catch (error) {
     await unlink(temporary).catch(() => undefined)
@@ -665,7 +676,7 @@ export async function writeLocalReviewRecord(
           'the run settled completed-soft before its record was written; the late verdict is discarded',
       }
     }
-    await writeReviewFileAtomic(target, jsonText(record))
+    await writeReviewFileAtomic(target, jsonText(record), cancelled)
     return { ok: true, path }
   } catch (error) {
     return {
@@ -712,6 +723,7 @@ export async function writePortableApproval(
     await writeReviewFileAtomic(
       await containedRecordTarget(workspace, path),
       jsonText(portableApprovalOf(record)),
+      cancelled,
     )
     return { ok: true, path }
   } catch (error) {

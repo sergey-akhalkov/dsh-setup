@@ -159,7 +159,7 @@ export declare function renderReviewPrompt(input: ReviewPromptInput): string;
 /** The per-scope digest lives with the evidence verifier; kept importable here. */
 export { reviewDigest } from './evidence.js';
 /** Write one file atomically: temp beside the target, then rename. */
-export declare function writeReviewFileAtomic(file: string, bytes: string): Promise<void>;
+export declare function writeReviewFileAtomic(file: string, bytes: string, cancelled?: () => boolean): Promise<void>;
 /** The committed approval subset; the field set and order are the stable format. */
 export declare function portableApprovalOf(record: ReviewRecord): Readonly<Record<string, unknown>>;
 export type ReviewWrite = {
