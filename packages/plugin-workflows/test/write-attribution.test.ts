@@ -761,6 +761,24 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('treats the second positional of Set-Content as content', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'c',
+            name: 'pwsh',
+            arguments: {
+              command: "Set-Content output.txt 'openspec/changes/auth/tasks.md'",
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual([])
+  })
   it('distinguishes tee inputs, collects every tee output, and decodes escaped letters', () => {
     expect(
       attributedChangeNames(

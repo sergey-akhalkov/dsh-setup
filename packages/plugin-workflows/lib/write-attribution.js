@@ -149,6 +149,7 @@ function shellDestinations(command, powershell) {
     // Only a writer that starts the stage executes; a printed writer name does not.
     const atStart = masked.trimStart();
     const writer = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee)\b([\s\S]*)/iu.exec(atStart);
+    const writerName = /^(Set-Content|Add-Content|Out-File|New-Item|tee)/iu.exec(atStart)?.[1]?.toLowerCase() ?? '';
     if (writer !== null) {
         const rest = writer[1] ?? '';
         const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest);
@@ -159,6 +160,7 @@ function shellDestinations(command, powershell) {
             const tokens = rest.match(/\u0000\d+\u0000|[<>]+|[^><\s]+/gu) ?? [];
             let skipValue = false;
             let skipInput = false;
+            let positionals = 0;
             for (const token of tokens) {
                 if (/^\d*[<>]/u.test(token)) {
                     skipInput = /^\d*</u.test(token);
@@ -178,8 +180,12 @@ function shellDestinations(command, powershell) {
                 }
                 if (token.startsWith('-'))
                     continue;
-                // Every positional output is a destination (tee accepts several).
-                destinations.push(resolveMasked(token, values));
+                // tee accepts several positional outputs; other writers take one path
+                // and treat the remaining positionals as content or property values.
+                if (writerName === 'tee' || positionals === 0) {
+                    destinations.push(resolveMasked(token, values));
+                }
+                positionals += 1;
             }
         }
     }
