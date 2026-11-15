@@ -111,6 +111,7 @@ async function gitWorkspace(): Promise<string> {
   const change = join(directory, 'openspec', 'changes', CHANGE)
   await mkdir(join(change, 'specs', 'auth'), { recursive: true })
   await writeFile(join(change, 'proposal.md'), '# Proposal\n\nWhy.\n', 'utf8')
+  await writeFile(join(change, 'design.md'), '# Design\n\nThe decision.\n', 'utf8')
   await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n\nA requirement.\n', 'utf8')
   await writeFile(join(change, 'tasks.md'), UNCHECKED_TASKS, 'utf8')
   const git = (...args: string[]): void => {
