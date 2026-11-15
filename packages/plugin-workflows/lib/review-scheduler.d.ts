@@ -61,8 +61,12 @@ export type ReviewAdmission = {
 };
 export declare class ReviewScheduler {
     private readonly host;
+    private readonly limits;
     private readonly maxAttempts;
     private readonly queue;
+    /** Every admitted entry by run id, so disposal can clean its snapshot up. */
+    private readonly admitted;
+    private disposed;
     /** The last settled result per run id, for a status read. */
     private readonly lastSettled;
     /** Live reviews by complete identity, so the host admits before a snapshot. */
@@ -112,5 +116,7 @@ export declare class ReviewScheduler {
         queued: number;
     };
     dispose(): void;
+    /** Wait out a disposed reviewer child, then release its snapshot and lease. */
+    private discardAfterTeardown;
     enqueue(input: ScheduledReview): Promise<ReviewAdmission>;
 }

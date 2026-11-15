@@ -548,6 +548,46 @@ export async function writePortableApproval(workspace, record) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
 }
+/** The local record path one review attempt publishes to. */
+export function reviewRecordPathOf(input) {
+    const spec = input.step.review;
+    if (spec === undefined)
+        throw new Error(`step "${input.step.id}" declares no review`);
+    return localReviewRecordPath({
+        definition: input.definition.id,
+        change: input.change,
+        scope: spec.scope,
+        ...(spec.phase === undefined ? {} : { phase: spec.phase }),
+        ...(input.task === undefined ? {} : { taskId: input.task.id }),
+    });
+}
+/** Read the authoritative record's comparable fingerprint; absent or unreadable is undefined. */
+export async function readReviewRecordFingerprint(workspace, input) {
+    try {
+        const raw = await readFile(join(workspace, reviewRecordPathOf(input)), 'utf8');
+        return JSON.stringify(JSON.parse(raw));
+    }
+    catch {
+        return undefined;
+    }
+}
+/**
+ * Discard a completion whose authoritative record changed after the start
+ * baseline: a superseded or late attempt never writes over its successor.
+ */
+async function supersededOutcome(input, now) {
+    if (input.baseline === undefined)
+        return undefined;
+    const current = await readReviewRecordFingerprint(input.context.workspace, input);
+    if (current === input.baseline.fingerprint)
+        return undefined;
+    const reason = 'a newer review record was published while this review ran; its late completion is discarded and the authoritative record is unchanged';
+    return {
+        run: settleStep(input.run, input.step.id, 'failed', { at: now, reason }),
+        error: reason,
+        discarded: true,
+    };
+}
 /** Record an engine-side failure (queue full, timeout) as an ERROR review record. */
 export async function recordReviewFailure(input) {
     const now = input.now ?? Date.now();
@@ -635,6 +675,9 @@ async function settleFromRecord(input, record, recordPath, now) {
     });
 }
 async function writeErrorRecord(input, record, error, failureClass, now) {
+    const superseded = await supersededOutcome(input, now);
+    if (superseded !== undefined)
+        return superseded;
     const failed = {
         ...record,
         verdict: 'ERROR',
@@ -845,6 +888,11 @@ export function beginReviewAttempt(input) {
  * its own evidence. Only the scheduler's settled attempt reaches this.
  */
 export async function publishReviewOutcome(input, outcome, now = input.now ?? Date.now()) {
+    // A successor published while this attempt ran: publish neither the portable
+    // approval nor the local record.
+    const superseded = await supersededOutcome(input, now);
+    if (superseded !== undefined)
+        return superseded;
     const record = outcome.record;
     const result = outcome.result;
     if (record === undefined) {

@@ -212,6 +212,8 @@ export interface ReviewRunInput {
     readonly session: string;
     readonly now?: number;
     readonly signal?: AbortSignal;
+    /** Captured before the first start; a retry preserves it across attempts. */
+    readonly baseline?: ReviewRecordBaseline;
     /** Test seams; production writes the real stores. */
     readonly writePortable?: typeof writePortableApproval;
     readonly writeLocal?: typeof writeLocalReviewRecord;
@@ -223,7 +225,21 @@ export interface ReviewRunResult {
     readonly record?: ReviewRecord;
     readonly recordPath?: string;
     readonly error?: string;
+    /** A newer authoritative record superseded this attempt; nothing was written. */
+    readonly discarded?: boolean;
 }
+/**
+ * The authoritative record fingerprint captured immediately before a review's
+ * first start; a retry keeps it, so only the settled attempt may publish.
+ */
+export interface ReviewRecordBaseline {
+    /** The record file's normalized JSON, or undefined when no record existed. */
+    readonly fingerprint: string | undefined;
+}
+/** The local record path one review attempt publishes to. */
+export declare function reviewRecordPathOf(input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task'>): string;
+/** Read the authoritative record's comparable fingerprint; absent or unreadable is undefined. */
+export declare function readReviewRecordFingerprint(workspace: string, input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task'>): Promise<string | undefined>;
 /** Record an engine-side failure (queue full, timeout) as an ERROR review record. */
 export declare function recordReviewFailure(input: {
     readonly run: WorkflowRun;
@@ -243,6 +259,8 @@ export declare function recordReviewFailure(input: {
     readonly failureClass: string;
     readonly now?: number;
     readonly writeLocal?: typeof writeLocalReviewRecord;
+    /** A started attempt's start baseline; a pre-start failure carries none. */
+    readonly baseline?: ReviewRecordBaseline;
 }): Promise<ReviewRunResult>;
 /** The review identity every attempt carries before a verdict exists. */
 type ReviewRecordBase = Omit<ReviewRecord, 'verdict' | 'findings'>;

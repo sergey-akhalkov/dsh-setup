@@ -745,6 +745,8 @@ export interface ReviewRunInput {
   readonly session: string
   readonly now?: number
   readonly signal?: AbortSignal
+  /** Captured before the first start; a retry preserves it across attempts. */
+  readonly baseline?: ReviewRecordBaseline
   /** Test seams; production writes the real stores. */
   readonly writePortable?: typeof writePortableApproval
   readonly writeLocal?: typeof writeLocalReviewRecord
@@ -757,6 +759,65 @@ export interface ReviewRunResult {
   readonly record?: ReviewRecord
   readonly recordPath?: string
   readonly error?: string
+  /** A newer authoritative record superseded this attempt; nothing was written. */
+  readonly discarded?: boolean
+}
+
+/**
+ * The authoritative record fingerprint captured immediately before a review's
+ * first start; a retry keeps it, so only the settled attempt may publish.
+ */
+export interface ReviewRecordBaseline {
+  /** The record file's normalized JSON, or undefined when no record existed. */
+  readonly fingerprint: string | undefined
+}
+
+/** The local record path one review attempt publishes to. */
+export function reviewRecordPathOf(
+  input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task'>,
+): string {
+  const spec = input.step.review
+  if (spec === undefined) throw new Error(`step "${input.step.id}" declares no review`)
+  return localReviewRecordPath({
+    definition: input.definition.id,
+    change: input.change,
+    scope: spec.scope,
+    ...(spec.phase === undefined ? {} : { phase: spec.phase }),
+    ...(input.task === undefined ? {} : { taskId: input.task.id }),
+  })
+}
+
+/** Read the authoritative record's comparable fingerprint; absent or unreadable is undefined. */
+export async function readReviewRecordFingerprint(
+  workspace: string,
+  input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task'>,
+): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(workspace, reviewRecordPathOf(input)), 'utf8')
+    return JSON.stringify(JSON.parse(raw))
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Discard a completion whose authoritative record changed after the start
+ * baseline: a superseded or late attempt never writes over its successor.
+ */
+async function supersededOutcome(
+  input: ReviewRunInput,
+  now: number,
+): Promise<ReviewRunResult | undefined> {
+  if (input.baseline === undefined) return undefined
+  const current = await readReviewRecordFingerprint(input.context.workspace, input)
+  if (current === input.baseline.fingerprint) return undefined
+  const reason =
+    'a newer review record was published while this review ran; its late completion is discarded and the authoritative record is unchanged'
+  return {
+    run: settleStep(input.run, input.step.id, 'failed', { at: now, reason }),
+    error: reason,
+    discarded: true,
+  }
 }
 
 /** Record an engine-side failure (queue full, timeout) as an ERROR review record. */
@@ -774,6 +835,8 @@ export async function recordReviewFailure(input: {
   readonly failureClass: string
   readonly now?: number
   readonly writeLocal?: typeof writeLocalReviewRecord
+  /** A started attempt's start baseline; a pre-start failure carries none. */
+  readonly baseline?: ReviewRecordBaseline
 }): Promise<ReviewRunResult> {
   const now = input.now ?? Date.now()
   const request: ReviewRunInput = { ...input, runner: {} as SubagentRunner, timeoutMs: 0 }
@@ -881,6 +944,8 @@ async function writeErrorRecord(
   failureClass: string,
   now: number,
 ): Promise<ReviewRunResult> {
+  const superseded = await supersededOutcome(input, now)
+  if (superseded !== undefined) return superseded
   const failed: ReviewRecord = {
     ...record,
     verdict: 'ERROR',
@@ -1175,6 +1240,10 @@ export async function publishReviewOutcome(
   outcome: ReviewAttemptOutcome,
   now = input.now ?? Date.now(),
 ): Promise<ReviewRunResult> {
+  // A successor published while this attempt ran: publish neither the portable
+  // approval nor the local record.
+  const superseded = await supersededOutcome(input, now)
+  if (superseded !== undefined) return superseded
   const record = outcome.record
   const result = outcome.result
   if (record === undefined) {

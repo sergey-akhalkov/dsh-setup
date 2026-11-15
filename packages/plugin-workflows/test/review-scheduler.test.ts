@@ -12,10 +12,15 @@ import {
   type ReviewRunInput,
   type ReviewSubagentRunner,
   resolveReviewers,
+  reviewDigest,
 } from '../src/host/review.ts'
 import type { QueueLimits } from '../src/host/review-queue.ts'
 import { ReviewScheduler } from '../src/host/review-scheduler.ts'
-import { createReviewSnapshot, discardReviewSnapshot } from '../src/host/review-snapshot.ts'
+import {
+  createReviewSnapshot,
+  discardReviewSnapshot,
+  startSnapshotLease,
+} from '../src/host/review-snapshot.ts'
 import { createRun, type WorkflowRun } from '../src/host/runs.ts'
 
 const roots: string[] = []
@@ -1043,6 +1048,353 @@ describe('review scheduler queued re-preparation', () => {
     expect(record.verdict).toBe('ERROR')
     expect(record.failureClass).toBe('reviewed-inputs-changed')
     expect(record.error).toContain('re-prepares only once')
+    scheduler.dispose()
+  })
+})
+
+const TASK_ID = '0123456789abcdef'
+
+/** A task-scope definition, so a PASS also writes the portable approval. */
+function taskDefinition(): Definition {
+  return validateDefinition({
+    v: 1,
+    id: 'task-review',
+    name: 'Task review',
+    version: 1,
+    trigger: { kind: 'turn.stopping', match: {}, mode: 'active', dedupe: 'turn' },
+    settings: {
+      allowModelStart: true,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+      gate: 'review',
+      gateIdentity: 'task-review',
+      legacy: { plugin: 'delegation-rules', signal: 'task-review' },
+    },
+    steps: [
+      {
+        id: 'review',
+        title: 'Review the checked task',
+        executor: 'review',
+        review: { target: 'codex', instruction: 'review-task', scope: 'task' },
+        evidence: {
+          kind: 'record',
+          rule: 'task-review',
+          change: '{name}',
+          scope: 'task',
+          task: '{taskId}',
+          verdicts: ['PASS', 'ERROR'],
+          path: `.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json`,
+        },
+        next: 'end',
+        blockTurnClose: true,
+      },
+    ],
+  })
+}
+
+function taskRequestFor(
+  root: string,
+  specDigest: string,
+  overrides: Partial<ReviewRunInput> = {},
+): ReviewRunInput {
+  const def = taskDefinition()
+  const digest = reviewDigest({ scope: 'task', specDigest })
+  const base: ReviewRunInput = {
+    run: runFor(def),
+    definition: def,
+    step: def.steps[0] as Definition['steps'][number],
+    reviewer: reviewers(),
+    runner: {
+      run: async () => ({ childId: 'child-1', completed: true, text: fencedPASS(digest) }),
+    },
+    context: { workspace: root, values: { name: 'auth', taskId: TASK_ID } },
+    change: 'auth',
+    task: { id: TASK_ID, number: '1.1', text: 'Task' },
+    prepared: { specDigest },
+    timeoutMs: 5_000,
+    session: 'session-1',
+  }
+  return { ...base, ...overrides }
+}
+
+function taskRecordPath(root: string): string {
+  return join(root, '.dsh/workflows/records/task-review/auth/tasks', `${TASK_ID}.json`)
+}
+
+function taskApprovalPath(root: string): string {
+  return join(root, 'openspec/changes/auth/reviews', `${TASK_ID}.json`)
+}
+
+describe('review scheduler record integrity', () => {
+  it('discards a late completion after a queued successor published', async () => {
+    const { root } = await reviewWorkspace()
+    await mkdir(join(root, '.dsh'), { recursive: true })
+    const persisted: WorkflowRun[] = []
+    const scheduler = new ReviewScheduler(limitsFor({ maxAttempts: 1, waitTimeoutMs: 60 }), {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async () => undefined,
+    })
+    const firstDigest = 'a'.repeat(64)
+    let releaseFirst: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    let firstStarted = false
+    const first = taskRequestFor(root, firstDigest, {
+      runner: {
+        run: async () => {
+          firstStarted = true
+          await gate
+          return {
+            childId: 'child-a',
+            completed: true,
+            text: fencedPASS(reviewDigest({ scope: 'task', specDigest: firstDigest })),
+          }
+        },
+      },
+    })
+    await scheduler.enqueue({
+      workspace: root,
+      run: first.run,
+      request: first,
+      rule: 'task-review',
+      change: 'auth',
+      taskId: TASK_ID,
+      digest: reviewDigest({ scope: 'task', specDigest: firstDigest }),
+    })
+    await waitFor(async () => firstStarted)
+    // A different-digest review of the same task waits, then settles as ERROR.
+    const secondDigest = 'b'.repeat(64)
+    const second = taskRequestFor(root, secondDigest)
+    const admission = await scheduler.enqueue({
+      workspace: root,
+      run: second.run,
+      request: second,
+      rule: 'task-review',
+      change: 'auth',
+      taskId: TASK_ID,
+      digest: reviewDigest({ scope: 'task', specDigest: secondDigest }),
+    })
+    expect(admission.kind).toBe('accepted')
+    await waitFor(async () => {
+      try {
+        return (
+          (JSON.parse(await readFile(taskRecordPath(root), 'utf8')) as ReviewRecord).runId ===
+          second.run.id
+        )
+      } catch {
+        return false
+      }
+    })
+    releaseFirst?.()
+    await waitFor(async () => persisted.some((run) => run.id === first.run.id))
+    const record = JSON.parse(await readFile(taskRecordPath(root), 'utf8')) as ReviewRecord
+    expect(record.runId).toBe(second.run.id)
+    expect(record.verdict).toBe('ERROR')
+    expect(record.digest).toBe(reviewDigest({ scope: 'task', specDigest: secondDigest }))
+    // The late PASS writes neither the approval nor the local record.
+    expect(existsSync(taskApprovalPath(root))).toBe(false)
+    const settledFirst = persisted.find((run) => run.id === first.run.id)
+    expect(settledFirst?.steps[0]?.state).toBe('failed')
+    expect(settledFirst?.steps[0]?.reason).toContain('late completion is discarded')
+    scheduler.dispose()
+  })
+})
+
+describe('review scheduler disposal', () => {
+  it('removes queued snapshots and releases an active snapshot after teardown', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const persisted: WorkflowRun[] = []
+    let releaseFirst: (() => void) | undefined
+    let firstStarted = false
+    let teardownConfirmed = false
+    let teardownCalls = 0
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const scheduler = new ReviewScheduler(limitsFor({ maxAttempts: 1 }), {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async (targetWorkspace, runId) =>
+        discardReviewSnapshot(targetWorkspace, runId, defaultGit),
+    })
+    const first = requestFor(root, digest)
+    const firstSnapshot = join(root, '.dsh', 'workflows', 'snapshots', first.run.id)
+    await mkdir(firstSnapshot, { recursive: true })
+    await writeFile(join(firstSnapshot, 'a.txt'), 'a\n', 'utf8')
+    await startSnapshotLease(root, first.run.id, 10)
+    const firstRequest: ReviewRunInput = {
+      ...first,
+      runner: {
+        run: async () => {
+          firstStarted = true
+          await gate
+          return { childId: 'child-a', completed: true, text: fencedPASS(digest) }
+        },
+        waitForTeardown: async () => {
+          teardownCalls += 1
+          if (!teardownConfirmed) throw new Error('the reviewer child is still alive')
+        },
+      },
+    }
+    await scheduler.enqueue({
+      workspace: root,
+      run: firstRequest.run,
+      request: firstRequest,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    await waitFor(async () => firstStarted)
+    const second = requestFor(root, 'b'.repeat(64))
+    const secondSnapshot = join(root, '.dsh', 'workflows', 'snapshots', second.run.id)
+    await mkdir(secondSnapshot, { recursive: true })
+    await writeFile(join(secondSnapshot, 'b.txt'), 'b\n', 'utf8')
+    await startSnapshotLease(root, second.run.id, 10)
+    const secondRequest: ReviewRunInput = {
+      ...second,
+      prepared: { specDigest: 'b'.repeat(64), reviewCwd: secondSnapshot },
+    }
+    await scheduler.enqueue({
+      workspace: root,
+      run: second.run,
+      request: secondRequest,
+      rule: 'spec-review',
+      change: 'auth',
+      digest: 'b'.repeat(64),
+    })
+    await waitFor(async () => existsSync(`${secondSnapshot}.lease`))
+    scheduler.dispose()
+    // A queued entry never started a reviewer, so its checkout goes at once.
+    await waitFor(async () => !existsSync(secondSnapshot) && !existsSync(`${secondSnapshot}.lease`))
+    // The active reviewer may still be reading its checkout: keep it leased.
+    expect(existsSync(firstSnapshot)).toBe(true)
+    expect(existsSync(`${firstSnapshot}.lease`)).toBe(true)
+    expect(
+      scheduler.liveRun({ workspace: root, rule: 'spec-review', change: 'auth', digest }),
+    ).toBeUndefined()
+    releaseFirst?.()
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(persisted).toEqual([])
+    expect(existsSync(recordPath(root))).toBe(false)
+    expect(existsSync(firstSnapshot)).toBe(true)
+    teardownConfirmed = true
+    await waitFor(
+      async () => !existsSync(firstSnapshot) && !existsSync(`${firstSnapshot}.lease`),
+      5_000,
+    )
+    expect(teardownCalls).toBeGreaterThan(1)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    // The stopped lease is not re-created by its refresh interval.
+    expect(existsSync(`${firstSnapshot}.lease`)).toBe(false)
+  })
+})
+
+describe('review scheduler queued identity collision', () => {
+  it('persists a failed non-advancing step without replacing the incumbent record', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const persisted: WorkflowRun[] = []
+    let releaseFirst: (() => void) | undefined
+    let firstStarted = false
+    let collisionStarts = 0
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const scheduler = new ReviewScheduler(limitsFor({ maxAttempts: 1, maxQueued: 3 }), {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async () => undefined,
+    })
+    const first = requestFor(root, digest, {
+      runner: {
+        run: async () => {
+          firstStarted = true
+          await gate
+          return { childId: 'child-a', completed: true, text: fencedPASS(digest) }
+        },
+      },
+    })
+    await scheduler.enqueue({
+      workspace: root,
+      run: first.run,
+      request: first,
+      rule: 'spec-review',
+      change: 'auth',
+      digest,
+    })
+    await waitFor(async () => firstStarted)
+    const queued = requestFor(root, 'b'.repeat(64), {
+      runner: {
+        run: async () => {
+          collisionStarts += 1
+          throw new Error('the discarded entry must not start a reviewer')
+        },
+      },
+    })
+    const collisionDigest = 'c'.repeat(64)
+    let reprepareCalls = 0
+    await scheduler.enqueue({
+      workspace: root,
+      run: queued.run,
+      request: queued,
+      rule: 'spec-review',
+      change: 'auth',
+      digest: 'b'.repeat(64),
+      reprepare: async () => {
+        reprepareCalls += 1
+        return {
+          kind: 'replaced',
+          prepared: { specDigest: collisionDigest },
+          digest: collisionDigest,
+          liveDigest: collisionDigest,
+        }
+      },
+    })
+    // The incumbent holding the replacement identity waits in the queue.
+    let releaseIncumbent: (() => void) | undefined
+    const incumbentGate = new Promise<void>((resolve) => {
+      releaseIncumbent = resolve
+    })
+    const incumbent = requestFor(root, collisionDigest, {
+      runner: {
+        run: async () => {
+          await incumbentGate
+          return { childId: 'child-c', completed: true, text: fencedPASS(collisionDigest) }
+        },
+      },
+    })
+    await scheduler.enqueue({
+      workspace: root,
+      run: incumbent.run,
+      request: incumbent,
+      rule: 'spec-review',
+      change: 'auth',
+      digest: collisionDigest,
+    })
+    releaseFirst?.()
+    await waitFor(async () => persisted.some((run) => run.id === queued.run.id))
+    const settledQueued = persisted.find((run) => run.id === queued.run.id)
+    expect(settledQueued?.steps[0]?.state).toBe('failed')
+    expect(settledQueued?.steps[0]?.reason).toContain(
+      'live successor already holds this review identity',
+    )
+    expect(reprepareCalls).toBe(1)
+    expect(collisionStarts).toBe(0)
+    // The incumbent's PASS record is unchanged by the discarded entry.
+    const record = JSON.parse(await readFile(recordPath(root), 'utf8')) as ReviewRecord
+    expect(record.runId).toBe(first.run.id)
+    expect(record.verdict).toBe('PASS')
+    releaseIncumbent?.()
+    await waitFor(async () => persisted.some((run) => run.id === incumbent.run.id))
     scheduler.dispose()
   })
 })

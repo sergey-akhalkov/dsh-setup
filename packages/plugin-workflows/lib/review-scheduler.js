@@ -1,5 +1,5 @@
-import { beginReviewAttempt, publishReviewOutcome, recordReviewFailure, } from './review.js';
-import { ReviewQueue, } from './review-queue.js';
+import { beginReviewAttempt, publishReviewOutcome, readReviewRecordFingerprint, recordReviewFailure, } from './review.js';
+import { ReviewQueue, retryDelayMs, } from './review-queue.js';
 import { settleStep } from './runs.js';
 function liveIdentity(input) {
     return `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}\u0000${input.digest ?? ''}\u0000${input.reviewer ?? ''}`;
@@ -49,8 +49,12 @@ function withUnconfirmedTeardown(outcome) {
 }
 export class ReviewScheduler {
     host;
+    limits;
     maxAttempts;
     queue;
+    /** Every admitted entry by run id, so disposal can clean its snapshot up. */
+    admitted = new Map();
+    disposed = false;
     /** The last settled result per run id, for a status read. */
     lastSettled = new Map();
     /** Live reviews by complete identity, so the host admits before a snapshot. */
@@ -79,6 +83,7 @@ export class ReviewScheduler {
     }
     constructor(limits, host) {
         this.host = host;
+        this.limits = limits;
         this.maxAttempts = limits.maxAttempts;
         this.queue = new ReviewQueue(limits, {
             start: (entry) => this.start(entry),
@@ -121,6 +126,7 @@ export class ReviewScheduler {
                 // them, then discards the snapshot.
                 if (info?.quarantined !== true) {
                     this.forgetLive(entry.run.id);
+                    this.admitted.delete(entry.run.id);
                     void this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
                 }
                 this.host.onSettled?.({
@@ -138,6 +144,16 @@ export class ReviewScheduler {
         await this.reprepareIfChanged(entry);
         if (!this.queue.owns(entry.file.id))
             return;
+        if (!entry.baselineCaptured) {
+            // Start-eligible means the predecessor has settled: this record is the
+            // publication baseline, and a retry keeps it rather than re-reading it.
+            entry.baselineCaptured = true;
+            entry.baseline = {
+                fingerprint: await readReviewRecordFingerprint(entry.workspace, entry.request),
+            };
+            entry.request = { ...entry.request, baseline: entry.baseline };
+        }
+        entry.started = true;
         const attempt = beginReviewAttempt(entry.request);
         let timer;
         try {
@@ -159,7 +175,7 @@ export class ReviewScheduler {
                 if (failure !== undefined) {
                     await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined);
                 }
-                this.quarantine(entry, 'failed');
+                this.quarantine(entry, failure?.discarded === true ? 'discarded' : 'failed');
                 return;
             }
         }
@@ -253,7 +269,7 @@ export class ReviewScheduler {
                 if (failure !== undefined) {
                     await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined);
                 }
-                this.quarantine(entry, 'failed');
+                this.quarantine(entry, failure?.discarded === true ? 'discarded' : 'failed');
                 return;
             }
             const reason = await this.recheckGuard(entry);
@@ -266,13 +282,17 @@ export class ReviewScheduler {
                 if (failure !== undefined) {
                     await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined);
                 }
-                await this.queue.complete(entry, 'failed');
+                await this.queue.complete(entry, failure?.discarded === true ? 'discarded' : 'failed');
                 return;
             }
         }
         const finalOutcome = teardownConfirmed ? outcome : withUnconfirmedTeardown(outcome);
         const result = await this.publish(entry, finalOutcome, now);
-        const state = result.record?.verdict === 'PASS' ? 'completed' : 'failed';
+        const state = result.discarded === true
+            ? 'discarded'
+            : result.record?.verdict === 'PASS'
+                ? 'completed'
+                : 'failed';
         if (!teardownConfirmed) {
             this.quarantine(entry, state);
             return;
@@ -294,7 +314,11 @@ export class ReviewScheduler {
     /** Publish a terminal attempt whose child teardown is not yet confirmed. */
     async publishAndQuarantine(entry, outcome, now) {
         const result = await this.publish(entry, outcome, now);
-        this.quarantine(entry, result.record?.verdict === 'PASS' ? 'completed' : 'failed');
+        this.quarantine(entry, result.discarded === true
+            ? 'discarded'
+            : result.record?.verdict === 'PASS'
+                ? 'completed'
+                : 'failed');
     }
     async publish(entry, outcome, now) {
         const result = await publishReviewOutcome(entry.request, outcome, now).catch(async (error) => {
@@ -308,7 +332,11 @@ export class ReviewScheduler {
         });
         await this.host.persistRun(entry.workspace, result.run).catch(() => undefined);
         this.lastSettled.set(entry.run.id, {
-            state: result.record?.verdict === 'PASS' ? 'completed' : 'failed',
+            state: result.discarded === true
+                ? 'discarded'
+                : result.record?.verdict === 'PASS'
+                    ? 'completed'
+                    : 'failed',
             ...(result.recordPath === undefined ? {} : { recordPath: result.recordPath }),
             ...(result.record?.verdict === undefined ? {} : { verdict: result.record.verdict }),
         });
@@ -329,6 +357,7 @@ export class ReviewScheduler {
         this.queue.quarantine(entry, async () => {
             await this.waitForTeardown(entry);
             this.forgetLive(entry.run.id);
+            this.admitted.delete(entry.run.id);
             await this.host.discardSnapshot(entry.workspace, entry.run.id);
         }, outcome);
     }
@@ -385,7 +414,44 @@ export class ReviewScheduler {
         return this.queue.summary();
     }
     dispose() {
+        if (this.disposed)
+            return;
+        this.disposed = true;
         this.queue.dispose();
+        const admitted = [...this.admitted.values()];
+        this.admitted.clear();
+        this.liveRuns.clear();
+        this.liveKeys.clear();
+        this.liveByRun.clear();
+        for (const entry of admitted) {
+            if (!entry.started) {
+                // No child ever read this checkout: release it and its lease now.
+                void this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
+                continue;
+            }
+            // A live reviewer may still be reading its checkout; keep the lease
+            // renewing until teardown confirms, then release the snapshot.
+            void this.discardAfterTeardown(entry);
+        }
+    }
+    /** Wait out a disposed reviewer child, then release its snapshot and lease. */
+    async discardAfterTeardown(entry) {
+        for (let attempt = 1;; attempt += 1) {
+            try {
+                await this.waitForTeardown(entry);
+                break;
+            }
+            catch {
+                // Keep the checkout leased while the child is still alive; the stale
+                // sweep must not reclaim a snapshot a running reviewer is reading.
+                const delay = Math.max(retryDelayMs(attempt, this.limits), 10);
+                await new Promise((resolve) => {
+                    const timer = setTimeout(resolve, delay);
+                    timer.unref?.();
+                });
+            }
+        }
+        await this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
     }
     async enqueue(input) {
         const reviewer = input.request.reviewer.id;
@@ -415,8 +481,11 @@ export class ReviewScheduler {
             liveKey: key,
             waited: false,
             reprepared: false,
+            baselineCaptured: false,
+            started: false,
             ...(input.reprepare === undefined ? {} : { reprepare: input.reprepare }),
         };
+        this.admitted.set(entry.run.id, entry);
         let admission;
         try {
             admission = await this.queue.submit(entry);
@@ -427,19 +496,24 @@ export class ReviewScheduler {
             if (error instanceof Error &&
                 START_FAILURE_NAMES.has(error.name) &&
                 !this.queue.owns(entry.file.id)) {
+                this.admitted.delete(entry.run.id);
                 return { kind: 'accepted', phase: 'settled' };
             }
+            this.admitted.delete(entry.run.id);
             throw error;
         }
         switch (admission.kind) {
             case 'duplicate':
+                this.admitted.delete(entry.run.id);
                 if (admission.run.run.id !== input.run.id) {
                     void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
                 }
                 return { kind: 'duplicate', runId: admission.run.run.id };
             case 'full':
+                this.admitted.delete(entry.run.id);
                 return { kind: 'full', depth: admission.depth, maxQueued: admission.maxQueued };
             case 'settled':
+                this.admitted.delete(entry.run.id);
                 return { kind: 'accepted', phase: 'settled' };
             case 'accepted':
                 if (admission.phase !== 'running')

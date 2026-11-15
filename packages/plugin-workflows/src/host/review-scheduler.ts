@@ -3,8 +3,10 @@ import {
   publishReviewOutcome,
   type ReviewAttemptHandle,
   type ReviewAttemptOutcome,
+  type ReviewRecordBaseline,
   type ReviewRunInput,
   type ReviewRunResult,
+  readReviewRecordFingerprint,
   recordReviewFailure,
 } from './review.js'
 import {
@@ -14,6 +16,7 @@ import {
   type QueueRun,
   type QueueRunFile,
   ReviewQueue,
+  retryDelayMs,
   type SettledRunState,
 } from './review-queue.js'
 import { settleStep, type WorkflowRun } from './runs.js'
@@ -69,6 +72,12 @@ interface ScheduledEntry extends QueueRun {
   waited: boolean
   /** The single input re-preparation is spent. */
   reprepared: boolean
+  /** The authoritative-record baseline was captured before the first start. */
+  baselineCaptured: boolean
+  /** The settled attempt must not publish over the captured record. */
+  baseline?: ReviewRecordBaseline
+  /** The start hook began an attempt; disposal must await its teardown. */
+  started: boolean
   reprepare?: (reprepared: boolean) => Promise<ReviewReprepareOutcome>
 }
 
@@ -155,8 +164,12 @@ function withUnconfirmedTeardown(outcome: ReviewAttemptOutcome): ReviewAttemptOu
 }
 
 export class ReviewScheduler {
+  private readonly limits: QueueLimits
   private readonly maxAttempts: number
   private readonly queue: ReviewQueue<ScheduledEntry>
+  /** Every admitted entry by run id, so disposal can clean its snapshot up. */
+  private readonly admitted = new Map<string, ScheduledEntry>()
+  private disposed = false
   /** The last settled result per run id, for a status read. */
   private readonly lastSettled = new Map<
     string,
@@ -197,6 +210,7 @@ export class ReviewScheduler {
     limits: QueueLimits,
     private readonly host: ReviewSchedulerHost,
   ) {
+    this.limits = limits
     this.maxAttempts = limits.maxAttempts
     this.queue = new ReviewQueue<ScheduledEntry>(limits, {
       start: (entry) => this.start(entry),
@@ -237,6 +251,7 @@ export class ReviewScheduler {
         // them, then discards the snapshot.
         if (info?.quarantined !== true) {
           this.forgetLive(entry.run.id)
+          this.admitted.delete(entry.run.id)
           void this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined)
         }
         this.host.onSettled?.({
@@ -254,6 +269,16 @@ export class ReviewScheduler {
   private async start(entry: ScheduledEntry): Promise<void> {
     await this.reprepareIfChanged(entry)
     if (!this.queue.owns(entry.file.id)) return
+    if (!entry.baselineCaptured) {
+      // Start-eligible means the predecessor has settled: this record is the
+      // publication baseline, and a retry keeps it rather than re-reading it.
+      entry.baselineCaptured = true
+      entry.baseline = {
+        fingerprint: await readReviewRecordFingerprint(entry.workspace, entry.request),
+      }
+      entry.request = { ...entry.request, baseline: entry.baseline }
+    }
+    entry.started = true
     const attempt = beginReviewAttempt(entry.request)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -279,7 +304,7 @@ export class ReviewScheduler {
         if (failure !== undefined) {
           await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined)
         }
-        this.quarantine(entry, 'failed')
+        this.quarantine(entry, failure?.discarded === true ? 'discarded' : 'failed')
         return
       }
     } catch (error) {
@@ -378,7 +403,7 @@ export class ReviewScheduler {
         if (failure !== undefined) {
           await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined)
         }
-        this.quarantine(entry, 'failed')
+        this.quarantine(entry, failure?.discarded === true ? 'discarded' : 'failed')
         return
       }
       const reason = await this.recheckGuard(entry)
@@ -391,13 +416,18 @@ export class ReviewScheduler {
         if (failure !== undefined) {
           await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined)
         }
-        await this.queue.complete(entry, 'failed')
+        await this.queue.complete(entry, failure?.discarded === true ? 'discarded' : 'failed')
         return
       }
     }
     const finalOutcome = teardownConfirmed ? outcome : withUnconfirmedTeardown(outcome)
     const result = await this.publish(entry, finalOutcome, now)
-    const state = result.record?.verdict === 'PASS' ? 'completed' : 'failed'
+    const state: SettledRunState =
+      result.discarded === true
+        ? 'discarded'
+        : result.record?.verdict === 'PASS'
+          ? 'completed'
+          : 'failed'
     if (!teardownConfirmed) {
       this.quarantine(entry, state)
       return
@@ -423,7 +453,14 @@ export class ReviewScheduler {
     now: number,
   ): Promise<void> {
     const result = await this.publish(entry, outcome, now)
-    this.quarantine(entry, result.record?.verdict === 'PASS' ? 'completed' : 'failed')
+    this.quarantine(
+      entry,
+      result.discarded === true
+        ? 'discarded'
+        : result.record?.verdict === 'PASS'
+          ? 'completed'
+          : 'failed',
+    )
   }
 
   private async publish(
@@ -444,7 +481,12 @@ export class ReviewScheduler {
     )
     await this.host.persistRun(entry.workspace, result.run).catch(() => undefined)
     this.lastSettled.set(entry.run.id, {
-      state: result.record?.verdict === 'PASS' ? 'completed' : 'failed',
+      state:
+        result.discarded === true
+          ? 'discarded'
+          : result.record?.verdict === 'PASS'
+            ? 'completed'
+            : 'failed',
       ...(result.recordPath === undefined ? {} : { recordPath: result.recordPath }),
       ...(result.record?.verdict === undefined ? {} : { verdict: result.record.verdict }),
     })
@@ -468,6 +510,7 @@ export class ReviewScheduler {
       async () => {
         await this.waitForTeardown(entry)
         this.forgetLive(entry.run.id)
+        this.admitted.delete(entry.run.id)
         await this.host.discardSnapshot(entry.workspace, entry.run.id)
       },
       outcome,
@@ -533,7 +576,43 @@ export class ReviewScheduler {
   }
 
   dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
     this.queue.dispose()
+    const admitted = [...this.admitted.values()]
+    this.admitted.clear()
+    this.liveRuns.clear()
+    this.liveKeys.clear()
+    this.liveByRun.clear()
+    for (const entry of admitted) {
+      if (!entry.started) {
+        // No child ever read this checkout: release it and its lease now.
+        void this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined)
+        continue
+      }
+      // A live reviewer may still be reading its checkout; keep the lease
+      // renewing until teardown confirms, then release the snapshot.
+      void this.discardAfterTeardown(entry)
+    }
+  }
+
+  /** Wait out a disposed reviewer child, then release its snapshot and lease. */
+  private async discardAfterTeardown(entry: ScheduledEntry): Promise<void> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await this.waitForTeardown(entry)
+        break
+      } catch {
+        // Keep the checkout leased while the child is still alive; the stale
+        // sweep must not reclaim a snapshot a running reviewer is reading.
+        const delay = Math.max(retryDelayMs(attempt, this.limits), 10)
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, delay)
+          timer.unref?.()
+        })
+      }
+    }
+    await this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined)
   }
 
   async enqueue(input: ScheduledReview): Promise<ReviewAdmission> {
@@ -564,8 +643,11 @@ export class ReviewScheduler {
       liveKey: key,
       waited: false,
       reprepared: false,
+      baselineCaptured: false,
+      started: false,
       ...(input.reprepare === undefined ? {} : { reprepare: input.reprepare }),
     }
+    this.admitted.set(entry.run.id, entry)
     let admission: Awaited<ReturnType<ReviewQueue<ScheduledEntry>['submit']>>
     try {
       admission = await this.queue.submit(entry)
@@ -577,19 +659,24 @@ export class ReviewScheduler {
         START_FAILURE_NAMES.has(error.name) &&
         !this.queue.owns(entry.file.id)
       ) {
+        this.admitted.delete(entry.run.id)
         return { kind: 'accepted', phase: 'settled' }
       }
+      this.admitted.delete(entry.run.id)
       throw error
     }
     switch (admission.kind) {
       case 'duplicate':
+        this.admitted.delete(entry.run.id)
         if (admission.run.run.id !== input.run.id) {
           void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined)
         }
         return { kind: 'duplicate', runId: admission.run.run.id }
       case 'full':
+        this.admitted.delete(entry.run.id)
         return { kind: 'full', depth: admission.depth, maxQueued: admission.maxQueued }
       case 'settled':
+        this.admitted.delete(entry.run.id)
         return { kind: 'accepted', phase: 'settled' }
       case 'accepted':
         if (admission.phase !== 'running') entry.waited = true
