@@ -216,6 +216,22 @@ export interface Definition {
 }
 /** The closed JSON Schema subset a subagent result may use; unsupported keywords fail the load. */
 export declare function resultSchemaShapeError(schema: Readonly<Record<string, unknown>>, depth?: number): string | undefined;
+/**
+ * The whole-spec review identity the engine's built-in `spec-review` definition
+ * owns. A whole-spec review step that declares it shares that canonical record:
+ * a current PASS settles the step without starting a second review, and the
+ * built-in trigger sees the same record.
+ */
+export declare const SHARED_SPEC_REVIEW_IDENTITY = "spec-review";
+/** The canonical whole-spec record the shared identity reads and writes. */
+export declare const SHARED_SPEC_REVIEW_PATH = ".dsh/workflows/records/spec-review/{name}/spec.json";
+/** The rule a review step's record carries: the shared identity or its gate identity. */
+export declare function reviewIdentityOf(definition: Definition, step: Step): string;
+/**
+ * The store a review step writes: the shared identity's store, else the
+ * definition's own directory (the rule and the store are separate facts).
+ */
+export declare function reviewStoreOf(definition: Definition, step: Step): string;
 /** Validate one raw definition; every failure names the definition and field. */
 export declare function validateDefinition(raw: unknown, source?: string): Definition;
 /** The host approval store; signed with the host key. */

@@ -27,6 +27,7 @@ import {
   type Definition,
   KNOWN_LEGACY_SOURCES,
   resolveOwnership,
+  reviewIdentityOf,
   workspaceDefinitionsDirectory,
 } from './definitions.js'
 import {
@@ -2828,7 +2829,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           return failure.run
         }
         let startEpoch = mutationEpochs.get(workspace) ?? 0
-        const reviewRule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id
+        const reviewRule = reviewIdentityOf(reviewDefinition, step)
         // The pre-snapshot admission identity names the reviewed worktree
         // content, so two different snapshots are not conflated beforehand.
         const admissionTree =

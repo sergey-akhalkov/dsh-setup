@@ -108,8 +108,8 @@ describe('OpenSpec workflow contribution', () => {
     })
     expect(step?.evidence).toMatchObject({
       kind: 'record',
-      rule: 'change-intake',
-      path: '.dsh/workflows/records/change-intake/{name}/spec.json',
+      rule: 'spec-review',
+      path: '.dsh/workflows/records/spec-review/{name}/spec.json',
       digest: 'current',
     })
     expect(definition.trigger.match).toEqual({

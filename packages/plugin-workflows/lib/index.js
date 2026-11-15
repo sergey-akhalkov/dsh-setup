@@ -9,7 +9,7 @@ import { authorizeUserArchive, decideArchiveAuthorization, } from './archive-aut
 import { CHANGE_NAME, parseArchiveCommand } from './command-parse.js';
 import { runWorkflowCommand } from './commands.js';
 import { buildConditionContext, conditionNeedsWorktree, evaluateConditions } from './condition.js';
-import { KNOWN_LEGACY_SOURCES, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
+import { KNOWN_LEGACY_SOURCES, resolveOwnership, reviewIdentityOf, workspaceDefinitionsDirectory, } from './definitions.js';
 import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
 import { evaluateEvent } from './evaluate.js';
 import { commandMatches, currentSpecDigest, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
@@ -2326,7 +2326,7 @@ export function apply(ctx, config = {}) {
                     return failure.run;
                 }
                 let startEpoch = mutationEpochs.get(workspace) ?? 0;
-                const reviewRule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id;
+                const reviewRule = reviewIdentityOf(reviewDefinition, step);
                 // The pre-snapshot admission identity names the reviewed worktree
                 // content, so two different snapshots are not conflated beforehand.
                 const admissionTree = spec.scope === 'task' || bindsWorktree

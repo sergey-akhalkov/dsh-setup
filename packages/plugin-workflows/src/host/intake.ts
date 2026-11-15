@@ -130,6 +130,39 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
     // Only a fully done definition completes; a failed or cancelled step stops
     // the walk instead of being skipped.
     if (pending === undefined) {
+      // A review step marked done must still hold its declared current
+      // evidence: an ERROR or a stale PASS reopens it, so the next close
+      // re-runs the review instead of completing the run on it. A completed
+      // run is terminal and is never reopened.
+      let staleReview = false
+      if (run.status !== 'completed') {
+        for (const reviewStep of input.definition.steps) {
+          if (reviewStep.executor !== 'review') continue
+          if (run.steps.find((entry) => entry.id === reviewStep.id)?.state !== 'done') continue
+          const reviewOwner =
+            resolved.steps.find((entry) => entry.id === reviewStep.id)?.ownership === 'defer'
+              ? 'legacy'
+              : 'workflows'
+          const check = await verifyEvidence(reviewStep.evidence ?? { kind: 'declaration' }, {
+            ...input.evidenceContext,
+            reviewOwner,
+          })
+          if (check.ok) continue
+          const reason = `the review evidence is no longer current: ${check.failure.detail.slice(0, 160)}`
+          run = {
+            ...run,
+            updatedAt: at,
+            steps: run.steps.map((entry) =>
+              entry.id === reviewStep.id
+                ? { ...entry, state: 'open', evidence: undefined, reason }
+                : entry,
+            ),
+          }
+          staleReview = true
+          break
+        }
+      }
+      if (staleReview) continue
       const completedRun = run.status === 'completed' ? run : setRunStatus(run, 'completed', at)
       if (input.auth !== undefined && input.definition.id === 'change-intake') {
         const name = run.context.name
