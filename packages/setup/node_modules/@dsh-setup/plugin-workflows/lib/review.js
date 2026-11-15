@@ -656,8 +656,12 @@ function baseRecord(input, now) {
         time: new Date(now).toISOString(),
     };
 }
-/** The step's record contract narrowed to the ERROR verdict, when it is one. */
-function errorContractOf(evidence) {
+/**
+ * The step's record contract narrowed to the ERROR verdict, when it is one.
+ * Shared with the intake, which consumes a current matching ERROR without
+ * starting a second review.
+ */
+export function errorContractOf(evidence) {
     if (evidence.kind !== 'record')
         return undefined;
     const { verdict: _verdict, verdicts: _verdicts, ...rest } = evidence;

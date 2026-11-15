@@ -475,12 +475,18 @@ describe('change-intake engine', () => {
       now: 2_000,
       questions: { ask: async () => ({ answer: 'yes' }) },
     })
-    // The affirmative answer cannot carry the run past a non-PASS review.
+    // The affirmative answer cannot carry the run past a non-PASS review: the
+    // current ERROR is consumed provisionally, never completed or approved.
     expect(answered.completed).toBe(false)
     expect(answered.run.steps.find((step) => step.id === 'approval')?.state).toBe('done')
     const reopened = answered.run.steps.find((step) => step.id === 'spec-review')
-    expect(reopened?.state).toBe('open')
-    expect(reopened?.reason).toContain('no longer current')
+    expect(reopened?.state).toBe('failed')
+    expect(reopened?.reason).toContain('ERROR')
+    expect(reopened?.reason).toContain('retries the review')
+    expect(reopened?.evidence).toMatchObject({
+      path: '.dsh/workflows/records/spec-review/auth/spec.json',
+      digest,
+    })
     expect(answered.waiting?.stepId).toBe('spec-review')
 
     // The retry starts the review again and only its current PASS completes.
@@ -512,17 +518,19 @@ describe('change-intake engine', () => {
     expect(retried.run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
   })
 
-  it('allows the intermediate close on a failing review and retries it once', async () => {
+  it('consumes a shared whole-spec ERROR provisionally and completes on the later PASS', async () => {
     const workspace = await tempWorkspace()
     const definition = intakeDefinition()
     await writeChangeArtifacts(workspace)
+    // The built-in `spec-review` definition wrote this ERROR for the same shared
+    // whole-spec identity the intake step reads.
     const digest = await writeSpecReviewRecord(workspace, 'ERROR')
     let run = newRun(definition, workspace)
     for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
       run = settleStep(run, step, 'done', { at: 1_500 })
     }
     let reviewStarts = 0
-    // The review executor settles a matching ERROR as failed, never as done.
+    // The existing ERROR is consumed, not replaced by a second review.
     const first = await advanceIntake({
       run,
       definition,
@@ -533,24 +541,17 @@ describe('change-intake engine', () => {
       enabledLegacy: new Set(),
       now: 2_000,
       questions: { ask: async () => ({ answer: 'yes' }) },
-      reviewStep: async ({ run: reviewRun, step }) => {
+      reviewStep: async () => {
         reviewStarts += 1
-        return settleStep(reviewRun, step.id, 'failed', {
-          at: 2_000,
-          reason:
-            'the review returned ERROR; the step stays incomplete without approval or completion, the close is allowed with the failure visible, and the next close retries the review: the record verdict "ERROR" is not one of: PASS',
-          evidence: {
-            kind: 'record',
-            path: '.dsh/workflows/records/spec-review/auth/spec.json',
-            digest,
-          },
-        })
+        return undefined
       },
     })
-    expect(reviewStarts).toBe(1)
+    expect(reviewStarts).toBe(0)
     expect(first.completed).toBe(false)
     const provisional = first.run.steps.find((step) => step.id === 'spec-review')
     expect(provisional?.state).toBe('failed')
+    expect(provisional?.reason).toContain('ERROR')
+    expect(provisional?.reason).toContain('retries the review')
     expect(provisional?.evidence).toMatchObject({
       path: '.dsh/workflows/records/spec-review/auth/spec.json',
       digest,
@@ -608,7 +609,9 @@ describe('change-intake engine', () => {
     expect(stale.kind).toBe('refuse')
     expect(staleSteers[0]).toContain('spec-review')
 
-    // The next advance retries the review exactly once; only its PASS completes.
+    // The shared built-in review later publishes a current PASS; the next close
+    // completes the intake from it without dispatching or re-running a review.
+    const passDigest = await writeSpecReviewRecord(workspace)
     const retried = await advanceIntake({
       run: first.run,
       definition,
@@ -619,22 +622,19 @@ describe('change-intake engine', () => {
       enabledLegacy: new Set(),
       now: 2_100,
       questions: { ask: async () => ({ answer: 'yes' }) },
-      reviewStep: async ({ run: reviewRun, step }) => {
+      reviewStep: async () => {
         reviewStarts += 1
-        const passDigest = await writeSpecReviewRecord(workspace)
-        return settleStep(reviewRun, step.id, 'done', {
-          at: 2_100,
-          evidence: {
-            kind: 'record',
-            path: '.dsh/workflows/records/spec-review/auth/spec.json',
-            digest: passDigest,
-          },
-        })
+        return undefined
       },
     })
-    expect(reviewStarts).toBe(2)
+    expect(reviewStarts).toBe(0)
     expect(retried.completed).toBe(true)
-    expect(retried.run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
+    const done = retried.run.steps.find((step) => step.id === 'spec-review')
+    expect(done?.state).toBe('done')
+    expect(done?.evidence).toMatchObject({
+      path: '.dsh/workflows/records/spec-review/auth/spec.json',
+      digest: passDigest,
+    })
     expect(retried.run.steps.find((step) => step.id === 'approval')?.state).toBe('done')
   })
 

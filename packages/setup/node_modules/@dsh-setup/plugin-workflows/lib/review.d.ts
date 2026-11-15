@@ -1,4 +1,4 @@
-import { type Definition, type Step } from './definitions.js';
+import { type Definition, type Evidence, type RecordEvidence, type Step } from './definitions.js';
 import { type EvidenceContext } from './evidence.js';
 import type { SubagentRunner } from './executors.js';
 import { type FailureClass } from './review-queue.js';
@@ -264,6 +264,12 @@ export declare function recordReviewFailure(input: {
     /** A started attempt's start baseline; a pre-start failure carries none. */
     readonly baseline?: ReviewRecordBaseline;
 }): Promise<ReviewRunResult>;
+/**
+ * The step's record contract narrowed to the ERROR verdict, when it is one.
+ * Shared with the intake, which consumes a current matching ERROR without
+ * starting a second review.
+ */
+export declare function errorContractOf(evidence: Evidence): RecordEvidence | undefined;
 /**
  * The failed review steps whose current record is a contract-matching ERROR.
  * Only those failures are provisional turn-close evidence: a recordless failure

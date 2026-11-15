@@ -4,6 +4,7 @@ import { collectEvidencePaths, describeEvidence, verifyEvidence, } from './evide
 import { runHumanStep, runSubagentStep, runToolStep, } from './executors.js';
 import { runDeferredStep } from './gates.js';
 import { issueCompletionReceipt } from './receipts.js';
+import { errorContractOf } from './review.js';
 import { MAX_TOOL_STEP_ATTEMPTS, setRunStatus, settleStep, writeRun, } from './runs.js';
 import { checkedTaskIdsOf } from './tasks.js';
 /** The first step that is not done, with its state; failed steps stop the walk. */
@@ -322,6 +323,25 @@ export async function advanceIntake(input) {
             if (existing.ok) {
                 run = settleStep(run, step.id, 'done', { at, evidence: existing.evidence });
                 continue;
+            }
+            // A current matching ERROR this step has not settled on yet is provisional
+            // evidence: it allows the intermediate close with the failure visible, so
+            // starting another review now would ignore the shared record. A step that
+            // already settled on this ERROR retries the review instead.
+            const errorContract = errorContractOf(step.evidence ?? { kind: 'declaration' });
+            const existingError = errorContract === undefined ? undefined : await verifyEvidence(errorContract, stepContext);
+            const previous = run.steps.find((entry) => entry.id === step.id)?.evidence;
+            const consumed = existingError?.ok === true &&
+                previous?.kind === 'record' &&
+                previous.path === existingError.evidence.path &&
+                previous.digest === existingError.evidence.digest;
+            if (existingError?.ok === true && !consumed) {
+                run = settleStep(run, step.id, 'failed', {
+                    at,
+                    reason: 'the current review record is an ERROR; the step stays incomplete without approval or completion, the close is allowed with the failure visible, and the next close retries the review',
+                    evidence: existingError.evidence,
+                });
+                return { run, completed: false, waiting: waitingFor(step, stepContext) };
             }
             if (input.reviewStep === undefined) {
                 return {
