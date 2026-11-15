@@ -95,11 +95,15 @@ function splitSegments(text) {
             continue;
         }
         if (char === ';' ||
+            char === '\n' ||
+            char === '\r' ||
             (char === '&' && text[index + 1] === '&') ||
             (char === '|' && text[index + 1] === '|')) {
             segments.push(current);
             current = '';
             if ((char === '&' || char === '|') && text[index + 1] === char)
+                index += 1;
+            if (char === '\r' && text[index + 1] === '\n')
                 index += 1;
             continue;
         }

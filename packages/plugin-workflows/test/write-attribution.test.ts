@@ -414,3 +414,42 @@ describe('quoted shell examples', () => {
     expect(attributedChangeNames(WORKSPACE, calls, 1)).toEqual([])
   })
 })
+
+describe('multiline shell attribution', () => {
+  it('recognizes a write after a read and writes on separate lines', () => {
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command:
+                'Get-Content README.md\nSet-Content -Path openspec/changes/auth/design.md -Value x',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual(['auth'])
+    expect(
+      attributedChangeNames(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'pwsh',
+            arguments: {
+              command:
+                'Set-Content -Path openspec/changes/auth/design.md -Value x\r\nSet-Content -Path openspec/changes/billing/design.md -Value y',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toEqual(['auth', 'billing'])
+  })
+})
