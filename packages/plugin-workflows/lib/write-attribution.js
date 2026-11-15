@@ -140,8 +140,7 @@ function maskQuoted(text, powershell) {
     return { masked, values };
 }
 function resolveMasked(token, values) {
-    const match = /^\u0000(\d+)\u0000$/u.exec(token);
-    return match === null ? token : (values[Number(match[1])] ?? '');
+    return token.replace(/\u0000(\d+)\u0000/gu, (_, index) => values[Number(index)] ?? '');
 }
 const WRITER_AT_START = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee|Copy-Item|Move-Item|Rename-Item|Remove-Item|cp|mv|rm|touch)\b/iu;
 // copy/move/rename/touch target the last positional; others target the first.
@@ -180,7 +179,8 @@ function shellDestinations(command, powershell) {
                 }
                 if (/^-(?:Value|Credential|Encoding|Force|NoNewline|Stream|AsByteStream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable)\b/iu.test(token)) {
                     skipValue =
-                        /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable)\b/iu.test(token);
+                        !token.includes(':') &&
+                            /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable)\b/iu.test(token);
                     continue;
                 }
                 if (token.startsWith('-'))

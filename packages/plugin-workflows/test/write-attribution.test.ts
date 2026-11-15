@@ -761,6 +761,53 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('decodes partial placeholders and inline option values', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'pwsh',
+            arguments: {
+              command: 'Set-Content -Path openspec/changes/"auth"/design.md -Value x',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'b',
+            name: 'bash',
+            arguments: {
+              command: 'echo changed>openspec/changes/"auth"/design.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    for (const command of [
+      'Set-Content -ErrorAction:Stop openspec/changes/auth/design.md x',
+      'Out-File -Width:80 openspec/changes/auth/design.md -InputObject x',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'c', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+  })
   it('attributes copy and move destinations', () => {
     expect(
       attributedChangeName(

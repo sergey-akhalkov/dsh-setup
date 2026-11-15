@@ -149,8 +149,7 @@ function maskQuoted(
 }
 
 function resolveMasked(token: string, values: readonly string[]): string {
-  const match = /^\u0000(\d+)\u0000$/u.exec(token)
-  return match === null ? token : (values[Number(match[1])] ?? '')
+  return token.replace(/\u0000(\d+)\u0000/gu, (_, index) => values[Number(index)] ?? '')
 }
 
 const WRITER_AT_START =
@@ -194,6 +193,7 @@ function shellDestinations(command: string, powershell: boolean): string[] {
           )
         ) {
           skipValue =
+            !token.includes(':') &&
             /^-(?:Value|Credential|Encoding|Stream|ItemType|InputObject|Width|ErrorAction|ErrorVariable|WarningAction|WarningVariable|OutVariable|OutBuffer|PipelineVariable|InformationAction|InformationVariable)\b/iu.test(
               token,
             )
