@@ -19,15 +19,15 @@ afterEach(async () => {
 describe('session involvement', () => {
   it('round-trips the change for a session', async () => {
     const root = await workspace()
-    await writeInvolvement(root, 'session-1', 'auth')
-    expect(await readInvolvement(root, 'session-1')).toBe('auth')
+    await writeInvolvement(root, 'session-1', ['auth', 'billing'])
+    expect(await readInvolvement(root, 'session-1')).toEqual(['auth', 'billing'])
   })
 
   it('returns undefined for a missing session or an invalid id', async () => {
     const root = await workspace()
-    expect(await readInvolvement(root, 'session-missing')).toBeUndefined()
-    expect(await readInvolvement(root, '../escape')).toBeUndefined()
-    await writeInvolvement(root, '../escape', 'auth')
-    expect(await readInvolvement(root, '../escape')).toBeUndefined()
+    expect(await readInvolvement(root, 'session-missing')).toEqual([])
+    expect(await readInvolvement(root, '../escape')).toEqual([])
+    await writeInvolvement(root, '../escape', ['auth'])
+    expect(await readInvolvement(root, '../escape')).toEqual([])
   })
 })

@@ -311,7 +311,7 @@ export function evaluateDefinitions(definitions, event, context) {
         const key = obligationDedupeKey(definition.id, definition.trigger, event, row.capture);
         if (definition.trigger.mode === 'shadow') {
             if (key !== undefined)
-                context.markKey?.(key);
+                context.markKey?.(key, definition);
             rows.push({ ...row, reason: 'would-fire' });
             continue;
         }
@@ -328,7 +328,7 @@ export function evaluateDefinitions(definitions, event, context) {
             // A suppressed start must not consume the dedupe key, or a later retry
             // would be reported as a duplicate without ever creating a run.
             if (key !== undefined)
-                context.markKey?.(key);
+                context.markKey?.(key, definition);
             rows.push({
                 ...row,
                 reason: 'run-created',
@@ -484,7 +484,7 @@ export function evaluateIntents(definitions, classification, context) {
         const key = intentDedupeKey(definition, classification, context);
         if (definition.trigger.mode !== 'active') {
             if (key !== undefined)
-                context.markKey?.(key);
+                context.markKey?.(key, definition);
             rows.push({ ...row, reason: 'would-fire' });
             continue;
         }
@@ -518,7 +518,7 @@ export function evaluateIntents(definitions, classification, context) {
             // Consume the identity only after the run exists, so a refused or
             // temporarily suppressed start can be retried.
             if (key !== undefined)
-                context.markKey?.(key);
+                context.markKey?.(key, definition);
             rows.push({
                 ...row,
                 reason: 'run-created',

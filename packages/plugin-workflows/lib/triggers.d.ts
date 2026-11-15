@@ -107,7 +107,7 @@ export interface StartRunOutcome {
 }
 export interface DefinitionRouterContext extends DefinitionEvaluationContext {
     readonly resolveApplicability?: (definition: Definition, event: DefinitionEvent) => boolean | undefined;
-    readonly markKey?: (key: string) => void;
+    readonly markKey?: (key: string, definition: Definition) => void;
     readonly startRun?: (definition: Definition, event: DefinitionEvent, capture?: string) => StartRunOutcome;
 }
 /**
@@ -131,7 +131,7 @@ export interface IntentEvaluationContext extends DefinitionEvaluationContext {
     readonly session?: string;
     readonly workspace?: string;
     readonly turn?: number;
-    readonly markKey?: (key: string) => void;
+    readonly markKey?: (key: string, definition: Definition) => void;
     readonly startRun?: (definition: Definition, classification: IntentClassification) => StartRunOutcome;
 }
 /** The classification fields a recorded intent evaluation must name. */

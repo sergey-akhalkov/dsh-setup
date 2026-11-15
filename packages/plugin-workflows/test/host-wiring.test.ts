@@ -6663,6 +6663,32 @@ describe('turn-close condition wiring', () => {
       await waitFor(async () =>
         (await conditionRows(workspace)).some((row) => row.reason === 'run-created'),
       )
+      // A session involved in two changes evaluates each change at the close.
+      await mkdir(join(workspace, 'openspec', 'changes', 'billing'), { recursive: true })
+      await writeFile(
+        join(workspace, 'openspec', 'changes', 'billing', 'proposal.md'),
+        '# Proposal\\n',
+        'utf8',
+      )
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: 'billing-write',
+          name: 'write',
+          arguments: { file_path: 'openspec/changes/billing/design.md' },
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+      await waitFor(
+        async () =>
+          (await conditionRows(workspace)).filter((row) => row.reason === 'run-created').length >=
+          2,
+      )
+      expect(
+        (await conditionRows(workspace)).filter((row) => row.reason === 'run-created').length,
+      ).toBeGreaterThanOrEqual(2)
     } finally {
       dispose?.()
     }

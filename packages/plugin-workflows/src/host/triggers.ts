@@ -410,7 +410,7 @@ export interface DefinitionRouterContext extends DefinitionEvaluationContext {
     definition: Definition,
     event: DefinitionEvent,
   ) => boolean | undefined
-  readonly markKey?: (key: string) => void
+  readonly markKey?: (key: string, definition: Definition) => void
   readonly startRun?: (
     definition: Definition,
     event: DefinitionEvent,
@@ -444,7 +444,7 @@ export function evaluateDefinitions(
     }
     const key = obligationDedupeKey(definition.id, definition.trigger, event, row.capture)
     if (definition.trigger.mode === 'shadow') {
-      if (key !== undefined) context.markKey?.(key)
+      if (key !== undefined) context.markKey?.(key, definition)
       rows.push({ ...row, reason: 'would-fire' })
       continue
     }
@@ -460,7 +460,7 @@ export function evaluateDefinitions(
     if (outcome.ok) {
       // A suppressed start must not consume the dedupe key, or a later retry
       // would be reported as a duplicate without ever creating a run.
-      if (key !== undefined) context.markKey?.(key)
+      if (key !== undefined) context.markKey?.(key, definition)
       rows.push({
         ...row,
         reason: 'run-created',
@@ -493,7 +493,7 @@ export interface IntentEvaluationContext extends DefinitionEvaluationContext {
   readonly session?: string
   readonly workspace?: string
   readonly turn?: number
-  readonly markKey?: (key: string) => void
+  readonly markKey?: (key: string, definition: Definition) => void
   readonly startRun?: (
     definition: Definition,
     classification: IntentClassification,
@@ -662,7 +662,7 @@ export function evaluateIntents(
     }
     const key = intentDedupeKey(definition, classification, context)
     if (definition.trigger.mode !== 'active') {
-      if (key !== undefined) context.markKey?.(key)
+      if (key !== undefined) context.markKey?.(key, definition)
       rows.push({ ...row, reason: 'would-fire' })
       continue
     }
@@ -700,7 +700,7 @@ export function evaluateIntents(
     } else if (outcome.ok) {
       // Consume the identity only after the run exists, so a refused or
       // temporarily suppressed start can be retried.
-      if (key !== undefined) context.markKey?.(key)
+      if (key !== undefined) context.markKey?.(key, definition)
       rows.push({
         ...row,
         reason: 'run-created',
