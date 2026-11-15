@@ -3950,25 +3950,27 @@ describe('owned review at runtime', () => {
     const stored = await runs.readAuthenticatedRun(workspace, 'run-owned-review', auth)
     const review = stored?.steps.find((step) => step.id === 'spec-review')
     // The unconfigured reviewer writes the engine's own ERROR record; the
-    // legacy PASS is ignored, and the native step settles from that record.
-    expect(review?.state).toBe('done')
-    expect(review?.evidence?.path).toBe('.dsh/workflows/records/change-intake/auth/spec.json')
+    // legacy PASS is ignored, and the ERROR never completes the PASS-only step.
+    // The gate keeps the step requested for the retry, with the failure visible.
+    expect(review?.state).not.toBe('done')
+    expect(review?.reason).toContain('not one of: PASS')
+    expect(review?.evidence?.path).toBe('.dsh/workflows/records/spec-review/auth/spec.json')
     const record = JSON.parse(
       await readFile(
-        join(workspace, '.dsh', 'workflows', 'records', 'change-intake', 'auth', 'spec.json'),
+        join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json'),
         'utf8',
       ),
     ) as Record<string, unknown>
     expect(record).toMatchObject({
-      definition: 'change-intake',
-      rule: 'change-intake',
+      definition: 'spec-review',
+      rule: 'spec-review',
       change: 'auth',
       phase: 'spec',
       scope: 'whole',
       verdict: 'ERROR',
       digest,
     })
-    // Approval is the next owned step; it is steered while no user answer exists.
+    // Approval is never reached from an ERROR record.
     expect(stored?.steps.find((step) => step.id === 'approval')?.state).not.toBe('done')
     await waitFor(async () => host.steers.length === 1)
   })
@@ -4079,6 +4081,27 @@ describe('intake runtime', () => {
     const intake = definitionsRegistry.installed('change-intake')?.definition
     expect(intake).toBeDefined()
     if (intake === undefined) return
+    // The whole-spec review completes from the canonical native PASS record.
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    for (const [file, text] of [
+      ['proposal.md', '# proposal\n'],
+      ['design.md', '# design\n'],
+      ['tasks.md', '- [ ] 1.1 Task\n'],
+      ['specs/auth/spec.md', '# spec\n'],
+    ] as const) {
+      await mkdir(dirname(join(changeDir, file)), { recursive: true })
+      await writeFile(join(changeDir, file), text, 'utf8')
+    }
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const digest = await currentSpecDigest(workspace, 'auth')
+    if (digest === undefined) throw new Error('the auth change artifacts are unreadable')
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(recordDir, 'spec.json'),
+      `${JSON.stringify({ definition: 'spec-review', rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
     let run = runs.createRun({
       definition: 'change-intake',
       trigger: 'tool.pre-execute',
@@ -4096,8 +4119,8 @@ describe('intake runtime', () => {
       at: 1_100,
       evidence: {
         kind: 'record',
-        path: '.dsh/workflows/records/change-intake/auth/spec.json',
-        digest: 'a'.repeat(64),
+        path: '.dsh/workflows/records/spec-review/auth/spec.json',
+        digest,
       },
     })
     run = runs.requestStep(run, 'create-change', 1_200)
@@ -4369,11 +4392,11 @@ describe('intake end-to-end in a fake host', () => {
     }
     const digest = await currentSpecDigest(workspace, 'auth')
     expect(digest).toBeDefined()
-    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'change-intake', 'auth')
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
     await mkdir(recordDir, { recursive: true })
     await writeFile(
       join(recordDir, 'spec.json'),
-      `${JSON.stringify({ definition: 'change-intake', rule: 'change-intake', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      `${JSON.stringify({ definition: 'spec-review', rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
       'utf8',
     )
     await fresh.emit(
@@ -4462,11 +4485,11 @@ describe('intake end-to-end in a fake host', () => {
     const { currentSpecDigest } = await import('../src/host/evidence.ts')
     const digest = await currentSpecDigest(workspace, 'auth')
     expect(digest).toBeDefined()
-    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'change-intake', 'auth')
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
     await mkdir(recordDir, { recursive: true })
     await writeFile(
       join(recordDir, 'spec.json'),
-      `${JSON.stringify({ definition: 'change-intake', rule: 'change-intake', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      `${JSON.stringify({ definition: 'spec-review', rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
       'utf8',
     )
     await runs.writeRun(workspace, run, auth)
@@ -5442,6 +5465,27 @@ describe('session disposal', () => {
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // A current canonical PASS is what lets this run reach the completion commit.
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    for (const [file, text] of [
+      ['proposal.md', '# proposal\n'],
+      ['design.md', '# design\n'],
+      ['tasks.md', '- [ ] 1.1 Task\n'],
+      ['specs/auth/spec.md', '# spec\n'],
+    ] as const) {
+      await mkdir(dirname(join(changeDir, file)), { recursive: true })
+      await writeFile(join(changeDir, file), text, 'utf8')
+    }
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const digest = await currentSpecDigest(workspace, 'auth')
+    if (digest === undefined) throw new Error('the auth change artifacts are unreadable')
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(recordDir, 'spec.json'),
+      `${JSON.stringify({ definition: 'spec-review', rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
     const steps = [
       'requirements',
       'architecture',
@@ -5467,8 +5511,8 @@ describe('session disposal', () => {
           ? {
               evidence: {
                 kind: 'record',
-                path: '.dsh/workflows/records/change-intake/auth/spec.json',
-                digest: 'a'.repeat(64),
+                path: '.dsh/workflows/records/spec-review/auth/spec.json',
+                digest,
               },
             }
           : {}),

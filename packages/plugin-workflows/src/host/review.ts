@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CHANGE_NAME } from './command-parse.js'
 import type { Definition, Step } from './definitions.js'
+import { reviewIdentityOf, reviewStoreOf } from './definitions.js'
 import { type EvidenceContext, reviewDigest, verifyEvidence } from './evidence.js'
 import type { SubagentRunner, SubagentRunResult } from './executors.js'
 import { isInside } from './fs-change.js'
@@ -805,7 +806,7 @@ export function reviewRecordPathOf(
   const spec = input.step.review
   if (spec === undefined) throw new Error(`step "${input.step.id}" declares no review`)
   return localReviewRecordPath({
-    definition: input.definition.id,
+    definition: reviewStoreOf(input.definition, input.step),
     change: input.change,
     scope: spec.scope,
     ...(spec.phase === undefined ? {} : { phase: spec.phase }),
@@ -891,10 +892,10 @@ function baseRecord(
 ): Omit<ReviewRecord, 'verdict' | 'findings'> {
   const spec = input.step.review
   if (spec === undefined) throw new Error(`step "${input.step.id}" declares no review`)
-  const rule = input.definition.settings.gateIdentity ?? input.definition.id
+  const identity = reviewIdentityOf(input.definition, input.step)
   return {
-    definition: input.definition.id,
-    rule,
+    definition: reviewStoreOf(input.definition, input.step),
+    rule: identity,
     change: input.change,
     phase: reviewPhase(spec.scope, spec.phase),
     scope: spec.scope,
@@ -1076,7 +1077,7 @@ function prepareAttempt(
       ),
     }
   }
-  const rule = input.definition.settings.gateIdentity ?? input.definition.id
+  const rule = reviewIdentityOf(input.definition, input.step)
   const declared = input.step.evidence
   if (declared === undefined || declared.kind !== 'record' || declared.rule !== rule) {
     const reason = `the review step must declare a "record" evidence contract for rule "${rule}"; a review never settles from unrelated evidence`

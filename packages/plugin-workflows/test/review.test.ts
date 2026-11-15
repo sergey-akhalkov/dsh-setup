@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   type Definition,
   resolveOwnership,
+  reviewIdentityOf,
+  reviewStoreOf,
   validateDefinition,
   withSource,
 } from '../src/host/definitions.ts'
@@ -831,6 +833,55 @@ describe('review evidence contract', () => {
         steps: [{ ...step, evidence: { ...ev, verdicts: ['PASS'] } }],
       }),
     ).not.toThrow()
+  })
+  it('shares the canonical whole-spec identity only from a whole-spec step', () => {
+    const def = taskDefinition()
+    const step = def.steps[0] as Definition['steps'][number]
+    const ev = step.evidence as unknown as Record<string, unknown>
+    const wholeStep = {
+      ...step,
+      review: {
+        target: 'codex',
+        instruction: 'review-spec',
+        scope: 'whole' as const,
+        phase: 'spec',
+      },
+      evidence: {
+        ...ev,
+        rule: 'spec-review',
+        phase: 'spec',
+        scope: 'whole',
+        digest: 'current',
+        path: '.dsh/workflows/records/spec-review/{name}/spec.json',
+      },
+    }
+    // A whole-spec step reuses the built-in definition's canonical record.
+    const whole = validateDefinition({ ...def, steps: [wholeStep] })
+    const shared = whole.steps[0] as Definition['steps'][number]
+    expect(reviewIdentityOf(whole, shared)).toBe('spec-review')
+    expect(reviewStoreOf(whole, shared)).toBe('spec-review')
+    // A task-scoped step cannot claim the shared identity.
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [{ ...step, evidence: { ...ev, rule: 'spec-review' } }],
+      }),
+    ).toThrow(/whole-spec review step/u)
+    // The identity reads only its canonical record.
+    expect(() =>
+      validateDefinition({
+        ...def,
+        steps: [
+          {
+            ...wholeStep,
+            evidence: {
+              ...wholeStep.evidence,
+              path: '.dsh/workflows/records/spec-review/{name}/x.json',
+            },
+          },
+        ],
+      }),
+    ).toThrow(/canonical whole-spec record/u)
   })
   it('requires the same record contract even without the review gate', () => {
     const def = taskDefinition()

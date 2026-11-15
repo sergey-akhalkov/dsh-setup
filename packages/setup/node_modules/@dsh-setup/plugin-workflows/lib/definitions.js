@@ -864,6 +864,41 @@ function credentialField(value, path) {
     }
     return undefined;
 }
+/**
+ * The whole-spec review identity the engine's built-in `spec-review` definition
+ * owns. A whole-spec review step that declares it shares that canonical record:
+ * a current PASS settles the step without starting a second review, and the
+ * built-in trigger sees the same record.
+ */
+export const SHARED_SPEC_REVIEW_IDENTITY = 'spec-review';
+/** The canonical whole-spec record the shared identity reads and writes. */
+export const SHARED_SPEC_REVIEW_PATH = `.dsh/workflows/records/${SHARED_SPEC_REVIEW_IDENTITY}/{name}/spec.json`;
+/**
+ * Whether a whole-spec step opts into the shared spec-review record. The step's
+ * own gate identity must differ, so the built-in definition keeps its store.
+ */
+function sharesSpecReview(ownIdentity, evidence, scope, phase) {
+    return (ownIdentity !== SHARED_SPEC_REVIEW_IDENTITY &&
+        evidence?.rule === SHARED_SPEC_REVIEW_IDENTITY &&
+        scope === 'whole' &&
+        (phase ?? 'spec') === 'spec');
+}
+function stepSharesSpecReview(definition, step) {
+    return sharesSpecReview(definition.settings.gateIdentity ?? definition.id, step.evidence?.kind === 'record' ? step.evidence : undefined, step.review?.scope, step.review?.phase);
+}
+/** The rule a review step's record carries: the shared identity or its gate identity. */
+export function reviewIdentityOf(definition, step) {
+    return stepSharesSpecReview(definition, step)
+        ? SHARED_SPEC_REVIEW_IDENTITY
+        : (definition.settings.gateIdentity ?? definition.id);
+}
+/**
+ * The store a review step writes: the shared identity's store, else the
+ * definition's own directory (the rule and the store are separate facts).
+ */
+export function reviewStoreOf(definition, step) {
+    return stepSharesSpecReview(definition, step) ? SHARED_SPEC_REVIEW_IDENTITY : definition.id;
+}
 /** Validate one raw definition; every failure names the definition and field. */
 export function validateDefinition(raw, source = 'definition') {
     if (!isRecord(raw))
@@ -915,7 +950,19 @@ export function validateDefinition(raw, source = 'definition') {
             fail(definition, `${reviewField}.kind`, 'must be "record"; a review step settles only from its matching verdict record');
         }
         const reviewRule = settingsValue.gateIdentity ?? definition;
-        if (reviewEvidence.rule !== reviewRule) {
+        // A whole-spec review may opt into the engine's shared spec-review identity:
+        // the built-in definition and the contributed intake then share one record,
+        // so a current PASS settles both and never starts a second review. The
+        // allowance names only that canonical record; every other step must keep its
+        // definition's own identity.
+        const sharedSpecReview = reviewEvidence.rule === SHARED_SPEC_REVIEW_IDENTITY &&
+            reviewRule !== SHARED_SPEC_REVIEW_IDENTITY;
+        if (sharedSpecReview) {
+            if (reviewStep.review?.scope !== 'whole' || (reviewStep.review.phase ?? 'spec') !== 'spec') {
+                fail(definition, `${reviewField}.rule`, `the shared "${SHARED_SPEC_REVIEW_IDENTITY}" identity requires a whole-spec review step`);
+            }
+        }
+        else if (reviewEvidence.rule !== reviewRule) {
             fail(definition, `${reviewField}.rule`, `must be "${reviewRule}" so the step cannot point at another record`);
         }
         const scope = reviewStep.review?.scope;
@@ -923,8 +970,12 @@ export function validateDefinition(raw, source = 'definition') {
             fail(definition, `${reviewField}.path`, 'must declare the review record path');
         }
         const normalizedPath = reviewEvidence.path.replaceAll('\\', '/');
-        if (!normalizedPath.startsWith(`.dsh/workflows/records/${definition}/`)) {
-            fail(definition, `${reviewField}.path`, `must stay under .dsh/workflows/records/${definition}/; another definition's record never satisfies this review`);
+        const recordOwner = sharedSpecReview ? SHARED_SPEC_REVIEW_IDENTITY : definition;
+        if (!normalizedPath.startsWith(`.dsh/workflows/records/${recordOwner}/`)) {
+            fail(definition, `${reviewField}.path`, `must stay under .dsh/workflows/records/${recordOwner}/; another definition's record never satisfies this review`);
+        }
+        if (sharedSpecReview && normalizedPath !== SHARED_SPEC_REVIEW_PATH) {
+            fail(definition, `${reviewField}.path`, `must be "${SHARED_SPEC_REVIEW_PATH}"; the shared identity reads only its canonical whole-spec record`);
         }
         if (scope === 'task' && !normalizedPath.includes('/tasks/')) {
             fail(definition, `${reviewField}.path`, 'must use the tasks/ record directory');

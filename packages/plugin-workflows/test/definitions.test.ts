@@ -141,11 +141,11 @@ describe('workflow definition schema', () => {
     })
     expect(review?.evidence).toMatchObject({
       kind: 'record',
-      rule: 'change-intake',
-      path: '.dsh/workflows/records/change-intake/{name}/spec.json',
+      rule: 'spec-review',
+      path: '.dsh/workflows/records/spec-review/{name}/spec.json',
       phase: 'spec',
       scope: 'whole',
-      verdicts: ['PASS', 'ERROR'],
+      verdict: 'PASS',
       digest: 'current',
     })
     expect(definition.steps.at(-1)?.executor).toBe('human')

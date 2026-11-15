@@ -103,12 +103,12 @@
       },
       "evidence": {
         "kind": "record",
-        "path": ".dsh/workflows/records/change-intake/{name}/spec.json",
-        "rule": "change-intake",
+        "path": ".dsh/workflows/records/spec-review/{name}/spec.json",
+        "rule": "spec-review",
         "change": "{name}",
         "phase": "spec",
         "scope": "whole",
-        "verdicts": ["PASS", "ERROR"],
+        "verdict": "PASS",
         "digest": "current"
       },
       "next": "approval",
