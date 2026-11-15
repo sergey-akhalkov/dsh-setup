@@ -132,17 +132,38 @@ export class ReviewScheduler {
         if (!this.queue.owns(entry.file.id))
             return;
         const attempt = beginReviewAttempt(entry.request);
+        let timer;
         try {
             // The acceptance deadline is cleared only by this success, after the
             // provider activation is published; a failed start reaches the queue's
-            // classifier and keeps its deadline across the retry backoff.
-            await attempt.started;
+            // classifier and keeps its deadline across the retry backoff. A hanging
+            // activation must not outlive the timeout: publish and quarantine it.
+            const started = await new Promise((resolve, reject) => {
+                timer = setTimeout(() => resolve('timeout'), entry.request.timeoutMs);
+                attempt.started.then(() => resolve('started'), (error) => reject(error));
+            });
+            if (started === 'timeout') {
+                void attempt.result.catch(() => undefined);
+                await this.publishAndQuarantine(entry, withUnconfirmedTeardown({
+                    result: {
+                        kind: 'failure',
+                        failureClass: 'timeout',
+                        error: 'provider activation timed out before the reviewer started',
+                        transient: false,
+                    },
+                }), attempt.now);
+                return;
+            }
         }
         catch (error) {
             // The queue classifies this start failure and decides retry or terminal
             // settlement; the background attempt publishes nothing.
             void attempt.result.catch(() => undefined);
             throw error;
+        }
+        finally {
+            if (timer !== undefined)
+                clearTimeout(timer);
         }
         void this.finish(entry, attempt);
     }
@@ -310,8 +331,12 @@ export class ReviewScheduler {
             reviewer,
         });
         const existing = this.liveRuns.get(key);
-        if (existing !== undefined)
+        if (existing !== undefined) {
+            if (existing.id !== input.run.id) {
+                void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
+            }
             return { kind: 'duplicate', runId: existing.id };
+        }
         const entry = {
             file: queueFile(input),
             workspace: input.workspace,
@@ -340,6 +365,9 @@ export class ReviewScheduler {
         }
         switch (admission.kind) {
             case 'duplicate':
+                if (admission.run.run.id !== input.run.id) {
+                    void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
+                }
                 return { kind: 'duplicate', runId: admission.run.run.id };
             case 'full':
                 return { kind: 'full', depth: admission.depth, maxQueued: admission.maxQueued };

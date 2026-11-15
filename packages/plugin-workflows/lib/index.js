@@ -2141,7 +2141,10 @@ export function apply(ctx, config = {}) {
             const auth = storedAuth;
             if (auth === undefined)
                 return settledRun;
-            return await persistRun(targetWorkspace, settledRun, auth, runGeneration(settledRun.id), undefined, settledRun.updatedAt);
+            // The settlement guard compares against the durable pre-settlement
+            // revision, not the new timestamp the settlement itself carries.
+            const stored = await readAuthenticatedRun(targetWorkspace, settledRun.id, auth).catch(() => undefined);
+            return await persistRun(targetWorkspace, settledRun, auth, runGeneration(settledRun.id), undefined, stored?.updatedAt);
         },
         discardSnapshot: (targetWorkspace, runId) => discardReviewSnapshot(targetWorkspace, runId, defaultGit),
     });
@@ -2234,13 +2237,14 @@ export function apply(ctx, config = {}) {
                 const change = reviewRun.context.name;
                 if (typeof change !== 'string' || !CHANGE_NAME.test(change))
                     return undefined;
-                const specDigest = await currentSpecDigest(workspace, change);
-                if (specDigest === undefined) {
+                const initialSpecDigest = await currentSpecDigest(workspace, change);
+                if (initialSpecDigest === undefined) {
                     return settleStep(reviewRun, step.id, 'failed', {
                         at: journal.time(),
                         reason: `the change artifacts for "${change}" are unreadable; fix openspec/changes/${change}/ and re-run`,
                     });
                 }
+                let specDigest = initialSpecDigest;
                 const changeDir = join(workspace, 'openspec', 'changes', change);
                 const taskId = reviewRun.context.taskId;
                 const task = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
@@ -2294,7 +2298,7 @@ export function apply(ctx, config = {}) {
                     });
                     return failure.run;
                 }
-                const startEpoch = mutationEpochs.get(workspace) ?? 0;
+                let startEpoch = mutationEpochs.get(workspace) ?? 0;
                 const reviewRule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id;
                 // The pre-snapshot admission identity names the task worktree content,
                 // so two different task snapshots are not conflated before preparation.
@@ -2423,6 +2427,14 @@ export function apply(ctx, config = {}) {
                     if (current.prepared.reviewCwd !== undefined) {
                         await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined);
                     }
+                    captured = next;
+                    capturedHash = nextHash;
+                    const refreshed = await currentSpecDigest(workspace, change);
+                    if (refreshed === undefined) {
+                        throw new Error(`the change artifacts for "${change}" became unreadable while the review waited`);
+                    }
+                    specDigest = refreshed;
+                    startEpoch = mutationEpochs.get(workspace) ?? 0;
                     captured = next;
                     capturedHash = nextHash;
                     current = await prepareInputs(next);
