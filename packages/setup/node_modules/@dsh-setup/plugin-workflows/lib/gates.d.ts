@@ -58,6 +58,12 @@ export interface TurnCloseInput {
     readonly checkpointIssue?: {
         readonly text: string;
     };
+    /**
+     * The failed review steps whose current record is a contract-matching ERROR,
+     * as verified by the host before the close. Absent means no failure is
+     * provisional, so a recordless failure keeps the close blocked.
+     */
+    readonly provisionalReviews?: ReadonlySet<string>;
     readonly now?: number;
     readonly onError?: (error: unknown) => void;
 }
@@ -65,10 +71,10 @@ export interface TurnCloseInput {
  * The first open `blockTurnClose` owned step, unless an earlier open step is
  * deferred or a failed review step holds the sequence: an unresolved deferred
  * prerequisite stops the selection (the legacy gate is the only steer for it),
- * and a provisional review failure allows the close without opening a later
- * step.
+ * and only a provisional review failure (a contract-matching current ERROR
+ * record) allows the close without opening a later step.
  */
-export declare function selectBlockingStep(run: WorkflowRun, definition: Definition, installedLegacy: ReadonlySet<string>, enabledLegacy?: ReadonlySet<string>): Step | undefined;
+export declare function selectBlockingStep(run: WorkflowRun, definition: Definition, installedLegacy: ReadonlySet<string>, enabledLegacy?: ReadonlySet<string>, provisionalReviews?: ReadonlySet<string>): Step | undefined;
 /** Evaluate one root turn stop. */
 export declare function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome;
 export type IntakeGateDecision = {

@@ -80,6 +80,12 @@ export interface TurnCloseInput {
   readonly completion?: { readonly ok: boolean; readonly text?: string }
   /** The owned checkpoint remedy/age decision for this turn, when it applies. */
   readonly checkpointIssue?: { readonly text: string }
+  /**
+   * The failed review steps whose current record is a contract-matching ERROR,
+   * as verified by the host before the close. Absent means no failure is
+   * provisional, so a recordless failure keeps the close blocked.
+   */
+  readonly provisionalReviews?: ReadonlySet<string>
   readonly now?: number
   readonly onError?: (error: unknown) => void
 }
@@ -88,23 +94,29 @@ export interface TurnCloseInput {
  * The first open `blockTurnClose` owned step, unless an earlier open step is
  * deferred or a failed review step holds the sequence: an unresolved deferred
  * prerequisite stops the selection (the legacy gate is the only steer for it),
- * and a provisional review failure allows the close without opening a later
- * step.
+ * and only a provisional review failure (a contract-matching current ERROR
+ * record) allows the close without opening a later step.
  */
 export function selectBlockingStep(
   run: WorkflowRun,
   definition: Definition,
   installedLegacy: ReadonlySet<string>,
   enabledLegacy?: ReadonlySet<string>,
+  provisionalReviews?: ReadonlySet<string>,
 ): Step | undefined {
   const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy)
   const ownership = new Map(resolved.steps.map((step) => [step.id, step.ownership]))
   for (const step of definition.steps) {
     const state = run.steps.find((entry) => entry.id === step.id)?.state
-    // A failed review step is provisional turn-close evidence: the review never
-    // completed, approval and completion stay unrequested, and the next advance
-    // retries it. The walk stops there so a later step is never selected.
-    if (step.executor === 'review' && state === 'failed') return undefined
+    // A failed review step is provisional turn-close evidence only while its
+    // current record is a contract-matching ERROR; a recordless failure
+    // (unreadable artifacts, an unpublished ERROR) or a foreign record stays
+    // blocking. The walk stops there so a later step is never selected.
+    if (step.executor === 'review' && state === 'failed') {
+      if (ownership.get(step.id) === 'defer') return undefined
+      if (provisionalReviews?.has(step.id) === true) return undefined
+      return step.blockTurnClose === true ? step : undefined
+    }
     if (state !== 'open' && state !== 'blocked') continue
     if (ownership.get(step.id) === 'defer') return undefined
     if (step.blockTurnClose === true) return step
@@ -164,6 +176,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       input.definition,
       input.installedLegacy,
       input.enabledLegacy,
+      input.provisionalReviews,
     )
     // A host-computed owned decision (completion coverage or the checkpoint
     // remedy/age rule) refuses before the generic step walk.
@@ -224,6 +237,20 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       )
       if (soft) run = releaseSoft(run, step.id, at)
       return { kind: 'violation', run, detail }
+    }
+    // A failed step cannot be requested again by the step walk, so its cause is
+    // steered directly: a returned refusal alone does not hold the turn open.
+    const failed = input.run.steps.find((entry) => entry.id === step.id)
+    if (failed?.state === 'failed') {
+      const cause = failed.reason === undefined ? '' : `: ${failed.reason.slice(0, 300)}`
+      const text = `step "${step.id}" is failed${cause}; fix the cause and retry with workflows resume before the close`
+      input.agent.steer(text)
+      return {
+        kind: 'refuse',
+        run: markTurn(incrementTurnBlocks(budgetRun(input.run), at)),
+        stepId: step.id,
+        text,
+      }
     }
     // A new turn also starts a fresh request budget: without this reset the
     // previous turn's attempts would hit the request bound before the fresh

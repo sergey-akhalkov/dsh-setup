@@ -264,6 +264,13 @@ export declare function recordReviewFailure(input: {
     /** A started attempt's start baseline; a pre-start failure carries none. */
     readonly baseline?: ReviewRecordBaseline;
 }): Promise<ReviewRunResult>;
+/**
+ * The failed review steps whose current record is a contract-matching ERROR.
+ * Only those failures are provisional turn-close evidence: a recordless failure
+ * (unreadable artifacts, an unpublished ERROR) or a record that no longer
+ * matches the step contract keeps the close blocked.
+ */
+export declare function provisionalReviewSteps(run: WorkflowRun, definition: Definition, context: EvidenceContext): Promise<ReadonlySet<string>>;
 /** The review identity every attempt carries before a verdict exists. */
 type ReviewRecordBase = Omit<ReviewRecord, 'verdict' | 'findings'>;
 export type ReviewAttemptResult = {

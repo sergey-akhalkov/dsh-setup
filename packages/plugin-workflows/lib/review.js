@@ -663,6 +663,25 @@ function errorContractOf(evidence) {
     const { verdict: _verdict, verdicts: _verdicts, ...rest } = evidence;
     return { ...rest, verdict: 'ERROR' };
 }
+/**
+ * The failed review steps whose current record is a contract-matching ERROR.
+ * Only those failures are provisional turn-close evidence: a recordless failure
+ * (unreadable artifacts, an unpublished ERROR) or a record that no longer
+ * matches the step contract keeps the close blocked.
+ */
+export async function provisionalReviewSteps(run, definition, context) {
+    const steps = new Set();
+    for (const step of definition.steps) {
+        if (step.executor !== 'review')
+            continue;
+        if (run.steps.find((entry) => entry.id === step.id)?.state !== 'failed')
+            continue;
+        const contract = errorContractOf(step.evidence ?? { kind: 'declaration' });
+        if (contract !== undefined && (await verifyEvidence(contract, context)).ok)
+            steps.add(step.id);
+    }
+    return steps;
+}
 /** Settle a review step from the record it just wrote. */
 async function settleFromRecord(input, record, recordPath, now) {
     const declared = input.step.evidence ?? { kind: 'declaration' };

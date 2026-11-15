@@ -27,7 +27,7 @@ import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { InputMutationError, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, TASK_ID_PATTERN, } from './review.js';
+import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
@@ -2350,8 +2350,13 @@ export function apply(ctx, config = {}) {
                         digest: liveDigest,
                         reviewer: resolved.reviewer.id,
                     });
-                    if (live !== undefined)
-                        return live;
+                    if (live !== undefined) {
+                        // Another workflow's live review already covers this shared
+                        // identity: keep this run and leave the step pending until the
+                        // shared record satisfies it. Adopting that run would replace this
+                        // run's steps with the foreign definition's.
+                        return undefined;
+                    }
                 }
                 // Capture the complete reviewed input set before preparing it: a stat
                 // signature survives an edit-read-restore that a content digest hides.
@@ -3322,6 +3327,26 @@ export function apply(ctx, config = {}) {
                 const checkpointIssue = definition.id === 'retro' && typeof current.context.checkpoint === 'string'
                     ? checkpointGateIssue(workspace, current.context.checkpoint, observations, checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn))
                     : undefined;
+                const closeContext = {
+                    workspace,
+                    values: current.context,
+                    ...(definition.id === 'verify'
+                        ? {
+                            checkCommands: verifySettings.commands,
+                            ...(turnMetrics.get(sessionId)?.lastWriteAt === undefined
+                                ? {}
+                                : {
+                                    lastWriteAt: turnMetrics.get(sessionId)?.lastWriteAt,
+                                    ...(turnMetrics.get(sessionId)?.lastWritePath === undefined
+                                        ? {}
+                                        : { lastWritePath: turnMetrics.get(sessionId)?.lastWritePath }),
+                                    ...(turnMetrics.get(sessionId)?.lastCheckAt === undefined
+                                        ? {}
+                                        : { lastCheckAt: turnMetrics.get(sessionId)?.lastCheckAt }),
+                                }),
+                        }
+                        : {}),
+                };
                 const outcome = evaluateTurnClose({
                     run: current,
                     definition,
@@ -3333,30 +3358,12 @@ export function apply(ctx, config = {}) {
                             source: { kind: 'workflows-gate' },
                         }),
                     },
-                    evidenceContext: {
-                        workspace,
-                        values: current.context,
-                        ...(definition.id === 'verify'
-                            ? {
-                                checkCommands: verifySettings.commands,
-                                ...(turnMetrics.get(sessionId)?.lastWriteAt === undefined
-                                    ? {}
-                                    : {
-                                        lastWriteAt: turnMetrics.get(sessionId)?.lastWriteAt,
-                                        ...(turnMetrics.get(sessionId)?.lastWritePath === undefined
-                                            ? {}
-                                            : { lastWritePath: turnMetrics.get(sessionId)?.lastWritePath }),
-                                        ...(turnMetrics.get(sessionId)?.lastCheckAt === undefined
-                                            ? {}
-                                            : { lastCheckAt: turnMetrics.get(sessionId)?.lastCheckAt }),
-                                    }),
-                            }
-                            : {}),
-                    },
+                    evidenceContext: closeContext,
                     turn: payload.turn,
                     maxBlocks: definition.settings.maxBlocks,
                     installedLegacy: legacy.installed,
                     enabledLegacy: legacy.enabled,
+                    provisionalReviews: await provisionalReviewSteps(current, definition, closeContext),
                     ...(completion === undefined ? {} : { completion }),
                     ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
                     onError: (error) => publishListenerError(workspace, error),

@@ -17,6 +17,7 @@ import { evaluateTurnClose } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { advanceIntake } from '../src/host/intake.ts'
 import { issueCompletionReceipt, readReceipt } from '../src/host/receipts.ts'
+import { provisionalReviewSteps } from '../src/host/review.ts'
 import {
   createRun,
   setRunStatus,
@@ -557,19 +558,55 @@ describe('change-intake engine', () => {
     // No approval was requested and completion stays unavailable.
     expect(first.run.steps.find((step) => step.id === 'approval')?.state).toBe('open')
     const steered: string[] = []
+    const closeContext = { workspace, values: { name: 'auth' } }
     const close = evaluateTurnClose({
       run: first.run,
       definition,
       agent: { steer: (text: string) => steered.push(text) },
-      evidenceContext: { workspace, values: { name: 'auth' } },
+      evidenceContext: closeContext,
       turn: 1,
       maxBlocks: definition.settings.maxBlocks,
       installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
       enabledLegacy: new Set(),
+      provisionalReviews: await provisionalReviewSteps(first.run, definition, closeContext),
     })
     // The matching ERROR is intermediate turn-close evidence, not a steer.
     expect(close.kind).toBe('allow')
     expect(steered).toEqual([])
+
+    // A stale ERROR record is not provisional evidence: the step's own current
+    // record is the only failure the close may allow through.
+    await writeFile(
+      join(workspace, '.dsh/workflows/records/spec-review/auth/spec.json'),
+      `${JSON.stringify({
+        definition: 'spec-review',
+        rule: 'spec-review',
+        change: 'auth',
+        phase: 'spec',
+        scope: 'whole',
+        digest: 'b'.repeat(64),
+        verdict: 'ERROR',
+        findings: [],
+        time: '2026-11-08T00:00:00.000Z',
+        target: { provider: 'codex-subagent' },
+      })}\n`,
+      'utf8',
+    )
+    const staleSteers: string[] = []
+    const staleContext = { workspace, values: { name: 'auth' } }
+    const stale = evaluateTurnClose({
+      run: first.run,
+      definition,
+      agent: { steer: (text: string) => staleSteers.push(text) },
+      evidenceContext: staleContext,
+      turn: 2,
+      maxBlocks: definition.settings.maxBlocks,
+      installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+      enabledLegacy: new Set(),
+      provisionalReviews: await provisionalReviewSteps(first.run, definition, staleContext),
+    })
+    expect(stale.kind).toBe('refuse')
+    expect(staleSteers[0]).toContain('spec-review')
 
     // The next advance retries the review exactly once; only its PASS completes.
     const retried = await advanceIntake({
