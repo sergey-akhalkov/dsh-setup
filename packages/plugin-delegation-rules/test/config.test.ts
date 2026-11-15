@@ -5,7 +5,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { apply, inject, validateConfig } from '../src/index.js'
-import { defaultTestConfig } from './helpers.js'
+import { defaultTestConfig, releaseAConfig, releaseARules } from './helpers.js'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
@@ -471,5 +471,30 @@ describe('real Cordis registration', () => {
   it('loads with the three delegation tools and no removed learning tool or command', async () => {
     const { tools } = await realCordisPlugin()
     expect(tools.sort()).toEqual(['delegate', 'delegation_status', 'task_progress'])
+  })
+})
+
+describe('Release A shipped configuration', () => {
+  it('keeps the dormant progress note rule and all five switches false', () => {
+    const config = releaseAConfig()
+    expect(
+      config.rules?.some((rule) => rule.when === 'implementation-work' && rule.contract === 'note'),
+    ).toBe(true)
+    expect(config.gates).toEqual({
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: false,
+    })
+    expect(releaseARules().map((rule) => rule.id)).toEqual([
+      'spec-review',
+      'task-review',
+      'integration-review',
+      'task-progress',
+      'lane-fanout',
+      'lane-boundary',
+    ])
+    expect(() => validateConfig(releaseAConfig())).not.toThrow()
   })
 })
