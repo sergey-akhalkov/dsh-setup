@@ -513,6 +513,17 @@ describe('quoted value text', () => {
     ).toBe('auth')
   })
 
+  it('keeps an escaped quote inside a value and finds the real destination', () => {
+    const command =
+      'Set-Content -Value "example `" -Path openspec/changes/fake/design.md `" tail" -Path openspec/changes/auth/design.md'
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [{ callId: 'c', name: 'pwsh', arguments: { command }, ok: true }],
+        1,
+      ),
+    ).toBe('auth')
+  })
   it('resolves a quoted redirection destination', () => {
     expect(
       attributedChangeName(

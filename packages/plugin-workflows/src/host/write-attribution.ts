@@ -61,6 +61,11 @@ function maskQuoted(text: string): { masked: string; values: readonly string[] }
       let content = ''
       index += 1
       while (index < text.length && text[index] !== quote) {
+        if ((text[index] === '\\' || text[index] === '`') && text[index + 1] === quote) {
+          content += text[index + 1] ?? ''
+          index += 2
+          continue
+        }
         content += text[index] ?? ''
         index += 1
       }
@@ -116,6 +121,11 @@ function splitSegments(text: string): string[] {
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
     if (quote !== undefined) {
+      if ((char === '\\' || char === '`') && text[index + 1] === quote) {
+        current += char + (text[index + 1] ?? '')
+        index += 1
+        continue
+      }
       current += char
       if (char === quote) quote = undefined
       continue
@@ -151,6 +161,11 @@ function stripComments(text: string): string {
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
     if (quote !== undefined) {
+      if ((char === '\\' || char === '`') && text[index + 1] === quote) {
+        output += char + (text[index + 1] ?? '')
+        index += 1
+        continue
+      }
       output += char
       if (char === quote) quote = undefined
       continue
@@ -178,6 +193,10 @@ function executedText(text: string): string {
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
     if (quote !== undefined) {
+      if ((char === '\\' || char === '`') && text[index + 1] === quote) {
+        index += 1
+        continue
+      }
       if (char === quote) quote = undefined
       continue
     }
