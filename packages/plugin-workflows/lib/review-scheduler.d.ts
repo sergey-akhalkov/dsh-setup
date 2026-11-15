@@ -46,6 +46,17 @@ export declare class ReviewScheduler {
     private readonly queue;
     /** The last settled result per run id, for a status read. */
     private readonly lastSettled;
+    /** Live reviews by workspace+rule+change+task, so the host admits before a snapshot. */
+    private readonly liveRuns;
+    private readonly liveKeys;
+    private liveKey;
+    /** The run already covering this review, before any snapshot is prepared. */
+    liveRun(input: {
+        workspace: string;
+        rule: string;
+        change: string;
+        taskId?: string;
+    }): WorkflowRun | undefined;
     constructor(limits: QueueLimits, host: ReviewSchedulerHost);
     private launch;
     summary(): {

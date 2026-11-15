@@ -330,6 +330,59 @@ it('retries a transient review start before settling', async () => {
   expect(persisted[0]?.steps[0]?.state).toBe('done')
   scheduler.dispose()
 })
+
+it('reports the live run before a snapshot and clears it after settle', async () => {
+  const { root, digest } = await reviewWorkspace()
+  const def = definition()
+  const persisted: WorkflowRun[] = []
+  const scheduler = new ReviewScheduler(
+    {
+      enabled: true,
+      concurrency: 1,
+      maxQueued: 2,
+      maxAttempts: 2,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      waitTimeoutMs: 10_000,
+    },
+    {
+      persistRun: async (_workspace, run) => {
+        persisted.push(run)
+        return run
+      },
+      discardSnapshot: async () => undefined,
+    },
+  )
+  const runner: SubagentRunner = {
+    run: async () => ({ childId: 'child-1', completed: true, text: fencedPASS(digest) }),
+  }
+  const run = runFor(def)
+  const request = {
+    run,
+    definition: def,
+    step: def.steps[0] as Definition['steps'][number],
+    reviewer: reviewers(),
+    runner,
+    context: { workspace: root, values: { name: 'auth' } },
+    change: 'auth',
+    prepared: { specDigest: digest },
+    timeoutMs: 5_000,
+    session: 'session-1',
+  }
+  await scheduler.enqueue({
+    workspace: root,
+    run,
+    request,
+    rule: 'spec-review',
+    change: 'auth',
+    digest,
+  })
+  const identity = { workspace: root, rule: 'spec-review', change: 'auth' }
+  expect(scheduler.liveRun(identity)?.id).toBe(run.id)
+  await waitFor(async () => persisted.length === 1)
+  expect(scheduler.liveRun(identity)).toBeUndefined()
+  scheduler.dispose()
+})
 describe('review snapshot', () => {
   it('builds a frozen checkout, copies the change, and discards it', async () => {
     const root = await workspace()

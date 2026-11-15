@@ -74,6 +74,28 @@ export class ReviewScheduler {
     string,
     { state: SettledRunState; recordPath?: string; verdict?: string }
   >()
+  /** Live reviews by workspace+rule+change+task, so the host admits before a snapshot. */
+  private readonly liveRuns = new Map<string, WorkflowRun>()
+  private readonly liveKeys = new Map<string, string>()
+
+  private liveKey(input: {
+    workspace: string
+    rule: string
+    change: string
+    taskId?: string
+  }): string {
+    return `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}`
+  }
+
+  /** The run already covering this review, before any snapshot is prepared. */
+  liveRun(input: {
+    workspace: string
+    rule: string
+    change: string
+    taskId?: string
+  }): WorkflowRun | undefined {
+    return this.liveRuns.get(this.liveKey(input))
+  }
 
   constructor(
     limits: QueueLimits,
@@ -160,6 +182,11 @@ export class ReviewScheduler {
       // timed-out review must not overlap the next admitted reviewer.
       await entry.request.runner.waitForTeardown?.().catch(() => undefined)
       await this.queue.complete(entry, result.record?.verdict === 'PASS' ? 'completed' : 'failed')
+      const key = this.liveKeys.get(entry.run.id)
+      if (key !== undefined) {
+        this.liveRuns.delete(key)
+        this.liveKeys.delete(entry.run.id)
+      }
     }
   }
   summary(): { enabled: boolean; concurrency: number; active: number; queued: number } {
@@ -171,6 +198,9 @@ export class ReviewScheduler {
   }
 
   async enqueue(input: ScheduledReview): Promise<ReviewAdmission> {
+    const key = this.liveKey(input)
+    const existing = this.liveRuns.get(key)
+    if (existing !== undefined) return { kind: 'duplicate', runId: existing.id }
     const entry: ScheduledEntry = {
       file: queueFile(input),
       workspace: input.workspace,
@@ -186,6 +216,8 @@ export class ReviewScheduler {
       case 'settled':
         return { kind: 'accepted', phase: 'settled' }
       case 'accepted':
+        this.liveRuns.set(key, input.run)
+        this.liveKeys.set(input.run.id, key)
         return { kind: 'accepted', phase: admission.phase }
     }
   }

@@ -2777,6 +2777,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           return failure.run
         }
         const startEpoch = mutationEpochs.get(workspace) ?? 0
+        const reviewRule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id
+        if (reviewQueue.enabled) {
+          const live = reviewScheduler?.liveRun({
+            workspace,
+            rule: reviewRule,
+            change,
+            ...(task === undefined ? {} : { taskId: task.id }),
+          })
+          if (live !== undefined) return live
+        }
         const prepared: ReviewRunInput['prepared'] =
           spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
             ? await (async () => {
@@ -2835,7 +2845,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           session: sessionId,
           now: journal.time(),
         }
-        const rule = reviewDefinition.settings.gateIdentity ?? reviewDefinition.id
+        const rule = reviewRule
         if (!reviewQueue.enabled) {
           try {
             const result = await runReviewStep(request)
