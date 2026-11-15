@@ -761,6 +761,37 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('parses adjacent redirect targets and PowerShell literal backslashes', () => {
+    expect(
+      attributedChangeName(
+        WORKSPACE,
+        [
+          {
+            callId: 'a',
+            name: 'bash',
+            arguments: {
+              command: 'echo x 2>/dev/null>openspec/changes/auth/tasks.md',
+            },
+            ok: true,
+          },
+        ],
+        1,
+      ),
+    ).toBe('auth')
+    for (const command of [
+      'Write-Output C:\\; Set-Content -Path openspec/changes/auth/design.md -Value x',
+      'Write-Output C:\\\nSet-Content -Path openspec/changes/auth/design.md -Value x',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'b', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+  })
   it('parses append redirection and skips $null', () => {
     for (const command of [
       'echo x>>openspec/changes/auth/design.md',

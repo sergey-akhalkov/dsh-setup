@@ -51,11 +51,23 @@ const CHANGE_CREATION =
  * `-Value` is invisible while a quoted destination is still resolved.
  */
 /** Whether this character starts an escape in the active shell and quote. */
-function isEscape(char: string, quote: string | undefined, powershell: boolean): boolean {
+function isEscape(
+  text: string,
+  index: number,
+  quote: string | undefined,
+  powershell: boolean,
+): boolean {
+  const char = text[index] ?? ''
   if (quote === "'") return false
   if (char === '`') return true
   if (char !== '\\') return false
-  return quote !== '"' || !powershell
+  // PowerShell keeps backslashes literal outside and inside double quotes.
+  if (powershell) return false
+  if (quote === '"') {
+    const next = text[index + 1]
+    return next === '"' || next === '\\' || next === '`' || next === '$'
+  }
+  return true
 }
 
 function maskQuoted(
@@ -149,7 +161,7 @@ function shellDestination(command: string, powershell: boolean): string | undefi
     const rest = writer[1] ?? ''
     const named = /-(?:Path|LiteralPath)\s+(\u0000\d+\u0000|\S+)/iu.exec(rest)
     if (named !== null) return resolveMasked(named[1] ?? '', values)
-    const tokens = rest.match(/\u0000\d+\u0000|\S+/gu) ?? []
+    const tokens = rest.match(/\u0000\d+\u0000|[^>\s]+/gu) ?? []
     let skipValue = false
     for (const token of tokens) {
       if (/^\d*>/u.test(token)) break
@@ -170,7 +182,7 @@ function shellDestination(command: string, powershell: boolean): string | undefi
     }
   }
   // Stream duplication and the null device are skipped; a later real target wins.
-  for (const match of masked.matchAll(/>+\s*(\u0000\d+\u0000|\S+)/gu)) {
+  for (const match of masked.matchAll(/>+\s*(\u0000\d+\u0000|[^>\s]+)/gu)) {
     const target = resolveMasked(match[1] ?? '', values)
     if (
       /^&\d+$/u.test(target) ||
@@ -206,7 +218,7 @@ function splitSegments(text: string, powershell: boolean): ShellSegment[] {
   }
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
-    if (isEscape(char, quote, powershell)) {
+    if (isEscape(text, index, quote, powershell)) {
       current += char + (text[index + 1] ?? '')
       index += 1
       continue
@@ -260,7 +272,7 @@ function stripComments(text: string, powershell: boolean): string {
   let quote: string | undefined
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
-    if (isEscape(char, quote, powershell)) {
+    if (isEscape(text, index, quote, powershell)) {
       output += char + (text[index + 1] ?? '')
       index += 1
       continue
@@ -297,7 +309,7 @@ function executedText(text: string, powershell: boolean): string {
   let quote: string | undefined
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index] ?? ''
-    if (isEscape(char, quote, powershell)) {
+    if (isEscape(text, index, quote, powershell)) {
       if (quote === undefined) output += char + (text[index + 1] ?? '')
       index += 1
       continue
