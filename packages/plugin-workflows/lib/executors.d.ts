@@ -84,6 +84,9 @@ export interface JsonLogicData {
     readonly item?: unknown;
 }
 export declare const MAX_LOGIC_EVALUATIONS = 10000;
+/** Intermediate values are bounded before they can exhaust host memory. */
+export declare const MAX_LOGIC_COLLECTION = 1000;
+export declare const MAX_LOGIC_STRING = 1000000;
 export declare function evaluateJsonLogic(rule: unknown, data: unknown, depth?: number, budget?: {
     used: number;
 }): unknown;

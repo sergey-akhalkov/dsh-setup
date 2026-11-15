@@ -172,6 +172,17 @@ function operands(args) {
     return Array.isArray(args) ? args : [args];
 }
 export const MAX_LOGIC_EVALUATIONS = 10_000;
+/** Intermediate values are bounded before they can exhaust host memory. */
+export const MAX_LOGIC_COLLECTION = 1_000;
+export const MAX_LOGIC_STRING = 1_000_000;
+function guardLogicSize(value) {
+    if (Array.isArray(value) && value.length > MAX_LOGIC_COLLECTION) {
+        throw new Error('invalid JSONLogic: evaluation produced an oversized collection');
+    }
+    if (typeof value === 'string' && value.length > MAX_LOGIC_STRING) {
+        throw new Error('invalid JSONLogic: evaluation produced an oversized string');
+    }
+}
 export function evaluateJsonLogic(rule, data, depth = 0, budget = { used: 0 }) {
     budget.used += 1;
     if (budget.used > MAX_LOGIC_EVALUATIONS) {
@@ -293,8 +304,11 @@ export function evaluateJsonLogic(rule, data, depth = 0, budget = { used: 0 }) {
             return Math.min(...args.map((entry) => Number(value(entry))));
         case 'max':
             return Math.max(...args.map((entry) => Number(value(entry))));
-        case 'cat':
-            return args.map((entry) => String(value(entry) ?? '')).join('');
+        case 'cat': {
+            const joined = args.map((entry) => String(value(entry) ?? '')).join('');
+            guardLogicSize(joined);
+            return joined;
+        }
         case 'missing': {
             const names = args.flatMap((entry) => {
                 const evaluated = value(entry);
@@ -351,14 +365,18 @@ export function evaluateJsonLogic(rule, data, depth = 0, budget = { used: 0 }) {
             let accumulator = args.length >= 3 ? value(args[2]) : undefined;
             for (const entry of Array.isArray(collection) ? collection : []) {
                 accumulator = evaluateJsonLogic(args[1], { current: entry, accumulator }, depth + 1, budget);
+                guardLogicSize(accumulator);
             }
             return accumulator;
         }
-        case 'merge':
-            return args.flatMap((entry) => {
+        case 'merge': {
+            const merged = args.flatMap((entry) => {
                 const evaluated = value(entry);
                 return Array.isArray(evaluated) ? evaluated : [evaluated];
             });
+            guardLogicSize(merged);
+            return merged;
+        }
         case 'missing_some': {
             const minimum = Number(value(args[0]));
             const collection = value(args[1]);
