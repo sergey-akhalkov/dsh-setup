@@ -170,9 +170,16 @@ function shellDestination(command: string, powershell: boolean): string | undefi
     }
   }
   // Stream duplication and the null device are skipped; a later real target wins.
-  for (const match of masked.matchAll(/>\s*(\u0000\d+\u0000|\S+)/gu)) {
+  for (const match of masked.matchAll(/>+\s*(\u0000\d+\u0000|\S+)/gu)) {
     const target = resolveMasked(match[1] ?? '', values)
-    if (/^&\d+$/u.test(target) || target === 'NUL' || target === '/dev/null') continue
+    if (
+      /^&\d+$/u.test(target) ||
+      target === 'NUL' ||
+      target === '/dev/null' ||
+      /^\$null$/iu.test(target)
+    ) {
+      continue
+    }
     return target
   }
   return undefined

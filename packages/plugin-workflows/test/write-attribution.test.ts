@@ -761,6 +761,21 @@ describe('skipped branches and compact redirection', () => {
 })
 
 describe('writer with output redirection', () => {
+  it('parses append redirection and skips $null', () => {
+    for (const command of [
+      'echo x>>openspec/changes/auth/design.md',
+      'echo x 2>$null >openspec/changes/auth/design.md',
+    ]) {
+      expect(
+        attributedChangeName(
+          WORKSPACE,
+          [{ callId: 'c', name: 'pwsh', arguments: { command }, ok: true }],
+          1,
+        ),
+        command,
+      ).toBe('auth')
+    }
+  })
   it('keeps the writer destination beside stream or file redirection', () => {
     for (const command of [
       'Set-Content -Path openspec/changes/auth/design.md -Value x 2>&1',
