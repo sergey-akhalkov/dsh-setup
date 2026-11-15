@@ -499,7 +499,10 @@ it('rechecks the live guard after teardown and refuses a PASS', async () => {
     digest,
   })
   await waitFor(async () => persisted.length === 1)
-  expect(persisted[0]?.status).not.toBe('completed')
+  const record = JSON.parse(
+    await readFile(join(root, '.dsh/workflows/records/spec-review/auth/spec.json'), 'utf8'),
+  ) as ReviewRecord
+  expect(record.verdict).toBe('ERROR')
   scheduler.dispose()
 })
 describe('review snapshot', () => {

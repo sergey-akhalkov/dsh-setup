@@ -27,12 +27,12 @@ import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { InputMutationError, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, runReviewStep, TASK_ID_PATTERN, } from './review.js';
+import { beginReviewAttempt, InputMutationError, publishReviewOutcome, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
-import { checkedTaskIds, isTaskChecked, taskOf } from './tasks.js';
+import { checkedTaskIds, findTaskOf, isTaskChecked, taskOf } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, obligationDedupeKey, } from './triggers.js';
 import { attributedChangeNames } from './write-attribution.js';
@@ -2385,6 +2385,22 @@ export function apply(ctx, config = {}) {
                     const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, reviewRun.id, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined);
                     const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
                     if (snapshot !== undefined) {
+                        if (task !== undefined) {
+                            // The frozen checkout is authoritative: the selected task must
+                            // still exist and be checked in its copied tasks.md.
+                            let frozen;
+                            try {
+                                frozen = readFileSync(join(snapshot.worktree, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
+                            }
+                            catch {
+                                frozen = undefined;
+                            }
+                            if (frozen === undefined ||
+                                findTaskOf(frozen, task.id) === undefined ||
+                                !checkedTaskIds(frozen).includes(task.id)) {
+                                throw new InputMutationError(`task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" changed or became unchecked while the review snapshot was prepared in change "${change}"; re-run the review`);
+                            }
+                        }
                         return {
                             prepared: {
                                 specDigest,
@@ -2476,13 +2492,10 @@ export function apply(ctx, config = {}) {
                     now: journal.time(),
                 };
                 if (!reviewQueue.enabled) {
+                    let keepSnapshot = false;
                     try {
-                        const result = await runReviewStep(request);
-                        return result.run;
-                    }
-                    finally {
-                        // A directly executed review must not leak its frozen checkout; a
-                        // child that is not confirmed torn down keeps it for the sweep.
+                        const attempt = beginReviewAttempt(request);
+                        const outcome = await attempt.result;
                         let tornDown = true;
                         try {
                             await request.runner.waitForTeardown?.();
@@ -2490,7 +2503,37 @@ export function apply(ctx, config = {}) {
                         catch {
                             tornDown = false;
                         }
-                        if (tornDown && current.prepared.reviewCwd !== undefined) {
+                        if (outcome.result.kind === 'verdict') {
+                            let reason;
+                            if (!tornDown) {
+                                keepSnapshot = true;
+                                reason =
+                                    'the reviewer teardown could not be confirmed, so its verdict is not published; the frozen checkout stays for the stale-snapshot sweep';
+                            }
+                            else {
+                                try {
+                                    reason = await request.prepared.liveGuard?.();
+                                }
+                                catch (error) {
+                                    reason = `the live-input recheck failed (${error instanceof Error ? error.message : String(error)})`;
+                                }
+                            }
+                            if (reason !== undefined) {
+                                const failure = await recordReviewFailure({
+                                    ...request,
+                                    error: reason,
+                                    failureClass: tornDown ? 'reviewed-inputs-changed' : 'timeout',
+                                }).catch(() => undefined);
+                                return failure?.run ?? reviewRun;
+                            }
+                        }
+                        const result = await publishReviewOutcome(request, outcome, attempt.now);
+                        return result.run;
+                    }
+                    finally {
+                        // A directly executed review must not leak its frozen checkout; a
+                        // child that is not confirmed torn down keeps it for the sweep.
+                        if (!keepSnapshot && current.prepared.reviewCwd !== undefined) {
                             await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined);
                         }
                     }
