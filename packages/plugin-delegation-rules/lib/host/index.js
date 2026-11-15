@@ -2716,12 +2716,18 @@ function readAsset(asset) {
         fail(`bundled instruction "${asset}" could not be read: ${errorMessage(error)}`);
     }
 }
+/** Resolve a legacy undled:<name> instruction to its asset text. */
+export function resolveBundledInstruction(instruction) {
+    return instruction.startsWith('bundled:')
+        ? readAsset(instruction.slice('bundled:'.length))
+        : instruction;
+}
 function instructionText(rule) {
     const instruction = rule.instruction;
     if (instruction === undefined)
         fail(`rule "${rule.id}" has no instruction`);
     if (instruction.startsWith('bundled:'))
-        return readAsset(instruction.slice('bundled:'.length));
+        return resolveBundledInstruction(instruction);
     return instruction;
 }
 function targetLabel(target) {

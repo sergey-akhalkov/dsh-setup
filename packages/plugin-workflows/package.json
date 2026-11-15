@@ -26,6 +26,7 @@
     "assets/triggers/*.json",
     "assets/definitions/*.json",
     "assets/parity/*.json",
+    "assets/reviews/*.md",
     "lib/index.js",
     "lib/index.d.ts",
     "lib/client.js",

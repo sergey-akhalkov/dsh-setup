@@ -3596,10 +3596,17 @@ function readAsset(asset: string): string {
   }
 }
 
+/** Resolve a legacy undled:<name> instruction to its asset text. */
+export function resolveBundledInstruction(instruction: string): string {
+  return instruction.startsWith('bundled:')
+    ? readAsset(instruction.slice('bundled:'.length))
+    : instruction
+}
+
 function instructionText(rule: RuleConfig): string {
   const instruction = rule.instruction
   if (instruction === undefined) fail(`rule "${rule.id}" has no instruction`)
-  if (instruction.startsWith('bundled:')) return readAsset(instruction.slice('bundled:'.length))
+  if (instruction.startsWith('bundled:')) return resolveBundledInstruction(instruction)
   return instruction
 }
 

@@ -82,6 +82,11 @@ export interface EvidenceContext {
     readonly answers?: readonly HumanAnswerObservation[];
     /** Whether the step is marked nonCritical, the only declaration consumer. */
     readonly nonCriticalStep?: boolean;
+    /**
+     * Which owner's record store a review record is read from. An owned step
+     * reads the workflows store; a rolled-back deferred step reads the legacy one.
+     */
+    readonly reviewOwner?: 'workflows' | 'legacy';
 }
 /** Interpolate every placeholder in a free-form string with a validated value. */
 export declare function resolveEvidenceText(value: string, context: EvidenceContext, item?: string): {
@@ -114,6 +119,14 @@ export declare function expandGlob(root: string, pattern: string): Promise<GlobE
 export declare function specDigest(changeDir: string): Promise<string>;
 /** The current digest of one change, or undefined when it does not exist. */
 export declare function currentSpecDigest(workspace: string, change: string): Promise<string | undefined>;
+/**
+ * Resolve the record path its step's ownership selects. The new shipped
+ * definitions name the workflows store; under a rolled-back switch the same
+ * suffix is read from the legacy store, and an explicit legacy path under an
+ * owned step is read from the workflows store. The committed approval path is
+ * ownership-independent and never rewritten.
+ */
+export declare function ownedReviewRecordPath(path: string, owner: 'workflows' | 'legacy' | undefined): string;
 /** The logical `shell` tool maps to the host's registered foreground shell. */
 export declare function hostToolName(name: string): string;
 /** Whether an observed tool is the declared tool; `shell` matches the host shell. */

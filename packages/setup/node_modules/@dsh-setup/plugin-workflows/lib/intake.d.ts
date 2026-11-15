@@ -18,8 +18,15 @@ export interface IntakeAdvanceInput {
     readonly toolRunner?: ToolRunner;
     readonly subagentRunner?: SubagentRunner;
     readonly questions?: HumanQuestionService;
+    /** The review executor's host callback; absent keeps the step blocked. */
+    readonly reviewStep?: (request: {
+        readonly run: WorkflowRun;
+        readonly definition: Definition;
+        readonly step: Step;
+        readonly context: EvidenceContext;
+    }) => Promise<WorkflowRun | undefined>;
     /** The deferred-step record reader; it must not call delegate. */
-    readonly readRecord?: (step: Step) => Promise<EvidenceCheck>;
+    readonly readRecord?: (step: Step, owner: 'workflows' | 'legacy') => Promise<EvidenceCheck>;
     readonly installedLegacy: ReadonlySet<string>;
     /** `${plugin}/${signal}` entries that would actually steer. */
     readonly enabledLegacy?: ReadonlySet<string>;

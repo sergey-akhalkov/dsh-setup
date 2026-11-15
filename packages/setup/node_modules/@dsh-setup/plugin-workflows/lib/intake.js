@@ -131,7 +131,11 @@ export async function advanceIntake(input) {
                 stepId: step.id,
                 installedLegacy: input.installedLegacy,
                 ...(input.enabledLegacy === undefined ? {} : { enabledLegacy: input.enabledLegacy }),
-                readRecord: input.readRecord,
+                readRecord: (deferredStep) => input.readRecord?.(deferredStep, 'legacy') ??
+                    Promise.resolve({
+                        ok: false,
+                        failure: { reason: 'unsupported', detail: 'no deferred record reader' },
+                    }),
                 now: at,
             });
             run = deferred.run;
@@ -260,6 +264,44 @@ export async function advanceIntake(input) {
             });
             if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
                 return { run, completed: false, waiting: waitingFor(step, input.evidenceContext) };
+            }
+            continue;
+        }
+        if (step.executor === 'review') {
+            const stepContext = {
+                ...input.evidenceContext,
+                reviewOwner: 'workflows',
+            };
+            // A matching current PASS or ERROR record settles the step without
+            // starting a second review.
+            const existing = await verifyEvidence(step.evidence ?? { kind: 'declaration' }, stepContext);
+            if (existing.ok) {
+                run = settleStep(run, step.id, 'done', { at, evidence: existing.evidence });
+                continue;
+            }
+            if (input.reviewStep === undefined) {
+                return {
+                    run: setRunStatus(run, 'blocked', at),
+                    completed: false,
+                    waiting: waitingFor(step, stepContext),
+                };
+            }
+            const reviewed = await input.reviewStep({
+                run,
+                definition: input.definition,
+                step,
+                context: stepContext,
+            });
+            if (reviewed === undefined) {
+                return {
+                    run: setRunStatus(run, 'blocked', at),
+                    completed: false,
+                    waiting: waitingFor(step, stepContext),
+                };
+            }
+            run = reviewed;
+            if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
+                return { run, completed: false, waiting: waitingFor(step, stepContext) };
             }
             continue;
         }
