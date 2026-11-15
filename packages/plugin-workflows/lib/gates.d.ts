@@ -200,3 +200,25 @@ export type ArchiveGateDecision = {
  * input; only the authenticated run, receipt, and record can allow.
  */
 export declare function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecision;
+/** Parity-facing progress decision shared with the engine-owned gate. */
+export interface ProgressParityInput {
+    readonly codeChanged: boolean;
+    readonly tickedReviewed: boolean;
+    readonly note?: {
+        readonly digest?: string;
+        readonly currentDigest?: string;
+    };
+}
+export interface ParityGateDecision {
+    readonly decision: 'allow' | 'refuse';
+    readonly reason: string;
+}
+export declare function evaluateProgressParity(input: ProgressParityInput): ParityGateDecision;
+/** Parity-facing lane decision shared with the engine-owned gate. */
+export interface LaneParityInput {
+    readonly plan: string;
+    readonly ticked: readonly string[];
+    readonly assigned: readonly string[];
+    readonly implementationChanged: boolean;
+}
+export declare function evaluateLaneParity(input: LaneParityInput): ParityGateDecision;

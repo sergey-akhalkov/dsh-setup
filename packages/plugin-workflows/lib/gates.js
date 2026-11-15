@@ -2,6 +2,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { resolveOwnership } from './definitions.js';
 import { requestMainStep } from './executors.js';
 import { addViolation, incrementTurnBlocks, resetStepAttempts, setRunStatus, settleStep, } from './runs.js';
+import { taskLanes } from './tasks.js';
 /**
  * The label a `nonCritical` step records when its turn-close budget is
  * exhausted: the run closes without its evidence and never counts as a pass.
@@ -544,4 +545,37 @@ export function evaluateArchiveGate(input) {
         kind: 'allow',
         reason: `the archive of "${input.change}" is allowed: the authenticated intake ${completed === undefined ? 'receipt' : 'run'} and the current whole-spec PASS record are present`,
     };
+}
+export function evaluateProgressParity(input) {
+    if (!input.codeChanged)
+        return { decision: 'allow', reason: 'the turn changed no implementation file' };
+    if (input.tickedReviewed) {
+        return { decision: 'allow', reason: 'the turn ticked a task with an owned PASS record' };
+    }
+    if (input.note !== undefined && input.note.digest === input.note.currentDigest) {
+        return { decision: 'allow', reason: 'a progress note matches the current worktree digest' };
+    }
+    return {
+        decision: 'refuse',
+        reason: 'the turn changed implementation files without a reviewed tick or a current note',
+    };
+}
+export function evaluateLaneParity(input) {
+    const lanes = taskLanes(input.plan);
+    const parallel = lanes.filter((lane) => !lane.serial && lane.checked.length + lane.unchecked.length > 0);
+    const ticked = new Set(input.ticked);
+    const current = new Set(parallel
+        .filter((lane) => [...lane.checked, ...lane.unchecked].some((number) => ticked.has(number)))
+        .map((lane) => lane.title));
+    const unassigned = parallel.filter((lane) => lane.unchecked.length > 0 && !current.has(lane.title) && !input.assigned.includes(lane.title));
+    if (parallel.length >= 2 &&
+        unassigned.length > 0 &&
+        unassigned.every((lane) => lane.owned.length > 0) &&
+        (ticked.size > 0 || input.implementationChanged)) {
+        return {
+            decision: 'refuse',
+            reason: `unassigned lanes: ${unassigned.map((lane) => lane.title).join(', ')}`,
+        };
+    }
+    return { decision: 'allow', reason: 'no unassigned non-serial lane is actionable' };
 }

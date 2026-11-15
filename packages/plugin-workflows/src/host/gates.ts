@@ -13,6 +13,7 @@ import {
   type WorkflowRun,
 } from './runs.js'
 import type { SteerTarget } from './steer.js'
+import { taskLanes } from './tasks.js'
 
 /**
  * The turn-close gate. It refuses a root turn close while the run has an open
@@ -776,4 +777,68 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
       completed === undefined ? 'receipt' : 'run'
     } and the current whole-spec PASS record are present`,
   }
+}
+
+/** Parity-facing progress decision shared with the engine-owned gate. */
+export interface ProgressParityInput {
+  readonly codeChanged: boolean
+  readonly tickedReviewed: boolean
+  readonly note?: { readonly digest?: string; readonly currentDigest?: string }
+}
+
+export interface ParityGateDecision {
+  readonly decision: 'allow' | 'refuse'
+  readonly reason: string
+}
+
+export function evaluateProgressParity(input: ProgressParityInput): ParityGateDecision {
+  if (!input.codeChanged)
+    return { decision: 'allow', reason: 'the turn changed no implementation file' }
+  if (input.tickedReviewed) {
+    return { decision: 'allow', reason: 'the turn ticked a task with an owned PASS record' }
+  }
+  if (input.note !== undefined && input.note.digest === input.note.currentDigest) {
+    return { decision: 'allow', reason: 'a progress note matches the current worktree digest' }
+  }
+  return {
+    decision: 'refuse',
+    reason: 'the turn changed implementation files without a reviewed tick or a current note',
+  }
+}
+
+/** Parity-facing lane decision shared with the engine-owned gate. */
+export interface LaneParityInput {
+  readonly plan: string
+  readonly ticked: readonly string[]
+  readonly assigned: readonly string[]
+  readonly implementationChanged: boolean
+}
+
+export function evaluateLaneParity(input: LaneParityInput): ParityGateDecision {
+  const lanes = taskLanes(input.plan)
+  const parallel = lanes.filter(
+    (lane) => !lane.serial && lane.checked.length + lane.unchecked.length > 0,
+  )
+  const ticked = new Set(input.ticked)
+  const current = new Set(
+    parallel
+      .filter((lane) => [...lane.checked, ...lane.unchecked].some((number) => ticked.has(number)))
+      .map((lane) => lane.title),
+  )
+  const unassigned = parallel.filter(
+    (lane) =>
+      lane.unchecked.length > 0 && !current.has(lane.title) && !input.assigned.includes(lane.title),
+  )
+  if (
+    parallel.length >= 2 &&
+    unassigned.length > 0 &&
+    unassigned.every((lane) => lane.owned.length > 0) &&
+    (ticked.size > 0 || input.implementationChanged)
+  ) {
+    return {
+      decision: 'refuse',
+      reason: `unassigned lanes: ${unassigned.map((lane) => lane.title).join(', ')}`,
+    }
+  }
+  return { decision: 'allow', reason: 'no unassigned non-serial lane is actionable' }
 }

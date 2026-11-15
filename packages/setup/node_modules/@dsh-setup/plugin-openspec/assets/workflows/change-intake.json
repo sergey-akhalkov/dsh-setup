@@ -93,22 +93,24 @@
     {
       "id": "spec-review",
       "title": "Independent spec review",
-      "executor": "tool",
-      "ownership": "defer",
+      "executor": "review",
+      "ownership": "own",
       "legacy": { "plugin": "delegation-rules", "signal": "spec-review" },
-      "tool": {
-        "name": "delegate",
-        "args": { "rule": "spec-review", "change": "{name}" }
+      "review": {
+        "target": "codex",
+        "instruction": "review-spec",
+        "scope": "whole",
+        "phase": "spec"
       },
       "evidence": {
         "kind": "record",
-        "path": ".dsh/delegation/spec-review/{name}/spec.json",
-        "rule": "spec-review",
+        "rule": "change-intake",
         "change": "{name}",
         "phase": "spec",
         "scope": "whole",
-        "verdict": "PASS",
-        "digest": "current"
+        "verdicts": ["PASS", "ERROR"],
+        "digest": "current",
+        "path": ".dsh/workflows/records/change-intake/{name}/spec.json"
       },
       "next": "approval",
       "blockTurnClose": true

@@ -37,7 +37,7 @@ import {
   taskReviewCoverage,
 } from '../lib/parity.js'
 import { createRun, incrementTurnBlocks, settleStep } from '../lib/runs.js'
-import { taskLanes } from '../lib/tasks.js'
+import { evaluateLaneParity, evaluateProgressParity } from '../src/host/gates.ts'
 
 /**
  * The shared retirement-parity fixture table. Each case carries the legacy
@@ -1481,17 +1481,7 @@ interface ProgressScenario {
  * replay certifies the decision table until then.
  */
 function progressWorkflowDecision(scenario: ProgressScenario): ParityDecision {
-  if (!scenario.codeChanged) return ALLOW
-  if (scenario.tickedReviewed) {
-    return { decision: 'allow', reason: 'the turn ticked a task with an owned PASS record' }
-  }
-  if (scenario.note !== undefined && scenario.note.digest === scenario.note.currentDigest) {
-    return { decision: 'allow', reason: 'a progress note matches the current worktree digest' }
-  }
-  return {
-    decision: 'refuse',
-    reason: 'the turn changed implementation files without a reviewed tick or a current note',
-  }
+  return evaluateProgressParity(scenario)
 }
 
 async function legacyProgressCase(
@@ -1594,34 +1584,7 @@ interface LaneScenario {
  * certifies the decision table over the production plan parser until then.
  */
 function laneWorkflowDecision(scenario: LaneScenario): ParityDecision {
-  const lanes = taskLanes(scenario.plan)
-  const parallel = lanes.filter(
-    (lane) => !lane.serial && lane.checked.length + lane.unchecked.length > 0,
-  )
-  const ticked = new Set(scenario.ticked)
-  const current = new Set(
-    parallel
-      .filter((lane) => [...lane.checked, ...lane.unchecked].some((number) => ticked.has(number)))
-      .map((lane) => lane.title),
-  )
-  const unassigned = parallel.filter(
-    (lane) =>
-      lane.unchecked.length > 0 &&
-      !current.has(lane.title) &&
-      !scenario.assigned.includes(lane.title),
-  )
-  if (
-    parallel.length >= 2 &&
-    unassigned.length > 0 &&
-    unassigned.every((lane) => lane.owned.length > 0) &&
-    (ticked.size > 0 || scenario.implementationChanged)
-  ) {
-    return {
-      decision: 'refuse',
-      reason: `unassigned lanes: ${unassigned.map((lane) => lane.title).join(', ')}`,
-    }
-  }
-  return { decision: 'allow', reason: 'no unassigned non-serial lane is actionable' }
+  return evaluateLaneParity(scenario)
 }
 
 const LANE_PLAN_TWO = `# Tasks
