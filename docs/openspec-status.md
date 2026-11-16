@@ -877,3 +877,15 @@ on both DSH versions (a known real-timer flake needed one rerun), 8/8 task revie
 integration-review PASS. It shipped in v0.38.0 (tag on commit `44825ec`); the owner installed it, the
 catalog showed the proactive description, and an unrequested complex explanation rendered a
 140580-byte page under `.tmp/answers/` with no home-directory writes.
+
+The `focused-rereview-and-section-steer` change shipped in v0.41.0 (tag `v0.41.0`, commit `56d7ece4`)
+with 13/13 portable task-review PASS records: a task re-review after `FINDINGS` now confirms every
+prior finding by its stable record id against the bounded diff from the previously reviewed tree, and
+the owned task-review gate reviews a related `tasks.md` section as one unit with coverage-aware
+duplicate suppression. Its delta is synced into `openspec/specs/workflows/spec.md`. The change could
+not be archived: the archive gate requires an authenticated completed `change-intake` run or an
+adoption receipt, while `verifyAdoptionEvidence` still reads the legacy
+`.dsh/delegation/spec-review/<change>/spec.json` that the native review owner no longer writes, so
+`/workflows adopt` refuses with `record-mismatch` on the stale legacy PASS. Owner follow-up: make
+adoption read the active review owner's whole-spec record, then adopt and archive the change. Per
+design D4 a section `FINDINGS` reopens the review obligation and never deletes an existing approval.
