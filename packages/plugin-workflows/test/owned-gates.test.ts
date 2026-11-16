@@ -11,7 +11,7 @@ import {
   pruneLaneDecisions,
   taskReviewEvidence,
 } from '../src/host/engine-gates.ts'
-import { type GitRunner, worktreeDigest } from '../src/host/git.ts'
+import { type GitRunner, legacyWorktreeDigest, worktreeDigest } from '../src/host/git.ts'
 import { notePathFor, readProgressNote, writeProgressNote } from '../src/host/notes.ts'
 import { taskIdOf } from '../src/host/tasks.ts'
 
@@ -755,11 +755,67 @@ describe('mixed ownership', () => {
     expect(lane.lanes?.map((entry) => entry.n)).toEqual([1])
   })
 
+  it('keeps the HEAD binding on workflow notes and the legacy digest on legacy notes', async () => {
+    const root = await workspace()
+    let head = 'a'.repeat(40)
+    const runGit: GitRunner = async (args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+        return Buffer.from(`${root}\n`)
+      }
+      if (args[0] === 'rev-parse') return Buffer.from(`${head}\n`)
+      if (args[0] === 'status') return Buffer.from(IMPLEMENTATION_STATUS)
+      return Buffer.from('')
+    }
+    const workflow = await writeProgressNote(
+      root,
+      { change: 'change-a', task: '1.1 Engine task', status: 'in-progress', reason: 'workflow' },
+      { runGit, now: 1_000 },
+    )
+    const legacy = await writeProgressNote(
+      root,
+      { change: 'change-a', task: '1.1 Engine task', status: 'in-progress', reason: 'legacy' },
+      { runGit, now: 1_000, owner: 'legacy', session: 'session-1' },
+    )
+    expect(workflow.note.worktreeDigest).toBe(await worktreeDigest(root, runGit))
+    expect(legacy.note.worktreeDigest).toBe(await legacyWorktreeDigest(root, runGit))
+    // A clean commit moves only the workflow format's HEAD identity.
+    head = 'b'.repeat(40)
+    expect(await worktreeDigest(root, runGit)).not.toBe(workflow.note.worktreeDigest)
+    expect(await legacyWorktreeDigest(root, runGit)).toBe(legacy.note.worktreeDigest)
+    const calls = [
+      {
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'packages/engine/src/engine.ts' },
+        ok: true,
+        at: 1_000,
+        turn: 1,
+      },
+    ]
+    const progress = (
+      noteOwner: 'workflows' | 'legacy',
+    ): ReturnType<typeof evaluateOwnedProgressGate> =>
+      evaluateOwnedProgressGate({
+        workspace: root,
+        change: 'change-a',
+        calls,
+        turn: 1,
+        codeChanged: true,
+        noteOwner,
+        reviewOwner: 'workflows',
+        runGit,
+      })
+    expect((await progress('workflows')).decision).toBe('refuse')
+    expect((await progress('legacy')).decision).toBe('allow')
+  })
+
   it('accepts a title-less legacy serial note only while its worktree is current', async () => {
     const root = await workspace()
     let status = IMPLEMENTATION_STATUS
     const runGit = fakeGit(() => status, root)
-    const digest = await worktreeDigest(root, runGit)
+    // The legacy writer records the HEAD-less digest; the note it wrote is
+    // current under that same algorithm.
+    const digest = await legacyWorktreeDigest(root, runGit)
     expect(digest).toBeDefined()
     const path = join(root, notePathFor('legacy', 'change-a'))
     await mkdir(dirname(path), { recursive: true })

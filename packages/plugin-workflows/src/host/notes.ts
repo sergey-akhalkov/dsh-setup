@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
-import { defaultGit, type GitRunner, worktreeDigest } from './git.js'
+import { defaultGit, type GitRunner, legacyWorktreeDigest, worktreeDigest } from './git.js'
 import { sanitizeReviewText } from './review.js'
 import { taskIdOf, taskLanes } from './tasks.js'
 
@@ -13,6 +13,8 @@ import { taskIdOf, taskLanes } from './tasks.js'
  * A serial note also names its lane and the session that wrote it, so the
  * workflow lane gate treats that one lane as the serial decision only for the
  * writing session; a legacy note has no lane and falls back to its digest.
+ * While the progress signal is legacy the note goes to the legacy store with
+ * that owner's HEAD-less digest, so its gate reads the note as current.
  */
 
 /** Where each owner keeps its progress note. */
@@ -153,9 +155,9 @@ export interface WrittenNote {
 
 /**
  * Write one owner's progress note. The worktree digest is captured now, so the
- * note authorizes only the worktree it was written against. An unreadable
- * tasks.md or an uncomputable digest refuses the note instead of writing
- * evidence the gates could never accept.
+ * note authorizes only the worktree it was written against; the legacy owner
+ * gets its HEAD-less digest. An unreadable tasks.md or an uncomputable digest
+ * refuses the note instead of writing evidence the gates could never accept.
  */
 export async function writeProgressNote(
   workspace: string,
@@ -181,7 +183,10 @@ export async function writeProgressNote(
     )
   }
   const task = resolveTask(markdown, input.task)
-  const digest = await worktreeDigest(workspace, options.runGit ?? defaultGit)
+  const digest = await (owner === 'legacy' ? legacyWorktreeDigest : worktreeDigest)(
+    workspace,
+    options.runGit ?? defaultGit,
+  )
   if (digest === undefined) {
     throw new Error(
       'the worktree digest could not be computed (git status failed); fix the git workspace so the note can be checked against it',

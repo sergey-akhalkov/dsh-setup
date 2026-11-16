@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { apply as applyDelegation } from '../../plugin-delegation-rules/src/host/index.ts'
 import { currentSpecDigest } from '../src/host/evidence.ts'
+import { defaultGit, legacyWorktreeDigest } from '../src/host/git.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
 import { writeInvolvement } from '../src/host/involvement.ts'
@@ -674,6 +675,112 @@ describe('composed rollback of each engine gate', () => {
     expect(host.steers.find((steer) => steer.kind === 'workflows-gate')?.text).toContain(
       'changed implementation files',
     )
+  })
+})
+
+describe('mixed gate ownership routes one note through both owners', () => {
+  it('writes the legacy store with the legacy digest and decides the owned lane', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: true,
+      laneFanout: false,
+    })
+    await implementationWrite(host, workspace)
+    const output = toolText(
+      await host.callTool('workflows', {
+        action: 'note',
+        change: CHANGE,
+        task: '2.1 Doc task',
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      }),
+    )
+    expect(output).toContain('delegation/task-progress')
+    // The retained progress gate reads its own store and its HEAD-less format,
+    // so a note routed there must record that digest.
+    const note = await readJson(
+      join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`),
+    )
+    expect(note?.worktreeDigest).toBe(await legacyWorktreeDigest(workspace, defaultGit))
+    expect(
+      await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeUndefined()
+    await closeTurn(host, 1)
+    expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
+    // The owned lane gate takes the note's serial decision; only lane 1 is open.
+    const lane = host.steers.find((steer) => steer.kind === 'workflows-gate')
+    expect(lane?.text).toContain('Lane: 1. Engine')
+    expect(lane?.text).not.toContain('Lane: 2. Docs')
+  })
+
+  it('updates the legacy lane decision from a progress-owned note', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: true,
+    })
+    await implementationWrite(host, workspace)
+    const output = toolText(
+      await host.callTool('workflows', {
+        action: 'note',
+        change: CHANGE,
+        task: '1.1 Engine task',
+        status: 'in-progress',
+        reason: 'engine stays serial',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    expect(
+      await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeDefined()
+    expect(
+      await readJson(join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
+    ).toBeUndefined()
+    await closeTurn(host, 1)
+    // The retained lane gate only knows the serial decision the note recorded.
+    const legacy = host.steers.filter((steer) => steer.kind === 'delegation-rules')
+    expect(legacy).toHaveLength(1)
+    expect(legacy[0]?.text).toContain('Lane: 2. Docs')
+    expect(legacy[0]?.text).not.toContain('Lane: 1. Engine')
+    // The owned progress gate accepts the fresh workflow note.
+    expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
+  })
+
+  it('accepts the note the actual legacy task_progress path wrote', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: true,
+      laneFanout: false,
+    })
+    await implementationWrite(host, workspace)
+    const output = toolText(
+      await host.callTool('task_progress', {
+        task: '2.1 Doc task',
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    const note = await readJson(
+      join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`),
+    )
+    expect(note?.worktreeDigest).toBe(await legacyWorktreeDigest(workspace, defaultGit))
+    expect(note?.lane).toBeUndefined()
+    await closeTurn(host, 1)
+    expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
+    // The owned lane gate still reads the title-less legacy note as current.
+    const lane = host.steers.find((steer) => steer.kind === 'workflows-gate')
+    expect(lane?.text).toContain('Lane: 1. Engine')
+    expect(lane?.text).not.toContain('Lane: 2. Docs')
   })
 })
 

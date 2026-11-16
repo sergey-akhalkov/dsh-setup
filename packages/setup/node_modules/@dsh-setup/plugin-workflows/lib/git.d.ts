@@ -32,3 +32,10 @@ export declare function implementationFingerprint(cwd: string, runGit: GitRunner
  * engine's own `.dsh` and `.tmp` state. Undefined when git cannot read the tree.
  */
 export declare function worktreeDigest(cwd: string, runGit: GitRunner, signal?: AbortSignal): Promise<string | undefined>;
+/**
+ * The digest the retained legacy progress writer records: the same worktree
+ * state without the HEAD identity, so a note routed to that store by either
+ * writer is current under the legacy gate's own algorithm. The workflow digest
+ * keeps its HEAD binding; the two formats are deliberately different.
+ */
+export declare function legacyWorktreeDigest(cwd: string, runGit: GitRunner, signal?: AbortSignal): Promise<string | undefined>;

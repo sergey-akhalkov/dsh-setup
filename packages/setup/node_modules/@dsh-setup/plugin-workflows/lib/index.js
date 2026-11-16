@@ -1946,6 +1946,36 @@ export function apply(ctx, config = {}) {
             return undefined;
         }
     };
+    /** The retained legacy lane owner's in-memory serial store; absent without it. */
+    const legacyLaneState = () => optionalService('delegationRulesLaneState');
+    /**
+     * Execute one progress note for the calling session. The evidence goes to the
+     * active progress owner's store, and the serial lane decision to the active
+     * lane owner, so a mixed-ownership profile satisfies both gates. The decision
+     * stays after a later note replaces the file; the note also attributes the
+     * change to this session, so the close evaluates its gates.
+     */
+    const executeNote = async (workspace, session, input, agentId) => {
+        const legacy = legacySignalState();
+        const progressOwned = !legacy.enabled.has('delegation-rules/task-progress');
+        const laneOwned = !legacy.enabled.has('delegation-rules/lane-assignment');
+        const written = await writeProgressNote(workspace, input, {
+            now: journal.time(),
+            session,
+            owner: progressOwned ? 'workflows' : 'legacy',
+        });
+        if (written.lane !== undefined) {
+            if (laneOwned) {
+                laneDecisionsFor(session, input.change).set(written.lane, 'serial');
+            }
+            else if (agentId !== undefined) {
+                // The compat caller is the legacy runtime, which records its own lane.
+                legacyLaneState()?.markSerial(agentId, input.change, written.lane);
+            }
+        }
+        await rememberInvolvement(workspace, session, input.change);
+        return written;
+    };
     /** The host subagent runner for the subagent executor; absent without the seam. */
     /** The host subagent runner for the subagent and review executors. */
     const hostSubagentRunner = (agent) => {
@@ -3763,17 +3793,7 @@ export function apply(ctx, config = {}) {
             },
             note: async (input) => {
                 const session = String(agent.session.id);
-                const written = await writeProgressNote(workspace, input, {
-                    now: journal.time(),
-                    session,
-                });
-                // The note is this session's serial decision; it stays decided after the
-                // note file is replaced by a later note for another lane. The note also
-                // attributes the change to this session, so the close evaluates its gates.
-                if (written.lane !== undefined) {
-                    laneDecisionsFor(session, input.change).set(written.lane, 'serial');
-                }
-                await rememberInvolvement(workspace, session, input.change);
+                const written = await executeNote(workspace, session, input, String(agent.id));
                 return written.text;
             },
         };
@@ -3944,16 +3964,7 @@ export function apply(ctx, config = {}) {
     };
     const compatNote = async (input) => {
         const call = compatCallContext();
-        const written = await writeProgressNote(call.workspace, input, {
-            now: journal.time(),
-            session: call.session,
-        });
-        // While the lane gate is owned, this call decides its serial lane too, and
-        // it attributes the change to the calling session for the close's gates.
-        if (written.lane !== undefined) {
-            laneDecisionsFor(call.session, input.change).set(written.lane, 'serial');
-        }
-        await rememberInvolvement(call.workspace, call.session, input.change);
+        const written = await executeNote(call.workspace, call.session, input);
         return {
             text: written.text,
             ...(written.lane === undefined ? {} : { lane: written.lane }),

@@ -7032,7 +7032,7 @@ function createSkillProvider(note: string): SkillProvider {
   }
 }
 
-/** Provide the ownership status once; an older host or a test double may lack provide(). */
+/** Provide a service once; an older host or a test double may lack provide(). */
 function provideStatus(ctx: Context, name: string, value: unknown): void {
   try {
     if (typeof ctx.get === 'function' && ctx.get(name) !== undefined) return
@@ -7069,6 +7069,17 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
     }),
   )
   const state = new DelegationState()
+  // The workflows note action records the serial lane here while this row still
+  // owns the lane signal; the caller resolves ownership.
+  provideStatus(
+    ctx,
+    'delegationRulesLaneState',
+    Object.freeze({
+      markSerial(agentId: string, change: string, lane: string): void {
+        state.markLaneSerial(agentId, change, lane)
+      },
+    }),
+  )
   const services: EngineServices = {
     subagents: ctx.subagents,
     workingDirectory: ctx.workingDirectory,

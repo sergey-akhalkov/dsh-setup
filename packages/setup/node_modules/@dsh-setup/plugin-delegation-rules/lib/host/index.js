@@ -5543,7 +5543,7 @@ function createSkillProvider(note) {
         },
     };
 }
-/** Provide the ownership status once; an older host or a test double may lack provide(). */
+/** Provide a service once; an older host or a test double may lack provide(). */
 function provideStatus(ctx, name, value) {
     try {
         if (typeof ctx.get === 'function' && ctx.get(name) !== undefined)
@@ -5574,6 +5574,13 @@ export function apply(ctx, config = {}, options = {}) {
             rule.gate !== 'none'),
     }));
     const state = new DelegationState();
+    // The workflows note action records the serial lane here while this row still
+    // owns the lane signal; the caller resolves ownership.
+    provideStatus(ctx, 'delegationRulesLaneState', Object.freeze({
+        markSerial(agentId, change, lane) {
+            state.markLaneSerial(agentId, change, lane);
+        },
+    }));
     const services = {
         subagents: ctx.subagents,
         workingDirectory: ctx.workingDirectory,

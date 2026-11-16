@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { CHANGE_NAME } from './command-parse.js';
 import { lastCodeWriteAt } from './evidence.js';
 import { evaluateLaneParity, evaluateProgressParity } from './gates.js';
-import { defaultGit, worktreeDigest } from './git.js';
+import { defaultGit, legacyWorktreeDigest, worktreeDigest } from './git.js';
 import { notePathFor, readProgressNote } from './notes.js';
 import { reviewerBinding, taskReviewCoverage } from './parity.js';
 import { checkedTaskIds, numberedTasks, taskLanes } from './tasks.js';
@@ -18,6 +18,14 @@ async function readPlan(workspace, change) {
     catch {
         return undefined;
     }
+}
+/**
+ * The current worktree digest in the format the note's owner records: the
+ * legacy store's writer omits HEAD, so its notes are checked with that
+ * algorithm; the workflow note keeps the HEAD binding.
+ */
+async function noteDigest(input, owner) {
+    return await (owner === 'legacy' ? legacyWorktreeDigest : worktreeDigest)(input.workspace, input.runGit ?? defaultGit);
 }
 /** The active change names; the archive collection is not an active change. */
 export async function activeChangeNames(workspace) {
@@ -149,7 +157,7 @@ export async function evaluateOwnedProgressGate(input) {
         if (saved !== undefined) {
             const current = tasks.find((task) => task.id === saved.taskId);
             if (current !== undefined && !current.checked) {
-                const digest = await worktreeDigest(input.workspace, input.runGit ?? defaultGit);
+                const digest = await noteDigest(input, input.noteOwner);
                 note = { digest: saved.worktreeDigest, currentDigest: digest };
                 if (digest !== undefined && digest !== saved.worktreeDigest) {
                     stale = ` The last note is stale: it names worktree digest ${saved.worktreeDigest.slice(0, 12)}, current ${digest.slice(0, 12)}.`;
@@ -272,7 +280,7 @@ export async function pruneLaneDecisions(workspace, change, decisions, note) {
  * the calling session. A workflow note records its lane title and its writing
  * session, so another session's note never decides this session's lane. A legacy
  * note carries no title or session; its captured worktree digest is the only
- * proof the plan is unchanged.
+ * proof the plan is unchanged, compared in the legacy store's own format.
  */
 async function noteDecidesLane(input, note, title) {
     if (note.lane !== undefined) {
@@ -280,7 +288,7 @@ async function noteDecidesLane(input, note, title) {
     }
     if (note.session !== undefined)
         return false;
-    const digest = await worktreeDigest(input.workspace, input.runGit ?? defaultGit);
+    const digest = await noteDigest(input, input.noteOwner);
     return digest !== undefined && digest === note.worktreeDigest;
 }
 /**

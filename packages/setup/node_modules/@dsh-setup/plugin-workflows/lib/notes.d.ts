@@ -7,6 +7,8 @@ import { type GitRunner } from './git.js';
  * A serial note also names its lane and the session that wrote it, so the
  * workflow lane gate treats that one lane as the serial decision only for the
  * writing session; a legacy note has no lane and falls back to its digest.
+ * While the progress signal is legacy the note goes to the legacy store with
+ * that owner's HEAD-less digest, so its gate reads the note as current.
  */
 /** Where each owner keeps its progress note. */
 export declare const NOTES_DIR = ".dsh/workflows/notes";
@@ -45,9 +47,9 @@ export interface WrittenNote {
 }
 /**
  * Write one owner's progress note. The worktree digest is captured now, so the
- * note authorizes only the worktree it was written against. An unreadable
- * tasks.md or an uncomputable digest refuses the note instead of writing
- * evidence the gates could never accept.
+ * note authorizes only the worktree it was written against; the legacy owner
+ * gets its HEAD-less digest. An unreadable tasks.md or an uncomputable digest
+ * refuses the note instead of writing evidence the gates could never accept.
  */
 export declare function writeProgressNote(workspace: string, input: NoteInput, options?: {
     readonly owner?: NoteOwner;
