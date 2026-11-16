@@ -59,9 +59,12 @@ deleted.
   `implementation-work` note rule for the progress gate — and its target still configured and every
   gate switch off: no legacy steer runs, the rules data stays available, and rollback is one switch
   flip. The review prompt assets are copied, not moved.
-- **BREAKING (next change)**: `retire-delegation-rules` deletes the plugin, folds its remaining
-  requirements, and removes the row, docs, skill, observability row, and bundle entries. Its
-  creation is the last task of this change and is not part of this implementation.
+- **BREAKING (next change)**: [`retire-delegation-rules`](../retire-delegation-rules/proposal.md)
+  deletes the plugin, folds its remaining requirements into `workflows` and `review-approval`, and
+  removes the row, docs, skill, observability row, legacy prompt copies, and bundle entries. It starts
+  only after this change is archived and its live profile confirmation is recorded; its design records
+  that the per-signal rollback flips below apply only before that release ships. Its creation is the
+  last task of this change and is not part of this implementation.
 
 ## Capabilities
 
