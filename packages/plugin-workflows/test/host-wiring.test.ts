@@ -119,6 +119,10 @@ async function tempWorkspace(): Promise<string> {
 
 afterEach(async () => {
   delete process.env.DSH_WORKFLOWS_HOST_KEY
+  parityMock.active = false
+  parityMock.report = undefined
+  parityMock.error = undefined
+  parityMock.path = undefined
   runStoreFaults.readdir = undefined
   runStoreFaults.stat = undefined
   runStoreFaults.writeFile = undefined
@@ -4658,9 +4662,23 @@ describe('intake end-to-end in a fake host', () => {
     expect(await receipts.readReceipt(workspace, 'auth', auth)).toBeUndefined()
   })
 
-  it('defers the registered spec-review step to the enabled legacy signal', async () => {
+  it('loads the spec-review rollback with a failed retained group and completes the deferred step from the legacy PASS', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
+    // The rollback flips only gates.specReview while the matching retained group
+    // failed to replay: the effectively deferred signal must not refuse the
+    // intake, and the legacy PASS must complete its deferred step.
+    const real = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL('../assets/parity/retire-legacy-gates.json', import.meta.url)),
+        'utf8',
+      ),
+    ) as { retained: Record<string, unknown> }
+    parityMock.active = true
+    parityMock.report = {
+      ...real,
+      retained: { ...real.retained, 'spec-review': { cases: 3, replayed: 2, status: 'failed' } },
+    }
     // The switch alone restores the legacy owner for the contributed step.
     const host = fakeHost(workspace, { userQuestions: true, specReview: true })
     apply(host.ctx as never)
@@ -4718,7 +4736,8 @@ describe('intake end-to-end in a fake host', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const stored = await runs.readAuthenticatedRun(workspace, 'run-intake-deferred', auth)
     const review = stored?.steps.find((step) => step.id === 'spec-review')
-    // The legacy record is the evidence; the native executor never dispatched.
+    // The intake loaded through the failed report, read the legacy record as its
+    // evidence, and never dispatched the native executor.
     expect(review?.state).toBe('done')
     expect(review?.evidence?.path).toBe('.dsh/delegation/spec-review/auth/spec.json')
     expect(review?.evidence?.digest).toBe(digest)

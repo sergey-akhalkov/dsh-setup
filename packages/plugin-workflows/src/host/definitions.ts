@@ -1450,6 +1450,8 @@ export interface ResolvedStepOwnership {
 }
 
 export interface OwnershipResolution {
+  /** The definition-level ownership after the profile switch resolves it. */
+  readonly ownership: GateOwnership
   readonly steps: readonly ResolvedStepOwnership[]
   /** One load-refusing line per illegal combination. */
   readonly issues: readonly string[]
@@ -1624,7 +1626,7 @@ export function resolveOwnership(
     }
     return { id: step.id, ownership, ...(legacy === undefined ? {} : { legacy }) }
   })
-  return { steps, issues }
+  return { ownership: definitionDeferred ? 'defer' : 'own', steps, issues }
 }
 
 /** Read and validate one definition file. */

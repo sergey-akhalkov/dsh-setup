@@ -121,6 +121,37 @@ describe('parity report load filter', () => {
     }
   })
 
+  it('unbinds an effectively deferred definition during rollback', () => {
+    const { definitions, report } = shipped()
+    const rollback = {
+      installed: new Set(['delegation-rules']),
+      enabled: new Set(['delegation-rules/spec-review']),
+    }
+    expect(
+      reportBoundDefinitions(definitions, rollback).map((definition) => definition.id),
+    ).not.toContain('spec-review')
+    const broken = [
+      {
+        ...report,
+        retained: {
+          ...report.retained,
+          'spec-review': { cases: 3, replayed: 2, status: 'failed' },
+        },
+      },
+      {
+        ...report,
+        retained: Object.fromEntries(
+          Object.entries(report.retained).filter(([group]) => group !== 'spec-review'),
+        ),
+      },
+    ]
+    for (const candidate of broken) {
+      const result = parityLoadIssues(definitions, candidate, reportPath, undefined, rollback)
+      expect(result.issues).toEqual([])
+      expect([...result.refused]).toEqual([])
+    }
+  })
+
   it('certifies the owned work-progress and lane gates from the same report', () => {
     const { report } = shipped()
     expect(retiredGateIssue(report, undefined, reportPath, 'task-progress')).toBeUndefined()

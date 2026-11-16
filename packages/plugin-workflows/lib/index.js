@@ -753,7 +753,7 @@ export function apply(ctx, config = {}) {
                 // The release-bound parity report gates every `own` definition; the
                 // verified profile settings are applied only after its template check.
                 const parity = readParityReport();
-                const parityCheck = parityLoadIssues(loaded.definitions, parity.report, shippedParityReportPath(), parity.error);
+                const parityCheck = parityLoadIssues(loaded.definitions, parity.report, shippedParityReportPath(), parity.error, legacy);
                 const loadErrors = [...loaded.errors, ...parityCheck.issues];
                 const accepted = loaded.definitions
                     .filter((definition) => !parityCheck.refused.has(definition.id))

@@ -1156,7 +1156,7 @@ export function resolveOwnership(definition, installed, enabledSignals) {
         }
         return { id: step.id, ownership, ...(legacy === undefined ? {} : { legacy }) };
     });
-    return { steps, issues };
+    return { ownership: definitionDeferred ? 'defer' : 'own', steps, issues };
 }
 /** Read and validate one definition file. */
 export function readDefinitionFile(file) {
