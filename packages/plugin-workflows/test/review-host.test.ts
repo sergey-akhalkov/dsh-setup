@@ -12,7 +12,7 @@ import { apply } from '../src/host/index.ts'
 import { readReceipt } from '../src/host/receipts.ts'
 import { definitionsRegistry } from '../src/host/registry.ts'
 import { createRun, readAuthenticatedRun, settleStep, writeRun } from '../src/host/runs.ts'
-import { taskIdOf } from '../src/host/tasks.ts'
+import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
 
 /**
  * Host-level regression for the native review executor: a frozen task snapshot
@@ -617,6 +617,203 @@ describe('shared whole-spec review admission', () => {
         kind: 'intake',
         change: 'auth',
       })
+    } finally {
+      unregister()
+    }
+  })
+})
+
+const SECTION = { key: '1', title: '1. Section' }
+const SECTION_TASKS = ['First task', 'Second task', 'Third task']
+const SECTION_IDS = SECTION_TASKS.map((text) => taskIdOf(text))
+
+/** A git-backed change whose section 1 has every task checked. */
+async function sectionWorkspace(): Promise<string> {
+  const workspace = await tempWorkspace()
+  await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+  const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+  await mkdir(join(changeDir, 'reviews'), { recursive: true })
+  await writeFile(
+    join(changeDir, 'tasks.md'),
+    `# Tasks\n\n## ${SECTION.title}\n\n${SECTION_TASKS.map((text, index) => `- [x] 1.${String(index + 1)} ${text}`).join('\n')}\n`,
+    'utf8',
+  )
+  const git = (...args: string[]): void => {
+    execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+  }
+  git('init')
+  git('config', 'user.name', 'review-host')
+  git('config', 'user.email', 'review-host@example.test')
+  git('add', '-A')
+  git('commit', '-m', 'init')
+  return workspace
+}
+
+/** One section run whose context names the whole checked coverage. */
+async function startSectionRun(
+  workspace: string,
+  definition: ReturnType<typeof reviewDefinition>,
+): Promise<{ readonly runId: string; readonly recordPath: string }> {
+  const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+  const run = createRun({
+    definition: definition.id,
+    trigger: 'turn.stopping',
+    session: 'session-1',
+    workspace,
+    context: {
+      name: 'auth',
+      taskId: sectionRecordId(SECTION.key),
+      section: SECTION.key,
+      sectionTitle: SECTION.title,
+      taskIds: SECTION_IDS,
+    },
+    steps: ['review'],
+    now: 1_000,
+  })
+  await writeRun(workspace, run, auth)
+  return {
+    runId: run.id,
+    recordPath: join(
+      workspace,
+      '.dsh',
+      'workflows',
+      'records',
+      definition.id,
+      'auth',
+      'tasks',
+      `${sectionRecordId(SECTION.key)}.json`,
+    ),
+  }
+}
+
+describe('section review publication through the host', () => {
+  it('preserves a matching approval and publishes only the missing section approvals', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await sectionWorkspace()
+    const definition = reviewDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+      // The first task already carries a matching approval in a formatting the
+      // publisher must leave byte-identical; its digest is a prior review's.
+      const preserved = `${JSON.stringify(
+        {
+          rule: definition.id,
+          change: 'auth',
+          scope: 'task',
+          taskId: SECTION_IDS[0],
+          digest: 'b'.repeat(64),
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: '2026-01-01T00:00:00.000Z',
+        },
+        null,
+        2,
+      )}\n`
+      const preservedPath = join(changeDir, 'reviews', `${SECTION_IDS[0]}.json`)
+      await writeFile(preservedPath, preserved, 'utf8')
+      const { runId, recordPath } = await startSectionRun(workspace, definition)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.digests.length === 1)
+      host.releases[0]?.()
+      await waitFor(
+        async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
+      )
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as {
+        readonly verdict: string
+        readonly digest: string
+        readonly section: string
+        readonly taskId: string
+        readonly taskIds: string[]
+      }
+      expect(record).toMatchObject({
+        scope: 'task',
+        section: SECTION.key,
+        taskId: sectionRecordId(SECTION.key),
+        taskIds: SECTION_IDS,
+        verdict: 'PASS',
+      })
+      // The matching approval stays byte-identical; the missing covered tasks
+      // each get the section verdict's own approval.
+      expect(await readFile(preservedPath, 'utf8')).toBe(preserved)
+      for (const taskId of SECTION_IDS.slice(1)) {
+        const approval = JSON.parse(
+          await readFile(join(changeDir, 'reviews', `${taskId}.json`), 'utf8'),
+        ) as Record<string, unknown>
+        expect(approval).toMatchObject({
+          rule: definition.id,
+          change: 'auth',
+          taskId,
+          digest: record.digest,
+          verdict: 'PASS',
+        })
+      }
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const stepState = async (): Promise<string | undefined> =>
+        (await readAuthenticatedRun(workspace, runId, auth))?.steps[0]?.state
+      await waitFor(async () => (await stepState()) !== 'open')
+      expect(
+        (await readAuthenticatedRun(workspace, runId, auth))?.steps[0]?.state,
+        (await readAuthenticatedRun(workspace, runId, auth))?.steps[0]?.reason,
+      ).toBe('done')
+    } finally {
+      unregister()
+    }
+  })
+
+  it('reopens the covered section tasks on a section FINDINGS', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await sectionWorkspace()
+    const definition = reviewDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'FINDINGS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+      const { runId, recordPath } = await startSectionRun(workspace, definition)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.digests.length === 1)
+      host.releases[0]?.()
+      await waitFor(
+        async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
+      )
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as {
+        readonly verdict: string
+        readonly section: string
+        readonly taskIds: string[]
+      }
+      expect(record).toMatchObject({ scope: 'task', section: SECTION.key, taskIds: SECTION_IDS })
+      expect(record.verdict).toBe('FINDINGS')
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const stepState = async (): Promise<string | undefined> =>
+        (await readAuthenticatedRun(workspace, runId, auth))?.steps[0]?.state
+      await waitFor(async () => (await stepState()) === 'blocked')
+      const blocked = await readAuthenticatedRun(workspace, runId, auth)
+      expect(blocked?.steps[0]?.state).toBe('blocked')
+      expect(blocked?.steps[0]?.reason).toContain('FINDINGS')
+      expect(blocked?.status).not.toBe('completed')
+      // No covered task is approved, so every one of them still needs a review.
+      for (const taskId of SECTION_IDS) {
+        expect(
+          await readFile(join(changeDir, 'reviews', `${taskId}.json`), 'utf8').catch(
+            () => undefined,
+          ),
+        ).toBeUndefined()
+      }
+      // The next close keeps the section obligation open instead of passing it.
+      const steersBefore = host.steers.length
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      expect(host.steers.length).toBeGreaterThan(steersBefore)
+      expect((await readAuthenticatedRun(workspace, runId, auth))?.status).not.toBe('completed')
     } finally {
       unregister()
     }

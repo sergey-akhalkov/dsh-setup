@@ -15,6 +15,7 @@ import {
 import { type EvidenceContext, reviewDigest, verifyEvidence } from './evidence.js'
 import type { SubagentRunner, SubagentRunResult } from './executors.js'
 import { isInside } from './fs-change.js'
+import { defaultGit, type GitRunner, repositoryRoot } from './git.js'
 import { classifyFailure, type FailureClass } from './review-queue.js'
 import { settleStep, type WorkflowRun } from './runs.js'
 
@@ -97,6 +98,12 @@ export interface ReviewFinding {
   readonly title: string
   readonly evidence: string
   readonly fix: string
+}
+
+/** A focused re-review confirms every prior finding by its stable per-record id. */
+export interface ReviewConfirmation {
+  readonly id: string
+  readonly status: 'closed' | 'open'
 }
 
 export type ReviewVerdict = 'PASS' | 'FINDINGS' | 'ERROR'
@@ -428,6 +435,10 @@ export interface ReviewRecord {
   readonly taskIds?: readonly string[]
   readonly digest: string
   readonly worktreeDigest?: string
+  /** The snapshot tree the verdict was rendered from; a focused re-review diffs from it. */
+  readonly reviewedTree?: string
+  /** The focused re-review confirmations; local only, never in the committed approval. */
+  readonly previous?: readonly ReviewConfirmation[]
   readonly verdict: ReviewVerdict
   readonly findings: readonly ReviewFinding[]
   readonly target: Readonly<{ provider: string; model?: string; reasoningEffort?: string }>
@@ -469,11 +480,24 @@ export function sanitizeReviewText(text: string, maximum = MAX_FIELD_CHARS): str
 }
 
 export type ParsedVerdict =
-  | { readonly ok: true; readonly verdict: 'PASS' | 'FINDINGS'; readonly findings: ReviewFinding[] }
+  | {
+      readonly ok: true
+      readonly verdict: 'PASS' | 'FINDINGS'
+      readonly findings: ReviewFinding[]
+      readonly previous?: readonly ReviewConfirmation[]
+    }
   | { readonly ok: false; readonly error: string }
 
-/** Accept exactly one fenced JSON verdict that echoes the requested digest. */
-export function parseReviewVerdict(text: string, expectedDigest: string): ParsedVerdict {
+/**
+ * Accept exactly one fenced JSON verdict that echoes the requested digest. With
+ * prior ids the verdict is a focused re-review: it confirms every prior finding
+ * by id, and an open prior id is repeated by exactly one finding.
+ */
+export function parseReviewVerdict(
+  text: string,
+  expectedDigest: string,
+  priorIds?: readonly string[],
+): ParsedVerdict {
   const blocks: string[] = []
   // Every fenced block counts, whatever its language: one verdict, no extras.
   const fence = /```[^\n]*\r?\n([\s\S]*?)```/g
@@ -539,13 +563,102 @@ export function parseReviewVerdict(text: string, expectedDigest: string): Parsed
       fix: sanitizeReviewText(raw.fix),
     })
   }
+  let previous: ReviewConfirmation[] | undefined
+  if (priorIds !== undefined) {
+    const rawPrevious = value.previous
+    if (!Array.isArray(rawPrevious)) {
+      return {
+        ok: false,
+        error:
+          'a focused re-review verdict needs a "previous" list with exactly one confirmation per prior finding id',
+      }
+    }
+    const known = new Set(priorIds)
+    const open = new Set<string>()
+    const seen = new Set<string>()
+    previous = []
+    for (const [index, raw] of rawPrevious.entries()) {
+      const position = `previous #${String(index + 1)}`
+      if (!isRecord(raw)) return { ok: false, error: `${position} must be an object` }
+      if (typeof raw.id !== 'string') {
+        return { ok: false, error: `${position}.id must be a string` }
+      }
+      if (!known.has(raw.id)) {
+        return {
+          ok: false,
+          error: `${position} names unknown prior finding id "${raw.id}"; use the ids listed in the prompt`,
+        }
+      }
+      if (seen.has(raw.id)) {
+        return {
+          ok: false,
+          error: `${position} repeats prior finding id "${raw.id}"; exactly one confirmation per prior id is required`,
+        }
+      }
+      if (raw.status !== 'closed' && raw.status !== 'open') {
+        return { ok: false, error: `${position}.status must be "closed" or "open"` }
+      }
+      seen.add(raw.id)
+      if (raw.status === 'open') open.add(raw.id)
+      previous.push({ id: raw.id, status: raw.status })
+    }
+    const missing = priorIds.filter((id) => !seen.has(id))
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        error: `the verdict omits prior finding id(s) ${missing.join(', ')}; exactly one confirmation per prior id is required`,
+      }
+    }
+    if (verdict === 'PASS' && open.size > 0) {
+      return { ok: false, error: 'verdict PASS requires every prior finding to be closed' }
+    }
+    const named = new Map<string, number>()
+    for (const [index, raw] of rawFindings.entries()) {
+      const position = `finding #${String(index + 1)}`
+      const previousId = isRecord(raw) ? raw.previousId : undefined
+      if (previousId === undefined) continue
+      if (typeof previousId !== 'string') {
+        return { ok: false, error: `${position}.previousId must be a string` }
+      }
+      if (!known.has(previousId)) {
+        return {
+          ok: false,
+          error: `${position}.previousId names unknown prior finding id "${previousId}"`,
+        }
+      }
+      if (!open.has(previousId)) {
+        return {
+          ok: false,
+          error: `${position} names prior finding "${previousId}", but that confirmation is "closed"; a closed finding is not reported again`,
+        }
+      }
+      named.set(previousId, (named.get(previousId) ?? 0) + 1)
+    }
+    for (const id of open) {
+      const count = named.get(id) ?? 0
+      if (count !== 1) {
+        return {
+          ok: false,
+          error:
+            count === 0
+              ? `the open prior finding "${id}" is not named by a finding; add previousId "${id}" to exactly one finding`
+              : `the open prior finding "${id}" is named by ${String(count)} findings; exactly one finding may carry previousId "${id}"`,
+        }
+      }
+    }
+  }
   if (verdict === 'PASS' && findings.length > 0) {
     return { ok: false, error: 'verdict PASS requires zero P0/P1 findings' }
   }
   if (verdict === 'FINDINGS' && findings.length === 0) {
     return { ok: false, error: 'verdict FINDINGS requires at least one P0/P1 finding' }
   }
-  return { ok: true, verdict, findings }
+  return {
+    ok: true,
+    verdict,
+    findings,
+    ...(previous === undefined ? {} : { previous }),
+  }
 }
 
 /** The shipped bundled review instructions live beside the definitions. */
@@ -578,6 +691,35 @@ export function readReviewInstruction(id: string): string {
   }
 }
 
+/** One prior finding keyed by its stable per-record id (`f1`..`fn`). */
+export interface FocusedFinding {
+  readonly id: string
+  readonly finding: ReviewFinding
+}
+
+/** The bounded change set between the prior reviewed tree and the current one. */
+export interface ReviewChangeSet {
+  readonly fromTree: string
+  readonly toTree: string
+  /** The changed-path list, bounded to the first entries. */
+  readonly paths: readonly string[]
+  readonly pathsTruncated: boolean
+  readonly patch: string
+  readonly patchTruncated: boolean
+  /** The current snapshot checkout, named when the patch is truncated. */
+  readonly reviewCwd?: string
+}
+
+/** The focused re-review context rendered after the review's sections. */
+export interface FocusedReviewContext {
+  /** The complete prior-finding inventory, in the prior record's order. */
+  readonly previous: readonly FocusedFinding[]
+  /** The bounded diff; absent means it could not be built. */
+  readonly changes?: ReviewChangeSet
+  /** Why the diff is unavailable, named in the prompt. */
+  readonly diffUnavailable?: string
+}
+
 export interface ReviewPromptInput {
   readonly instruction: string
   readonly rule: string
@@ -592,6 +734,63 @@ export interface ReviewPromptInput {
   /** Caller-supplied facts carried by the delegate alias into this review. */
   readonly context?: string
   readonly objective?: string
+  /** The prior findings and bounded diff when this unit's last record is a moved FINDINGS. */
+  readonly focused?: FocusedReviewContext
+}
+
+/** Bounds for the focused diff; only the diff is bounded, never the prior inventory. */
+const MAX_CHANGED_PATHS = 200
+const MAX_DIFF_LINES = 400
+const MAX_DIFF_BYTES = 32 * 1024
+const MAX_PREVIOUS_FINDINGS_BYTES = 256 * 1024
+/** A snapshot tree is a 40-hex git tree id; a live-worktree digest is 64 hex. */
+const GIT_TREE = /^[0-9a-f]{40}$/u
+
+/** The complete prior-finding inventory, keyed by its stable id. Never truncated. */
+function previousFindingsBlock(previous: readonly FocusedFinding[]): string {
+  const lines = ['## Previous findings', '']
+  for (const entry of previous) {
+    const finding = entry.finding
+    lines.push(
+      `- ${entry.id} [${finding.severity}] (${finding.class}) ${finding.title}`,
+      `  - Evidence: ${finding.evidence}`,
+      `  - Fix: ${finding.fix}`,
+    )
+  }
+  return lines.join('\n')
+}
+
+/** The changed-path list and the fenced bounded patch. */
+function changesSinceBlock(changes: ReviewChangeSet): string {
+  const lines = [
+    '## Changes since the last review',
+    '',
+    `The prior reviewed tree is \`${changes.fromTree}\`; the current reviewed tree is \`${changes.toTree}\`.`,
+    '',
+    changes.pathsTruncated
+      ? `Changed paths (the first ${String(changes.paths.length)}; the list is bounded):`
+      : `Changed paths (${String(changes.paths.length)}):`,
+  ]
+  if (changes.paths.length === 0) lines.push('(none)')
+  for (const path of changes.paths) lines.push(`- ${path}`)
+  if (changes.patchTruncated) {
+    const readable =
+      changes.reviewCwd === undefined
+        ? 'the current reviewed worktree'
+        : `the current snapshot checkout at ${changes.reviewCwd}`
+    lines.push(
+      '',
+      `The patch is truncated at the ${String(MAX_DIFF_LINES)}-line / ${String(MAX_DIFF_BYTES / 1024)} KiB bound; read the full change in ${readable}.`,
+    )
+  }
+  lines.push('', '```diff', changes.patch, '```')
+  return lines.join('\n')
+}
+
+/** The fallback line naming why no diff could be rendered. */
+function unavailableDiffBlock(focused: FocusedReviewContext): string {
+  const cause = focused.diffUnavailable ?? 'the prior diff is unavailable'
+  return `The diff since the prior reviewed tree is unavailable: ${cause}. Confirm the prior findings above from the current reviewed state, and report as new only a P0/P1 introduced since the prior review.`
 }
 
 /** Render the bundled instruction with the review's digest-bound context. */
@@ -641,10 +840,25 @@ export function renderReviewPrompt(input: ReviewPromptInput): string {
   if (input.objective !== undefined && input.objective.trim() !== '') {
     lines.push('', '## Objective', '', input.objective.trim())
   }
+  if (input.focused !== undefined) {
+    lines.push('', previousFindingsBlock(input.focused.previous))
+    lines.push(
+      '',
+      input.focused.changes === undefined
+        ? unavailableDiffBlock(input.focused)
+        : changesSinceBlock(input.focused.changes),
+    )
+  }
   lines.push(
     '',
     'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with `class`, `title`, `evidence`, and `fix`. Prose outside that block is ignored.',
   )
+  if (input.focused !== undefined) {
+    lines.push(
+      '',
+      'This is a focused re-review: also return `previous` with exactly one `{ "id": "f1", "status": "closed" | "open" }` entry for every prior id listed above, and repeat each `open` prior id by exactly one finding carrying `previousId` with that id. A `closed` prior id must not be named by a finding.',
+    )
+  }
   return lines.join('\n')
 }
 
@@ -848,6 +1062,8 @@ export interface ReviewRunInput {
   readonly session: string
   readonly now?: number
   readonly signal?: AbortSignal
+  /** The git runner the focused diff uses; production spawns the bounded runner. */
+  readonly runGit?: GitRunner
   /** Captured before the first start; a retry preserves it across attempts. */
   readonly baseline?: ReviewRecordBaseline
   /** True once the run settled completed-soft; a late verdict is discarded. */
@@ -1011,6 +1227,7 @@ function baseRecord(
             section === undefined ? 'task-review-snapshot-v1' : 'section-review-snapshot-v1',
             input.prepared.tree,
           ]),
+          reviewedTree: input.prepared.tree,
         }),
     target: targetIdentity(input.reviewer),
     reviewer: input.reviewer.id,
@@ -1158,6 +1375,8 @@ export type ReviewAttemptResult =
       readonly kind: 'verdict'
       readonly verdict: 'PASS' | 'FINDINGS'
       readonly findings: readonly ReviewFinding[]
+      /** The focused re-review confirmations; present only with prior ids. */
+      readonly previous?: readonly ReviewConfirmation[]
     }
   | {
       readonly kind: 'failure'
@@ -1200,13 +1419,178 @@ function failureOutcome(
   }
 }
 
-/** Validate the step and render the prompt before any target starts. */
-function prepareAttempt(
+/** The prior record's focused inputs, read tolerantly from an engine-written file. */
+interface PriorFindings {
+  readonly digest: string
+  readonly findings: readonly ReviewFinding[]
+  readonly reviewedTree?: string
+}
+
+function priorFindingsOf(value: unknown): PriorFindings | undefined {
+  if (!isRecord(value) || value.verdict !== 'FINDINGS') return undefined
+  if (typeof value.digest !== 'string') return undefined
+  if (!Array.isArray(value.findings) || value.findings.length === 0) return undefined
+  const findings: ReviewFinding[] = []
+  for (const raw of value.findings) {
+    if (!isRecord(raw)) return undefined
+    if (raw.severity !== 'P0' && raw.severity !== 'P1') return undefined
+    if (
+      typeof raw.title !== 'string' ||
+      typeof raw.evidence !== 'string' ||
+      typeof raw.fix !== 'string'
+    ) {
+      return undefined
+    }
+    findings.push({
+      severity: raw.severity,
+      class: normalizeFindingClass(raw.class),
+      title: raw.title,
+      evidence: raw.evidence,
+      fix: raw.fix,
+    })
+  }
+  return {
+    digest: value.digest,
+    findings,
+    ...(typeof value.reviewedTree === 'string' ? { reviewedTree: value.reviewedTree } : {}),
+  }
+}
+
+/** The unit's own latest record, when it is a FINDINGS record this change can focus. */
+async function priorFindingsFor(input: ReviewRunInput): Promise<PriorFindings | undefined> {
+  try {
+    const raw = await readFile(join(input.context.workspace, reviewRecordPathOf(input)), 'utf8')
+    return priorFindingsOf(JSON.parse(raw))
+  } catch {
+    return undefined
+  }
+}
+
+interface BuiltChanges {
+  readonly changes?: ReviewChangeSet
+  readonly cause?: string
+}
+
+/** Bound the changed-path list and the patch; the prior inventory is never bounded. */
+function boundedChanges(
+  fromTree: string,
+  toTree: string,
+  statuses: string,
+  patch: string,
+  reviewCwd: string | undefined,
+): ReviewChangeSet {
+  const entries = statuses
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== '')
+  const lines = patch.split('\n')
+  let used = 0
+  let bytes = 0
+  for (const line of lines) {
+    const size = Buffer.byteLength(line, 'utf8') + 1
+    if (used >= MAX_DIFF_LINES || bytes + size > MAX_DIFF_BYTES) break
+    used += 1
+    bytes += size
+  }
+  return {
+    fromTree,
+    toTree,
+    paths: entries.slice(0, MAX_CHANGED_PATHS),
+    pathsTruncated: entries.length > MAX_CHANGED_PATHS,
+    patch: lines.slice(0, used).join('\n').trimEnd(),
+    patchTruncated: used < lines.length,
+    ...(reviewCwd === undefined ? {} : { reviewCwd }),
+  }
+}
+
+/** The diff from the prior reviewed tree; any unusable input is a named fallback. */
+async function changesSince(
+  input: ReviewRunInput,
+  priorTree: string | undefined,
+): Promise<BuiltChanges> {
+  const currentTree = input.prepared.tree
+  if (priorTree === undefined) {
+    return { cause: 'the prior review record carries no reviewed tree' }
+  }
+  if (currentTree === undefined) {
+    return { cause: 'the current review has no frozen tree to compare with the prior tree' }
+  }
+  if (!GIT_TREE.test(priorTree)) {
+    return { cause: `the prior reviewed tree "${priorTree}" is not a git tree id` }
+  }
+  if (!GIT_TREE.test(currentTree)) {
+    return {
+      cause: 'the current reviewed tree is not a git tree id (the review ran on the live worktree)',
+    }
+  }
+  const runGit = input.runGit ?? defaultGit
+  try {
+    const root = await repositoryRoot(input.context.workspace, runGit)
+    try {
+      await runGit(['cat-file', '-e', `${priorTree}^{tree}`], root)
+    } catch {
+      return {
+        cause: `the prior reviewed tree ${priorTree} is no longer in the repository object database`,
+      }
+    }
+    const statuses = await runGit(['diff', '--name-status', priorTree, currentTree], root)
+    const patch = await runGit(
+      ['diff', '--no-color', '--no-ext-diff', '--unified=3', priorTree, currentTree],
+      root,
+    )
+    return {
+      changes: boundedChanges(
+        priorTree,
+        currentTree,
+        statuses.toString('utf8'),
+        patch.toString('utf8'),
+        input.prepared.reviewCwd,
+      ),
+    }
+  } catch (error) {
+    return {
+      cause: `the diff from the prior reviewed tree could not be read (${error instanceof Error ? error.message : String(error)})`,
+    }
+  }
+}
+
+interface FocusedAttempt {
+  readonly context: FocusedReviewContext
+  readonly ids: readonly string[]
+}
+
+/** The focused prompt inputs when the unit's own latest record is a moved FINDINGS. */
+async function focusedAttempt(
+  input: ReviewRunInput,
+  record: ReviewRecordBase,
+): Promise<FocusedAttempt | undefined> {
+  // Whole-spec reviews have no stored tree to diff, so they stay full reviews.
+  if (input.step.review?.scope !== 'task') return undefined
+  const prior = await priorFindingsFor(input)
+  if (prior === undefined || prior.digest === record.digest) return undefined
+  const previous: FocusedFinding[] = prior.findings.map((finding, index) => ({
+    id: `f${String(index + 1)}`,
+    finding,
+  }))
+  const built = await changesSince(input, prior.reviewedTree)
+  return {
+    ids: previous.map((entry) => entry.id),
+    context: {
+      previous,
+      ...(built.changes === undefined ? {} : { changes: built.changes }),
+      ...(built.cause === undefined ? {} : { diffUnavailable: built.cause }),
+    },
+  }
+}
+
+/** Validate the step, prepare the focused context, and render the prompt. */
+async function prepareAttempt(
   input: ReviewRunInput,
   now: number,
-):
-  | { kind: 'ready'; record: ReviewRecordBase; prompt: string }
-  | { kind: 'failed'; outcome: ReviewAttemptOutcome } {
+): Promise<
+  | { kind: 'ready'; record: ReviewRecordBase; prompt: string; priorIds?: readonly string[] }
+  | { kind: 'failed'; outcome: ReviewAttemptOutcome }
+> {
   const spec = input.step.review
   if (spec === undefined) {
     return {
@@ -1237,6 +1621,23 @@ function prepareAttempt(
     return { kind: 'failed', outcome: failureOutcome(undefined, reason, 'config', false) }
   }
   const record = baseRecord(input, now)
+  const focused = await focusedAttempt(input, record)
+  if (focused !== undefined) {
+    // The complete inventory is never truncated; if it cannot fit whole, the
+    // attempt fails loud instead of dropping findings the reviewer must confirm.
+    const inventory = Buffer.byteLength(previousFindingsBlock(focused.context.previous), 'utf8')
+    if (inventory > MAX_PREVIOUS_FINDINGS_BYTES) {
+      return {
+        kind: 'failed',
+        outcome: failureOutcome(
+          record,
+          `the complete prior-finding inventory is ${String(inventory)} bytes, over the ${String(MAX_PREVIOUS_FINDINGS_BYTES)}-byte focused review limit; the review did not start because dropping prior findings would break the confirmation contract`,
+          'config',
+          false,
+        ),
+      }
+    }
+  }
   const promptInput: ReviewPromptInput = {
     instruction: spec.instruction,
     rule: record.rule,
@@ -1250,10 +1651,16 @@ function prepareAttempt(
     ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
     ...(input.callerContext === undefined ? {} : { context: input.callerContext }),
     ...(input.callerObjective === undefined ? {} : { objective: input.callerObjective }),
+    ...(focused === undefined ? {} : { focused: focused.context }),
   }
   try {
     const prompt = (input.renderPrompt ?? renderReviewPrompt)(promptInput)
-    return { kind: 'ready', record, prompt }
+    return {
+      kind: 'ready',
+      record,
+      prompt,
+      ...(focused === undefined ? {} : { priorIds: focused.ids }),
+    }
   } catch (error) {
     return {
       kind: 'failed',
@@ -1283,6 +1690,7 @@ async function executeAttempt(
   input: ReviewRunInput,
   record: ReviewRecordBase,
   prompt: string,
+  priorIds: readonly string[] | undefined,
   controller: AbortController,
   stopped: Promise<never>,
 ): Promise<ReviewAttemptOutcome> {
@@ -1339,7 +1747,7 @@ async function executeAttempt(
       },
     }
   }
-  const parsed = parseReviewVerdict(child.text, record.digest)
+  const parsed = parseReviewVerdict(child.text, record.digest, priorIds)
   if (!parsed.ok) {
     return {
       record,
@@ -1366,18 +1774,26 @@ async function executeAttempt(
       return { record, result: resultFailure(failure, 'reviewed-inputs-changed') }
     }
   }
-  return { record, result: { kind: 'verdict', verdict: parsed.verdict, findings: parsed.findings } }
+  return {
+    record,
+    result: {
+      kind: 'verdict',
+      verdict: parsed.verdict,
+      findings: parsed.findings,
+      ...(parsed.previous === undefined ? {} : { previous: parsed.previous }),
+    },
+  }
 }
 
 /**
- * Start one review attempt and return only after the target actually started.
+ * Prepare one review attempt and return only after the target actually started.
  * The result continues in the background; the queue's start hook awaits
  * `started`, so an activation failure is classified and retried before the
  * acceptance deadline is cleared. No record is written here.
  */
-export function beginReviewAttempt(input: ReviewRunInput): ReviewAttemptHandle {
+export async function beginReviewAttempt(input: ReviewRunInput): Promise<ReviewAttemptHandle> {
   const now = input.now ?? Date.now()
-  const prepared = prepareAttempt(input, now)
+  const prepared = await prepareAttempt(input, now)
   if (prepared.kind === 'failed') {
     return { started: Promise.resolve(), result: Promise.resolve(prepared.outcome), now }
   }
@@ -1396,7 +1812,14 @@ export function beginReviewAttempt(input: ReviewRunInput): ReviewAttemptHandle {
       reject(new Error('the review timed out after the configured review timeout'))
     }, input.timeoutMs)
   })
-  const result = executeAttempt(input, prepared.record, prepared.prompt, controller, stopped)
+  const result = executeAttempt(
+    input,
+    prepared.record,
+    prepared.prompt,
+    prepared.priorIds,
+    controller,
+    stopped,
+  )
     .finally(() => {
       if (timer !== undefined) clearTimeout(timer)
       input.signal?.removeEventListener('abort', forwardAbort)
@@ -1481,7 +1904,12 @@ export async function publishReviewOutcome(
   if (result.kind === 'failure') {
     return writeErrorRecord(input, record, result.error, result.failureClass, now)
   }
-  const published: ReviewRecord = { ...record, verdict: result.verdict, findings: result.findings }
+  const published: ReviewRecord = {
+    ...record,
+    verdict: result.verdict,
+    findings: result.findings,
+    ...(result.previous === undefined ? {} : { previous: result.previous }),
+  }
   if (published.scope === 'task' && published.verdict === 'PASS') {
     // The committed approval is written first; a failed publish publishes no PASS.
     const writePortable =
@@ -1545,6 +1973,6 @@ export async function publishReviewOutcome(
  * retried attempt publishes nothing.
  */
 export async function runReviewStep(input: ReviewRunInput): Promise<ReviewRunResult> {
-  const attempt = beginReviewAttempt(input)
+  const attempt = await beginReviewAttempt(input)
   return publishReviewOutcome(input, await attempt.result, attempt.now)
 }

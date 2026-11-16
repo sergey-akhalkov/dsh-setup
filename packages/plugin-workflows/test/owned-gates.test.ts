@@ -9,11 +9,15 @@ import {
   evaluateOwnedProgressGate,
   goalCompletionRefusal,
   pruneLaneDecisions,
+  type ReviewUnit,
+  reviewUnits,
+  reviewUnitText,
   taskReviewEvidence,
 } from '../src/host/engine-gates.ts'
 import { type GitRunner, legacyWorktreeDigest, worktreeDigest } from '../src/host/git.ts'
 import { notePathFor, readProgressNote, writeProgressNote } from '../src/host/notes.ts'
-import { taskIdOf } from '../src/host/tasks.ts'
+import { taskReviewCompletion } from '../src/host/parity.ts'
+import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
 
 /**
  * The engine-owned gate evidence surface: the note action writes the persisted
@@ -852,5 +856,171 @@ describe('mixed ownership', () => {
     const stale = await gate()
     expect(stale.decision).toBe('refuse')
     expect(stale.lanes?.map((lane) => lane.n)).toEqual([2])
+  })
+})
+
+/** A section whose checked tasks can be partly approved, plus an off-section lane. */
+const SECTIONED_PLAN = `# Tasks
+
+## 1. Engine (lane 1, owns \`packages/engine/**\`)
+
+- [x] 1.1 Engine task
+- [x] 1.2 Engine follow-up
+- [x] 1.3 Engine cleanup
+- [ ] 1.4 Pending engine task
+
+## 2. Docs (lane 2, owns \`docs/**\`)
+
+- [x] 2.1 Doc task
+`
+
+/** The same plan with every task checked, for the completion steer. */
+const DONE_PLAN = `# Tasks
+
+## 1. Engine (lane 1, owns \`packages/engine/**\`)
+
+- [x] 1.1 Engine task
+- [x] 1.2 Engine follow-up
+
+## 2. Docs (lane 2, owns \`docs/**\`)
+
+- [x] 2.1 Doc task
+`
+
+/** The first selected unit; selection produced none when this throws. */
+async function firstUnit(root: string): Promise<ReviewUnit> {
+  const unit = (await reviewUnits(root, 'change-a', 'workflows'))?.[0]
+  if (unit === undefined) throw new Error('no review unit was selected')
+  return unit
+}
+
+describe('the section-first review units', () => {
+  it('selects one section unit covering every checked task for two missing records', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    await writeTaskPass(root, taskIdOf('Doc task'))
+    const units = await reviewUnits(root, 'change-a', 'workflows')
+    expect(units).toHaveLength(1)
+    expect(units?.[0]?.section).toEqual({
+      key: '1',
+      title: '1. Engine (lane 1, owns `packages/engine/**`)',
+    })
+    expect(units?.[0]?.covered.map((task) => task.number)).toEqual(['1.1', '1.2', '1.3'])
+    expect(units?.[0]?.missing.map((task) => task.number)).toEqual(['1.1', '1.2', '1.3'])
+  })
+
+  it('keeps the per-task unit for a single missing task', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    await writeTaskPass(root, taskIdOf('Engine task'))
+    await writeTaskPass(root, taskIdOf('Engine follow-up'))
+    await writeTaskPass(root, taskIdOf('Doc task'))
+    const units = await reviewUnits(root, 'change-a', 'workflows')
+    expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([['1.3']])
+    expect(units?.[0]?.section).toBeUndefined()
+  })
+
+  it('selects nothing when every checked task has a matching record', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    for (const text of ['Engine task', 'Engine follow-up', 'Engine cleanup', 'Doc task']) {
+      await writeTaskPass(root, taskIdOf(text))
+    }
+    expect(await reviewUnits(root, 'change-a', 'workflows')).toEqual([])
+  })
+
+  it('keeps the per-task unit for a task outside any section', async () => {
+    const root = await workspace(
+      '# Tasks\n\n- [x] 0.1 Unsectioned task\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n',
+    )
+    const units = await reviewUnits(root, 'change-a', 'workflows')
+    expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([
+      ['1.1'],
+      ['0.1'],
+    ])
+    expect(units?.every((unit) => unit.section === undefined)).toBe(true)
+  })
+
+  it('covers an approved task when a section mixes approvals and missing records', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    await writeTaskPass(root, taskIdOf('Engine follow-up'))
+    await writeTaskPass(root, taskIdOf('Doc task'))
+    const units = await reviewUnits(root, 'change-a', 'workflows')
+    expect(units).toHaveLength(1)
+    expect(units?.[0]?.covered.map((task) => task.number)).toEqual(['1.1', '1.2', '1.3'])
+    expect(units?.[0]?.missing.map((task) => task.number)).toEqual(['1.1', '1.3'])
+  })
+})
+
+describe('the review unit steer', () => {
+  it('names the section key, its missing tasks, and the section start action', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    const text = reviewUnitText('change-a', await firstUnit(root))
+    expect(text).toContain('section "1" (1. Engine')
+    expect(text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2, 1.3')
+    expect(text).toContain('delegate(rule: "task-review", change: "change-a", section: "1")')
+  })
+
+  it('points the status line at a pending section run instead of a new start', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    const unit = await firstUnit(root)
+    const text = reviewUnitText('change-a', unit, {
+      openRuns: [
+        {
+          id: 'run-1',
+          change: 'change-a',
+          context: {
+            name: 'change-a',
+            taskId: sectionRecordId('1'),
+            section: '1',
+            sectionTitle: '1. Engine (lane 1, owns `packages/engine/**`)',
+            taskIds: unit.covered.map((task) => task.id),
+          },
+        },
+      ],
+    })
+    expect(text).toContain('the open review run "run-1" covers it')
+    expect(text).not.toContain('delegate(')
+  })
+
+  it('keeps the per-task form for a single missing task', async () => {
+    const root = await workspace('# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n')
+    const unit = await firstUnit(root)
+    expect(unit.section).toBeUndefined()
+    const text = reviewUnitText('change-a', unit)
+    expect(text).toContain('task "1.1 Engine task"')
+    expect(text).toContain(
+      `delegate(rule: "task-review", change: "change-a", task: "${taskIdOf('Engine task')}")`,
+    )
+  })
+
+  it('points a per-task unit at a pending section run that covers it', async () => {
+    const root = await workspace('# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n')
+    const unit = await firstUnit(root)
+    const text = reviewUnitText('change-a', unit, {
+      openRuns: [
+        {
+          id: 'run-2',
+          change: 'change-a',
+          context: {
+            name: 'change-a',
+            taskId: sectionRecordId('1'),
+            section: '1',
+            taskIds: [taskIdOf('Engine task')],
+          },
+        },
+      ],
+    })
+    expect(text).toContain('the open review run "run-2" covers it')
+    expect(text).not.toContain('delegate(')
+  })
+
+  it('carries the section unit into the completion steer', async () => {
+    const root = await workspace(DONE_PLAN)
+    await writeTaskPass(root, taskIdOf('Doc task'))
+    const completion = taskReviewCompletion(root, 'change-a')
+    expect(completion?.ok).toBe(false)
+    expect(completion?.text).toContain('section "1" (1. Engine')
+    expect(completion?.text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2')
+    expect(completion?.text).toContain(
+      'delegate(rule: "task-review", change: "change-a", section: "1")',
+    )
   })
 })

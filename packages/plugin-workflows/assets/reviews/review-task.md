@@ -19,6 +19,29 @@ Do not review later tasks, unchecked tasks, unrelated files, style, or wording. 
 review, check each listed checked task and name its number (or text) in every finding; never
 review an unchecked task as if it were done.
 
+## Focused re-review
+
+When the prompt carries `## Previous findings` and `## Changes since the last review`, this is a
+focused re-review of a unit that already has a `FINDINGS` record at a different digest. Confirm
+every prior finding and review only the change since the prior reviewed tree:
+
+- The `## Previous findings` inventory is complete: every prior finding is listed by its stable
+  id (`f1`..`fN`) with its severity, title, evidence, and fix. No finding is omitted or
+  summarized. Confirm each id as `closed` or `open` in the `previous` list.
+- Review the changed-path list and the diff from the prior reviewed tree. Report as new only a
+  P0/P1 introduced by the change since that tree. A pre-existing problem outside the diff is not
+  a new finding; do not re-report it.
+- An `open` prior finding is repeated by exactly one finding whose `previousId` names its id,
+  with updated evidence and fix. A `closed` prior id must not be named by a finding.
+- The diff is bounded. When the prompt says the patch is truncated, read the full change in the
+  current snapshot checkout the prompt names. Only the diff is bounded; the prior-finding
+  inventory is not.
+- When the prompt says the diff is unavailable, confirm the prior findings from the current
+  reviewed state, and report as new only a P0/P1 introduced since the prior review.
+
+A review without those sections is a full review; a `previous` list is required and parsed only
+when the task lists prior findings.
+
 ## Blocking rubric (P0/P1)
 
 - **P0** — the task's claim is false or the change is broken: it does not do what the task
@@ -43,7 +66,8 @@ missing or unknown value is stored as `other` and never rejects the verdict.
 
 ## Output
 
-Return exactly one fenced ```json block and no other fenced block:
+Return exactly one fenced ```json block and no other fenced block. A full review lists only
+`digest`, `verdict`, and `findings`:
 
 ```json
 {
@@ -72,5 +96,45 @@ blocking finding:
 }
 ```
 
+On a focused re-review, add `previous` with exactly one entry per prior id listed in the prompt.
+`PASS` requires every entry `closed` and no new finding:
+
+```json
+{
+  "digest": "<the digest given in the task>",
+  "verdict": "PASS",
+  "previous": [
+    { "id": "f1", "status": "closed" },
+    { "id": "f2", "status": "closed" }
+  ],
+  "findings": []
+}
+```
+
+`FINDINGS` repeats each `open` prior id in exactly one finding that carries `previousId` with that
+id; a finding with no `previousId` is a new finding from the diff:
+
+```json
+{
+  "digest": "<the digest given in the task>",
+  "verdict": "FINDINGS",
+  "previous": [
+    { "id": "f1", "status": "open" },
+    { "id": "f2", "status": "closed" }
+  ],
+  "findings": [
+    {
+      "severity": "P1",
+      "class": "missing-test",
+      "title": "Short failure title",
+      "evidence": "file:line and the concrete failure",
+      "fix": "the smallest change that resolves it",
+      "previousId": "f1"
+    }
+  ]
+}
+```
+
+Missing, duplicate, or unknown confirmation ids are invalid output and reject the whole verdict.
 `severity` is `P0` or `P1`; `class` is one of the listed vocabulary; all text fields are
 non-empty. Only the one block is parsed.

@@ -3,6 +3,8 @@ import { type ToolCallObservation } from './evidence.js';
 import { type LaneParityLane } from './gates.js';
 import { type GitRunner } from './git.js';
 import { type NoteOwner } from './notes.js';
+import { type ReviewUnit, reviewUnitText } from './parity.js';
+export { type ReviewUnit, reviewUnitText };
 /**
  * The engine-owned gates: work progress, lane assignment, and goal completion.
  * Their decisions are the parity tables (`evaluateProgressParity`,
@@ -50,6 +52,14 @@ export declare function newlyCheckedTaskIds(calls: readonly ToolCallObservation[
  * failed internally never approves.
  */
 export declare function taskReviewEvidence(workspace: string, change: string, taskId: string, owner: ReviewOwner): Promise<boolean>;
+/**
+ * The section-first review units of one change: checked tasks without a matching
+ * PASS/ERROR record in one level-2 section are one unit covering every checked
+ * task of that section when two or more are missing; a single missing task, a
+ * task outside any section, and a section that cannot resolve keep the per-task
+ * unit. Undefined when the plan is unreadable.
+ */
+export declare function reviewUnits(workspace: string, change: string, owner: ReviewOwner): Promise<ReviewUnit[] | undefined>;
 export interface ProgressGateInput extends GateEvidence {
     readonly codeChanged: boolean;
     readonly noteOwner: NoteOwner;

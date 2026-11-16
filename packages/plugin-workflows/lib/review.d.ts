@@ -1,6 +1,7 @@
 import { type Definition, type Evidence, type RecordEvidence, type Step } from './definitions.js';
 import { type EvidenceContext } from './evidence.js';
 import type { SubagentRunner } from './executors.js';
+import { type GitRunner } from './git.js';
 import { type FailureClass } from './review-queue.js';
 import { type WorkflowRun } from './runs.js';
 /**
@@ -42,6 +43,11 @@ export interface ReviewFinding {
     readonly title: string;
     readonly evidence: string;
     readonly fix: string;
+}
+/** A focused re-review confirms every prior finding by its stable per-record id. */
+export interface ReviewConfirmation {
+    readonly id: string;
+    readonly status: 'closed' | 'open';
 }
 export type ReviewVerdict = 'PASS' | 'FINDINGS' | 'ERROR';
 /** Where a reviewer comes from: a profile target id, never a provider. */
@@ -134,6 +140,10 @@ export interface ReviewRecord {
     readonly taskIds?: readonly string[];
     readonly digest: string;
     readonly worktreeDigest?: string;
+    /** The snapshot tree the verdict was rendered from; a focused re-review diffs from it. */
+    readonly reviewedTree?: string;
+    /** The focused re-review confirmations; local only, never in the committed approval. */
+    readonly previous?: readonly ReviewConfirmation[];
     readonly verdict: ReviewVerdict;
     readonly findings: readonly ReviewFinding[];
     readonly target: Readonly<{
@@ -154,15 +164,46 @@ export type ParsedVerdict = {
     readonly ok: true;
     readonly verdict: 'PASS' | 'FINDINGS';
     readonly findings: ReviewFinding[];
+    readonly previous?: readonly ReviewConfirmation[];
 } | {
     readonly ok: false;
     readonly error: string;
 };
-/** Accept exactly one fenced JSON verdict that echoes the requested digest. */
-export declare function parseReviewVerdict(text: string, expectedDigest: string): ParsedVerdict;
+/**
+ * Accept exactly one fenced JSON verdict that echoes the requested digest. With
+ * prior ids the verdict is a focused re-review: it confirms every prior finding
+ * by id, and an open prior id is repeated by exactly one finding.
+ */
+export declare function parseReviewVerdict(text: string, expectedDigest: string, priorIds?: readonly string[]): ParsedVerdict;
 /** The shipped bundled review instructions live beside the definitions. */
 export declare function reviewAssetsDirectory(): string;
 export declare function readReviewInstruction(id: string): string;
+/** One prior finding keyed by its stable per-record id (`f1`..`fn`). */
+export interface FocusedFinding {
+    readonly id: string;
+    readonly finding: ReviewFinding;
+}
+/** The bounded change set between the prior reviewed tree and the current one. */
+export interface ReviewChangeSet {
+    readonly fromTree: string;
+    readonly toTree: string;
+    /** The changed-path list, bounded to the first entries. */
+    readonly paths: readonly string[];
+    readonly pathsTruncated: boolean;
+    readonly patch: string;
+    readonly patchTruncated: boolean;
+    /** The current snapshot checkout, named when the patch is truncated. */
+    readonly reviewCwd?: string;
+}
+/** The focused re-review context rendered after the review's sections. */
+export interface FocusedReviewContext {
+    /** The complete prior-finding inventory, in the prior record's order. */
+    readonly previous: readonly FocusedFinding[];
+    /** The bounded diff; absent means it could not be built. */
+    readonly changes?: ReviewChangeSet;
+    /** Why the diff is unavailable, named in the prompt. */
+    readonly diffUnavailable?: string;
+}
 export interface ReviewPromptInput {
     readonly instruction: string;
     readonly rule: string;
@@ -181,6 +222,8 @@ export interface ReviewPromptInput {
     /** Caller-supplied facts carried by the delegate alias into this review. */
     readonly context?: string;
     readonly objective?: string;
+    /** The prior findings and bounded diff when this unit's last record is a moved FINDINGS. */
+    readonly focused?: FocusedReviewContext;
 }
 /** Render the bundled instruction with the review's digest-bound context. */
 export declare function renderReviewPrompt(input: ReviewPromptInput): string;
@@ -242,6 +285,8 @@ export interface ReviewRunInput {
     readonly session: string;
     readonly now?: number;
     readonly signal?: AbortSignal;
+    /** The git runner the focused diff uses; production spawns the bounded runner. */
+    readonly runGit?: GitRunner;
     /** Captured before the first start; a retry preserves it across attempts. */
     readonly baseline?: ReviewRecordBaseline;
     /** True once the run settled completed-soft; a late verdict is discarded. */
@@ -316,6 +361,8 @@ export type ReviewAttemptResult = {
     readonly kind: 'verdict';
     readonly verdict: 'PASS' | 'FINDINGS';
     readonly findings: readonly ReviewFinding[];
+    /** The focused re-review confirmations; present only with prior ids. */
+    readonly previous?: readonly ReviewConfirmation[];
 } | {
     readonly kind: 'failure';
     readonly error: string;
@@ -336,12 +383,12 @@ export interface ReviewAttemptHandle {
     readonly now: number;
 }
 /**
- * Start one review attempt and return only after the target actually started.
+ * Prepare one review attempt and return only after the target actually started.
  * The result continues in the background; the queue's start hook awaits
  * `started`, so an activation failure is classified and retried before the
  * acceptance deadline is cleared. No record is written here.
  */
-export declare function beginReviewAttempt(input: ReviewRunInput): ReviewAttemptHandle;
+export declare function beginReviewAttempt(input: ReviewRunInput): Promise<ReviewAttemptHandle>;
 /**
  * Publish one settled attempt: write the ERROR record or the verdict record
  * (and the committed approval first for a task PASS), then settle the step from

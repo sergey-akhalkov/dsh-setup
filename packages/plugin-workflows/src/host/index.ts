@@ -44,6 +44,8 @@ import {
   goalCompletionRefusal,
   type LaneDecision,
   pruneLaneDecisions,
+  reviewUnits,
+  reviewUnitText,
   taskReviewEvidence,
   taskTicksOf,
   workerLaneTag,
@@ -1558,6 +1560,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         changedName !== undefined && /(?:^|\/)tasks\.md$/u.test(event.subject)
           ? checkedTaskDelta(workspace, input.session, changedName, event.subject)
           : []
+      // Section-first selection over every checked task of the change: a section
+      // with two or more missing records is one unit covering its checked tasks.
+      const taskReviewUnits =
+        taskReviewTaskIds.length > 0 && changedName !== undefined
+          ? await reviewUnits(workspace, changedName, 'workflows')
+          : undefined
       const definitionRows: Array<{
         id: string
         matched: boolean
@@ -1684,7 +1692,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
                 if (definition.id === 'task-review') {
                   // The watcher coalesces writes, so every newly checked task
-                  // gets its own observational run.
+                  // reaches one unit start; a section with two or more missing
+                  // records is one unit instead of one run per task.
                   if (taskReviewTaskIds.length === 0) {
                     return { ok: false, reason: 'no newly checked task in this tasks.md change' }
                   }
@@ -1693,35 +1702,99 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   }
                   let first: StartRunOutcome | undefined
                   let suppressed: StartRunOutcome | undefined
+                  // A live run for the same change still owns its obligation; a
+                  // dead-session run must not block the new one.
+                  const liveRuns = knownRuns.filter(
+                    (run) =>
+                      run.definition.id === 'task-review' &&
+                      run.context.name === capture &&
+                      isOpenRun(run) &&
+                      services.agents.get(run.session) !== undefined,
+                  )
+                  const attempted = new Set<string>()
+                  const start = (context: Readonly<Record<string, unknown>>): void => {
+                    const outcome = startDefinitionRun(
+                      workspace,
+                      definition,
+                      matched,
+                      limited(),
+                      context,
+                    )
+                    if (outcome.ok) {
+                      startedThisEvent += 1
+                      first ??= outcome
+                    } else {
+                      suppressed ??= outcome
+                    }
+                  }
                   // Task identity hashes only the text, so two checked tasks with
                   // the same text share an id and must not start two runs.
-                  for (const taskId of new Set(taskReviewTaskIds)) {
-                    // A live run for the same change and task already owns the
-                    // obligation; a dead-session run must not block the new one.
-                    const duplicate = knownRuns.find(
+                  const startTask = (taskId: string): void => {
+                    if (attempted.has(taskId)) return
+                    attempted.add(taskId)
+                    const duplicate = liveRuns.find(
                       (run) =>
-                        run.definition.id === 'task-review' &&
-                        run.context.name === capture &&
-                        run.context.taskId === taskId &&
-                        isOpenRun(run) &&
-                        services.agents.get(run.session) !== undefined,
+                        run.context.taskId === taskId ||
+                        (Array.isArray(run.context.taskIds) &&
+                          run.context.taskIds.includes(taskId)),
                     )
                     if (duplicate !== undefined) {
                       suppressed ??= {
                         ok: false,
                         reason: `a live run "${duplicate.id}" already covers task "${taskId}"`,
                       }
-                      continue
+                      return
                     }
-                    const outcome = startDefinitionRun(workspace, definition, matched, limited(), {
-                      name: capture,
-                      taskId,
-                    })
-                    if (outcome.ok) {
-                      startedThisEvent += 1
-                      first ??= outcome
-                    } else {
-                      suppressed ??= outcome
+                    start({ name: capture, taskId })
+                  }
+                  if (taskReviewUnits === undefined) {
+                    // An unreadable plan keeps the per-task start.
+                    for (const taskId of new Set(taskReviewTaskIds)) startTask(taskId)
+                  } else {
+                    for (const unit of taskReviewUnits) {
+                      // A unit starts only when one of its missing tasks is new.
+                      if (!unit.missing.some((task) => taskReviewTaskIds.includes(task.id))) {
+                        continue
+                      }
+                      const section = unit.section
+                      if (section === undefined) {
+                        for (const task of unit.missing) startTask(task.id)
+                        continue
+                      }
+                      const recordId = sectionRecordId(section.key)
+                      if (attempted.has(recordId)) continue
+                      attempted.add(recordId)
+                      const view: TaskSection = {
+                        key: section.key,
+                        title: section.title,
+                        tasks: unit.covered,
+                        covered: unit.covered,
+                        unchecked: [],
+                      }
+                      const duplicate = liveRuns.find((run) =>
+                        sameSectionCoverage(run.context, view, recordId),
+                      )
+                      if (duplicate !== undefined) {
+                        suppressed ??= {
+                          ok: false,
+                          reason: `a live run "${duplicate.id}" already covers section "${section.key}"`,
+                        }
+                        continue
+                      }
+                      const context = {
+                        name: capture,
+                        taskId: recordId,
+                        section: section.key,
+                        sectionTitle: section.title,
+                        taskIds: unit.covered.map((task) => task.id),
+                      }
+                      // The section identity is a required run key, not prompt
+                      // payload: over the limit the unit falls back per task.
+                      if (Buffer.byteLength(JSON.stringify(context), 'utf8') > MAX_CONTEXT_BYTES) {
+                        for (const task of unit.missing) startTask(task.id)
+                        continue
+                      }
+                      start(context)
                     }
                   }
                   return (
@@ -5127,11 +5200,35 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const definitions = await definitionsFor(call.workspace)
     const runs = auth === undefined ? [] : await listAuthenticatedRuns(call.workspace, auth)
     const receipts = auth === undefined ? [] : await listReceipts(call.workspace, auth)
+    // The review units still missing a record, pointing at the open run that
+    // already covers one instead of a new start.
+    const openRuns = runs
+      .filter(
+        (run) =>
+          run.definition.id === 'task-review' &&
+          isOpenRun(run) &&
+          typeof run.context.name === 'string',
+      )
+      .map((run) => ({ id: run.id, change: String(run.context.name), context: run.context }))
+    const reviewOwner = state.enabled.has('delegation-rules/task-review') ? 'legacy' : 'workflows'
+    const changes = [
+      ...new Set([
+        ...(await activeChangeNames(call.workspace)),
+        ...openRuns.map((run) => run.change),
+      ]),
+    ].sort()
+    const units: string[] = []
+    for (const name of changes) {
+      for (const unit of (await reviewUnits(call.workspace, name, reviewOwner)) ?? []) {
+        units.push(reviewUnitText(name, unit, { openRuns }))
+      }
+    }
     return [
       'Workflows status',
       `review: ${owner('delegation-rules', 'task-review')} (task-review), ${owner('delegation-rules', 'spec-review')} (spec-review), ${owner('delegation-rules', 'integration-review')} (integration-review)`,
       `gates: ${owner('delegation-rules', 'task-progress')} (work progress), ${owner('delegation-rules', 'lane-assignment')} (lane assignment)`,
       `definitions: ${String(definitions.length)}; open runs: ${String(openRunCount(runs))}; receipts: ${String(receipts.length)}`,
+      ...(units.length === 0 ? [] : [`review units: ${units.join('; ')}`]),
     ].join('\n')
   }
   try {

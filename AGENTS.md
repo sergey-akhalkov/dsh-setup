@@ -86,12 +86,16 @@ tasks) -> **sync** deltas into main specs -> **archive**. Use the packaged OpenS
 available, otherwise follow the same flow manually. A behavior change that touches a documented
 requirement updates its delta spec and design rationale in the same change.
 
-When delegation-rules is active, apply is task-by-task: mark a task `[x]` only when complete and
-start its task-scoped review immediately. Keep implementing an independent task while the run uses a
-frozen snapshot. When the run reports the live worktree, a write can discard its verdict: restore
-snapshot support and re-run, or defer writes until the run settles. No blocking sleep. Stop mid-task
-with `task_progress` instead of ticking. The gate refuses a code-changing turn without the record;
-see [docs/delegation-rules.md](docs/delegation-rules.md).
+When task review is owned, a related group is one unit: a `tasks.md` level-2 section with two or
+more checked tasks lacking a `PASS`/`ERROR` record is one section run covering every checked task;
+the gate names the review unit. A lone or risky task keeps its per-task review: mark it `[x]` only
+when complete and start its task-scoped review immediately. Keep implementing an
+independent task while the run uses a frozen snapshot. A `FINDINGS` re-review confirms each prior
+finding (`closed`/`open`) against a bounded diff from the prior tree. When the run reports the
+live worktree, a write can discard its verdict: restore snapshot support and re-run, or defer writes
+until the run settles. No blocking sleep. Stop mid-task with `task_progress` instead of ticking. The
+gate refuses a code-changing turn without the record; see
+[docs/delegation-rules.md](docs/delegation-rules.md).
 
 **Workflow-owned gates (`retire-legacy-gates`).** The `workflows` definitions own the checkpoint
 (`retro`), task-review, and verification closes; `checkpoint.automation: false` and

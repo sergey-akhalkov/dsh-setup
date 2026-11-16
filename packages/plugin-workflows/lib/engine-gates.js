@@ -5,9 +5,10 @@ import { lastCodeWriteAt } from './evidence.js';
 import { evaluateLaneParity, evaluateProgressParity } from './gates.js';
 import { defaultGit, legacyWorktreeDigest, worktreeDigest } from './git.js';
 import { notePathFor, readProgressNote } from './notes.js';
-import { reviewerBinding, taskReviewCoverage } from './parity.js';
-import { checkedTaskIds, numberedTasks, taskLanes } from './tasks.js';
+import { reviewerBinding, reviewUnitText, taskReviewCoverage } from './parity.js';
+import { checkedTaskIds, numberedTasks, resolveTaskSection, taskLanes, } from './tasks.js';
 import { normalizedWorkspacePath } from './write-attribution.js';
+export { reviewUnitText };
 const WORKER_LANE_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
 const LANE_TAG = /(?<![A-Za-z0-9_-])lane-tag:\s*([a-z0-9][a-z0-9-]*)#([1-9][0-9]*)(?![0-9A-Za-z_])/gu;
 /** The plan markdown of one change, or undefined when it is unreadable. */
@@ -126,6 +127,58 @@ export async function taskReviewEvidence(workspace, change, taskId, owner) {
     if (binding?.model !== undefined && value.target.model !== binding.model)
         return false;
     return true;
+}
+/**
+ * The section-first review units of one change: checked tasks without a matching
+ * PASS/ERROR record in one level-2 section are one unit covering every checked
+ * task of that section when two or more are missing; a single missing task, a
+ * task outside any section, and a section that cannot resolve keep the per-task
+ * unit. Undefined when the plan is unreadable.
+ */
+export async function reviewUnits(workspace, change, owner) {
+    const plan = await readPlan(workspace, change);
+    if (plan === undefined)
+        return undefined;
+    const checked = numberedTasks(plan).filter((task) => task.checked);
+    const missing = new Set();
+    for (const task of checked) {
+        if (!(await taskReviewEvidence(workspace, change, task.id, owner)))
+            missing.add(task.id);
+    }
+    const units = [];
+    const sectioned = new Set();
+    for (const lane of taskLanes(plan)) {
+        if (lane.checked.length === 0)
+            continue;
+        let section;
+        try {
+            section = resolveTaskSection(plan, lane.title, change);
+        }
+        catch {
+            // A section that cannot resolve keeps its tasks on the per-task unit.
+            continue;
+        }
+        for (const task of section.covered)
+            sectioned.add(task.id);
+        const absent = section.covered.filter((task) => missing.has(task.id));
+        if (absent.length === 0)
+            continue;
+        if (absent.length === 1) {
+            units.push({ covered: absent, missing: absent });
+            continue;
+        }
+        units.push({
+            section: { key: section.key, title: section.title },
+            covered: section.covered,
+            missing: absent,
+        });
+    }
+    for (const task of checked) {
+        if (!missing.has(task.id) || sectioned.has(task.id))
+            continue;
+        units.push({ covered: [task], missing: [task] });
+    }
+    return units;
 }
 /**
  * The owned work-progress gate: a code-changing turn needs a newly checked and

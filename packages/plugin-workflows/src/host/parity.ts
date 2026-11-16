@@ -9,6 +9,13 @@ import {
   resolveOwnership,
   SWITCH_BY_SIGNAL,
 } from './definitions.js'
+import {
+  type NumberedTaskLine,
+  resolveTaskSection,
+  sectionRecordId,
+  type TaskSection,
+  taskLanes,
+} from './tasks.js'
 
 /**
  * The release-bound retirement parity: the tracked report, its template
@@ -743,16 +750,89 @@ export function reviewerBinding(workspace: string): ReviewApprovalBinding | unde
   }
 }
 
+/** One review unit: a level-2 section covering every checked task in it, or a single task. */
+export interface ReviewUnit {
+  /** The section key and title of a section unit; absent for a per-task unit. */
+  readonly section?: { readonly key: string; readonly title: string }
+  /** Every checked task the unit covers, in file order. */
+  readonly covered: readonly NumberedTaskLine[]
+  /** The covered checked tasks without a matching PASS/ERROR record, in file order. */
+  readonly missing: readonly NumberedTaskLine[]
+}
+
+/** One open task-review run the review-unit text may point at. */
+export interface ReviewUnitRun {
+  readonly id: string
+  readonly change: string
+  readonly context: Readonly<Record<string, unknown>>
+}
+
+export interface ReviewUnitTextOptions {
+  /** The rule the start action names; default the shipped `task-review`. */
+  readonly rule?: string
+  /** Open task-review runs; a run covering the unit is pointed at instead of a start. */
+  readonly openRuns?: readonly ReviewUnitRun[]
+}
+
+/** Whether one open run's recorded identity covers every missing task of the unit. */
+function runCoversUnit(run: ReviewUnitRun, unit: ReviewUnit): boolean {
+  const context = run.context
+  const covered = Array.isArray(context.taskIds)
+    ? context.taskIds.filter((entry): entry is string => typeof entry === 'string')
+    : []
+  if (unit.section !== undefined) {
+    return (
+      context.section === unit.section.key &&
+      context.sectionTitle === unit.section.title &&
+      context.taskId === sectionRecordId(unit.section.key) &&
+      covered.length === unit.covered.length &&
+      unit.covered.every((task) => covered.includes(task.id))
+    )
+  }
+  return unit.missing.every((task) => context.taskId === task.id || covered.includes(task.id))
+}
+
+/**
+ * The one-line review unit: the section key and the missing task numbers (or the
+ * single task) and the start action that covers them — or the open run that
+ * already does. Shared by the turn-close steer and the status summary.
+ */
+export function reviewUnitText(
+  change: string,
+  unit: ReviewUnit,
+  options: ReviewUnitTextOptions = {},
+): string {
+  const rule = options.rule ?? 'task-review'
+  const numbers = (tasks: readonly NumberedTaskLine[]): string =>
+    tasks.map((task) => task.number).join(', ')
+  const pending = (options.openRuns ?? []).find(
+    (run) => run.change === change && runCoversUnit(run, unit),
+  )
+  const action = (selector: string): string =>
+    pending === undefined
+      ? `; start it with delegate(rule: "${rule}", change: "${change}", ${selector})`
+      : `; the open review run "${pending.id}" covers it, so continue that run instead of a new start`
+  const section = unit.section
+  if (section === undefined) {
+    const task = unit.missing[0]
+    if (task === undefined) return `change "${change}" has no outstanding review unit`
+    return `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS/ERROR record${action(`task: "${task.id}"`)}`
+  }
+  return `section "${section.key}" (${section.title}) is one review unit covering checked tasks ${numbers(unit.covered)}; missing a ${rule} PASS/ERROR record: ${numbers(unit.missing)}${action(`section: "${section.key}"`)}`
+}
+
 export interface TaskReviewCoverage {
   readonly ok: boolean
-  /** One line per checked task without a valid portable PASS. */
+  /** One line per missing review unit. */
   readonly gaps: readonly string[]
 }
 
 /**
  * The portable completion/archive coverage: every checked task needs a portable
  * PASS for the given task-scoped rule (default the shipped `task-review`) and
- * the marker's reviewer when one is declared.
+ * the marker's reviewer when one is declared. A section with two or more checked
+ * tasks without a portable PASS is one section gap; a single missing task keeps
+ * its own line.
  */
 export function taskReviewCoverage(
   workspace: string,
@@ -788,7 +868,7 @@ export function taskReviewCoverage(
       )
     }
   }
-  for (const task of checkedTaskLines(markdown)) {
+  const taskGap = (task: TaskLine): string | undefined => {
     const record = readPortableApproval(workspace, change, task.id)
     const mismatch: string[] = []
     if (record === undefined) mismatch.push('no portable PASS record')
@@ -805,11 +885,40 @@ export function taskReviewCoverage(
         mismatch.push(`target model "${String(target.model)}"`)
       }
     }
-    if (mismatch.length > 0) {
-      gaps.push(
-        `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`,
-      )
+    return mismatch.length === 0
+      ? undefined
+      : `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`
+  }
+  const taskGaps = checkedTaskLines(markdown).map((task) => ({ task, gap: taskGap(task) }))
+  const missing = new Set(taskGaps.filter((entry) => entry.gap !== undefined).map((e) => e.task.id))
+  const grouped = new Set<string>()
+  for (const lane of taskLanes(markdown)) {
+    if (lane.checked.length === 0) continue
+    let section: TaskSection
+    try {
+      section = resolveTaskSection(markdown, lane.title, change)
+    } catch {
+      // A section that cannot resolve keeps the per-task lines below.
+      continue
     }
+    const absent = section.covered.filter((task) => missing.has(task.id))
+    if (absent.length < 2) continue
+    gaps.push(
+      reviewUnitText(
+        change,
+        {
+          section: { key: section.key, title: section.title },
+          covered: section.covered,
+          missing: absent,
+        },
+        { rule },
+      ),
+    )
+    for (const task of absent) grouped.add(task.id)
+  }
+  for (const entry of taskGaps) {
+    if (entry.gap === undefined || grouped.has(entry.task.id)) continue
+    gaps.push(entry.gap)
   }
   return { ok: gaps.length === 0, gaps }
 }

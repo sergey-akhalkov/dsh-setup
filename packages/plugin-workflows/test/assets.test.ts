@@ -11,15 +11,26 @@ const LEGACY = join(ROOT, 'packages/plugin-delegation-rules/assets/delegation-ru
 const IDS = ['review-spec', 'review-task', 'review-integration']
 
 describe('bundled review instructions', () => {
-  it('ships the three ids byte-identically to the legacy copies', () => {
+  it('ships the three ids with the P0/P1 rubric', () => {
     for (const id of IDS) {
-      const shipped = readFileSync(join(SHIPPED, `${id}.md`))
-      const legacy = readFileSync(join(LEGACY, `${id}.md`))
-      expect(shipped.equals(legacy), id).toBe(true)
-      const text = shipped.toString()
+      const text = readFileSync(join(SHIPPED, `${id}.md`), 'utf8')
       expect(text, id).toContain('P0')
       expect(text, id).toContain('P1')
       expect(text.toLowerCase(), id).toContain('class')
+    }
+  })
+
+  it('documents the focused re-review confirmation contract', () => {
+    const text = readFileSync(join(SHIPPED, 'review-task.md'), 'utf8')
+    for (const phrase of [
+      '## Previous findings',
+      '## Changes since the last review',
+      '"previous"',
+      '"previousId"',
+      'closed',
+      'open',
+    ]) {
+      expect(text, phrase).toContain(phrase)
     }
   })
 

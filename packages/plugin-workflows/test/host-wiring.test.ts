@@ -1524,30 +1524,6 @@ describe('task-review runtime from a tasks.md change', () => {
     await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n- [ ] 1.2 Second task\n', 'utf8')
     const { taskIdOf } = await import('../src/host/tasks.ts')
     const taskIds = [taskIdOf('Task'), taskIdOf('Second task')]
-    for (const taskId of taskIds) {
-      await writeFile(
-        join(changeDir, 'reviews', `${taskId}.json`),
-        `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
-        'utf8',
-      )
-      await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks'), {
-        recursive: true,
-      })
-      await writeFile(
-        join(
-          workspace,
-          '.dsh',
-          'workflows',
-          'records',
-          'task-review',
-          'auth',
-          'tasks',
-          `${taskId}.json`,
-        ),
-        `${JSON.stringify({ rule: 'task-review', change: 'auth', phase: 'task', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
-        'utf8',
-      )
-    }
     const host = fakeHost(workspace, { toolExecute: true })
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 200))
@@ -1581,6 +1557,32 @@ describe('task-review runtime from a tasks.md change', () => {
     const created = await taskRuns()
     expect(created.map((run) => run.context.taskId).sort()).toEqual([...taskIds].sort())
     expect(created.every((run) => run.context.name === 'auth')).toBe(true)
+    // The records appear after the units started, so each run settles its review
+    // step from the matching record instead of dispatching a reviewer.
+    for (const taskId of taskIds) {
+      await writeFile(
+        join(changeDir, 'reviews', `${taskId}.json`),
+        `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+        'utf8',
+      )
+      await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks'), {
+        recursive: true,
+      })
+      await writeFile(
+        join(
+          workspace,
+          '.dsh',
+          'workflows',
+          'records',
+          'task-review',
+          'auth',
+          'tasks',
+          `${taskId}.json`,
+        ),
+        `${JSON.stringify({ rule: 'task-review', change: 'auth', phase: 'task', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+        'utf8',
+      )
+    }
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     for (const run of created) {
       const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
@@ -1607,6 +1609,67 @@ describe('task-review runtime from a tasks.md change', () => {
     host.fireFs()
     await waitFor(async () => (await rows()).some((row) => row.reason === 'run-suppressed'))
     expect(await taskRuns()).toHaveLength(2)
+  })
+
+  it('starts one section run for two missing tasks and no per-task run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    const plan = (box: string): string =>
+      `# Tasks\n\n## 1. Engine (lane 1, owns \`src/**\`)\n\n- [${box}] 1.1 First task\n- [${box}] 1.2 Second task\n`
+    await writeFile(join(changeDir, 'tasks.md'), plan(' '), 'utf8')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const runs = await import('../src/host/runs.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const taskIds = [taskIdOf('First task'), taskIdOf('Second task')]
+    const reviewRuns = async (): Promise<Array<{ id: string; context: Record<string, unknown> }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth))
+        .filter((entry) => entry.definition.id === 'task-review')
+        .map((entry) => ({ id: entry.id, context: entry.context }))
+    await writeFile(join(changeDir, 'tasks.md'), plan('x'), 'utf8')
+    host.fireFs()
+    await waitFor(async () => (await reviewRuns()).length >= 1)
+    // Give a per-task start the chance to appear before asserting the one unit.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const created = await reviewRuns()
+    expect(created).toHaveLength(1)
+    expect(created[0]?.context).toMatchObject({
+      name: 'auth',
+      taskId: sectionRecordId('1'),
+      section: '1',
+      taskIds,
+    })
+    // The section record evidence path resolves to the section record id: with
+    // no configured reviewer the step publishes its ERROR record there.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const recordPath = join(
+      workspace,
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      'auth',
+      'tasks',
+      `${sectionRecordId('1')}.json`,
+    )
+    await waitFor(
+      async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
+    )
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
+    expect(record).toMatchObject({
+      rule: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId: sectionRecordId('1'),
+      section: '1',
+      taskIds,
+    })
+    expect(record.verdict).toBe('ERROR')
   })
 
   it('suppresses a second run for a task a live run already covers', async () => {
@@ -1874,8 +1937,9 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(runA?.status).toBe('completed')
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 A\n- [x] 1.2 B\n', 'utf8')
     host.fireFs()
-    // The cleared key and baseline start one fresh run per newly checked task.
-    await waitFor(async () => (await reviewRuns()).length === 4)
+    // The cleared key and baseline start a fresh run for the restored task;
+    // A already has a matching ERROR record, so it needs no second run.
+    await waitFor(async () => (await reviewRuns()).length === 3)
     const restored = (await reviewRuns()).filter(
       (entry) => entry.id !== runB?.id && entry.context.taskId === taskIdOf('B'),
     )

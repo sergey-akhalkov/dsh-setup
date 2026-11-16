@@ -262,7 +262,7 @@ export class ReviewScheduler {
         if (this.disposed || !this.queue.owns(entry.file.id))
             return;
         entry.started = true;
-        const attempt = beginReviewAttempt(entry.request);
+        const attempt = await beginReviewAttempt(entry.request);
         let timer;
         try {
             // The acceptance deadline is cleared only by this success, after the

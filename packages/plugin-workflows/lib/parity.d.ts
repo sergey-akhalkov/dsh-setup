@@ -1,4 +1,5 @@
 import { type Definition, type LegacySignalState } from './definitions.js';
+import { type NumberedTaskLine } from './tasks.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -104,15 +105,47 @@ export interface ReviewApprovalBinding {
 }
 /** The marker-pinned reviewer and archive-gate settings, or an error when the marker is invalid. */
 export declare function reviewerBinding(workspace: string): ReviewApprovalBinding | undefined;
+/** One review unit: a level-2 section covering every checked task in it, or a single task. */
+export interface ReviewUnit {
+    /** The section key and title of a section unit; absent for a per-task unit. */
+    readonly section?: {
+        readonly key: string;
+        readonly title: string;
+    };
+    /** Every checked task the unit covers, in file order. */
+    readonly covered: readonly NumberedTaskLine[];
+    /** The covered checked tasks without a matching PASS/ERROR record, in file order. */
+    readonly missing: readonly NumberedTaskLine[];
+}
+/** One open task-review run the review-unit text may point at. */
+export interface ReviewUnitRun {
+    readonly id: string;
+    readonly change: string;
+    readonly context: Readonly<Record<string, unknown>>;
+}
+export interface ReviewUnitTextOptions {
+    /** The rule the start action names; default the shipped `task-review`. */
+    readonly rule?: string;
+    /** Open task-review runs; a run covering the unit is pointed at instead of a start. */
+    readonly openRuns?: readonly ReviewUnitRun[];
+}
+/**
+ * The one-line review unit: the section key and the missing task numbers (or the
+ * single task) and the start action that covers them — or the open run that
+ * already does. Shared by the turn-close steer and the status summary.
+ */
+export declare function reviewUnitText(change: string, unit: ReviewUnit, options?: ReviewUnitTextOptions): string;
 export interface TaskReviewCoverage {
     readonly ok: boolean;
-    /** One line per checked task without a valid portable PASS. */
+    /** One line per missing review unit. */
     readonly gaps: readonly string[];
 }
 /**
  * The portable completion/archive coverage: every checked task needs a portable
  * PASS for the given task-scoped rule (default the shipped `task-review`) and
- * the marker's reviewer when one is declared.
+ * the marker's reviewer when one is declared. A section with two or more checked
+ * tasks without a portable PASS is one section gap; a single missing task keeps
+ * its own line.
  */
 export declare function taskReviewCoverage(workspace: string, change: string, rule?: string): TaskReviewCoverage;
 export interface CheckpointCloseRecord {

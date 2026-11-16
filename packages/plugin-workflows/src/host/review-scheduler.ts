@@ -393,7 +393,7 @@ export class ReviewScheduler {
     // while it is pending, so ownership is checked again before start.
     if (this.disposed || !this.queue.owns(entry.file.id)) return
     entry.started = true
-    const attempt = beginReviewAttempt(entry.request)
+    const attempt = await beginReviewAttempt(entry.request)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       // The acceptance deadline is cleared only by this success, after the

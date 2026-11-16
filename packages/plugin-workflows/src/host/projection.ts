@@ -415,6 +415,15 @@ function validTarget(value: unknown): boolean {
   return true
 }
 
+/** A focused re-review confirmation; optional, but shaped when present. */
+function validConfirmation(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    (value.status === 'closed' || value.status === 'open')
+  )
+}
+
 /** The producer contract for a settled local review record. */
 /** The goal-continuity checkpoint record shape every reader accepts. */
 export function checkpointRecordError(record: Record<string, unknown>): string | undefined {
@@ -506,6 +515,20 @@ export function localRecordError(record: Record<string, unknown>): string | unde
     (typeof record.worktreeDigest !== 'string' || !DIGEST.test(record.worktreeDigest))
   ) {
     return 'field "worktreeDigest" must be 64 hex characters'
+  }
+  // A focused re-review stores the reviewed tree and its confirmations locally;
+  // older records omit both and stay readable.
+  if (
+    record.reviewedTree !== undefined &&
+    (typeof record.reviewedTree !== 'string' || !/^[0-9a-f]+$/u.test(record.reviewedTree))
+  ) {
+    return 'field "reviewedTree" must be a hex tree id'
+  }
+  if (
+    record.previous !== undefined &&
+    (!Array.isArray(record.previous) || !record.previous.every(validConfirmation))
+  ) {
+    return 'field "previous" must be a list of prior-finding confirmations'
   }
   if (record.error !== undefined && typeof record.error !== 'string') {
     return 'field "error" must be a string'

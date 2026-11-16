@@ -14,12 +14,13 @@ import {
 } from '../src/host/definitions.ts'
 import { currentSpecDigest, verifyEvidence } from '../src/host/evidence.ts'
 import type { SubagentRunner, SubagentRunResult } from '../src/host/executors.ts'
-import { defaultGit, worktreeDigest } from '../src/host/git.ts'
+import { defaultGit, type GitRunner, worktreeDigest } from '../src/host/git.ts'
 import { portableRecordError } from '../src/host/projection.ts'
 import {
   localReviewRecordPath,
   parseReviewVerdict,
   portableApprovalPath,
+  type ReviewFinding,
   type ReviewRecord,
   renderReviewPrompt,
   resolveReviewer,
@@ -140,6 +141,90 @@ async function invoke(
     renderPrompt: () => 'test prompt',
     ...overrides,
   })
+}
+
+const TREE_BEFORE = 'a'.repeat(40)
+const TREE_AFTER = 'b'.repeat(40)
+
+function focusedDigest(tree: string): string {
+  return reviewDigest({ scope: 'task', specDigest: DIGEST, tree })
+}
+
+function testFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
+  return {
+    severity: 'P1',
+    class: 'missing-test',
+    title: 'No regression',
+    evidence: 'the test file does not cover it',
+    fix: 'add the test',
+    ...overrides,
+  }
+}
+
+function taskRecordPath(): string {
+  return localReviewRecordPath({
+    definition: 'task-review',
+    change: 'auth',
+    scope: 'task',
+    taskId: TASK_ID,
+  })
+}
+
+async function writePriorFindings(
+  root: string,
+  prior: { digest: string; findings: readonly ReviewFinding[]; reviewedTree?: string },
+): Promise<void> {
+  const path = join(root, taskRecordPath())
+  await mkdir(join(path, '..'), { recursive: true })
+  await writeFile(
+    path,
+    `${JSON.stringify(
+      {
+        definition: 'task-review',
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId: TASK_ID,
+        digest: prior.digest,
+        verdict: 'FINDINGS',
+        findings: prior.findings,
+        target: { provider: 'codex-subagent' },
+        reviewer: 'codex',
+        time: '2026-11-14T00:00:00.000Z',
+        ...(prior.reviewedTree === undefined ? {} : { reviewedTree: prior.reviewedTree }),
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  )
+}
+
+/** A fake git runner; the focused diff never touches the real repository in tests. */
+function fakeGit(options: { statuses?: string; patch?: string; missingTree?: boolean } = {}): {
+  calls: string[][]
+  runGit: GitRunner
+} {
+  const calls: string[][] = []
+  const runGit: GitRunner = async (args) => {
+    calls.push([...args])
+    if (args[0] === 'cat-file') {
+      if (options.missingTree === true) throw new Error('fatal: Not a valid object name')
+      return Buffer.from('')
+    }
+    if (args[0] === 'diff' && args.includes('--name-status')) {
+      return Buffer.from(options.statuses ?? 'M\tsrc/engine.ts\n')
+    }
+    if (args[0] === 'diff') {
+      return Buffer.from(
+        options.patch ??
+          'diff --git a/src/engine.ts b/src/engine.ts\n@@ -1 +1 @@\n-export const engine = 1\n+export const engine = 2\n',
+      )
+    }
+    return Buffer.from('')
+  }
+  return { calls, runGit }
 }
 
 const roots: string[] = []
@@ -485,6 +570,327 @@ describe('runReviewStep', () => {
   })
 })
 
+describe('focused re-review', () => {
+  it('renders the complete prior findings and the diff from the prior reviewed tree', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const findings = [
+      testFinding({ title: 'First failure', evidence: 'the first evidence', fix: 'the first fix' }),
+      testFinding({
+        severity: 'P0',
+        class: 'security',
+        title: 'Second failure',
+        evidence: 'the second evidence',
+        fix: 'the second fix',
+      }),
+    ]
+    await writePriorFindings(root, {
+      digest: reviewDigest({ scope: 'task', specDigest: DIGEST }),
+      findings,
+      reviewedTree: TREE_BEFORE,
+    })
+    const digest = focusedDigest(TREE_AFTER)
+    const text = fenced({
+      digest,
+      verdict: 'PASS',
+      previous: [
+        { id: 'f1', status: 'closed' },
+        { id: 'f2', status: 'closed' },
+      ],
+      findings: [],
+    })
+    let prompt = ''
+    const result = await invoke(
+      root,
+      {
+        run: async (request) => {
+          prompt = request.prompt
+          return { childId: 'child-1', completed: true, text }
+        },
+      },
+      {
+        prepared: { specDigest: DIGEST, tree: TREE_AFTER, reviewCwd: '/snapshot/run-1' },
+        runGit: fakeGit({ statuses: 'M\tsrc/engine.ts\nA\tsrc/new.ts\n' }).runGit,
+        renderPrompt: renderReviewPrompt,
+      },
+    )
+    expect(result.run.steps[0]?.state).toBe('done')
+    // The rendered inventory is after the bundled instruction and lists every
+    // prior finding in full, keyed by its stable id.
+    expect(prompt.lastIndexOf('## Previous findings')).toBeGreaterThan(
+      prompt.indexOf('## Native review'),
+    )
+    for (const line of [
+      'f1 [P1] (missing-test) First failure',
+      'the first evidence',
+      'the first fix',
+      'f2 [P0] (security) Second failure',
+      'the second evidence',
+      'the second fix',
+    ]) {
+      expect(prompt).toContain(line)
+    }
+    expect(prompt.lastIndexOf('## Changes since the last review')).toBeGreaterThan(
+      prompt.indexOf('## Native review'),
+    )
+    expect(prompt).toContain(`The prior reviewed tree is \`${TREE_BEFORE}\``)
+    expect(prompt).toContain(`the current reviewed tree is \`${TREE_AFTER}\``)
+    expect(prompt).toContain('- M\tsrc/engine.ts')
+    expect(prompt).toContain('- A\tsrc/new.ts')
+    expect(prompt).toContain('+export const engine = 2')
+    expect(prompt).toContain('also return `previous`')
+    const local = JSON.parse(await readFile(join(root, taskRecordPath()), 'utf8')) as ReviewRecord
+    expect(local.reviewedTree).toBe(TREE_AFTER)
+    expect(local.previous).toEqual([
+      { id: 'f1', status: 'closed' },
+      { id: 'f2', status: 'closed' },
+    ])
+    const approval = JSON.parse(
+      await readFile(join(root, portableApprovalPath('auth', TASK_ID)), 'utf8'),
+    ) as Record<string, unknown>
+    expect(Object.keys(approval)).not.toContain('previous')
+    expect(Object.keys(approval)).not.toContain('reviewedTree')
+  })
+
+  it('fails loud when the complete prior-finding inventory exceeds the prompt limit', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const findings = Array.from({ length: 90 }, (_unused, index) =>
+      testFinding({
+        title: `prior finding ${String(index)}`,
+        evidence: 'e'.repeat(2_000),
+        fix: 'f'.repeat(2_000),
+      }),
+    )
+    await writePriorFindings(root, {
+      digest: reviewDigest({ scope: 'task', specDigest: DIGEST }),
+      findings,
+      reviewedTree: TREE_BEFORE,
+    })
+    let started = 0
+    const result = await invoke(
+      root,
+      {
+        run: async () => {
+          started += 1
+          return { childId: 'child-1', completed: true, text: PASS_TEXT }
+        },
+      },
+      {
+        prepared: { specDigest: DIGEST, tree: TREE_AFTER },
+        runGit: fakeGit().runGit,
+      },
+    )
+    // The inventory is never truncated: the reviewer never starts and an ERROR
+    // record names the cause.
+    expect(started).toBe(0)
+    expect(result.record?.verdict).toBe('ERROR')
+    expect(result.record?.failureClass).toBe('config')
+    expect(result.error).toContain('prior-finding inventory')
+    expect(result.error).toContain('focused review limit')
+    await expect(
+      readFile(join(root, portableApprovalPath('auth', TASK_ID)), 'utf8'),
+    ).rejects.toThrow()
+  })
+
+  it('falls back to the prior findings when the prior record carries no reviewed tree', async () => {
+    const root = await workspace()
+    roots.push(root)
+    await writePriorFindings(root, {
+      digest: reviewDigest({ scope: 'task', specDigest: DIGEST }),
+      findings: [testFinding({ title: 'First failure' })],
+    })
+    const digest = focusedDigest(TREE_AFTER)
+    let prompt = ''
+    const result = await invoke(
+      root,
+      {
+        run: async (request) => {
+          prompt = request.prompt
+          return {
+            childId: 'child-1',
+            completed: true,
+            text: fenced({
+              digest,
+              verdict: 'PASS',
+              previous: [{ id: 'f1', status: 'closed' }],
+              findings: [],
+            }),
+          }
+        },
+      },
+      {
+        prepared: { specDigest: DIGEST, tree: TREE_AFTER },
+        runGit: fakeGit().runGit,
+        renderPrompt: renderReviewPrompt,
+      },
+    )
+    expect(result.run.steps[0]?.state).toBe('done')
+    expect(prompt).toContain(
+      'The diff since the prior reviewed tree is unavailable: the prior review record carries no reviewed tree.',
+    )
+    expect(prompt).toContain('First failure')
+    expect(result.record?.previous).toEqual([{ id: 'f1', status: 'closed' }])
+  })
+
+  it('names a missing prior tree object as the fallback cause', async () => {
+    const root = await workspace()
+    roots.push(root)
+    await writePriorFindings(root, {
+      digest: reviewDigest({ scope: 'task', specDigest: DIGEST }),
+      findings: [testFinding({ title: 'First failure' })],
+      reviewedTree: TREE_BEFORE,
+    })
+    const digest = focusedDigest(TREE_AFTER)
+    let prompt = ''
+    const result = await invoke(
+      root,
+      {
+        run: async (request) => {
+          prompt = request.prompt
+          return {
+            childId: 'child-1',
+            completed: true,
+            text: fenced({
+              digest,
+              verdict: 'PASS',
+              previous: [{ id: 'f1', status: 'closed' }],
+              findings: [],
+            }),
+          }
+        },
+      },
+      {
+        prepared: { specDigest: DIGEST, tree: TREE_AFTER },
+        runGit: fakeGit({ missingTree: true }).runGit,
+        renderPrompt: renderReviewPrompt,
+      },
+    )
+    expect(result.run.steps[0]?.state).toBe('done')
+    expect(prompt).toContain(
+      'is no longer in the repository object database. Confirm the prior findings',
+    )
+  })
+
+  it('bounds the changed-path list and the patch and names the snapshot checkout', async () => {
+    const root = await workspace()
+    roots.push(root)
+    await writePriorFindings(root, {
+      digest: reviewDigest({ scope: 'task', specDigest: DIGEST }),
+      findings: [testFinding({ title: 'First failure' })],
+      reviewedTree: TREE_BEFORE,
+    })
+    const digest = focusedDigest(TREE_AFTER)
+    const statuses = Array.from(
+      { length: 201 },
+      (_unused, index) => `M\tsrc/file${String(index)}.ts`,
+    ).join('\n')
+    const patch = Array.from({ length: 500 }, (_unused, index) => `+line ${String(index)}`).join(
+      '\n',
+    )
+    let prompt = ''
+    const result = await invoke(
+      root,
+      {
+        run: async (request) => {
+          prompt = request.prompt
+          return {
+            childId: 'child-1',
+            completed: true,
+            text: fenced({
+              digest,
+              verdict: 'PASS',
+              previous: [{ id: 'f1', status: 'closed' }],
+              findings: [],
+            }),
+          }
+        },
+      },
+      {
+        prepared: { specDigest: DIGEST, tree: TREE_AFTER, reviewCwd: '/snapshot/run-1' },
+        runGit: fakeGit({ statuses, patch }).runGit,
+        renderPrompt: renderReviewPrompt,
+      },
+    )
+    expect(result.run.steps[0]?.state).toBe('done')
+    expect(prompt).toContain('Changed paths (the first 200; the list is bounded):')
+    expect(prompt).toContain('- M\tsrc/file199.ts')
+    expect(prompt).toContain('+line 399')
+    expect(prompt).not.toContain('+line 400')
+    expect(prompt).toContain(
+      'The patch is truncated at the 400-line / 32 KiB bound; read the full change in the current snapshot checkout at /snapshot/run-1.',
+    )
+  })
+
+  it('keeps the full prompt when no prior FINDINGS moved', async () => {
+    const root = await workspace()
+    roots.push(root)
+    // A same-digest FINDINGS record keeps the existing path, not a focused one.
+    await writePriorFindings(root, {
+      digest: TASK_DIGEST,
+      findings: [testFinding({ title: 'First failure' })],
+      reviewedTree: TREE_BEFORE,
+    })
+    let prompt = ''
+    await invoke(
+      root,
+      {
+        run: async (request) => {
+          prompt = request.prompt
+          return { childId: 'child-1', completed: true, text: PASS_TEXT }
+        },
+      },
+      { renderPrompt: renderReviewPrompt },
+    )
+    expect(prompt).not.toContain('also return `previous`')
+    expect(prompt).not.toContain('The prior reviewed tree is')
+    const local = JSON.parse(await readFile(join(root, taskRecordPath()), 'utf8')) as ReviewRecord
+    expect(local.previous).toBeUndefined()
+  })
+
+  it('confirms duplicate prior titles by id and stores the confirmations locally', async () => {
+    const root = await workspace()
+    roots.push(root)
+    // Both prior titles sanitize to the same text; only the positional ids
+    // distinguish them.
+    await writePriorFindings(root, {
+      digest: reviewDigest({ scope: 'task', specDigest: DIGEST }),
+      findings: [testFinding({ title: '[path]' }), testFinding({ title: '[path]' })],
+      reviewedTree: TREE_BEFORE,
+    })
+    const digest = focusedDigest(TREE_AFTER)
+    const text = fenced({
+      digest,
+      verdict: 'FINDINGS',
+      previous: [
+        { id: 'f1', status: 'open' },
+        { id: 'f2', status: 'closed' },
+      ],
+      findings: [
+        {
+          severity: 'P1',
+          class: 'missing-test',
+          title: 'Still failing',
+          evidence: 'the first evidence still holds',
+          fix: 'finish the fix',
+          previousId: 'f1',
+        },
+      ],
+    })
+    const result = await invoke(root, runnerFor(text), {
+      prepared: { specDigest: DIGEST, tree: TREE_AFTER },
+      runGit: fakeGit().runGit,
+    })
+    expect(result.run.steps[0]?.state).toBe('blocked')
+    const local = JSON.parse(await readFile(join(root, taskRecordPath()), 'utf8')) as ReviewRecord
+    expect(local.previous).toEqual([
+      { id: 'f1', status: 'open' },
+      { id: 'f2', status: 'closed' },
+    ])
+    expect(local.findings).toHaveLength(1)
+  })
+})
+
 describe('parseReviewVerdict', () => {
   it('rejects two fenced blocks and an invalid severity', () => {
     expect(parseReviewVerdict(`${PASS_TEXT}\n${PASS_TEXT}`, DIGEST).ok).toBe(false)
@@ -549,6 +955,168 @@ describe('parseReviewVerdict', () => {
     const parsed = parseReviewVerdict(text, DIGEST)
     expect(parsed.ok).toBe(true)
     if (parsed.ok) expect(parsed.findings[0]?.class).toBe('other')
+  })
+})
+
+describe('parseReviewVerdict focused confirmations', () => {
+  const PRIOR_IDS = ['f1', 'f2'] as const
+  const previous = [
+    { id: 'f1', status: 'closed' },
+    { id: 'f2', status: 'closed' },
+  ]
+
+  it('returns one confirmation per prior id and requires every one closed for PASS', () => {
+    const parsed = parseReviewVerdict(
+      fenced({ digest: DIGEST, verdict: 'PASS', previous, findings: [] }),
+      DIGEST,
+      PRIOR_IDS,
+    )
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(parsed.previous).toEqual(previous)
+    const open = parseReviewVerdict(
+      fenced({
+        digest: DIGEST,
+        verdict: 'PASS',
+        previous: [
+          { id: 'f1', status: 'open' },
+          { id: 'f2', status: 'closed' },
+        ],
+        findings: [],
+      }),
+      DIGEST,
+      PRIOR_IDS,
+    )
+    expect(open.ok).toBe(false)
+    if (!open.ok) expect(open.error).toContain('every prior finding to be closed')
+  })
+
+  it('accepts an open prior id repeated by exactly one finding with previousId', () => {
+    const parsed = parseReviewVerdict(
+      fenced({
+        digest: DIGEST,
+        verdict: 'FINDINGS',
+        previous: [
+          { id: 'f1', status: 'open' },
+          { id: 'f2', status: 'closed' },
+        ],
+        findings: [
+          {
+            severity: 'P1',
+            class: 'missing-test',
+            title: 'Still failing',
+            evidence: 'the first evidence still holds',
+            fix: 'finish the fix',
+            previousId: 'f1',
+          },
+        ],
+      }),
+      DIGEST,
+      PRIOR_IDS,
+    )
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) {
+      expect(parsed.verdict).toBe('FINDINGS')
+      expect(parsed.previous).toEqual([
+        { id: 'f1', status: 'open' },
+        { id: 'f2', status: 'closed' },
+      ])
+    }
+  })
+
+  it('rejects missing, duplicate, and unknown confirmation ids', () => {
+    const run = (entries: unknown[]): ReturnType<typeof parseReviewVerdict> =>
+      parseReviewVerdict(
+        fenced({ digest: DIGEST, verdict: 'PASS', previous: entries, findings: [] }),
+        DIGEST,
+        PRIOR_IDS,
+      )
+    const missing = run([{ id: 'f1', status: 'closed' }])
+    expect(missing.ok).toBe(false)
+    if (!missing.ok) expect(missing.error).toContain('omits prior finding id(s) f2')
+    const duplicate = run([
+      { id: 'f1', status: 'closed' },
+      { id: 'f1', status: 'closed' },
+    ])
+    expect(duplicate.ok).toBe(false)
+    if (!duplicate.ok) expect(duplicate.error).toContain('repeats prior finding id "f1"')
+    const unknown = run([
+      { id: 'f1', status: 'closed' },
+      { id: 'f9', status: 'closed' },
+    ])
+    expect(unknown.ok).toBe(false)
+    if (!unknown.ok) expect(unknown.error).toContain('unknown prior finding id "f9"')
+  })
+
+  it('rejects a finding that names a closed prior id', () => {
+    const parsed = parseReviewVerdict(
+      fenced({
+        digest: DIGEST,
+        verdict: 'FINDINGS',
+        previous,
+        findings: [{ severity: 'P1', title: 't', evidence: 'e', fix: 'f', previousId: 'f1' }],
+      }),
+      DIGEST,
+      PRIOR_IDS,
+    )
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.error).toContain('that confirmation is "closed"')
+  })
+
+  it('rejects an open prior id with no finding or with two findings', () => {
+    const base = {
+      digest: DIGEST,
+      verdict: 'FINDINGS',
+      previous: [
+        { id: 'f1', status: 'open' },
+        { id: 'f2', status: 'closed' },
+      ],
+    }
+    const unnamed = parseReviewVerdict(
+      fenced({
+        ...base,
+        findings: [{ severity: 'P1', title: 'new', evidence: 'e', fix: 'f' }],
+      }),
+      DIGEST,
+      PRIOR_IDS,
+    )
+    expect(unnamed.ok).toBe(false)
+    if (!unnamed.ok) expect(unnamed.error).toContain('"f1" is not named by a finding')
+    const repeated = parseReviewVerdict(
+      fenced({
+        ...base,
+        findings: [
+          { severity: 'P1', title: 'a', evidence: 'e', fix: 'f', previousId: 'f1' },
+          { severity: 'P1', title: 'b', evidence: 'e', fix: 'f', previousId: 'f1' },
+        ],
+      }),
+      DIGEST,
+      PRIOR_IDS,
+    )
+    expect(repeated.ok).toBe(false)
+    if (!repeated.ok) expect(repeated.error).toContain('is named by 2 findings')
+  })
+
+  it('ignores previous and previousId without prior ids', () => {
+    const parsed = parseReviewVerdict(
+      fenced({
+        digest: DIGEST,
+        verdict: 'PASS',
+        previous: [{ id: 'f9', status: 'open' }],
+        findings: [],
+      }),
+      DIGEST,
+    )
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(parsed.previous).toBeUndefined()
+    const finding = parseReviewVerdict(
+      fenced({
+        digest: DIGEST,
+        verdict: 'FINDINGS',
+        findings: [{ severity: 'P1', title: 't', evidence: 'e', fix: 'f', previousId: 'f1' }],
+      }),
+      DIGEST,
+    )
+    expect(finding.ok).toBe(true)
   })
 })
 
@@ -635,6 +1203,40 @@ describe('review record store', () => {
     ) as Record<string, unknown>
     expect(local.definition).toBe('task-review')
     expect(local.runId).toBe('run-1')
+  })
+
+  it('writes the reviewed tree and confirmations to the local record only', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const focused: ReviewRecord = {
+      ...record,
+      reviewedTree: TREE_AFTER,
+      previous: [{ id: 'f1', status: 'closed' }],
+    }
+    expect((await writePortableApproval(root, focused)).ok).toBe(true)
+    // The committed approval keeps the pre-focus field set, order, and bytes.
+    const expected = `${JSON.stringify(
+      {
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: TASK_ID,
+        digest: DIGEST,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T00:00:00.000Z',
+      },
+      null,
+      2,
+    )}\n`
+    expect(await readFile(join(root, portableApprovalPath('auth', TASK_ID)), 'utf8')).toBe(expected)
+    expect((await writeLocalReviewRecord(root, focused)).ok).toBe(true)
+    const local = JSON.parse(
+      await readFile(join(root, localReviewRecordPath(focused)), 'utf8'),
+    ) as ReviewRecord
+    expect(local.reviewedTree).toBe(TREE_AFTER)
+    expect(local.previous).toEqual([{ id: 'f1', status: 'closed' }])
   })
 
   it('reads the path its ownership selects', async () => {

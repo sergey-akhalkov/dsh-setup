@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveOwnership, SWITCH_BY_SIGNAL, } from './definitions.js';
+import { resolveTaskSection, sectionRecordId, taskLanes, } from './tasks.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -576,10 +577,48 @@ export function reviewerBinding(workspace) {
         taskRule: raw.taskRule,
     };
 }
+/** Whether one open run's recorded identity covers every missing task of the unit. */
+function runCoversUnit(run, unit) {
+    const context = run.context;
+    const covered = Array.isArray(context.taskIds)
+        ? context.taskIds.filter((entry) => typeof entry === 'string')
+        : [];
+    if (unit.section !== undefined) {
+        return (context.section === unit.section.key &&
+            context.sectionTitle === unit.section.title &&
+            context.taskId === sectionRecordId(unit.section.key) &&
+            covered.length === unit.covered.length &&
+            unit.covered.every((task) => covered.includes(task.id)));
+    }
+    return unit.missing.every((task) => context.taskId === task.id || covered.includes(task.id));
+}
+/**
+ * The one-line review unit: the section key and the missing task numbers (or the
+ * single task) and the start action that covers them — or the open run that
+ * already does. Shared by the turn-close steer and the status summary.
+ */
+export function reviewUnitText(change, unit, options = {}) {
+    const rule = options.rule ?? 'task-review';
+    const numbers = (tasks) => tasks.map((task) => task.number).join(', ');
+    const pending = (options.openRuns ?? []).find((run) => run.change === change && runCoversUnit(run, unit));
+    const action = (selector) => pending === undefined
+        ? `; start it with delegate(rule: "${rule}", change: "${change}", ${selector})`
+        : `; the open review run "${pending.id}" covers it, so continue that run instead of a new start`;
+    const section = unit.section;
+    if (section === undefined) {
+        const task = unit.missing[0];
+        if (task === undefined)
+            return `change "${change}" has no outstanding review unit`;
+        return `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS/ERROR record${action(`task: "${task.id}"`)}`;
+    }
+    return `section "${section.key}" (${section.title}) is one review unit covering checked tasks ${numbers(unit.covered)}; missing a ${rule} PASS/ERROR record: ${numbers(unit.missing)}${action(`section: "${section.key}"`)}`;
+}
 /**
  * The portable completion/archive coverage: every checked task needs a portable
  * PASS for the given task-scoped rule (default the shipped `task-review`) and
- * the marker's reviewer when one is declared.
+ * the marker's reviewer when one is declared. A section with two or more checked
+ * tasks without a portable PASS is one section gap; a single missing task keeps
+ * its own line.
  */
 export function taskReviewCoverage(workspace, change, rule = 'task-review') {
     let markdown;
@@ -608,7 +647,7 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review') {
             gaps.push(`checked task line "${line.trim()}" is not a numbered task; fix tasks.md so its review can be matched`);
         }
     }
-    for (const task of checkedTaskLines(markdown)) {
+    const taskGap = (task) => {
         const record = readPortableApproval(workspace, change, task.id);
         const mismatch = [];
         if (record === undefined)
@@ -630,9 +669,39 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review') {
                 mismatch.push(`target model "${String(target.model)}"`);
             }
         }
-        if (mismatch.length > 0) {
-            gaps.push(`checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`);
+        return mismatch.length === 0
+            ? undefined
+            : `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`;
+    };
+    const taskGaps = checkedTaskLines(markdown).map((task) => ({ task, gap: taskGap(task) }));
+    const missing = new Set(taskGaps.filter((entry) => entry.gap !== undefined).map((e) => e.task.id));
+    const grouped = new Set();
+    for (const lane of taskLanes(markdown)) {
+        if (lane.checked.length === 0)
+            continue;
+        let section;
+        try {
+            section = resolveTaskSection(markdown, lane.title, change);
         }
+        catch {
+            // A section that cannot resolve keeps the per-task lines below.
+            continue;
+        }
+        const absent = section.covered.filter((task) => missing.has(task.id));
+        if (absent.length < 2)
+            continue;
+        gaps.push(reviewUnitText(change, {
+            section: { key: section.key, title: section.title },
+            covered: section.covered,
+            missing: absent,
+        }, { rule }));
+        for (const task of absent)
+            grouped.add(task.id);
+    }
+    for (const entry of taskGaps) {
+        if (entry.gap === undefined || grouped.has(entry.task.id))
+            continue;
+        gaps.push(entry.gap);
     }
     return { ok: gaps.length === 0, gaps };
 }
