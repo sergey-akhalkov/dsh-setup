@@ -888,9 +888,15 @@ export function taskReviewCoverage(
   const grouped = new Set<string>()
   // The section parser is the one resolution and the start path use, so a
   // tab-separated heading groups here too.
-  for (const section of taskSections(markdown)) {
+  const sections = taskSections(markdown)
+  const keyCounts = new Map<string, number>()
+  for (const section of sections) keyCounts.set(section.key, (keyCounts.get(section.key) ?? 0) + 1)
+  for (const section of sections) {
     // Tasks before the first heading are outside every section.
     if (section.title === '') continue
+    // A key shared by two headings cannot resolve to one section run, so its
+    // tasks keep the per-task gap lines below.
+    if ((keyCounts.get(section.key) ?? 0) > 1) continue
     const absent = section.covered.filter((task) => missing.has(task.id))
     if (absent.length < 2) continue
     gaps.push(

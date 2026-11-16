@@ -149,9 +149,17 @@ export async function reviewUnits(workspace, change, owner) {
     const sectioned = new Set();
     // The section parser is the one `resolveTaskSection` and the start path use;
     // `taskLanes` reads only `## ` headings and would miss a tab-separated one.
-    for (const section of taskSections(plan)) {
+    const sections = taskSections(plan);
+    const keyCounts = new Map();
+    for (const section of sections)
+        keyCounts.set(section.key, (keyCounts.get(section.key) ?? 0) + 1);
+    for (const section of sections) {
         // Tasks before the first heading are outside every section: per-task units.
         if (section.title === '')
+            continue;
+        // A key shared by two headings cannot resolve to one section run, so its
+        // tasks keep the per-task unit instead of a unit the start rejects.
+        if ((keyCounts.get(section.key) ?? 0) > 1)
             continue;
         for (const task of section.covered)
             sectioned.add(task.id);

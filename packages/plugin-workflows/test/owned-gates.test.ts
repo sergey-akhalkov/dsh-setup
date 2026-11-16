@@ -918,6 +918,19 @@ describe('the section-first review units', () => {
     expect(units?.[0]?.covered.map((task) => task.number)).toEqual(['1.1', '1.2'])
   })
 
+  it('keeps per-task units when two headings share one section key', async () => {
+    const root = await workspace(
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n\n## 1. Docs\n\n- [x] 1.3 Third task\n',
+    )
+    const units = await reviewUnits(root, 'change-a', 'workflows')
+    expect(units?.every((unit) => unit.section === undefined)).toBe(true)
+    expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([
+      ['1.1'],
+      ['1.2'],
+      ['1.3'],
+    ])
+  })
+
   it('keeps the per-task unit for a single missing task', async () => {
     const root = await workspace(SECTIONED_PLAN)
     await writeTaskPass(root, taskIdOf('Engine task'))
