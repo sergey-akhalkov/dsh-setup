@@ -202,6 +202,32 @@ export async function evaluateOwnedProgressGate(input: ProgressGateInput): Promi
   }
 }
 
+/** The change and lane number one worker-start argument tree tags. */
+export interface LaneTag {
+  readonly change: string
+  readonly n: number
+}
+
+/** The first lane tag in a worker start's arguments; the tag is plain argument text. */
+export function laneTagOf(argumentsValue: Readonly<Record<string, unknown>>): LaneTag | undefined {
+  const text = JSON.stringify(argumentsValue)
+  for (const match of text.matchAll(LANE_TAG)) {
+    const n = Number(match[2])
+    if (match[1] !== undefined && Number.isSafeInteger(n)) return { change: match[1], n }
+  }
+  return undefined
+}
+
+/** The lane tag of a successful worker start, or undefined for any other tool call. */
+export function workerLaneTag(
+  name: string,
+  ok: boolean,
+  argumentsValue: Readonly<Record<string, unknown>>,
+): LaneTag | undefined {
+  if (!WORKER_LANE_TOOLS.has(name) || !ok) return undefined
+  return laneTagOf(argumentsValue)
+}
+
 /** The lane titles covered by a successful tagged worker start in this session. */
 export function taggedLaneTitles(
   calls: readonly ToolCallObservation[],
@@ -210,20 +236,46 @@ export function taggedLaneTitles(
 ): string[] {
   const titles = new Set<string>()
   for (const call of calls) {
-    if (!WORKER_LANE_TOOLS.has(call.name) || call.ok === false) continue
-    const text = JSON.stringify(call.arguments)
-    for (const match of text.matchAll(LANE_TAG)) {
-      if (match[1] !== change) continue
-      const lane = lanes.find((entry) => entry.n === Number(match[2]))
-      if (lane !== undefined) titles.add(lane.title)
-    }
+    const tag = workerLaneTag(call.name, call.ok !== false, call.arguments)
+    if (tag === undefined || tag.change !== change) continue
+    const lane = lanes.find((entry) => entry.n === tag.n)
+    if (lane !== undefined) titles.add(lane.title)
   }
   return [...titles]
+}
+
+/** How one lane was satisfied for the session: a tagged worker or a serial note. */
+export type LaneDecision = 'assigned' | 'serial'
+
+/**
+ * Forget decisions for lanes that disappeared, lost their tasks, or completed.
+ * A renamed lane is a new title and therefore a new, unassigned lane. An
+ * unreadable plan keeps the decisions: the gate already fails open there.
+ */
+export async function pruneLaneDecisions(
+  workspace: string,
+  change: string,
+  decisions: Map<string, LaneDecision>,
+): Promise<void> {
+  if (decisions.size === 0) return
+  const plan = await readPlan(workspace, change)
+  if (plan === undefined) return
+  const lanes = taskLanes(plan)
+  for (const title of [...decisions.keys()]) {
+    const lane = lanes.find((entry) => entry.title === title)
+    const tasks = lane === undefined ? 0 : lane.checked.length + lane.unchecked.length
+    if (lane === undefined || (tasks > 0 && lane.unchecked.length === 0)) decisions.delete(title)
+  }
 }
 
 export interface LaneGateInput extends GateEvidence {
   readonly codeChanged: boolean
   readonly noteOwner: NoteOwner
+  /**
+   * The session's satisfied lanes for this change, kept beyond the bounded tool
+   * buffer and the single latest note; the host records them as they happen.
+   */
+  readonly decisions?: ReadonlyMap<string, LaneDecision>
 }
 
 export interface LaneGateDecision extends GateDecision {
@@ -255,6 +307,12 @@ export async function evaluateOwnedLaneGate(input: LaneGateInput): Promise<LaneG
       .filter((number): number is string => number !== undefined),
   )
   const assigned = new Set(taggedLaneTitles(input.calls, input.change, lanes))
+  // A kept decision outlives the tool buffer and a later note for another lane;
+  // a decision whose lane completed or disappeared no longer counts.
+  for (const title of input.decisions?.keys() ?? []) {
+    const lane = lanes.find((entry) => entry.title === title)
+    if (lane !== undefined && lane.unchecked.length > 0) assigned.add(title)
+  }
   const note = await readProgressNote(input.workspace, input.change, input.noteOwner)
   if (note !== undefined) {
     const task = tasks.find((entry) => entry.id === note.taskId)

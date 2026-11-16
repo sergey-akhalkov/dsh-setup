@@ -128,6 +128,46 @@ export async function repositoryRoot(
   }
 }
 
+/** Files that count as implementation work rather than documentation/plan state. */
+function isImplementationPath(path: string): boolean {
+  if (ignoredForDigest(path)) return false
+  if (path === 'docs' || path.startsWith('docs/')) return false
+  if (path === 'openspec' || path.startsWith('openspec/')) return false
+  if (path === 'market' || path.startsWith('market/')) return false
+  return !/\.(?:md|mdx)$/iu.test(path)
+}
+
+/**
+ * The implementation-state fingerprint: every dirty implementation file's
+ * status code and content. Unlike a write observation it sees a shell edit, so
+ * a turn-start/close comparison cannot miss one. Undefined when git cannot read
+ * the tree; the caller then falls back to the write observations.
+ */
+export async function implementationFingerprint(
+  cwd: string,
+  runGit: GitRunner,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const root = await repositoryRoot(cwd, runGit, signal)
+  let status: Buffer
+  try {
+    status = await runGit(['status', '--porcelain=v1', '-z', '--untracked-files=all'], cwd, signal)
+  } catch {
+    return undefined
+  }
+  const entries = parseStatus(status).filter((entry) => isImplementationPath(entry.path))
+  const parts: Array<string | Buffer> = ['implementation-v1']
+  for (const entry of entries.sort((left, right) => left.path.localeCompare(right.path))) {
+    parts.push(`${entry.code} ${entry.path}`)
+    try {
+      parts.push(await readFile(resolve(root, entry.path)))
+    } catch {
+      parts.push('[deleted]')
+    }
+  }
+  return hashParts(parts)
+}
+
 /**
  * The worktree content digest: tracked diffs plus untracked files, ignoring the
  * engine's own `.dsh` and `.tmp` state. Undefined when git cannot read the tree.

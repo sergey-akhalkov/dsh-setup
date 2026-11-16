@@ -676,3 +676,63 @@ describe('composed rollback of each engine gate', () => {
     )
   })
 })
+
+describe('goal-completion ownership', () => {
+  /** Register the host-owned `update_goal` tool so callTool can dispatch it. */
+  function registerGoalTool(host: FakeHost): void {
+    host.tools.set('update_goal', {
+      name: 'update_goal',
+      execute: async () => ({ text: 'goal updated' }),
+    })
+  }
+
+  it('refuses goal completion from the workflows listener, not the dormant legacy row', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(CHECKED_TASKS)
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+
+    // The legacy row alone no longer dispatches the goal guard.
+    const legacyOnly = fakeHost(workspace)
+    applyDelegation(legacyOnly.ctx as never, delegation as never)
+    registerGoalTool(legacyOnly)
+    expect(await legacyOnly.callTool('update_goal', { action: 'complete' })).toMatchObject({
+      text: 'goal updated',
+    })
+
+    // With both rows mounted, the workflows listener owns the refusal.
+    const composed = fakeHost(workspace)
+    applyDelegation(composed.ctx as never, delegation as never)
+    apply(composed.ctx as never, workflows as never)
+    registerGoalTool(composed)
+    const refused = (await composed.callTool('update_goal', { action: 'complete' })) as {
+      kind?: string
+      reason?: string
+    }
+    expect(refused.kind).toBe('deny')
+    expect(refused.reason).toContain('goal completion refused')
+    expect(refused.reason).toContain('no portable task-review PASS')
+
+    // The portable PASS the native review publishes satisfies the same guard.
+    const reviews = join(workspace, 'openspec', 'changes', CHANGE, 'reviews')
+    await mkdir(reviews, { recursive: true })
+    await writeFile(
+      join(reviews, `${TASK_ID}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: CHANGE,
+        scope: 'task',
+        taskId: TASK_ID,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T10:00:00.000Z',
+      }),
+      'utf8',
+    )
+    expect(await composed.callTool('update_goal', { action: 'complete' })).toMatchObject({
+      text: 'goal updated',
+    })
+  })
+})

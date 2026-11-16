@@ -6,6 +6,7 @@ import {
   codeChangedThisTurn,
   evaluateOwnedLaneGate,
   evaluateOwnedProgressGate,
+  pruneLaneDecisions,
   taskReviewEvidence,
 } from '../src/host/engine-gates.ts'
 import type { GitRunner } from '../src/host/git.ts'
@@ -303,6 +304,44 @@ describe('the owned lane-assignment gate', () => {
         })
       ).decision,
     ).toBe('allow')
+  })
+})
+
+describe('the kept lane decisions', () => {
+  it('prunes a completed or removed lane and keeps an actionable one', async () => {
+    const root = await workspace()
+    const decisions = new Map<string, 'assigned' | 'serial'>([
+      ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
+      ['2. Docs (lane 2, owns `docs/**`)', 'serial'],
+      ['3. Gone (owns `src/**`)', 'assigned'],
+    ])
+    await pruneLaneDecisions(root, 'change-a', decisions)
+    expect([...decisions.keys()]).toEqual([
+      '1. Engine (lane 1, owns `packages/engine/**`)',
+      '2. Docs (lane 2, owns `docs/**`)',
+    ])
+    // A completed lane is pruned even while its heading stays in the plan.
+    const completed = await workspace(PLAN.replace('- [ ] 1.1', '- [x] 1.1'))
+    const kept = new Map<string, 'assigned' | 'serial'>([
+      ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
+    ])
+    await pruneLaneDecisions(completed, 'change-a', kept)
+    expect(kept.size).toBe(0)
+  })
+
+  it('satisfies a lane from a kept decision after the tool buffer lost the tag', async () => {
+    const root = await workspace()
+    const decision = await evaluateOwnedLaneGate({
+      workspace: root,
+      change: 'change-a',
+      calls: [],
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      decisions: new Map([['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned']]),
+    })
+    expect(decision.decision).toBe('refuse')
+    expect(decision.lanes?.map((lane) => lane.n)).toEqual([2])
   })
 })
 

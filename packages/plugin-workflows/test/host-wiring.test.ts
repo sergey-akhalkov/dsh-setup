@@ -7146,10 +7146,11 @@ async function gitGateWorkspace(plan = GATE_PLAN): Promise<string> {
 async function engineGateHost(
   workspace: string,
   options: Parameters<typeof fakeHost>[1] = {},
+  config?: Parameters<typeof apply>[1],
 ): Promise<ReturnType<typeof fakeHost>> {
   process.env.DSH_WORKFLOWS_HOST_KEY = KEY
   const host = fakeHost(workspace, options)
-  apply(host.ctx as never)
+  apply(host.ctx as never, config)
   await new Promise((resolve) => setTimeout(resolve, 100))
   await host.emit(
     'agent/pre-step',
@@ -7176,6 +7177,25 @@ async function gateWrite(
     { agent: host.agent, callId: `call-${path}`, name, arguments: { file_path: path } },
     { isError: false, content: [{ type: 'text', text: 'ok' }] },
   )
+}
+
+/** The canonical foreground result a successful shell tool returns. */
+function gateShellResult(workspace: string): Record<string, unknown> {
+  return {
+    isError: false,
+    content: [{ type: 'text', text: 'ok' }],
+    value: {
+      kind: 'foreground',
+      cwd: workspace,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      aborted: false,
+      timeoutMs: 120_000,
+      stdout: { text: '', truncated: false },
+      stderr: { text: '', truncated: false },
+    },
+  }
 }
 
 describe('engine-owned gates', () => {
@@ -7251,6 +7271,102 @@ describe('engine-owned gates', () => {
     ) as { lane?: string; worktreeDigest?: string }
     expect(note.lane).toBe('2. Docs (lane 2, owns `docs/**`)')
     expect(note.worktreeDigest).toMatch(/^[0-9a-f]{64}$/u)
+  })
+
+  it('counts a shell-only implementation edit for both gates', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    // No write/edit observation: the file changes on disk, as a pwsh edit leaves it.
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'engine.ts'), 'export const engine = 1\n', 'utf8')
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'shell-edit',
+        name: 'pwsh',
+        arguments: { command: 'Set-Content -Path src/engine.ts -Value "export const engine = 1"' },
+      },
+      gateShellResult(workspace),
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('changed implementation files in change "auth"')
+    expect(text).toContain('lane assignment is missing in change "auth"')
+  })
+
+  it('keeps earlier serial-lane decisions after a later serial note', async () => {
+    const workspace = await gitGateWorkspace()
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await gateWrite(host, 'src/app.ts')
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | { execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }> }
+      | undefined
+    const note = (task: string): Promise<{ text: string }> | undefined =>
+      tool?.execute(
+        { action: 'note', change: 'auth', task, status: 'in-progress', reason: 'serial' },
+        { agent: host.agent },
+      )
+    await note('2.1 Doc task')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(steered(host)).toContain('lane "1. Engine')
+    const refusals = host.steers.length
+    // The later note replaces the note file; the earlier serial decision stays.
+    await note('1.1 Engine task')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBe(refusals)
+    expect(steered(host)).not.toContain('lane "2. Docs')
+  })
+
+  it('keeps a tagged worker assignment after the tool buffer evicts it', async () => {
+    const workspace = await gitGateWorkspace()
+    // Keep the unrelated checkpoint run out of this lane test: it also needs a
+    // worker start, so its applicability would otherwise mask the gate refusal.
+    const host = await engineGateHost(
+      workspace,
+      { taskProgress: false, laneFanout: false },
+      { checkpointApplicability: { minToolCalls: 1000 } },
+    )
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'worker-1',
+        name: 'subagent',
+        arguments: { prompt: 'lane-tag: auth#1. Implement lane 1.' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'started' }] },
+    )
+    for (let index = 0; index < 100; index += 1) {
+      await host.emit(
+        'tools/result',
+        { agent: host.agent, callId: `read-${String(index)}`, name: 'read', arguments: {} },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    // The tagged observation is evicted. THIS write stays in the buffer, so
+    // attribution still names the change; the shell edit is its code change.
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'engine.ts'), 'export const engine = 1\n', 'utf8')
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'shell-edit',
+        name: 'pwsh',
+        arguments: { command: 'Set-Content -Path src/engine.ts -Value x' },
+      },
+      gateShellResult(workspace),
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('lane "2. Docs')
+    expect(text).not.toContain('lane "1. Engine')
   })
 
   it('refuses a stale note and accepts a fresh one', async () => {

@@ -41,7 +41,10 @@ import {
   evaluateOwnedLaneGate,
   evaluateOwnedProgressGate,
   goalCompletionRefusal,
+  type LaneDecision,
+  pruneLaneDecisions,
   taskReviewEvidence,
+  workerLaneTag,
 } from './engine-gates.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
@@ -70,7 +73,7 @@ import {
   isSoftSettled,
   runReplaceable,
 } from './gates.js'
-import { defaultGit, worktreeDigest } from './git.js'
+import { defaultGit, implementationFingerprint, worktreeDigest } from './git.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
 import { advanceIntake } from './intake.js'
@@ -142,7 +145,14 @@ import {
   writeRunSync,
 } from './runs.js'
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js'
-import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, taskOf } from './tasks.js'
+import {
+  checkedTaskIds,
+  findTaskOf,
+  isTaskChecked,
+  numberedTasks,
+  taskLanes,
+  taskOf,
+} from './tasks.js'
 import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
 import {
   checkpointRequired,
@@ -1177,6 +1187,26 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     return next
   }
   const sessionShellResults = new Map<string, ShellResultObservation[]>()
+  /** The turn-start implementation fingerprint, so a shell-only code edit still counts. */
+  const implementationBaseline = new Map<
+    string,
+    { readonly turn: number; readonly fingerprint?: string }
+  >()
+  /** Session-scoped satisfied lanes per change; a decision outlives the tool buffer. */
+  const laneDecisions = new Map<string, Map<string, Map<string, LaneDecision>>>()
+  const laneDecisionsFor = (session: string, change: string): Map<string, LaneDecision> => {
+    let changes = laneDecisions.get(session)
+    if (changes === undefined) {
+      changes = new Map()
+      laneDecisions.set(session, changes)
+    }
+    let lanes = changes.get(change)
+    if (lanes === undefined) {
+      lanes = new Map()
+      changes.set(change, lanes)
+    }
+    return lanes
+  }
   /** The current pre-step index per session, for checkpoint freshness. */
   const turnSteps = new Map<string, number>()
   /** The checked task ids last seen per session and change, for the delta. */
@@ -1763,10 +1793,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         workspace = workspaceFor(services, session)
         if (workspace !== undefined) {
           const activeWorkspace = workspace
-          turns.set(String(session.id), payload.turn)
-          turnSteps.set(String(session.id), payload.step)
-          metricsFor(String(session.id), payload.turn)
+          const sessionId = String(session.id)
+          const previousTurn = turns.get(sessionId)
+          turns.set(sessionId, payload.turn)
+          turnSteps.set(sessionId, payload.step)
+          metricsFor(sessionId, payload.turn)
           const origin = session.header.origin === 'subagent' ? 'subagent' : 'root'
+          // A new root turn starts against the implementation state it inherited:
+          // comparing it at the close catches a shell edit no write was observed for.
+          if (previousTurn !== payload.turn) {
+            if (origin === 'root') {
+              const fingerprint = await implementationFingerprint(activeWorkspace, defaultGit)
+              implementationBaseline.set(sessionId, {
+                turn: payload.turn,
+                ...(fingerprint === undefined ? {} : { fingerprint }),
+              })
+            } else {
+              implementationBaseline.delete(sessionId)
+            }
+          }
           const summary = `step ${String(payload.step)}`
           await record(
             workspace,
@@ -1782,7 +1827,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             },
             { kind: 'agent.turn-start', subject: origin },
           )
-          const sessionId = String(session.id)
           const text = lastUserText(payload.messages as readonly unknown[])
           if (text !== undefined && intentTurns.get(sessionId) !== payload.turn) {
             intentTurns.set(sessionId, payload.turn)
@@ -1984,6 +2028,23 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const summary = toolSummary(exec.name, result.isError, text)
         const bytes = Buffer.byteLength(text, 'utf8')
         const sessionId = String(session.id)
+        // Keep the lane a successful tagged worker start covered: the observation
+        // buffer is bounded, and the next note may decide another lane.
+        const laneTag = workerLaneTag(exec.name, !result.isError, args)
+        if (laneTag !== undefined) {
+          try {
+            const plan = readFileSync(
+              join(workspace, 'openspec', 'changes', laneTag.change, 'tasks.md'),
+              'utf8',
+            )
+            const lane = taskLanes(plan).find((entry) => entry.n === laneTag.n)
+            if (lane !== undefined && lane.title !== '') {
+              laneDecisionsFor(sessionId, laneTag.change).set(lane.title, 'assigned')
+            }
+          } catch {
+            // An unreadable plan assigns nothing; the observation still records the call.
+          }
+        }
         const shellOutcome = shellOutcomeOf(result)
         const isShellTool = exec.name === 'pwsh' || exec.name === 'bash'
         const observed = sessionToolCalls.get(sessionId) ?? []
@@ -3794,7 +3855,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     for (const change of await readInvolvement(workspace, session)) changes.add(change)
     for (const change of attributedChangeNames(workspace, calls, turn)) changes.add(change)
     if (changes.size === 0) return undefined
+    // A shell edit leaves no write observation; compare the implementation state
+    // the turn started from with the state at this close.
+    const baseline = implementationBaseline.get(session)
+    const baselineFingerprint =
+      baseline !== undefined && baseline.turn === turn ? baseline.fingerprint : undefined
+    const currentFingerprint =
+      baselineFingerprint === undefined
+        ? undefined
+        : await implementationFingerprint(workspace, defaultGit)
+    const implementationChanged =
+      currentFingerprint !== undefined && currentFingerprint !== baselineFingerprint
     const codeChanged =
+      implementationChanged ||
       codeChangedThisTurn(calls, workspace, turn) ||
       (metrics?.turn === turn && metrics.lastWriteAt !== undefined)
     // The task-review evidence and the note both follow their signal's owner.
@@ -3818,6 +3891,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           }
         }
         if (laneOwned) {
+          const decisions = laneDecisionsFor(session, change)
+          await pruneLaneDecisions(workspace, change, decisions)
           const decision = await evaluateOwnedLaneGate({
             workspace,
             change,
@@ -3825,6 +3900,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             turn,
             codeChanged,
             noteOwner,
+            decisions,
           })
           if (decision.decision === 'refuse' && decision.steer !== undefined) {
             texts.push(decision.steer)
@@ -4400,6 +4476,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       },
       note: async (input: NoteInput) => {
         const written = await writeProgressNote(workspace, input, { now: journal.time() })
+        // The note is the session's serial decision; it stays decided after the
+        // note file is replaced by a later note for another lane.
+        if (written.lane !== undefined) {
+          laneDecisionsFor(String(agent.session.id), input.change).set(written.lane, 'serial')
+        }
         return written.text
       },
     }
@@ -4612,6 +4693,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }): Promise<{ readonly text: string; readonly lane?: string }> => {
     const call = compatCallContext()
     const written = await writeProgressNote(call.workspace, input, { now: journal.time() })
+    // While the lane gate is owned, this call decides its serial lane too.
+    if (written.lane !== undefined) {
+      laneDecisionsFor(call.session, input.change).set(written.lane, 'serial')
+    }
     return {
       text: written.text,
       ...(written.lane === undefined ? {} : { lane: written.lane }),

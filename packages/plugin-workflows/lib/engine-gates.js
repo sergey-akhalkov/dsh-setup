@@ -151,22 +151,53 @@ export async function evaluateOwnedProgressGate(input) {
         steer: `rule "task-progress": this turn changed implementation files in change "${input.change}" without a newly checked-and-reviewed task and without a current progress note for worktree digest ${digest}.${stale ?? ''} Tick the task and run ${reviewCall}, or record ${noteCall}. Only a matching record or a note whose worktree digest matches the current worktree satisfies this gate; a text claim does not.`,
     };
 }
+/** The first lane tag in a worker start's arguments; the tag is plain argument text. */
+export function laneTagOf(argumentsValue) {
+    const text = JSON.stringify(argumentsValue);
+    for (const match of text.matchAll(LANE_TAG)) {
+        const n = Number(match[2]);
+        if (match[1] !== undefined && Number.isSafeInteger(n))
+            return { change: match[1], n };
+    }
+    return undefined;
+}
+/** The lane tag of a successful worker start, or undefined for any other tool call. */
+export function workerLaneTag(name, ok, argumentsValue) {
+    if (!WORKER_LANE_TOOLS.has(name) || !ok)
+        return undefined;
+    return laneTagOf(argumentsValue);
+}
 /** The lane titles covered by a successful tagged worker start in this session. */
 export function taggedLaneTitles(calls, change, lanes) {
     const titles = new Set();
     for (const call of calls) {
-        if (!WORKER_LANE_TOOLS.has(call.name) || call.ok === false)
+        const tag = workerLaneTag(call.name, call.ok !== false, call.arguments);
+        if (tag === undefined || tag.change !== change)
             continue;
-        const text = JSON.stringify(call.arguments);
-        for (const match of text.matchAll(LANE_TAG)) {
-            if (match[1] !== change)
-                continue;
-            const lane = lanes.find((entry) => entry.n === Number(match[2]));
-            if (lane !== undefined)
-                titles.add(lane.title);
-        }
+        const lane = lanes.find((entry) => entry.n === tag.n);
+        if (lane !== undefined)
+            titles.add(lane.title);
     }
     return [...titles];
+}
+/**
+ * Forget decisions for lanes that disappeared, lost their tasks, or completed.
+ * A renamed lane is a new title and therefore a new, unassigned lane. An
+ * unreadable plan keeps the decisions: the gate already fails open there.
+ */
+export async function pruneLaneDecisions(workspace, change, decisions) {
+    if (decisions.size === 0)
+        return;
+    const plan = await readPlan(workspace, change);
+    if (plan === undefined)
+        return;
+    const lanes = taskLanes(plan);
+    for (const title of [...decisions.keys()]) {
+        const lane = lanes.find((entry) => entry.title === title);
+        const tasks = lane === undefined ? 0 : lane.checked.length + lane.unchecked.length;
+        if (lane === undefined || (tasks > 0 && lane.unchecked.length === 0))
+            decisions.delete(title);
+    }
 }
 /**
  * The owned lane-assignment gate. A serial note naming a task in a lane decides
@@ -191,6 +222,13 @@ export async function evaluateOwnedLaneGate(input) {
         .map((taskId) => tasks.find((task) => task.id === taskId)?.number)
         .filter((number) => number !== undefined));
     const assigned = new Set(taggedLaneTitles(input.calls, input.change, lanes));
+    // A kept decision outlives the tool buffer and a later note for another lane;
+    // a decision whose lane completed or disappeared no longer counts.
+    for (const title of input.decisions?.keys() ?? []) {
+        const lane = lanes.find((entry) => entry.title === title);
+        if (lane !== undefined && lane.unchecked.length > 0)
+            assigned.add(title);
+    }
     const note = await readProgressNote(input.workspace, input.change, input.noteOwner);
     if (note !== undefined) {
         const task = tasks.find((entry) => entry.id === note.taskId);

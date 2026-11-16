@@ -49,14 +49,36 @@ export interface ProgressGateInput extends GateEvidence {
  * note, a note for a completed task, and a note from another path refuse.
  */
 export declare function evaluateOwnedProgressGate(input: ProgressGateInput): Promise<GateDecision>;
+/** The change and lane number one worker-start argument tree tags. */
+export interface LaneTag {
+    readonly change: string;
+    readonly n: number;
+}
+/** The first lane tag in a worker start's arguments; the tag is plain argument text. */
+export declare function laneTagOf(argumentsValue: Readonly<Record<string, unknown>>): LaneTag | undefined;
+/** The lane tag of a successful worker start, or undefined for any other tool call. */
+export declare function workerLaneTag(name: string, ok: boolean, argumentsValue: Readonly<Record<string, unknown>>): LaneTag | undefined;
 /** The lane titles covered by a successful tagged worker start in this session. */
 export declare function taggedLaneTitles(calls: readonly ToolCallObservation[], change: string, lanes: readonly {
     readonly n: number;
     readonly title: string;
 }[]): string[];
+/** How one lane was satisfied for the session: a tagged worker or a serial note. */
+export type LaneDecision = 'assigned' | 'serial';
+/**
+ * Forget decisions for lanes that disappeared, lost their tasks, or completed.
+ * A renamed lane is a new title and therefore a new, unassigned lane. An
+ * unreadable plan keeps the decisions: the gate already fails open there.
+ */
+export declare function pruneLaneDecisions(workspace: string, change: string, decisions: Map<string, LaneDecision>): Promise<void>;
 export interface LaneGateInput extends GateEvidence {
     readonly codeChanged: boolean;
     readonly noteOwner: NoteOwner;
+    /**
+     * The session's satisfied lanes for this change, kept beyond the bounded tool
+     * buffer and the single latest note; the host records them as they happen.
+     */
+    readonly decisions?: ReadonlyMap<string, LaneDecision>;
 }
 export interface LaneGateDecision extends GateDecision {
     readonly lanes?: readonly LaneParityLane[];
