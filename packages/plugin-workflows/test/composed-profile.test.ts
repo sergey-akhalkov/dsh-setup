@@ -758,6 +758,41 @@ describe('mixed gate ownership routes one note through both owners', () => {
     expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
   })
 
+  it('establishes the restored legacy involvement from a progress-owned note', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: false,
+        laneFanout: true,
+      },
+      { seedInvolvement: false },
+    )
+    await implementationWrite(host, workspace)
+    // A fresh session notes lane 1 through the workflows action: the workflow
+    // store is not the one the retained gate filters on, so the same note must
+    // also attribute the change to the legacy store.
+    const output = toolText(
+      await host.callTool('workflows', {
+        action: 'note',
+        change: CHANGE,
+        task: '1.1 Engine task',
+        status: 'in-progress',
+        reason: 'engine stays serial',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    await closeTurn(host, 1)
+    const legacy = host.steers.filter((steer) => steer.kind === 'delegation-rules')
+    expect(legacy).toHaveLength(1)
+    expect(legacy[0]?.text).toContain('Lane: 2. Docs')
+    expect(legacy[0]?.text).not.toContain('Lane: 1. Engine')
+    expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
+  })
+
   it('accepts the note the actual legacy task_progress path wrote', async () => {
     const workspace = await gitWorkspace(LANE_PLAN)
     const host = await openComposed(workspace, {

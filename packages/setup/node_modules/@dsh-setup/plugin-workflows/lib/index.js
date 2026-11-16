@@ -1946,7 +1946,6 @@ export function apply(ctx, config = {}) {
             return undefined;
         }
     };
-    /** The retained legacy lane owner's in-memory serial store; absent without it. */
     const legacyLaneState = () => optionalService('delegationRulesLaneState');
     /**
      * Execute one progress note for the calling session. The evidence goes to the
@@ -1970,7 +1969,11 @@ export function apply(ctx, config = {}) {
             }
             else if (agentId !== undefined) {
                 // The compat caller is the legacy runtime, which records its own lane.
-                legacyLaneState()?.markSerial(agentId, input.change, written.lane);
+                const laneState = legacyLaneState();
+                laneState?.markSerial(agentId, input.change, written.lane);
+                // The retained lane gate evaluates only involved changes, so the note
+                // that decided its lane also attributes the change to this session.
+                await laneState?.establishInvolvement(workspace, session, input.change);
             }
         }
         await rememberInvolvement(workspace, session, input.change);

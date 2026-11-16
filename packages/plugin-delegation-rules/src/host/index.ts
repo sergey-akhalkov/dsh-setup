@@ -7075,13 +7075,28 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
   )
   const state = new DelegationState()
   // The workflows note action records the serial lane here while this row still
-  // owns the lane signal; the caller resolves ownership.
+  // owns the lane signal; the caller resolves ownership. That note is the only
+  // attribution a fresh session has, so it also persists the involvement this
+  // row's own gate filters on.
   provideStatus(
     ctx,
     'delegationRulesLaneState',
     Object.freeze({
       markSerial(agentId: string, change: string, lane: string): void {
         state.markLaneSerial(agentId, change, lane)
+      },
+      async establishInvolvement(
+        workspaceRoot: string,
+        session: string,
+        change: string,
+      ): Promise<void> {
+        if (!CHANGE_PATTERN.test(change)) return
+        await withInvolvementLock(workspaceRoot, session, async () => {
+          const { involvement } = await readInvolvement(workspaceRoot, session)
+          if (involvement.changes[change] !== undefined) return
+          involvementEntry(involvement, change)
+          await writeInvolvement(workspaceRoot, involvement)
+        })
       },
     }),
   )

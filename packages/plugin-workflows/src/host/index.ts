@@ -2408,15 +2408,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return undefined
     }
   }
-  /** The retained legacy lane owner's in-memory serial store; absent without it. */
-  const legacyLaneState = ():
-    | {
-        markSerial(agentId: string, change: string, lane: string): void
-      }
-    | undefined =>
-    optionalService<{ markSerial(agentId: string, change: string, lane: string): void }>(
-      'delegationRulesLaneState',
-    )
+  /** The retained legacy lane owner's compat state; absent without it. */
+  interface LegacyLaneState {
+    markSerial(agentId: string, change: string, lane: string): void
+    /** Attribute the change to the calling session, as a legacy note call does. */
+    establishInvolvement(workspace: string, session: string, change: string): Promise<void>
+  }
+  const legacyLaneState = (): LegacyLaneState | undefined =>
+    optionalService<LegacyLaneState>('delegationRulesLaneState')
   /**
    * Execute one progress note for the calling session. The evidence goes to the
    * active progress owner's store, and the serial lane decision to the active
@@ -2443,7 +2442,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         laneDecisionsFor(session, input.change).set(written.lane, 'serial')
       } else if (agentId !== undefined) {
         // The compat caller is the legacy runtime, which records its own lane.
-        legacyLaneState()?.markSerial(agentId, input.change, written.lane)
+        const laneState = legacyLaneState()
+        laneState?.markSerial(agentId, input.change, written.lane)
+        // The retained lane gate evaluates only involved changes, so the note
+        // that decided its lane also attributes the change to this session.
+        await laneState?.establishInvolvement(workspace, session, input.change)
       }
     }
     await rememberInvolvement(workspace, session, input.change)
