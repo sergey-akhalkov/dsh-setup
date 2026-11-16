@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import type { BundleConfig, GatesConfig } from '../src/index.js'
 import {
   ALL_GATES,
@@ -527,5 +530,28 @@ describe('deprecated alias status', () => {
     const text = await harness.toolText('delegation_status', {})
     expect(text).toContain('Delegation status')
     expect(text).not.toMatch(DEPRECATION)
+  })
+
+  it('matches the composed setup row to the Release A fixture', async () => {
+    const root = join(fileURLToPath(new URL('..', import.meta.url)), '..', '..')
+    const patch = parse(
+      readFileSync(join(root, 'packages', 'setup', 'cordis.patch.yml'), 'utf8'),
+    ) as Array<
+      | { insert?: Array<{ id?: string; config?: Record<string, unknown> }> }
+      | { id?: string; config?: Record<string, unknown> }
+    >
+    const rows = patch.flatMap((entry) => ('insert' in entry ? (entry.insert ?? []) : [entry]))
+    const row = rows
+      .filter((entry) => entry.id === 'dsh-setup-delegation-rules' && entry.config !== undefined)
+      .at(-1)
+    const config = releaseAConfig()
+    expect(row?.config?.gates).toEqual(config.gates)
+    const composedCodex = (row?.config as { targets?: { codex?: { provider?: string } } }).targets
+      ?.codex
+    expect(composedCodex?.provider).toBe(config.targets.codex.provider)
+    // The fixture must carry at least one rule for every composed trigger so a
+    // flip has a restored steer to print.
+    const triggers = (config.rules ?? []).map((rule) => rule.when)
+    for (const rule of row?.config?.rules ?? []) expect(triggers).toContain(rule.when)
   })
 })
