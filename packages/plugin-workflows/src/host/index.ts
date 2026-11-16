@@ -714,6 +714,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const delegationCall = new AsyncLocalStorage<{
     readonly session: string
     readonly workspace: string
+    readonly agentId: string
   }>()
   const journal = new Journal()
   /** Latest turn per session, so a tool result belongs to a turn. */
@@ -3902,7 +3903,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           exec.name === 'task_progress' ||
           exec.name === 'delegation_status'
         ) {
-          return await delegationCall.run({ session: sessionId, workspace }, () => next())
+          return await delegationCall.run(
+            { session: sessionId, workspace, agentId: String(agent.id) },
+            () => next(),
+          )
         }
         return await next()
       } catch (error) {
@@ -4669,7 +4673,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
    * definition run and `task_progress` calls `note`; `delegation_status` reads
    * the workflows status summary.
    */
-  const compatCallContext = (): { readonly session: string; readonly workspace: string } => {
+  const compatCallContext = (): {
+    readonly session: string
+    readonly workspace: string
+    readonly agentId: string
+  } => {
     const store = delegationCall.getStore()
     if (store !== undefined) return store
     throw new Error(
@@ -4779,7 +4787,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     readonly reason?: string
   }): Promise<{ readonly text: string; readonly lane?: string }> => {
     const call = compatCallContext()
-    const written = await executeNote(call.workspace, call.session, input)
+    const written = await executeNote(call.workspace, call.session, input, call.agentId)
     return {
       text: written.text,
       ...(written.lane === undefined ? {} : { lane: written.lane }),

@@ -3244,7 +3244,7 @@ export function apply(ctx, config = {}) {
             if (exec.name === 'delegate' ||
                 exec.name === 'task_progress' ||
                 exec.name === 'delegation_status') {
-                return await delegationCall.run({ session: sessionId, workspace }, () => next());
+                return await delegationCall.run({ session: sessionId, workspace, agentId: String(agent.id) }, () => next());
             }
             return await next();
         }
@@ -3970,7 +3970,7 @@ export function apply(ctx, config = {}) {
     };
     const compatNote = async (input) => {
         const call = compatCallContext();
-        const written = await executeNote(call.workspace, call.session, input);
+        const written = await executeNote(call.workspace, call.session, input, call.agentId);
         return {
             text: written.text,
             ...(written.lane === undefined ? {} : { lane: written.lane }),

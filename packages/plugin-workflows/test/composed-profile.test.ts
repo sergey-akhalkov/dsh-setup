@@ -556,7 +556,7 @@ const LANE_PLAN = `# Tasks
 async function openComposed(
   workspace: string,
   gates: Record<string, boolean>,
-  options: { seedInvolvement?: boolean } = {},
+  options: { seedInvolvement?: boolean; dropProgressNoteRule?: boolean } = {},
 ): Promise<FakeHost> {
   process.env.DSH_WORKFLOWS_HOST_KEY = KEY
   const delegation = await composedConfig('dsh-setup-delegation-rules')
@@ -567,7 +567,14 @@ async function openComposed(
     name: 'subagent',
     execute: async () => ({ text: 'started' }),
   })
-  applyDelegation(host.ctx as never, { ...delegation, gates } as never)
+  // A progress switch with no covering note rule cannot steer, so the resolved
+  // legacy signal is off even while the raw switch is on.
+  const rules = options.dropProgressNoteRule
+    ? (delegation.rules as Array<Record<string, unknown>>).filter(
+        (rule) => !(rule.when === 'implementation-work' && rule.contract === 'note'),
+      )
+    : delegation.rules
+  applyDelegation(host.ctx as never, { ...delegation, rules, gates } as never)
   apply(host.ctx as never, workflows as never)
   await waitFor(() => host.watch.length > 0)
   if (options.seedInvolvement !== false) {
@@ -637,6 +644,43 @@ async function implementationWrite(host: FakeHost, workspace: string): Promise<v
     { isError: false, content: [{ type: 'text', text: 'ok' }] },
   )
 }
+
+describe('task_progress routes by the resolved legacy signal', () => {
+  it('writes the owned note path when the switch is on but no note rule covers it', async () => {
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: true,
+        laneFanout: false,
+      },
+      { dropProgressNoteRule: true },
+    )
+    await implementationWrite(host, workspace)
+    const output = toolText(
+      await host.callTool('task_progress', {
+        task: '1.2 Follow-up task',
+        status: 'in-progress',
+        reason: 'spans turns',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    // The resolved signal is disabled, so the evidence belongs to the workflows
+    // store, which is where the owned progress gate reads it.
+    expect(
+      await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeDefined()
+    expect(
+      await readJson(join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
+    ).toBeUndefined()
+    await closeTurn(host, 1)
+    expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
+    expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
+  })
+})
 
 describe('composed rollback of each engine gate', () => {
   it('restores the legacy progress steer while the owned lane gate keeps steering', async () => {
@@ -785,6 +829,41 @@ describe('mixed gate ownership routes one note through both owners', () => {
       }),
     )
     expect(output).toContain('progress note written')
+    await closeTurn(host, 1)
+    const legacy = host.steers.filter((steer) => steer.kind === 'delegation-rules')
+    expect(legacy).toHaveLength(1)
+    expect(legacy[0]?.text).toContain('Lane: 2. Docs')
+    expect(legacy[0]?.text).not.toContain('Lane: 1. Engine')
+    expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
+  })
+
+  it('establishes the restored legacy involvement from the progress-owned task_progress alias', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: false,
+        laneFanout: true,
+      },
+      { seedInvolvement: false },
+    )
+    await implementationWrite(host, workspace)
+    // The alias routes to the workflows note while the lane signal stays legacy;
+    // the note must also persist the legacy attribution the lane gate filters on.
+    const output = toolText(
+      await host.callTool('task_progress', {
+        task: '1.1 Engine task',
+        status: 'in-progress',
+        reason: 'engine stays serial',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    expect(
+      await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeDefined()
     await closeTurn(host, 1)
     const legacy = host.steers.filter((steer) => steer.kind === 'delegation-rules')
     expect(legacy).toHaveLength(1)

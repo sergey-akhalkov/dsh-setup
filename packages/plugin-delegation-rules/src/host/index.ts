@@ -5516,7 +5516,7 @@ class DelegationEngine {
     // action; the returned lane still decides the legacy lane state so a mixed
     // ownership profile satisfies both gates.
     const compat = this.services.compat?.()
-    if (compat !== undefined && !this.config.gates.taskProgress) {
+    if (compat !== undefined && !resolveLegacySignals(this.config).taskProgress) {
       const result = await compat.note({
         change: match.change.name,
         task: `${match.task.number} ${match.task.text}`,
