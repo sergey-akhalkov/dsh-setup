@@ -558,10 +558,12 @@ with the configured model and effort, accepts one fenced JSON verdict that echoe
 and writes the local record and the portable task approval under `.dsh/workflows/records/` and
 `openspec/changes/<change>/reviews/` (see [workflows](workflows.md#review-executor)). The engine also
 owns the work-progress, lane-assignment, goal-complete, and archive gates, each rendered as a
-read-only contract card in the Workflows overview rather than a definition. The progress, lane, and
-archive gates are active only while their per-signal legacy switch is false, and the goal-complete
-guard is engine-owned in every combination; one switch flip restores the matching retained delegation
-steer for rollback. The `workflows` tool exposes list, start, resume, status, evidence, cancel, adopt and note;
+read-only contract card in the Workflows overview rather than a definition. The progress and lane
+gates are active only while their per-signal legacy switch is false, and the goal-complete guard is
+engine-owned in every combination; `workflowOwned` transfers the legacy task-review and
+portable-approval enforcement, while the archive gate always keeps its intake, open-step, and
+whole-spec checks in workflows. One switch flip restores the matching retained delegation steer for
+rollback. The `workflows` tool exposes list, start, resume, status, evidence, cancel, adopt and note;
 `adopt` asks the user in the question UI and writes the host-authenticated receipt only after a yes.
 The `/workflows` command family covers run, resume, install, adopt and status; `/workflows` itself
 names the Workflows tab as the session entry and the `Workflow design` card as the editor entry and

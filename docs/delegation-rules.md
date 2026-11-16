@@ -452,7 +452,7 @@ its portable task-review `PASS`; the refusal is the same coverage report, with e
 record path and exact review call, and the goal stays active. It needs no
 `openspec/review-approval.json` marker and is independent of the per-signal switches: the guard moved
 from the delegation listener to the workflows gate listener in Release A, so disabling this row does
-not remove it. A profile that declares no strict `spec-task-ready` task-scope review rule has no
+not remove it. A profile without an installed `task-review` workflow definition has no
 obligation, and a change without a checked task is not part of the check; an unreadable `tasks.md`
 fails closed. The way out is the review itself, or archiving the change, which keeps its own gate.
 
