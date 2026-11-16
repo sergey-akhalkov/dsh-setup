@@ -187,9 +187,11 @@ decisions; the parity report records the replay counts and the declared integrat
 `src/host/parity.ts` binds all five retired definitions and also any definition whose own step
 carries a retired review signal (the contributed `change-intake` owns `spec-review`), so a missing
 report, a missing retained group, or a recorded decision mismatch refuses the definition at load
-instead of letting the retired signal execute. Work-progress and lane gates certify their replayed
-retained cases before they act, and a failed report refuses the close with the per-signal rollback
-switch and the parity command as the remedy.
+instead of letting the retired signal execute. Certification uses the resolved ownership: a
+definition or step whose enabled legacy switch makes it effectively defer is exempt from the native
+parity requirement, so the rollback switch alone restores the legacy path. Work-progress and lane
+gates certify their replayed retained cases before they act, and a failed report refuses the close
+with the per-signal rollback switch and the parity command as the remedy.
 
 ## Release, migration, and rollback
 
