@@ -33,7 +33,7 @@ import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
 import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, sectionReviewDigest, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
-import { addViolation, boundedPromptContext, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
+import { addViolation, boundedPromptContext, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, MAX_CONTEXT_BYTES, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
@@ -4080,12 +4080,42 @@ export function apply(ctx, config = {}) {
     const compatDelegate = async (input) => {
         const call = compatCallContext();
         const definition = await compatDefinition(call.workspace, input.rule);
+        const reviewStep = definition.steps.find((entry) => entry.executor === 'review');
+        // The legacy alias rejects a task selector on a whole-scope rule; the owned
+        // route keeps that contract instead of silently reviewing the whole scope.
+        if (input.task !== undefined && reviewStep?.review?.scope !== 'task') {
+            throw new Error(`rule "${input.rule}" reviews the whole scope; omit task (only a task-scoped review accepts one)`);
+        }
         const section = input.section === undefined
             ? undefined
             : await compatReviewSection(call.workspace, input.change, definition, input.section);
         const task = section === undefined
             ? await compatReviewTask(call.workspace, input.change, definition, input.task)
             : undefined;
+        // The section identity and its coverage are required run keys, not prompt
+        // payload: bounding them would replace the context with a truncation marker
+        // and the review step could not resolve the section. Reject before a run.
+        const identity = section === undefined
+            ? {
+                name: input.change,
+                ...(task === undefined ? {} : { taskId: task.id }),
+            }
+            : {
+                name: input.change,
+                taskId: section.recordId,
+                section: section.section.key,
+                sectionTitle: section.section.title,
+                taskIds: section.section.covered.map((entry) => entry.id),
+            };
+        const identityBytes = Buffer.byteLength(JSON.stringify(identity), 'utf8');
+        if (identityBytes > MAX_CONTEXT_BYTES) {
+            const detail = section === undefined
+                ? `the run identity for rule "${input.rule}" needs ${String(identityBytes)} bytes`
+                : `section "${section.section.key}" of change "${input.change}" needs ${String(identityBytes)} bytes for ${String(section.section.covered.length)} checked tasks`;
+            throw new Error(`${detail}, over the ${String(MAX_CONTEXT_BYTES)}-byte context limit; ${section === undefined
+                ? 'shorten the selector'
+                : 'split the section or review tasks individually'}`);
+        }
         const auth = storedAuth ?? (await ensureAuth());
         if (auth === undefined) {
             throw new Error('the workflows host key is unavailable; no review run was created');
@@ -4099,21 +4129,19 @@ export function apply(ctx, config = {}) {
                 : run.context.section === section.section.key) &&
             isOpenRun(run) &&
             services.agents.get(run.session) !== undefined);
+        // An explicit review call attributes the change to the calling session, as
+        // the legacy path does before creating its run: both gate owners evaluate
+        // only attributed changes, so a fresh session's later edits must reach them.
+        const attribute = async () => {
+            await rememberInvolvement(call.workspace, call.session, input.change);
+            await legacyLaneState()?.establishInvolvement(call.workspace, call.session, input.change);
+        };
         if (pending !== undefined) {
+            await attribute();
             return `rule "${input.rule}" review already pending\nrun: ${pending.id}`;
         }
-        const run = await startRunFor(call.workspace, call.session, auth, definition, boundedPromptContext(section === undefined
-            ? {
-                name: input.change,
-                ...(task === undefined ? {} : { taskId: task.id }),
-            }
-            : {
-                name: input.change,
-                taskId: section.recordId,
-                section: section.section.key,
-                sectionTitle: section.section.title,
-                taskIds: section.section.covered.map((entry) => entry.id),
-            }, input.context, input.objective));
+        const run = await startRunFor(call.workspace, call.session, auth, definition, boundedPromptContext(identity, input.context, input.objective));
+        await attribute();
         void refreshPromptRuns(call.workspace);
         return section === undefined
             ? `rule "${input.rule}" review started\nrun: ${run.id}`

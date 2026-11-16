@@ -138,6 +138,7 @@ import {
   interruptEndedRun,
   isOpenRun,
   listAuthenticatedRuns,
+  MAX_CONTEXT_BYTES,
   openRunCount,
   pruneRuns,
   readAuthenticatedRun,
@@ -4938,6 +4939,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }): Promise<string> => {
     const call = compatCallContext()
     const definition = await compatDefinition(call.workspace, input.rule)
+    const reviewStep = definition.steps.find((entry) => entry.executor === 'review')
+    // The legacy alias rejects a task selector on a whole-scope rule; the owned
+    // route keeps that contract instead of silently reviewing the whole scope.
+    if (input.task !== undefined && reviewStep?.review?.scope !== 'task') {
+      throw new Error(
+        `rule "${input.rule}" reviews the whole scope; omit task (only a task-scoped review accepts one)`,
+      )
+    }
     const section =
       input.section === undefined
         ? undefined
@@ -4946,6 +4955,36 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       section === undefined
         ? await compatReviewTask(call.workspace, input.change, definition, input.task)
         : undefined
+    // The section identity and its coverage are required run keys, not prompt
+    // payload: bounding them would replace the context with a truncation marker
+    // and the review step could not resolve the section. Reject before a run.
+    const identity =
+      section === undefined
+        ? {
+            name: input.change,
+            ...(task === undefined ? {} : { taskId: task.id }),
+          }
+        : {
+            name: input.change,
+            taskId: section.recordId,
+            section: section.section.key,
+            sectionTitle: section.section.title,
+            taskIds: section.section.covered.map((entry) => entry.id),
+          }
+    const identityBytes = Buffer.byteLength(JSON.stringify(identity), 'utf8')
+    if (identityBytes > MAX_CONTEXT_BYTES) {
+      const detail =
+        section === undefined
+          ? `the run identity for rule "${input.rule}" needs ${String(identityBytes)} bytes`
+          : `section "${section.section.key}" of change "${input.change}" needs ${String(identityBytes)} bytes for ${String(section.section.covered.length)} checked tasks`
+      throw new Error(
+        `${detail}, over the ${String(MAX_CONTEXT_BYTES)}-byte context limit; ${
+          section === undefined
+            ? 'shorten the selector'
+            : 'split the section or review tasks individually'
+        }`,
+      )
+    }
     const auth = storedAuth ?? (await ensureAuth())
     if (auth === undefined) {
       throw new Error('the workflows host key is unavailable; no review run was created')
@@ -4962,7 +5001,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         isOpenRun(run) &&
         services.agents.get(run.session) !== undefined,
     )
+    // An explicit review call attributes the change to the calling session, as
+    // the legacy path does before creating its run: both gate owners evaluate
+    // only attributed changes, so a fresh session's later edits must reach them.
+    const attribute = async (): Promise<void> => {
+      await rememberInvolvement(call.workspace, call.session, input.change)
+      await legacyLaneState()?.establishInvolvement(call.workspace, call.session, input.change)
+    }
     if (pending !== undefined) {
+      await attribute()
       return `rule "${input.rule}" review already pending\nrun: ${pending.id}`
     }
     const run = await startRunFor(
@@ -4970,23 +5017,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       call.session,
       auth,
       definition,
-      boundedPromptContext(
-        section === undefined
-          ? {
-              name: input.change,
-              ...(task === undefined ? {} : { taskId: task.id }),
-            }
-          : {
-              name: input.change,
-              taskId: section.recordId,
-              section: section.section.key,
-              sectionTitle: section.section.title,
-              taskIds: section.section.covered.map((entry) => entry.id),
-            },
-        input.context,
-        input.objective,
-      ),
+      boundedPromptContext(identity, input.context, input.objective),
     )
+    await attribute()
     void refreshPromptRuns(call.workspace)
     return section === undefined
       ? `rule "${input.rule}" review started\nrun: ${run.id}`

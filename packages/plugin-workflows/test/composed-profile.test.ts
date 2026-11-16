@@ -10,7 +10,7 @@ import { currentSpecDigest } from '../src/host/evidence.ts'
 import { defaultGit, legacyWorktreeDigest } from '../src/host/git.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
-import { writeInvolvement } from '../src/host/involvement.ts'
+import { readInvolvement, writeInvolvement } from '../src/host/involvement.ts'
 import { listAuthenticatedRuns } from '../src/host/runs.ts'
 import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
 
@@ -560,6 +560,111 @@ describe('deprecated aliases route by effective owner', () => {
       )
       return run?.status === 'completed'
     })
+  })
+
+  it('attributes an explicit owned review so a later implementation edit is refused', async () => {
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: false,
+        laneFanout: false,
+      },
+      { seedInvolvement: false },
+    )
+    const started = toolText(
+      await host.callTool('delegate', { rule: 'spec-review', change: CHANGE }),
+    )
+    expect(started).toMatch(/review started/u)
+    // The explicit call is a fresh session's only attribution; both owners
+    // filter their gates on it.
+    expect(await readInvolvement(workspace, SESSION)).toContain(CHANGE)
+    const legacyName = createHash('sha256').update(SESSION).digest('hex').slice(0, 16)
+    const legacy = await readJson(
+      join(workspace, '.dsh', 'delegation', 'sessions', `${legacyName}.json`),
+    )
+    expect(Object.keys((legacy?.changes ?? {}) as Record<string, unknown>)).toContain(CHANGE)
+    // The next turn changes implementation only; the started review settles on
+    // this close, and the owned gates must still refuse the unreviewed edit.
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 2,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await implementationWrite(host, workspace)
+    await closeTurn(host, 2)
+    const gate = host.steers.find((steer) => steer.kind === 'workflows-gate')
+    expect(gate?.text).toContain('changed implementation files')
+  })
+
+  it('rejects a section identity over the run context limit before starting a run', async () => {
+    const workspace = await gitWorkspace(`# Tasks
+
+## 1. Large section (lane 1, owns \`packages/plugin-workflows/**\`)
+
+${Array.from(
+  { length: 220 },
+  (_, index) => `- [x] 1.${String(index + 1)} Large section task ${String(index + 1)}`,
+).join('\n')}
+`)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: false,
+    })
+    // The covered ids are required run identity, so an oversized section must be
+    // refused with the limit instead of starting a run whose context createRun
+    // would replace with a truncation marker.
+    const refused = (await host.callTool('delegate', {
+      rule: 'task-review',
+      change: CHANGE,
+      section: '1',
+    })) as { kind?: string; reason?: string }
+    expect(refused.kind).toBe('deny')
+    expect(refused.reason).toContain('220 checked tasks')
+    expect(refused.reason).toContain('over the 4096-byte context limit')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    expect(
+      (await listAuthenticatedRuns(workspace, auth)).filter(
+        (run) => run.definition.id === 'task-review',
+      ),
+    ).toEqual([])
+  })
+
+  it('rejects a task selector on an owned whole-scope review before starting a run', async () => {
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: false,
+    })
+    const refused = (await host.callTool('delegate', {
+      rule: 'spec-review',
+      change: CHANGE,
+      task: 'missing-task',
+    })) as { kind?: string; reason?: string }
+    expect(refused.kind).toBe('deny')
+    expect(refused.reason).toContain('rule "spec-review" reviews the whole scope; omit task')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    expect(
+      (await listAuthenticatedRuns(workspace, auth)).filter(
+        (run) => run.definition.id === 'spec-review',
+      ),
+    ).toEqual([])
   })
 
   it('keeps the legacy runtime and the legacy note path while the switches are enabled', async () => {
