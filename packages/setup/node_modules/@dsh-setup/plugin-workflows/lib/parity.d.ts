@@ -36,7 +36,12 @@ export interface ParityReport {
  * and the settings schema. Profile-provided verify values are excluded.
  */
 export declare function templateHash(definition: Definition): string;
-/** The report binds these ids whenever owned, independent of settings.legacy. */
+/**
+ * The report binds the five retirement ids whenever owned, independent of
+ * settings.legacy, plus any definition that effectively owns a retirement
+ * review signal through a step of its own: the contributed change-intake runs
+ * the spec-review decision itself, so it needs that signal's certification.
+ */
 export declare function reportBoundDefinitions(definitions: readonly Definition[]): Definition[];
 /** The assets/parity directory, resolving from src and from lib. */
 export declare function parityAssetDirectory(): string;

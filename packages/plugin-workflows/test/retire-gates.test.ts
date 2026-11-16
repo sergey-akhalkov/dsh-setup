@@ -119,6 +119,44 @@ describe('parity load gate and verify settings', () => {
     expect(byId.get('spec-review')).toBe('own')
   })
 
+  it('certifies the contributed intake through the reported spec-review replay', () => {
+    const report = readParityReport().report
+    if (report === undefined) throw new Error('the tracked parity report is missing')
+    const intake = registeredIntake()
+    const path = '/plugins/parity.json'
+    // The shipped report's replayed spec-review cases certify the owned step.
+    expect(parityLoadIssues([intake], report, path, undefined).issues).toEqual([])
+
+    // A missing report, a missing retained entry, and a recorded decision
+    // mismatch each refuse the intake's owned spec-review path.
+    const missing = parityLoadIssues([intake], undefined, path, 'not found')
+    expect([...missing.refused]).toContain('change-intake')
+    expect(missing.issues.join('\n')).toContain('delegation.gates.specReview: true')
+
+    const absent = parityLoadIssues(
+      [intake],
+      {
+        ...report,
+        retained: Object.fromEntries(
+          Object.entries(report.retained).filter(([group]) => group !== 'spec-review'),
+        ),
+      },
+      path,
+      undefined,
+    )
+    expect([...absent.refused]).toContain('change-intake')
+    expect(absent.issues.join('\n')).toContain('does not carry the retained "spec-review" cases')
+
+    const mismatch = parityLoadIssues(
+      [intake],
+      { ...report, mismatches: ['the spec-review replay differs'] },
+      path,
+      undefined,
+    )
+    expect([...mismatch.refused]).toContain('change-intake')
+    expect(mismatch.issues.join('\n')).toContain('decision mismatch')
+  })
+
   it('keeps the rollback switch inside the bounded 300-character diagnostic', () => {
     const missing = parityLoadIssues(
       loadShippedDefinitions(),

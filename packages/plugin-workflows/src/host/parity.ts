@@ -77,7 +77,6 @@ export function templateHash(definition: Definition): string {
   return `sha256-${createHash('sha256').update(canonical(template)).digest('hex')}`
 }
 
-/** Definitions that declare a legacy signal are report-bound when `own`. */
 /** The five retirement ids, bound by id even if editable metadata is removed. */
 const RETIREMENT_BINDINGS: Readonly<Record<string, { plugin: string; signal: string }>> = {
   retro: { plugin: 'goal-continuity', signal: 'work_checkpoint' },
@@ -87,12 +86,18 @@ const RETIREMENT_BINDINGS: Readonly<Record<string, { plugin: string; signal: str
   'integration-review': { plugin: 'delegation-rules', signal: 'integration-review' },
 }
 
-/** The report binds these ids whenever owned, independent of settings.legacy. */
+/**
+ * The report binds the five retirement ids whenever owned, independent of
+ * settings.legacy, plus any definition that effectively owns a retirement
+ * review signal through a step of its own: the contributed change-intake runs
+ * the spec-review decision itself, so it needs that signal's certification.
+ */
 export function reportBoundDefinitions(definitions: readonly Definition[]): Definition[] {
   return definitions.filter(
     (definition) =>
       definition.settings.gateOwnership === 'own' &&
-      RETIREMENT_BINDINGS[definition.id] !== undefined,
+      (RETIREMENT_BINDINGS[definition.id] !== undefined ||
+        ownedRetirementSignals(definition).length > 0),
   )
 }
 
@@ -248,6 +253,22 @@ export type RetainedGate =
   | 'task-progress'
   | 'lane-assignment'
 
+/**
+ * The retirement review signals a definition owns through its own steps. A
+ * contributed definition such as change-intake runs the spec-review decision
+ * itself, so the signal's retained replay certifies that path too.
+ */
+function ownedRetirementSignals(definition: Definition): RetainedGate[] {
+  if (definition.settings.gateOwnership !== 'own') return []
+  const signals = new Set<RetainedGate>()
+  for (const step of definition.steps) {
+    if ((step.ownership ?? 'own') !== 'own') continue
+    const signal = step.legacy?.signal
+    if (signal === 'spec-review' || signal === 'integration-review') signals.add(signal)
+  }
+  return [...signals].sort()
+}
+
 /** Whether every case of one retained group replayed with a matching decision. */
 function retainedCertified(entry: ParityRetainedEntry | undefined): boolean {
   return (
@@ -307,6 +328,14 @@ export function parityLoadIssues(
   if (report === undefined) {
     for (const definition of bound) {
       refused.add(definition.id)
+      if (RETIREMENT_BINDINGS[definition.id] === undefined) {
+        for (const signal of ownedRetirementSignals(definition)) {
+          issues.push(
+            `workflow definition "${definition.id}": set ${legacySwitchFor('delegation-rules', signal)} to fall back to the legacy gate; the parity report is missing at "${reportPath}" (${reportError ?? 'no report'})`,
+          )
+        }
+        continue
+      }
       const rollback = retirementSwitch(definition.id)
       issues.push(
         `workflow definition "${definition.id}": set ${rollback} to fall back to the legacy gate; the parity report is missing at "${reportPath}" (${reportError ?? 'no report'})`,
@@ -320,6 +349,18 @@ export function parityLoadIssues(
       : `the parity report records ${String(report.mismatches.length)} mismatch(es) ("${(report.mismatches[0] ?? '').slice(0, 200)}"); a decision mismatch fails certification`
   const verifyIsBound = bound.some((definition) => definition.id === 'verify')
   for (const definition of bound) {
+    if (RETIREMENT_BINDINGS[definition.id] === undefined) {
+      // A contributed step owns the signal and writes the shared record, so the
+      // signal's replayed retained cases certify it; no template hash covers a
+      // definition the workflows plugin does not ship.
+      for (const signal of ownedRetirementSignals(definition)) {
+        const retained = retiredGateIssue(report, undefined, reportPath, signal)
+        if (retained === undefined) continue
+        refused.add(definition.id)
+        issues.push(`workflow definition "${definition.id}": ${retained}`)
+      }
+      continue
+    }
     const rollback = retirementSwitch(definition.id)
     if (mismatch !== undefined) {
       refused.add(definition.id)
