@@ -409,9 +409,17 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 - **Protect the Harness home.** An agent command must never delete, move, or wholesale reset
   `~/.dsh`, `~/.pg0`, `~/.hindsight`, or the desktop profile, and must not run recursive deletes
   outside the workspace. A clean-state test sets a throwaway `DSH_HOME` (the `pnpm dogfood` path).
-  Any destructive operation against live data requires explicit owner confirmation and a completed
+  Any destructive operation against live data requires explicit owner confirmation plus a completed
   Hindsight export or backup first. On 2026-10-29 a careless recursive delete destroyed every session
   and the local Hindsight database; `docs/hindsight.md` owns the export and restore procedure.
+- **Live acceptance runs locally, not through the owner.** An agent runs review/acceptance scenarios
+  itself in a throwaway profile: copy the owner profile with the `pnpm dogfood` path, install the
+  built bundles into that `DSH_HOME`, create a fake OpenSpec change in a temp workspace, and drive
+  the scenarios (native task review with record plus committed approval, whole-spec review, a
+  refused close with a missing record, a lane steer) through the composed runtime or the throwaway
+  web host. Verify the records, approvals, and the Workflows route's data; the browser click-through
+  is reported as not run when browser control is absent, never emulated. Never install into or reload
+  the live desktop profile for this, and always delete the temp home after the run.
 - **Never hand-edit generated files** (`packages/*/cordis.patch.yml`, `packages/*/lib/**`,
   `packages/setup/package.json`, `packages/setup/cordis.patch.yml`,
   `packages/setup/node_modules/**`). Run `pnpm gen` and/or `pnpm build`, then commit the result.
