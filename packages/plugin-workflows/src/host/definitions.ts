@@ -1477,7 +1477,7 @@ export interface LegacySignalState {
 }
 
 /** The exact profile switch that owns each legacy signal. */
-const SWITCH_BY_SIGNAL: Readonly<Record<string, string>> = {
+export const SWITCH_BY_SIGNAL: Readonly<Record<string, string>> = {
   'spec-review': 'delegation.gates.specReview',
   'task-review': 'delegation.gates.workflowOwned',
   archive: 'delegation.gates.workflowOwned',

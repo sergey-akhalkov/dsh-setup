@@ -225,8 +225,9 @@ export interface ParityCheckResult {
 /** Recompute and compare with the tracked report, ignoring the informational `at`. */
 export async function checkParityReport(
   file = shippedParityReportPath(),
+  cases: readonly ParityCase[] = PARITY_CASES,
 ): Promise<ParityCheckResult> {
-  const current = await buildParityReport()
+  const current = await buildParityReport(new Date(), cases)
   if (current.mismatches.length > 0) {
     return {
       ok: false,

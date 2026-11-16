@@ -1,4 +1,4 @@
-import type { Definition } from './definitions.js';
+import { type Definition } from './definitions.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -16,6 +16,11 @@ export interface ParityGateEntry {
     readonly mismatches: number;
     readonly status: string;
 }
+export interface ParityRetainedEntry {
+    readonly cases: number;
+    readonly replayed: number;
+    readonly status: string;
+}
 export interface ParityReport {
     readonly v: 1;
     readonly change: string;
@@ -23,10 +28,7 @@ export interface ParityReport {
     readonly templates: Readonly<Record<string, string>>;
     readonly settings: Readonly<Record<string, ParitySettingsEntry>>;
     readonly gates: Readonly<Record<string, ParityGateEntry>>;
-    readonly retained: Readonly<Record<string, {
-        readonly cases: number;
-        readonly status: string;
-    }>>;
+    readonly retained: Readonly<Record<string, ParityRetainedEntry>>;
     readonly mismatches: readonly string[];
 }
 /**
@@ -46,6 +48,15 @@ export declare function readParityReport(file?: string): {
 };
 /** The rollback switch a refused definition names. */
 export declare function legacySwitchFor(plugin: string, signal: string): string;
+/** A retired gate certified by the report's replayed retained cases. */
+export type RetainedGate = 'spec-review' | 'integration-review' | 'task-progress' | 'lane-assignment';
+/**
+ * The runtime certification of one retired gate: a recorded mismatch, an absent
+ * case table, or a replay that did not complete is a failure. A missing or
+ * changed evaluator surfaces as such an entry, so the gate is never certified
+ * from a stale table. Returns one line naming the cause and the rollback.
+ */
+export declare function retiredGateIssue(report: ParityReport | undefined, reportError: string | undefined, reportPath: string, group: RetainedGate): string | undefined;
 /** Every issue that blocks one `own` definition from loading, with its id. */
 export interface ParityLoadResult {
     readonly issues: readonly string[];

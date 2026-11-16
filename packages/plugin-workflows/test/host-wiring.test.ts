@@ -1164,8 +1164,12 @@ describe('parity report refusal at runtime', () => {
     const missing = join(directory, 'missing.json')
     const failed = join(directory, 'failed.json')
     const mismatch = join(directory, 'mismatch.json')
-    const failedReport = structuredClone(report) as { gates: Record<string, { status: string }> }
+    const failedReport = structuredClone(report) as {
+      gates: Record<string, { status: string }>
+      retained: Record<string, { replayed: number; status: string }>
+    }
     for (const gate of Object.values(failedReport.gates)) gate.status = 'fail'
+    for (const retained of Object.values(failedReport.retained)) retained.status = 'failed'
     const mismatchReport = structuredClone(report) as { templates: Record<string, string> }
     for (const key of Object.keys(mismatchReport.templates)) {
       mismatchReport.templates[key] = 'sha256-' + 'a'.repeat(64)
@@ -1182,6 +1186,8 @@ describe('parity report refusal at runtime', () => {
       const definitions = await runReport(variant)
       expect(definitions).not.toContain('verify')
       expect(definitions).not.toContain('retro')
+      expect(definitions).not.toContain('spec-review')
+      expect(definitions).not.toContain('integration-review')
     }
     // An external report override cannot rescue a missing packaged report: the
     // production loader only reads the packaged path.
@@ -7640,6 +7646,41 @@ describe('engine-owned gates', () => {
     await tool?.execute(note, { agent: host.agent })
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(host.steers.length).toBe(refusals)
+  })
+
+  it('refuses an owned gate whose retained parity replay is not certified', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks\n\n- [ ] 1.1 First task\n`)
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+    const real = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL('../assets/parity/retire-legacy-gates.json', import.meta.url)),
+        'utf8',
+      ),
+    ) as { retained: Record<string, unknown> }
+    parityMock.active = true
+    parityMock.report = {
+      ...real,
+      retained: {
+        ...real.retained,
+        'task-progress': { cases: 4, replayed: 3, status: 'failed' },
+      },
+    }
+    try {
+      const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: true })
+      await gateWrite(host, 'openspec/changes/auth/proposal.md')
+      await gateWrite(host, 'src/app.ts')
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      const refused = steered(host)
+      expect(refused).toContain('rule "task-progress"')
+      expect(refused).toContain('did not replay')
+      expect(refused).toContain('delegation.gates.taskProgress: true')
+    } finally {
+      parityMock.active = false
+      parityMock.report = undefined
+      parityMock.error = undefined
+      parityMock.path = undefined
+    }
   })
 
   it('refuses goal completion without a portable PASS and allows it with one', async () => {

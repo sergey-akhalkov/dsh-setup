@@ -1055,7 +1055,7 @@ function signalEnabled(plugin, signal, installed, enabled) {
     return enabled.has(`${plugin}/${signal}`);
 }
 /** The exact profile switch that owns each legacy signal. */
-const SWITCH_BY_SIGNAL = {
+export const SWITCH_BY_SIGNAL = {
     'spec-review': 'delegation.gates.specReview',
     'task-review': 'delegation.gates.workflowOwned',
     archive: 'delegation.gates.workflowOwned',

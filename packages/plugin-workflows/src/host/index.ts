@@ -95,6 +95,7 @@ import {
   parityLoadIssues,
   readParityReport,
   resolveVerifySettings,
+  retiredGateIssue,
   shippedParityReportPath,
   taskReviewCompletion,
   withVerifySettings,
@@ -4156,6 +4157,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const active = await activeChangeNames(workspace)
     for (const change of [...changes]) if (!active.has(change)) changes.delete(change)
     if (changes.size === 0) return undefined
+    // An owned gate acts only when the tracked report certifies its replayed
+    // cases; an uncertified gate refuses the close instead of passing silently.
+    const texts: string[] = []
+    const parity = readParityReport()
+    for (const [owned, group] of [
+      [progressOwned, 'task-progress'],
+      [laneOwned, 'lane-assignment'],
+    ] as const) {
+      if (!owned) continue
+      const issue = retiredGateIssue(parity.report, parity.error, shippedParityReportPath(), group)
+      if (issue !== undefined) texts.push(`rule "${group}": ${issue}`)
+    }
+    if (texts.length > 0) return texts.join('\n')
     // A shell edit leaves no write observation; compare the implementation state
     // the turn started from with the state at this close.
     const baseline = implementationBaseline.get(session)
@@ -4174,7 +4188,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     // The task-review evidence and the note both follow their signal's owner.
     const reviewOwner = legacy.enabled.has('delegation-rules/task-review') ? 'legacy' : 'workflows'
     const noteOwner = progressOwned ? 'workflows' : 'legacy'
-    const texts: string[] = []
     for (const change of [...changes].sort()) {
       // The tick that completed this change's task may already be evicted from
       // the bounded observation buffer; the host retained its ids this turn.

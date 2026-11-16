@@ -257,6 +257,8 @@ export interface LegacySignalState {
     /** `${plugin}/${signal}` entries that would actually steer. */
     readonly enabled: ReadonlySet<string>;
 }
+/** The exact profile switch that owns each legacy signal. */
+export declare const SWITCH_BY_SIGNAL: Readonly<Record<string, string>>;
 /**
  * Resolve ownership per definition and step against the installed and enabled
  * legacy sources. A `defer` needs an enabled source; an `own` step may not
