@@ -2,6 +2,81 @@
 
 ## MODIFIED Requirements
 
+### Requirement: Whole-spec review evidence
+
+A whole-spec review record SHALL be read from `.dsh/workflows/records/spec-review/<change>/spec.json`.
+The legacy `.dsh/delegation/spec-review/<change>/spec.json` path and the `defer` ownership path are
+removed with the delegation plugin, so no enabled legacy switch can select a legacy record. The
+record MUST match `rule: spec-review`, the change name, `phase: spec`, `scope: whole`, and a digest
+equal to the current change spec digest; only `PASS` completes the step, while an `ERROR` allows an
+intermediate close with the failure visible and MUST NOT approve. A task-scoped record MUST NOT
+satisfy a whole-spec step.
+
+#### Scenario: Whole-spec record completes the review step
+
+- **WHEN** `.dsh/workflows/records/spec-review/auth/spec.json` has rule `spec-review`, change `auth`, phase `spec`, scope `whole`, verdict `PASS`, and the current spec digest
+- **THEN** the review step is marked done with the record path and digest
+
+#### Scenario: Legacy record is not consulted
+
+- **WHEN** only `.dsh/delegation/spec-review/auth/spec.json` exists
+- **THEN** the step reads no record and its ownership cannot select a legacy path
+
+#### Scenario: Stale whole-spec record blocks
+
+- **WHEN** the record's digest differs from the current change spec digest
+- **THEN** the step is not done and the close steers a fresh whole-spec review
+
+#### Scenario: Task-scoped record is not whole-spec evidence
+
+- **WHEN** only a task-scoped `PASS` exists for the change
+- **THEN** the whole-spec step remains open
+
+### Requirement: Retirement parity
+
+A legacy gate behavior SHALL move to a workflow `own` definition only after a release-bound parity
+report passes. The report SHALL be a tracked asset at `assets/parity/retire-legacy-gates.json`,
+replay legacy scenarios in shadow, and include the covered template hashes. `pnpm workflows:parity
+--check` MUST fail on a missing, stale, or mismatched report; a fresh installation SHALL load the
+shipped report and `own` definitions. For a `soft` legacy signal the compared decision SHALL be the
+per-turn sequence, and the shipped integration definition SHALL reproduce the legacy once-only
+refusal with `maxBlocks: 1`; the visible violation recorded after an exhausted soft budget is the
+declared, documented difference and MUST NOT count as a parity mismatch. An exhausted soft budget
+SHALL settle that step as `completed-soft`, never as a pass, so the run keeps no open required step
+and MUST NOT block an otherwise authorized archive. After the delegation plugin is removed, a
+failing parity report is remedied by fixing the report or definition; no legacy switch is available
+to re-enable.
+
+#### Scenario: Parity passes
+
+- **WHEN** every legacy scenario produces the same allow/refuse decision in the workflow shadow run
+- **THEN** the workflow definition may be `own`
+
+#### Scenario: Parity mismatch has no legacy fallback
+
+- **WHEN** a retained scenario mismatches after the plugin is removed
+- **THEN** `pnpm workflows:parity --check` fails and the remedy names the report or definition, not a legacy switch
+
+#### Scenario: Fresh installation
+
+- **WHEN** a fresh installation loads the shipped report and `own` definitions
+- **THEN** the parity report is present and every bound definition loads
+
+#### Scenario: Parity fails
+
+- **WHEN** a retained scenario produces a different allow/refuse decision in shadow
+- **THEN** `pnpm workflows:parity --check` fails with the scenario and the owned definition is refused
+
+#### Scenario: Report is release-bound
+
+- **WHEN** the release changes the tracked report without the matching template hashes
+- **THEN** `--check` fails and the release is blocked
+
+#### Scenario: Missing report at runtime
+
+- **WHEN** a definition is `own` and the report is missing
+- **THEN** the definition is refused and the remedy names `pnpm workflows:parity`
+
 ### Requirement: Owned task-review gate
 
 When `task-review` is `own`, the workflow SHALL start the review through the review executor only when
@@ -135,7 +210,16 @@ The work-progress gate SHALL be owned by the engine: a code-changing turn SHALL 
 has a newly checked and reviewed task or a `note` action whose worktree digest matches the current
 worktree. A stale note MUST NOT authorize the close and MUST NOT count as a `PASS`. The note SHALL be
 written by the `note` action to `.dsh/workflows/notes/<change>.json` and SHALL be readable by any
-session.
+session. The `note` action MUST require the change and the task id and MUST record a bounded reason
+and a timestamp; it SHALL accept only `in-progress` or `blocked` and MUST reject an unknown or
+checked task.
+
+#### Scenario: Progress note fields and validation
+
+- **WHEN** a `note` call names an unchecked task with status `in-progress` and a reason
+- **THEN** the note records the change, task id, status, reason, timestamp, and current digest
+- **AND WHEN** the same call names an unknown or checked task
+- **THEN** the note is refused and nothing is written
 
 #### Scenario: Unchecked task still needs a note
 
@@ -277,14 +361,35 @@ Multiple runs MUST proceed concurrently up to the configured queue limit.
 
 A duplicate review request MUST be identified by the definition, change, task or phase, prepared
 digest, and resolved reviewer. A second request with the same identity while pending MUST return the
-existing run handle and MUST NOT start a duplicate; a changed digest or reviewer MUST be a distinct run.
-Distinct definitions reviewing the same change or task MUST queue as separate runs and write their own
-records, and a late completion MUST NOT replace the authoritative record.
+existing run handle and MUST NOT start a duplicate; a changed digest or reviewer MUST be a distinct
+run.
 
 #### Scenario: Duplicate pending request
 
 - **WHEN** a review is already pending for the same identity and is requested again
 - **THEN** the existing run handle is returned and no second reviewer starts
+
+#### Scenario: Changed digest is distinct
+
+- **WHEN** a review request has the same definition and task but a different prepared digest
+- **THEN** a new run is created and the old handle is not joined
+
+#### Scenario: Late completion
+
+- **WHEN** a run completes after the authoritative record was written
+- **THEN** its result is reported as discarded and does not replace the record
+
+### Requirement: Shared review conversation key
+
+Distinct rules reviewing the same change or task SHALL share one conversation key and execute
+serially: a second definition MUST wait for the first even when queue capacity remains. Distinct
+definitions MUST queue as separate runs and write their own records, and a late completion MUST NOT
+replace the authoritative record.
+
+#### Scenario: Shared conversation key serializes
+
+- **WHEN** two rules review the same task with queue capacity remaining
+- **THEN** the second waits for the first and both keep their own records
 
 #### Scenario: Changed digest is distinct
 
@@ -1119,6 +1224,16 @@ independent of the engine's delivery choice.
 - **WHEN** a review target uses an in-process provider
 - **THEN** the service catalogs the local child exactly as before (a continuable child accepts follow-up), and the engine's delivery choice only decides whether its settlement notice is delivered
 
+### Requirement: Shipped strong reviewer defaults
+
+The `reviewers.codex` entry SHALL select the shipped strong Codex model with `xhigh` reasoning
+effort, and a review step naming `codex` SHALL forward that model and effort; a profile may override
+the entry but the shipped default MUST NOT be the weaker model.
+
+#### Scenario: Shipped reviewer defaults
+
+- **WHEN** a review step names the `codex` reviewer with the shipped setup
+- **THEN** the provider starts with the strong model and `xhigh` effort
 ## REMOVED Requirements
 
 ### Requirement: Gate-only switches
