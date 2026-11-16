@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "archiveGate": false,
+  "archiveGate": true,
   "taskRule": "task-review",
   "reviewerProvider": "codex-subagent",
   "cutoff": "v0.12.0",
