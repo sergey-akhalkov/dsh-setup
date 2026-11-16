@@ -7,13 +7,7 @@ import { evaluateLaneParity, evaluateProgressParity, type LaneParityLane } from 
 import { defaultGit, type GitRunner, legacyWorktreeDigest, worktreeDigest } from './git.js'
 import { type NoteOwner, notePathFor, type ProgressNote, readProgressNote } from './notes.js'
 import { type ReviewUnit, reviewerBinding, reviewUnitText, taskReviewCoverage } from './parity.js'
-import {
-  checkedTaskIds,
-  numberedTasks,
-  resolveTaskSection,
-  type TaskSection,
-  taskLanes,
-} from './tasks.js'
+import { checkedTaskIds, numberedTasks, taskLanes, taskSections } from './tasks.js'
 import { normalizedWorkspacePath } from './write-attribution.js'
 
 export { type ReviewUnit, reviewUnitText }
@@ -207,15 +201,11 @@ export async function reviewUnits(
   }
   const units: ReviewUnit[] = []
   const sectioned = new Set<string>()
-  for (const lane of taskLanes(plan)) {
-    if (lane.checked.length === 0) continue
-    let section: TaskSection
-    try {
-      section = resolveTaskSection(plan, lane.title, change)
-    } catch {
-      // A section that cannot resolve keeps its tasks on the per-task unit.
-      continue
-    }
+  // The section parser is the one `resolveTaskSection` and the start path use;
+  // `taskLanes` reads only `## ` headings and would miss a tab-separated one.
+  for (const section of taskSections(plan)) {
+    // Tasks before the first heading are outside every section: per-task units.
+    if (section.title === '') continue
     for (const task of section.covered) sectioned.add(task.id)
     const absent = section.covered.filter((task) => missing.has(task.id))
     if (absent.length === 0) continue

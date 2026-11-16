@@ -55,6 +55,9 @@ export interface TaskSection {
  * task id. It is not a task id: the section record covers several tasks.
  */
 export declare function sectionRecordId(key: string): string;
+/** Every level-2 section with its numbered tasks, checked or not; the untitled
+ * leading group carries the tasks before the first heading. */
+export declare function taskSections(markdown: string): TaskSection[];
 /**
  * Resolve a section selector against the level-2 task groups: the heading
  * number (`1`), its wildcard form (`1.x`), the normalized or bare title, or

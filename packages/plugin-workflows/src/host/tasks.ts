@@ -189,8 +189,9 @@ function sectionOf(title: string, tasks: NumberedTaskLine[]): TaskSection {
   }
 }
 
-/** Every level-2 section with its numbered tasks, checked or not. */
-function taskSections(markdown: string): TaskSection[] {
+/** Every level-2 section with its numbered tasks, checked or not; the untitled
+ * leading group carries the tasks before the first heading. */
+export function taskSections(markdown: string): TaskSection[] {
   const sections: Array<{ title: string; tasks: NumberedTaskLine[] }> = []
   const untitled: NumberedTaskLine[] = []
   let current: { title: string; tasks: NumberedTaskLine[] } | undefined

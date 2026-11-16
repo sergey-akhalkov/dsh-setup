@@ -9,13 +9,7 @@ import {
   resolveOwnership,
   SWITCH_BY_SIGNAL,
 } from './definitions.js'
-import {
-  type NumberedTaskLine,
-  resolveTaskSection,
-  sectionRecordId,
-  type TaskSection,
-  taskLanes,
-} from './tasks.js'
+import { type NumberedTaskLine, sectionRecordId, taskSections } from './tasks.js'
 
 /**
  * The release-bound retirement parity: the tracked report, its template
@@ -892,15 +886,11 @@ export function taskReviewCoverage(
   const taskGaps = checkedTaskLines(markdown).map((task) => ({ task, gap: taskGap(task) }))
   const missing = new Set(taskGaps.filter((entry) => entry.gap !== undefined).map((e) => e.task.id))
   const grouped = new Set<string>()
-  for (const lane of taskLanes(markdown)) {
-    if (lane.checked.length === 0) continue
-    let section: TaskSection
-    try {
-      section = resolveTaskSection(markdown, lane.title, change)
-    } catch {
-      // A section that cannot resolve keeps the per-task lines below.
-      continue
-    }
+  // The section parser is the one resolution and the start path use, so a
+  // tab-separated heading groups here too.
+  for (const section of taskSections(markdown)) {
+    // Tasks before the first heading are outside every section.
+    if (section.title === '') continue
     const absent = section.covered.filter((task) => missing.has(task.id))
     if (absent.length < 2) continue
     gaps.push(

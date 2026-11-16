@@ -6,7 +6,7 @@ import { evaluateLaneParity, evaluateProgressParity } from './gates.js';
 import { defaultGit, legacyWorktreeDigest, worktreeDigest } from './git.js';
 import { notePathFor, readProgressNote } from './notes.js';
 import { reviewerBinding, reviewUnitText, taskReviewCoverage } from './parity.js';
-import { checkedTaskIds, numberedTasks, resolveTaskSection, taskLanes, } from './tasks.js';
+import { checkedTaskIds, numberedTasks, taskLanes, taskSections } from './tasks.js';
 import { normalizedWorkspacePath } from './write-attribution.js';
 export { reviewUnitText };
 const WORKER_LANE_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
@@ -147,17 +147,12 @@ export async function reviewUnits(workspace, change, owner) {
     }
     const units = [];
     const sectioned = new Set();
-    for (const lane of taskLanes(plan)) {
-        if (lane.checked.length === 0)
+    // The section parser is the one `resolveTaskSection` and the start path use;
+    // `taskLanes` reads only `## ` headings and would miss a tab-separated one.
+    for (const section of taskSections(plan)) {
+        // Tasks before the first heading are outside every section: per-task units.
+        if (section.title === '')
             continue;
-        let section;
-        try {
-            section = resolveTaskSection(plan, lane.title, change);
-        }
-        catch {
-            // A section that cannot resolve keeps its tasks on the per-task unit.
-            continue;
-        }
         for (const task of section.covered)
             sectioned.add(task.id);
         const absent = section.covered.filter((task) => missing.has(task.id));

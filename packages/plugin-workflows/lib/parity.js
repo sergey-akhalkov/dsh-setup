@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveOwnership, SWITCH_BY_SIGNAL, } from './definitions.js';
-import { resolveTaskSection, sectionRecordId, taskLanes, } from './tasks.js';
+import { sectionRecordId, taskSections } from './tasks.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -676,17 +676,12 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review') {
     const taskGaps = checkedTaskLines(markdown).map((task) => ({ task, gap: taskGap(task) }));
     const missing = new Set(taskGaps.filter((entry) => entry.gap !== undefined).map((e) => e.task.id));
     const grouped = new Set();
-    for (const lane of taskLanes(markdown)) {
-        if (lane.checked.length === 0)
+    // The section parser is the one resolution and the start path use, so a
+    // tab-separated heading groups here too.
+    for (const section of taskSections(markdown)) {
+        // Tasks before the first heading are outside every section.
+        if (section.title === '')
             continue;
-        let section;
-        try {
-            section = resolveTaskSection(markdown, lane.title, change);
-        }
-        catch {
-            // A section that cannot resolve keeps the per-task lines below.
-            continue;
-        }
         const absent = section.covered.filter((task) => missing.has(task.id));
         if (absent.length < 2)
             continue;
