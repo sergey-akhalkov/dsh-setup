@@ -125,7 +125,10 @@ releases at once (it would delete code before the live proof `Migration completi
 the only call that carried an explicit task or section to a task-scoped review. The folded `Explicit task
 review selection` and `Section-scoped review` requirements keep that selector, so the `workflows` `start`
 action accepts `change` with `task` or `section` for a `task-review` definition, validates the selector
-against the checked tasks and the definition, and records it in the run context. Every surviving printed
+against the checked tasks and the definition, and records it in the run context. The three shipped review definitions opt in to model starts
+(`allowModelStart: true`) while the generic refusal for definitions that do not opt in stays; the
+audit and apply-loop calls print the definition matching the selected approval rule (the marker's
+`taskRule`, default `task-review`). Every surviving printed
 review call uses it: the work-progress steer, the approval gap formatter, and the parity approval
 diagnostic. Rejected: leaving the printed calls pointing at the deleted tool; keeping `delegate` as a
 hidden alias (the change removes the tool); a new review-scoped tool (the existing action is the tool).

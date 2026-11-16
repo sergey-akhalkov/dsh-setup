@@ -37,7 +37,7 @@ The repository SHALL provide `pnpm reviews:check --change <name>`, `pnpm reviews
 `pnpm reviews:check --push`, plus `pnpm hooks:install` for the pre-push hook. The missing-approval output
 MUST name the change, the task number and text, the expected record path, and the exact supported
 `workflows` review call with the explicit task selector:
-`workflows(action: "start", definitionId: "task-review", change: "<change>", task: "<taskId>")`. The
+`workflows(action: "start", definitionId: "<the definition for the selected approval taskRule, default task-review>", change: "<change>", task: "<taskId>")`. The
 retired `reviews:export` command is not part of the audit surface. The archive workflow guidance and the
 contributor documentation MUST point at the audit before an archive.
 
@@ -45,6 +45,11 @@ contributor documentation MUST point at the audit before an archive.
 
 - **WHEN** a contributor runs the audit for an active change with an unreviewed checked task
 - **THEN** the output lists the task and the exact `workflows` review call, and exits non-zero
+
+#### Scenario: Non-default task rule
+
+- **WHEN** `openspec/review-approval.json` selects a supported non-default `taskRule`
+- **THEN** the printed recovery call names that rule's workflow definition and the resulting approval satisfies the audit
 
 #### Scenario: Audit all archived changes
 
