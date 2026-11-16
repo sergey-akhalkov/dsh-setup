@@ -428,6 +428,9 @@ const SECTION_TASKS = `# Tasks
 - [ ] 2.1 Doc task
 `
 
+/** The same section with its second task still unchecked. */
+const PENDING_SECTION_TASKS = SECTION_TASKS.replace('- [x] 1.2', '- [ ] 1.2')
+
 function toolText(value: unknown): string {
   return typeof value === 'object' && value !== null && 'text' in value
     ? String((value as { text: unknown }).text)
@@ -559,6 +562,52 @@ describe('deprecated aliases route by effective owner', () => {
         (entry) => entry.id === runs[0]?.id,
       )
       return run?.status === 'completed'
+    })
+  })
+
+  it('starts a distinct section run when a task is checked while one is pending', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(PENDING_SECTION_TASKS)
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(workspace)
+    applyDelegation(host.ctx as never, delegation as never)
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const taskReviews = async () =>
+      (await listAuthenticatedRuns(workspace, auth)).filter(
+        (run) => run.definition.id === 'task-review',
+      )
+
+    // The first section run covers the one checked task and stays pending.
+    expect(
+      toolText(
+        await host.callTool('delegate', { rule: 'task-review', change: CHANGE, section: '1' }),
+      ),
+    ).toMatch(/section "1" review started/u)
+    const first = await taskReviews()
+    expect(first).toHaveLength(1)
+    expect(first[0]?.context).toMatchObject({ section: '1', taskIds: [TASK_ID] })
+
+    // Check another task of the same section while the first run is pending.
+    await writeFile(
+      join(workspace, 'openspec', 'changes', CHANGE, 'tasks.md'),
+      SECTION_TASKS,
+      'utf8',
+    )
+    const started = toolText(
+      await host.callTool('delegate', { rule: 'task-review', change: CHANGE, section: '1' }),
+    )
+    // The old run's coverage misses the newly checked task, so a distinct run
+    // covering both tasks starts instead of the stale run being reused.
+    expect(started).toMatch(/review started/u)
+    const runs = await taskReviews()
+    expect(runs).toHaveLength(2)
+    expect(runs.find((run) => run.id !== first[0]?.id)?.context).toMatchObject({
+      name: CHANGE,
+      section: '1',
+      taskIds: [TASK_ID, SECOND_TASK_ID],
     })
   })
 

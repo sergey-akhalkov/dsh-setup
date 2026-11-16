@@ -381,6 +381,22 @@ function sectionRunOf(context) {
     const taskIds = raw.filter((entry) => typeof entry === 'string' && TASK_ID_PATTERN.test(entry));
     return taskIds.length === raw.length ? { key, recordId, taskIds } : undefined;
 }
+/**
+ * Whether a pending section run recorded exactly the requested section content.
+ * Reusing a run whose coverage misses a newly checked task would review the
+ * section without it, so a changed coverage starts a distinct run.
+ */
+function sameSectionCoverage(context, section, recordId) {
+    const run = sectionRunOf(context);
+    if (run === undefined || run.recordId !== recordId)
+        return false;
+    if (run.key !== section.key || context.sectionTitle !== section.title)
+        return false;
+    if (run.taskIds.length !== section.covered.length)
+        return false;
+    const covered = new Set(section.covered.map((task) => task.id));
+    return run.taskIds.every((id) => covered.has(id));
+}
 /** Build one section coverage record from the parsed section and covered tasks. */
 function sectionReviewOf(section, covered, recordId) {
     return {
@@ -4126,7 +4142,7 @@ export function apply(ctx, config = {}) {
             run.context.name === input.change &&
             (section === undefined
                 ? task === undefined || run.context.taskId === task.id
-                : run.context.section === section.section.key) &&
+                : sameSectionCoverage(run.context, section.section, section.recordId)) &&
             isOpenRun(run) &&
             services.agents.get(run.session) !== undefined);
         // An explicit review call attributes the change to the calling session, as
