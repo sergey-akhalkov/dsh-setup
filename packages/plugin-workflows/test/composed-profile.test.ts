@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { apply as applyDelegation } from '../../plugin-delegation-rules/src/host/index.ts'
@@ -75,7 +75,10 @@ const TEMP_DIRECTORIES: string[] = []
 afterEach(async () => {
   delete process.env.DSH_WORKFLOWS_HOST_KEY
   for (const directory of TEMP_DIRECTORIES.splice(0)) {
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    // Windows transiently locks a just-closed workspace (git children and the
+    // scanner); retry long enough for the handle to drop instead of failing the
+    // test in cleanup.
+    await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   }
 })
 
@@ -999,16 +1002,21 @@ async function openComposed(
 }
 
 /** One implementation write observed by both runtimes. */
-async function implementationWrite(host: FakeHost, workspace: string): Promise<void> {
-  await mkdir(join(workspace, 'src'), { recursive: true })
-  await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+async function implementationWrite(
+  host: FakeHost,
+  workspace: string,
+  path = 'src/app.ts',
+): Promise<void> {
+  const file = join(workspace, path)
+  await mkdir(dirname(file), { recursive: true })
+  await writeFile(file, 'export const app = 1\n', 'utf8')
   await host.emit(
     'tools/result',
     {
       agent: host.agent,
       callId: 'impl-write',
       name: 'write',
-      arguments: { file_path: 'src/app.ts' },
+      arguments: { file_path: path },
     },
     { isError: false, content: [{ type: 'text', text: 'ok' }] },
   )
@@ -1155,6 +1163,233 @@ describe('composed rollback of each engine gate', () => {
     expect(host.steers.find((steer) => steer.kind === 'workflows-gate')?.text).toContain(
       'changed implementation files',
     )
+  })
+})
+
+/** The taskProgress-only rollback: the legacy progress gate stays, the lane is owned. */
+const TASK_PROGRESS_ONLY = {
+  workflowOwned: false,
+  specReview: false,
+  integrationReview: false,
+  taskProgress: true,
+  laneFanout: false,
+}
+
+const LANE_DOCS = '2. Docs (lane 2, owns `docs/**`)'
+
+/** The last task is checked and reviewed while the earlier task stays open. */
+const FINAL_PLAN = `# Tasks
+
+## 1. Compose the profile (lane 1, owns \`packages/plugin-workflows/**\`)
+
+- [ ] 1.1 First task
+- [ ] 1.2 Final task
+`
+const FINAL_PLAN_CHECKED = FINAL_PLAN.replace('- [ ] 1.2', '- [x] 1.2')
+const FINAL_TASK_TEXT = 'Final task'
+const FINAL_TASK_ID = taskIdOf(FINAL_TASK_TEXT)
+
+const PROGRESS_NOTE_CALL = /workflows \{ action: "note", change: "([^"]+)", task: "([^"]+)"/u
+const TASK_PROGRESS_CALL = /task_progress\(task: "([^"]+)", status: "in-progress"/u
+
+/** The task one printed serial-note steer names. */
+function printedTask(text: string, pattern: RegExp): string {
+  const match = pattern.exec(text)
+  const task = match?.[2] ?? match?.[1]
+  if (task === undefined) throw new Error(`the steer prints no serial note call:\n${text}`)
+  return task
+}
+
+/**
+ * The rollback cases the review requires on the real composed profile: both
+ * production runtimes are mounted through the middleware chain, the printed
+ * serial-note alternative is executed through the tool the *other* owner
+ * printed, and the next close proves both gates accepted the same note.
+ */
+describe('mixed-ownership rollback through both production runtimes', () => {
+  it('accepts the progress-owned task_progress note at the restored legacy lane gate', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: true,
+    })
+    // Lane 1 completes in this turn; lane 2 stays unassigned, so the legacy
+    // lane gate prints its serial-note alternative while the workflows runtime
+    // owns the progress signal.
+    await completeLane(host, workspace, LANE_PLAN, LANE_PLAN_TICKED)
+    await implementationWrite(host, workspace)
+    await closeTurn(host, 1)
+    const legacy = host.steers.find((steer) => steer.kind === 'delegation-rules')?.text ?? ''
+    expect(legacy).toContain('lane assignment is missing')
+    expect(legacy).toContain('task_progress(task: "2.1 Doc task"')
+    expect(host.steers.find((steer) => steer.kind === 'workflows-gate')?.text).toContain(
+      'changed implementation files',
+    )
+
+    // The printed call is the delegation task_progress tool; it routes the note
+    // to the owning workflows store and forwards the returned lane to the
+    // legacy lane state.
+    const output = toolText(
+      await host.callTool('task_progress', {
+        task: printedTask(legacy, TASK_PROGRESS_CALL),
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    const note = await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`))
+    expect(note).toMatchObject({ session: SESSION, lane: LANE_DOCS })
+    expect(note?.taskId).toBe(taskIdOf('Doc task'))
+    expect(
+      await readJson(join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
+    ).toBeUndefined()
+
+    // The restored lane gate accepted its own lane decision; the owned
+    // progress gate accepted the same fresh note: no duplicate steer remains.
+    host.steers.length = 0
+    await closeTurn(host, 1)
+    expect(host.steers).toEqual([])
+  })
+
+  it('accepts the lane-owned serial notes at the restored legacy progress gate', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(workspace, TASK_PROGRESS_ONLY)
+    await completeLane(host, workspace, LANE_PLAN, LANE_PLAN_TICKED)
+    await implementationWrite(host, workspace)
+    await closeTurn(host, 1)
+    const legacy = host.steers.find((steer) => steer.kind === 'delegation-rules')?.text ?? ''
+    const owned = host.steers.find((steer) => steer.kind === 'workflows-gate')?.text ?? ''
+    expect(legacy).toContain('changed implementation files')
+    expect(legacy).toContain('task_progress(task: "2.1 Doc task"')
+    expect(owned).toContain('lane assignment is missing')
+    expect(owned).toContain('workflows { action: "note"')
+
+    // Both printed calls write the active (legacy) progress store: the owned
+    // note action and the legacy progress tool. The owned lane gate reads its
+    // session decision from either call.
+    const ownedText = toolText(
+      await host.callTool('workflows', {
+        action: 'note',
+        change: CHANGE,
+        task: printedTask(owned, PROGRESS_NOTE_CALL),
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      }),
+    )
+    expect(ownedText).toContain('delegation/task-progress')
+    const legacyText = toolText(
+      await host.callTool('task_progress', {
+        task: printedTask(legacy, TASK_PROGRESS_CALL),
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      }),
+    )
+    expect(legacyText).toContain('delegation/task-progress')
+    const note = await readJson(
+      join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`),
+    )
+    expect(note?.worktreeDigest).toBe(await legacyWorktreeDigest(workspace, defaultGit))
+    expect(note?.taskId).toBe(taskIdOf('Doc task'))
+    expect(
+      await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeUndefined()
+
+    host.steers.length = 0
+    await closeTurn(host, 1)
+    expect(host.steers).toEqual([])
+  })
+
+  it('accepts the final task native PASS and the mixed serial note at the restored progress gate', async () => {
+    const workspace = await gitWorkspace(FINAL_PLAN)
+    const host = await openComposed(workspace, TASK_PROGRESS_ONLY)
+
+    // The mixed serial-note path: the owned note action writes the legacy
+    // progress store because the legacy switch owns the progress signal.
+    await implementationWrite(host, workspace)
+    await closeTurn(host, 1)
+    expect(host.steers.find((steer) => steer.kind === 'delegation-rules')?.text).toContain(
+      'changed implementation files',
+    )
+    const noteText = toolText(
+      await host.callTool('workflows', {
+        action: 'note',
+        change: CHANGE,
+        task: `1.2 ${FINAL_TASK_TEXT}`,
+        status: 'in-progress',
+        reason: 'the final task spans turns',
+      }),
+    )
+    expect(noteText).toContain('delegation/task-progress')
+    expect(
+      (await readJson(join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)))
+        ?.worktreeDigest,
+    ).toBe(await legacyWorktreeDigest(workspace, defaultGit))
+    host.steers.length = 0
+    await closeTurn(host, 1)
+    expect(host.steers).toEqual([])
+
+    // Next turn: the final task is checked and reviewed natively. The review
+    // run goes through the real delegate tool and the close executes it.
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 2,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await completeLane(host, workspace, FINAL_PLAN, FINAL_PLAN_CHECKED)
+    const started = toolText(
+      await host.callTool('delegate', {
+        rule: 'task-review',
+        change: CHANGE,
+        task: FINAL_TASK_ID,
+      }),
+    )
+    expect(started).toMatch(/review started/u)
+    await closeTurn(host, 2)
+    const recordPath = join(
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      CHANGE,
+      'tasks',
+      `${FINAL_TASK_ID}.json`,
+    )
+    const approvalPath = join('openspec', 'changes', CHANGE, 'reviews', `${FINAL_TASK_ID}.json`)
+    await waitFor(async () => (await readJson(join(workspace, recordPath)))?.verdict === 'PASS')
+    await waitFor(async () => (await readJson(join(workspace, approvalPath)))?.verdict === 'PASS')
+    const review = host.activations.filter((activation) => activation.rule === 'task-review')
+    expect(review).toHaveLength(1)
+    expect(review[0]?.prompt).toContain(NATIVE_HEADER)
+    // No legacy record: the restored gate must read the native store.
+    expect(
+      await readJson(
+        join(
+          workspace,
+          '.dsh',
+          'delegation',
+          'task-review',
+          CHANGE,
+          'tasks',
+          `${FINAL_TASK_ID}.json`,
+        ),
+      ),
+    ).toBeUndefined()
+
+    // The code-changing close after the tick is satisfied by the native PASS.
+    host.steers.length = 0
+    await implementationWrite(host, workspace, 'src/extra.ts')
+    await closeTurn(host, 2)
+    expect(host.steers).toEqual([])
   })
 })
 
