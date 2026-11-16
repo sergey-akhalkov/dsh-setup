@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "move-review-runtime-into-workflows",
+  "scope": "task",
+  "taskId": "b3deef4b25494f2c",
+  "digest": "29b40ef80ecbe4f496903dffe17077714f879ea8fb8bb74fa066ce54b3256b0a",
+  "worktreeDigest": "fd57c8c838871c0c6c17428dfbf64c02e8f8411adb548da8c54b33f978ca8f78",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-16T12:36:18.716Z"
+}
