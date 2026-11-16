@@ -534,24 +534,33 @@ describe('deprecated alias status', () => {
 
   it('matches the composed setup row to the Release A fixture', async () => {
     const root = join(fileURLToPath(new URL('..', import.meta.url)), '..', '..')
-    const patch = parse(
+    type PatchRow = { id?: string; config?: Record<string, unknown>; insert?: PatchRow[] }
+    const parsed = parse(
       readFileSync(join(root, 'packages', 'setup', 'cordis.patch.yml'), 'utf8'),
-    ) as Array<
-      | { insert?: Array<{ id?: string; config?: Record<string, unknown> }> }
-      | { id?: string; config?: Record<string, unknown> }
-    >
-    const rows = patch.flatMap((entry) => ('insert' in entry ? (entry.insert ?? []) : [entry]))
+    ) as unknown
+    const entries = Array.isArray(parsed) ? (parsed as PatchRow[]) : []
+    const rows = entries.flatMap((entry) => entry.insert ?? [entry])
     const row = rows
       .filter((entry) => entry.id === 'dsh-setup-delegation-rules' && entry.config !== undefined)
       .at(-1)
     const config = releaseAConfig()
-    expect(row?.config?.gates).toEqual(config.gates)
-    const composedCodex = (row?.config as { targets?: { codex?: { provider?: string } } }).targets
-      ?.codex
-    expect(composedCodex?.provider).toBe(config.targets.codex.provider)
-    // The fixture must carry at least one rule for every composed trigger so a
-    // flip has a restored steer to print.
+    const composed = row?.config ?? {}
+    expect(composed.gates).toEqual(config.gates)
+    const targets = composed.targets as { codex?: { provider?: string } } | undefined
+    expect(targets?.codex?.provider).toBe(config.targets?.codex?.provider)
+    const rules = (composed.rules as Array<{ when?: string }> | undefined) ?? []
     const triggers = (config.rules ?? []).map((rule) => rule.when)
-    for (const rule of row?.config?.rules ?? []) expect(triggers).toContain(rule.when)
+    expect(rules.length).toBeGreaterThan(0)
+    for (const rule of rules) expect(triggers).toContain(rule.when)
+    // The exact shipped row must carry a rule for every rollback trigger.
+    for (const trigger of [
+      'spec-ready',
+      'spec-task-ready',
+      'implementation-complete',
+      'implementation-work',
+      'lane-assignment',
+    ]) {
+      expect(rules.map((rule) => rule.when)).toContain(trigger)
+    }
   })
 })
