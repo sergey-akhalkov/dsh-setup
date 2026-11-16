@@ -104,9 +104,11 @@ export async function buildConditionContext(input) {
     const drivePath = /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/]|[^\s])/u;
     const absolutePath = /(?:^|[\s"'`=([[{(<:;,]|[|?&!])\/[^\s'"`*]/u;
     const uncPath = /(?:^|[^A-Za-z0-9])\\\\(?:[^\\/\s]+[\\/]|\?[\\/]UNC[\\/])/u;
-    // `..` counts only as a whole path segment, never as the ellipsis in
-    // ".../tasks/<taskId>.json".
-    const traverses = /(?:^|[^A-Za-z0-9.])\.\.(?:[^A-Za-z0-9.]|$)/u;
+    // `..` counts as a traversal when a separator follows it (`../x`, `..\x`), when
+    // it is a whole segment (`x/..`, a leading or trailing `..`), or when it ends a
+    // segment before a delimiter (`` `safe/..` ``). Prose ranges such as
+    // `f1`..`fn` are not traversals.
+    const traverses = /\.\.[\\/]|(?:^|[\\/])\.\.(?:[\\/]|$)|[\\/]\.\.(?:[^A-Za-z0-9._-]|$)/u;
     // In a shell command a redirection operator can touch an absolute path.
     const redirectedPath = />{1,2}\/[^\s'"`*]/u;
     const assertNoPath = (value, redirection = false) => {
