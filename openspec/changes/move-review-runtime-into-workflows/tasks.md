@@ -61,7 +61,7 @@
 - [x] 5.1 Update `packages/setup/defaults.yml`: `reviewers.codex`, `reviewQueue`, `timeouts.review` on the workflows row; the delegation row keeps its rules (including the dormant `implementation-work` note rule) and target and carries the five false switches. Run `pnpm build` and then `pnpm gen`, and commit the regenerated setup manifest, patch, and vendored tree. Verify `pnpm gen:check` passes and a composed-profile test asserts the legacy rules are still configured while no legacy steer installs and no review runs twice.
 - [x] 5.2 Update `docs/workflows.md`, `docs/delegation-rules.md`, `docs/plugins.md`, and `docs/openspec-status.md`: the review executor, `condition`, reviewers, records, engine gate cards, the per-signal switches, and the Release B plan. Verify `pnpm lint:fix` leaves the files unchanged.
 - [x] 5.3 Run `pnpm build && git diff --exit-code`, `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer`, and `node scripts/workflows-parity.ts --check`. Verify every command exits 0.
-- [ ] 5.4 Run a live acceptance in a throwaway profile: one task review through the engine (record plus committed approval), one whole-spec review, one refused close with a missing record, and one lane fan-out steer. Verify each run appears in the Workflows view with its evidence and the approval matches the current format.
+- [x] 5.4 Run a live acceptance in a throwaway profile: one task review through the engine (record plus committed approval), one whole-spec review, one refused close with a missing record, and one lane fan-out steer. Verify each run appears in the Workflows view with its evidence and the approval matches the current format.
 
 ## 6. Release handoff (serial, owns `openspec/changes/**`)
 
