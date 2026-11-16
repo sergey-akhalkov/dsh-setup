@@ -133,8 +133,9 @@ function sectionOf(title, tasks) {
         unchecked: tasks.filter((task) => !task.checked),
     };
 }
-/** Every level-2 section with its numbered tasks, checked or not. */
-function taskSections(markdown) {
+/** Every level-2 section with its numbered tasks, checked or not; the untitled
+ * leading group carries the tasks before the first heading. */
+export function taskSections(markdown) {
     const sections = [];
     const untitled = [];
     let current;

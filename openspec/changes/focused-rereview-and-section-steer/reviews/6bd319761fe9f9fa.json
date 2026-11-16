@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "focused-rereview-and-section-steer",
+  "scope": "task",
+  "taskId": "6bd319761fe9f9fa",
+  "digest": "02ad80b418d46c18ba8a19b2143d7d58a5b558c661e262478b025862382649f9",
+  "worktreeDigest": "e18528fad654903e4f89d6a624d82831b2dcd42873dc5e5ca69a6b8f790cdd8c",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-16T19:39:37.824Z"
+}
