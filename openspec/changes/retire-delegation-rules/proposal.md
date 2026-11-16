@@ -59,18 +59,34 @@ and applies only after that change is archived and its live profile confirmation
   - 6 are deleted with the plugin and have no replacement behavior: `Model-facing cost`,
     `Removal and opt-out`, `Setup delivery and standalone use`, `Parallel writer isolation`,
     `Deprecated lane-boundary trigger`, `Gate-only retirement switch`.
-- Remove the Release A coexistence scaffolding from the accepted specs: `workflows`
-  `Gate-only switches` and `Per-signal legacy ownership` are removed, and the `defer`/legacy-owner
-  clauses are dropped from `Whole-spec review evidence`, `Owned task-review gate`,
-  `Owned work-progress gate`, `Owned lane-assignment gate`, `Installed definitions`, `Retirement
-  parity`, `Migration completion`, and the `review-approval` `Approval producer`. The committed
-  approvals, their path, and their audit stay unchanged.
+- Remove the Release A coexistence scaffolding from the accepted specs: `workflows` `Gate-only switches`
+  and `Per-signal legacy ownership` are removed, and the surviving checkpoint and verification clauses of
+  the latter move to a new `Surviving legacy ownership` requirement; the delegation signal clauses and the
+  `defer`/legacy-owner clauses are dropped from `Whole-spec review evidence`, `Owned task-review gate`,
+  `Owned work-progress gate`, `Owned lane-assignment gate`, `Installed definitions`, `Retirement parity`,
+  `Migration completion`, and the `review-approval` `Approval producer`. The committed approvals, their
+  path, and their audit stay unchanged.
+- Preserve the parity baseline independently of the deleted runtime: move the certified legacy replay into
+  a retained executable baseline in the workflows test package, point the fixtures at the moved approval
+  format, and regenerate `packages/plugin-workflows/assets/parity/retire-legacy-gates.json` so
+  `node scripts/workflows-parity.ts --check` runs with the package absent.
+- Retire the legacy exporter: remove `reviews:export`, its `exportChange()` implementation and tests, and
+  the root script, while keeping `--change`, `--all`, `--push`, `--staged`, `pnpm hooks:install`, and every
+  committed record. The missing-approval output and the surviving gate and parity diagnostics print the
+  supported `workflows(action: "start", definitionId: "task-review", change, task)` review call.
+- Migrate the shipped OpenSpec apply guidance in `packages/plugin-openspec/assets/guidance/task-lanes.md`
+  to the `workflows` `note` action and the native review-at-tick/snapshot loop, with its tests.
+- Remove only the delegation-rules `legacy`/`ownership` bindings from the shipped definitions and the
+  contributed intake; the `retro` (`goal-continuity`) and `verify` (`verification-gate`) bindings, their
+  ownership validation, and their surviving spec clauses stay.
 - Remove the legacy `.dsh/delegation/**` fallbacks from the engine and the `legacy` blocks from the
   shipped definitions and the contributed `change-intake`; a profile that still sets the deleted row,
   its `rules`/`targets`, or `delegation.gates` fails at load with the removal named.
 - Delete `docs/delegation-rules.md` and the `delegation-rules` skill; update `AGENTS.md`, `README.md`,
   `docs/*` (workflows, plugins, contributing, openspec-status, review-approval, codex-subagent) to name
-  `workflows` as the only owner and drop the delegation apply-loop paragraph.
+  `workflows` as the only owner, drop the delegation apply-loop paragraph, and remove every
+  `reviews:export` reference. The apply-loop guidance moves into
+  `packages/plugin-openspec/assets/guidance/task-lanes.md` with the `workflows` `note` action.
 - Remove the `delegation-rules` observability row, its triggers and sources, and the setup
   `sourceKind: delegation-rules` and `delegation_status` tool entries; update the observability tests.
 - Sequencing: this change is planned now and applied only after Release A is archived and its live
@@ -95,8 +111,12 @@ None. This change only removes a capability and moves requirements between exist
 ## Impact
 
 - `packages/plugin-delegation-rules/**` (deleted), `packages/plugin-workflows/src|test|assets/**` (legacy
-  fallbacks, definitions, parity), `packages/plugin-openspec/assets/workflows/change-intake.json`.
-- `scripts/reviews-check.ts` (import moves to the workflows copy of the approval format).
+  fallbacks, definitions, retained parity baseline, parity report),
+  `packages/plugin-openspec/assets/workflows/change-intake.json`,
+  `packages/plugin-openspec/assets/guidance/task-lanes.md`, and its tests.
+- `scripts/reviews-check.ts` (import moves to the workflows copy of the approval format; the export mode
+  and its legacy-scratch reader are removed), `scripts/test/reviews-check.test.ts`,
+  `scripts/workflows-parity.ts`, and the root `package.json` script entry.
 - `packages/setup/{defaults.yml,package.json,cordis.patch.yml,node_modules/@dsh-setup/**}` and
   `pnpm-lock.yaml` (regenerated).
 - `packages/plugin-observability/assets|src|test/**`, `tsconfig.json`, `README.md`, `AGENTS.md`,
@@ -104,6 +124,9 @@ None. This change only removes a capability and moves requirements between exist
 - `openspec/specs/delegation-rules/spec.md` (deleted), `openspec/specs/workflows/spec.md`,
   `openspec/specs/review-approval/spec.md`.
 
-Out of scope: any new review scope, definition, prompt semantic, approval field, or gate; migrating or
-deleting the local `.dsh/delegation/**` scratch, which stays on disk unread; the Release A rollback
-switches, which exist only until this change ships (rollback after Release B is a version downgrade).
+Out of scope: any new review scope, definition, prompt semantic, approval field, or gate; the explicit
+task/section selector on the `workflows` `start` action is the relocated interface of the removed
+`delegate` alias, not a new review scope. Migrating or deleting the local `.dsh/delegation/**` scratch,
+which stays on disk unread (no command reads it after the export retirement), is also out of scope. The
+Release A rollback switches exist only until this change ships (rollback after Release B is a version
+downgrade).

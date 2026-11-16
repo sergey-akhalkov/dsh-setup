@@ -35,17 +35,19 @@ satisfy a whole-spec step.
 ### Requirement: Retirement parity
 
 A legacy gate behavior SHALL move to a workflow `own` definition only after a release-bound parity
-report passes. The report SHALL be a tracked asset at `assets/parity/retire-legacy-gates.json`,
-replay legacy scenarios in shadow, and include the covered template hashes. `pnpm workflows:parity
---check` MUST fail on a missing, stale, or mismatched report; a fresh installation SHALL load the
+report passes. The report SHALL be a tracked asset at `assets/parity/retire-legacy-gates.json`, replay
+legacy scenarios in shadow, and include the covered template hashes. The replay SHALL run from a retained
+executable baseline in the workflows test package that imports no deleted plugin code; a baseline change
+MUST regenerate the report before `--check` passes again. `pnpm workflows:parity --check` MUST fail on a
+missing, stale, or mismatched report or a missing baseline evaluator; a fresh installation SHALL load the
 shipped report and `own` definitions. For a `soft` legacy signal the compared decision SHALL be the
 per-turn sequence, and the shipped integration definition SHALL reproduce the legacy once-only
 refusal with `maxBlocks: 1`; the visible violation recorded after an exhausted soft budget is the
 declared, documented difference and MUST NOT count as a parity mismatch. An exhausted soft budget
 SHALL settle that step as `completed-soft`, never as a pass, so the run keeps no open required step
 and MUST NOT block an otherwise authorized archive. After the delegation plugin is removed, a
-failing parity report is remedied by fixing the report or definition; no legacy switch is available
-to re-enable.
+failing parity report is remedied by fixing the report, the retained baseline, or the definition; no
+legacy switch is available to re-enable.
 
 #### Scenario: Parity passes
 
@@ -55,7 +57,7 @@ to re-enable.
 #### Scenario: Parity mismatch has no legacy fallback
 
 - **WHEN** a retained scenario mismatches after the plugin is removed
-- **THEN** `pnpm workflows:parity --check` fails and the remedy names the report or definition, not a legacy switch
+- **THEN** `pnpm workflows:parity --check` fails and the remedy names the report, the retained baseline, or the definition, not a legacy switch
 
 #### Scenario: Fresh installation
 
@@ -76,6 +78,16 @@ to re-enable.
 
 - **WHEN** a definition is `own` and the report is missing
 - **THEN** the definition is refused and the remedy names `pnpm workflows:parity`
+
+#### Scenario: Baseline outlives the runtime
+
+- **WHEN** the delegation plugin is absent and every retained scenario still matches the retained executable baseline
+- **THEN** `pnpm workflows:parity --check` passes and the `own` definitions load
+
+#### Scenario: Edited baseline is stale
+
+- **WHEN** a retained baseline decision changes without regenerating the tracked report
+- **THEN** `--check` fails and names the stale report instead of certifying the edited baseline
 
 ### Requirement: Owned task-review gate
 
@@ -161,16 +173,18 @@ every checked task. `ERROR` MUST allow an intermediate turn close and MUST NOT a
 ### Requirement: Installed definitions
 
 The engine SHALL ship the built-in process definitions: `task-review`, `spec-review`,
-`integration-review`, `retro`, and `verify`. The review definitions declare `own`. `change-intake` SHALL
-be contributed by `@dsh-setup/plugin-openspec`. The review definitions are the built-in process, not
-product-specific content: a new product-specific definition MUST NOT be added without its own delta, and
-a contributed definition MUST run from the generic schema and MUST NOT require a new id-specific engine
-behavior.
+`integration-review`, `retro`, and `verify`. The three review definitions declare `own` and carry no
+legacy source. `retro` and `verify` keep their surviving legacy source references (`goal-continuity`
+`work_checkpoint` and `verification-gate`) and the per-signal ownership check that refuses them while
+that source is enabled. `change-intake` SHALL be contributed by `@dsh-setup/plugin-openspec`. The review
+definitions are the built-in process, not product-specific content: a new product-specific definition
+MUST NOT be added without its own delta, and a contributed definition MUST run from the generic schema
+and MUST NOT require a new id-specific engine behavior.
 
 #### Scenario: Engine-shipped exceptions
 
 - **WHEN** a fresh installation loads the engine definitions
-- **THEN** `task-review`, `spec-review`, `integration-review`, `retro`, and `verify` load with their `own` ownership
+- **THEN** `task-review`, `spec-review`, `integration-review`, `retro`, and `verify` load with their `own` ownership, and `retro` and `verify` keep their surviving legacy source references
 
 #### Scenario: Contributed intake loads
 
@@ -1174,6 +1188,11 @@ still be collected before the turn closes and before archive.
 - **WHEN** the run falls back to the live worktree because a review snapshot cannot be built
 - **THEN** the apply guidance requires restoring snapshot support and re-running or deferring writes until the run settles, and does not prescribe a blocking sleep
 
+#### Scenario: Guidance ships with the surviving skills
+
+- **WHEN** the apply, propose, or update skill loads the shipped task-lane guidance
+- **THEN** the guidance carries the review-at-tick and snapshot/fallback paragraphs and names the `workflows` `note` action for a serial decision, not the removed `task_progress` tool
+
 ### Requirement: Review trust boundaries
 
 The engine SHALL validate review definition ids, change names, task ids, worktree paths, and git
@@ -1234,16 +1253,60 @@ the entry but the shipped default MUST NOT be the weaker model.
 
 - **WHEN** a review step names the `codex` reviewer with the shipped setup
 - **THEN** the provider starts with the strong model and `xhigh` effort
+
+### Requirement: Surviving legacy ownership
+
+Legacy ownership SHALL be resolved per declared signal, not per provider. An `own` definition or step
+MUST be refused while its matching legacy signal is enabled; a `defer` definition or step MUST be refused
+unless that signal is enabled. The surviving sources are the checkpoint signal (`retro` to
+`goal-continuity` `work_checkpoint`, following `checkpoint.automation`) and verification (`verify` to the
+`verification-gate` row, following its row configuration and command).
+
+#### Scenario: Defer with the checkpoint switch off is refused
+
+- **WHEN** `retro` is `defer` and `checkpoint.automation` is false
+- **THEN** the definition is refused and neither owner is silently left enforcing the checkpoint
+
+#### Scenario: Defer with the verification row disabled is refused
+
+- **WHEN** a `verify` definition is `defer` and the verification-gate row is disabled
+- **THEN** the definition is refused and neither owner is silently left enforcing verification
+
+#### Scenario: Defer with an inert verification row is refused
+
+- **WHEN** a `verify` definition is `defer` and the verification-gate row is active but has no configured command
+- **THEN** the definition is refused because the row would not steer
+
+#### Scenario: Enabled defer loads
+
+- **WHEN** the definition is `defer` and its matching legacy signal is enabled
+- **THEN** the definition loads and reads the legacy record without adding a second steer
+
+#### Scenario: Installed but inert source does not block own
+
+- **WHEN** the definition is `own` and the matching legacy source is installed but its signal is disabled
+- **THEN** the definition loads and the disabled source does not steer
+
+#### Scenario: Split state is refused
+
+- **WHEN** the definition is `own` while the matching legacy signal is still enabled
+- **THEN** the definition is refused with the split-state diagnostic and the setting that MUST be turned off
+
+#### Scenario: Rollback
+
+- **WHEN** the owner re-enables the surviving legacy signal and flips the definition back to `defer`
+- **THEN** the legacy signal steers again and the workflow adds no second steer
+
 ## REMOVED Requirements
 
 ### Requirement: Gate-only switches
 
-**Reason**: The delegation row and its per-signal switches are deleted with the plugin, so no legacy signal remains to enable or disable; the engine gates are unconditionally owned.
+**Reason**: The delegation row and its per-signal switches are deleted with the plugin, so no delegation signal remains to enable or disable; the gates that replaced them are owned. The surviving checkpoint and verification legacy sources keep their per-signal ownership check, which is not delegation configuration.
 
 **Migration**: Remove `delegation.gates` from every profile; the engine's `Configuration and off switch` keeps the `enabled` switch. A profile that still sets the deleted row or its gates fails at load with the removed row named.
 
 ### Requirement: Per-signal legacy ownership
 
-**Reason**: No legacy owner remains after the plugin is deleted; every shipped and contributed definition is unconditionally `own`, and the `legacy`/`ownership: defer` blocks are removed from the definitions and the contributed intake.
+**Reason**: The requirement resolved ownership for the five delegation signals, which are deleted with the plugin. The generic refusal rule and the checkpoint and verification signals describe plugins that survive, so they move to `Surviving legacy ownership`; the delegation signal clauses and their split-state scenarios are removed with the signal.
 
-**Migration**: Delete the `legacy` and per-signal ownership blocks from local definitions and `change-intake`; the generic defer mechanism stays available for another installed legacy source.
+**Migration**: `Surviving legacy ownership` keeps the generic `own`/`defer` refusal and the checkpoint (`goal-continuity`) and verification (`verification-gate`) cases; delete only the delegation `legacy`/`ownership` blocks from local definitions and `change-intake`.

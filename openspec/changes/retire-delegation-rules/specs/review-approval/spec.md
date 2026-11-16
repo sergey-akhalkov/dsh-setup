@@ -7,7 +7,9 @@
 The workflows review executor SHALL be the only producer of a committed task approval. It SHALL write
 `openspec/changes/<change>/reviews/<taskId>.json` atomically before its local record, and a failed write
 SHALL publish no `PASS`. The approval SHALL keep the existing field set, so the audit commands, the
-archive marker, and an archived change are unchanged.
+archive marker, and an archived change are unchanged. The retired `reviews:export` command SHALL NOT
+produce an approval: a record that exists only in the local `.dsh/delegation/**` scratch SHALL NOT be
+copied, counted, or audited as an approval.
 
 #### Scenario: Review executor publishes the approval
 
@@ -23,6 +25,41 @@ archive marker, and an archived change are unchanged.
 
 - **WHEN** `pnpm reviews:check` reads a change whose approvals were written by the executor and a change whose approvals were written before the legacy runtime was deleted
 - **THEN** both produce identical results for the same fields
+
+#### Scenario: Legacy-only scratch produces no approval
+
+- **WHEN** a checked task has a local `.dsh/delegation/task-review/<change>/tasks/<taskId>.json` PASS and no committed approval
+- **THEN** no approval is written, the audit reports the task as missing, and the remedy is the native task review, not the retired export command
+
+### Requirement: The approval audit is one command
+
+The repository SHALL provide `pnpm reviews:check --change <name>`, `pnpm reviews:check --all`, and
+`pnpm reviews:check --push`, plus `pnpm hooks:install` for the pre-push hook. The missing-approval output
+MUST name the change, the task number and text, the expected record path, and the exact supported
+`workflows` review call with the explicit task selector:
+`workflows(action: "start", definitionId: "task-review", change: "<change>", task: "<taskId>")`. The
+retired `reviews:export` command is not part of the audit surface. The archive workflow guidance and the
+contributor documentation MUST point at the audit before an archive.
+
+#### Scenario: Audit an active change
+
+- **WHEN** a contributor runs the audit for an active change with an unreviewed checked task
+- **THEN** the output lists the task and the exact `workflows` review call, and exits non-zero
+
+#### Scenario: Audit all archived changes
+
+- **WHEN** a contributor runs the full audit
+- **THEN** it reports every archived change's coverage, including the pre-cutoff historical baseline and the documented exception, and fails only for a post-cutoff violation
+
+#### Scenario: Install the hook
+
+- **WHEN** a contributor runs `pnpm hooks:install`
+- **THEN** the repository's pre-push hook is selected and a subsequent push runs the audit
+
+#### Scenario: No export fallback
+
+- **WHEN** a contributor looks for a way to copy a local `.dsh` record into an approval after Release B
+- **THEN** the audit and the documentation name the native task review instead, and no export command exists
 
 ## ADDED Requirements
 
