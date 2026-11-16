@@ -67,7 +67,10 @@ export interface LaneTag {
     readonly change: string;
     readonly n: number;
 }
-/** The first lane tag in a worker start's arguments; the tag is plain argument text. */
+/**
+ * The first lane tag in a worker start's arguments. The tag is searched in
+ * decoded argument strings, so a tag that starts a new line still matches.
+ */
 export declare function laneTagOf(argumentsValue: Readonly<Record<string, unknown>>): LaneTag | undefined;
 /** The lane tag of a successful worker start, or undefined for any other tool call. */
 export declare function workerLaneTag(name: string, ok: boolean, argumentsValue: Readonly<Record<string, unknown>>): LaneTag | undefined;

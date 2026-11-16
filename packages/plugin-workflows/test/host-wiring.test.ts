@@ -7245,6 +7245,29 @@ describe('engine-owned gates', () => {
     expect(text).not.toContain('Lane: 1. Engine')
   })
 
+  it('accepts a lane tag that starts a new line in the worker prompt', async () => {
+    const workspace = await gitGateWorkspace()
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+    const host = await engineGateHost(workspace, { taskProgress: true, laneFanout: false })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await gateWrite(host, 'src/app.ts')
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'worker-1',
+        name: 'subagent',
+        arguments: { prompt: 'Context\nlane-tag: auth#1. Implement lane 1.' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'started' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('Lane: 2. Docs')
+    expect(text).not.toContain('Lane: 1. Engine')
+  })
+
   it('lets the note action decide one lane serial for the workflow gate', async () => {
     const workspace = await gitGateWorkspace()
     await mkdir(join(workspace, 'src'), { recursive: true })

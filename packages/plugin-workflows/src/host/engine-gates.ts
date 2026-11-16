@@ -240,12 +240,33 @@ export interface LaneTag {
   readonly n: number
 }
 
-/** The first lane tag in a worker start's arguments; the tag is plain argument text. */
+/** Collect every string value in a tool-argument tree, decoded (never JSON-escaped). */
+function argumentStrings(value: unknown, into: string[]): void {
+  if (typeof value === 'string') {
+    into.push(value)
+    return
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) argumentStrings(item, into)
+    return
+  }
+  if (isRecord(value)) {
+    for (const item of Object.values(value)) argumentStrings(item, into)
+  }
+}
+
+/**
+ * The first lane tag in a worker start's arguments. The tag is searched in
+ * decoded argument strings, so a tag that starts a new line still matches.
+ */
 export function laneTagOf(argumentsValue: Readonly<Record<string, unknown>>): LaneTag | undefined {
-  const text = JSON.stringify(argumentsValue)
-  for (const match of text.matchAll(LANE_TAG)) {
-    const n = Number(match[2])
-    if (match[1] !== undefined && Number.isSafeInteger(n)) return { change: match[1], n }
+  const strings: string[] = []
+  argumentStrings(argumentsValue, strings)
+  for (const text of strings) {
+    for (const match of text.matchAll(LANE_TAG)) {
+      const n = Number(match[2])
+      if (match[1] !== undefined && Number.isSafeInteger(n)) return { change: match[1], n }
+    }
   }
   return undefined
 }

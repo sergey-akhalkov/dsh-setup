@@ -178,13 +178,35 @@ export async function evaluateOwnedProgressGate(input) {
         steer: `rule "task-progress": this turn changed implementation files in change "${input.change}" without a newly checked-and-reviewed task and without a current progress note for worktree digest ${digest}.${stale ?? ''} Tick the task and run ${reviewCall}, or record ${noteCall}. Only a matching record or a note whose worktree digest matches the current worktree satisfies this gate; a text claim does not.`,
     };
 }
-/** The first lane tag in a worker start's arguments; the tag is plain argument text. */
+/** Collect every string value in a tool-argument tree, decoded (never JSON-escaped). */
+function argumentStrings(value, into) {
+    if (typeof value === 'string') {
+        into.push(value);
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value)
+            argumentStrings(item, into);
+        return;
+    }
+    if (isRecord(value)) {
+        for (const item of Object.values(value))
+            argumentStrings(item, into);
+    }
+}
+/**
+ * The first lane tag in a worker start's arguments. The tag is searched in
+ * decoded argument strings, so a tag that starts a new line still matches.
+ */
 export function laneTagOf(argumentsValue) {
-    const text = JSON.stringify(argumentsValue);
-    for (const match of text.matchAll(LANE_TAG)) {
-        const n = Number(match[2]);
-        if (match[1] !== undefined && Number.isSafeInteger(n))
-            return { change: match[1], n };
+    const strings = [];
+    argumentStrings(argumentsValue, strings);
+    for (const text of strings) {
+        for (const match of text.matchAll(LANE_TAG)) {
+            const n = Number(match[2]);
+            if (match[1] !== undefined && Number.isSafeInteger(n))
+                return { change: match[1], n };
+        }
     }
     return undefined;
 }
