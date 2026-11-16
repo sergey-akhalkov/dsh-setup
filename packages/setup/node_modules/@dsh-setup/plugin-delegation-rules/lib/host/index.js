@@ -4306,7 +4306,7 @@ class DelegationEngine {
         const lane = laneOfTask(lanes, match.task.id);
         if (lane !== undefined && lane.title !== '') {
             this.services.state.markLaneSerial(String(agent.id), match.change.name, lane.title);
-            compat?.markLaneSerial(match.change.name, lane.title);
+            await compat?.markLaneSerial(match.change.name, lane.title);
         }
         return [
             `progress note written for change "${match.change.name}" (${relativePath(cwd, path)})`,

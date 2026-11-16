@@ -247,7 +247,7 @@ export class FakeReviewCompat implements WorkflowsReviewCompat {
     }
   }
 
-  markLaneSerial(change: string, lane: string): void {
+  async markLaneSerial(change: string, lane: string): Promise<void> {
     this.laneSerialCalls.push({ change, lane })
   }
 

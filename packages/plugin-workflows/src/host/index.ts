@@ -4783,12 +4783,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
    * Keep a serial lane decision the legacy `task_progress` call made: the note
    * file holds only its latest lane, so the owned lane gate's session state is
    * the only place an earlier decision survives a later note. The legacy call
-   * writes its own note; this forwards the decision alone.
+   * writes its own note; this forwards the decision and binds the change to the
+   * calling session, so a fresh session's note reaches the owned gates.
    */
-  const compatMarkLaneSerial = (change: string, lane: string): void => {
+  const compatMarkLaneSerial = async (change: string, lane: string): Promise<void> => {
     const call = compatCallContext()
     if (legacySignalState().enabled.has('delegation-rules/lane-assignment')) return
     laneDecisionsFor(call.session, change).set(lane, 'serial')
+    await rememberInvolvement(call.workspace, call.session, change)
   }
   const compatStatus = async (): Promise<string> => {
     const call = compatCallContext()

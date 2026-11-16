@@ -553,7 +553,11 @@ const LANE_PLAN = `# Tasks
 - [ ] 2.1 Doc task
 `
 
-async function openComposed(workspace: string, gates: Record<string, boolean>): Promise<FakeHost> {
+async function openComposed(
+  workspace: string,
+  gates: Record<string, boolean>,
+  options: { seedInvolvement?: boolean } = {},
+): Promise<FakeHost> {
   process.env.DSH_WORKFLOWS_HOST_KEY = KEY
   const delegation = await composedConfig('dsh-setup-delegation-rules')
   const workflows = await composedConfig('dsh-setup-workflows')
@@ -566,18 +570,20 @@ async function openComposed(workspace: string, gates: Record<string, boolean>): 
   applyDelegation(host.ctx as never, { ...delegation, gates } as never)
   apply(host.ctx as never, workflows as never)
   await waitFor(() => host.watch.length > 0)
-  // Both runtimes need the session attributed to the change.
-  const legacyName = createHash('sha256').update(SESSION).digest('hex').slice(0, 16)
-  await mkdir(join(workspace, '.dsh', 'delegation', 'sessions'), { recursive: true })
-  await writeFile(
-    join(workspace, '.dsh', 'delegation', 'sessions', `${legacyName}.json`),
-    JSON.stringify({
-      session: SESSION,
-      changes: { [CHANGE]: { created: true, specChanged: true, tasks: [], completed: false } },
-    }),
-    'utf8',
-  )
-  await writeInvolvement(workspace, SESSION, [CHANGE])
+  if (options.seedInvolvement !== false) {
+    // Both runtimes need the session attributed to the change.
+    const legacyName = createHash('sha256').update(SESSION).digest('hex').slice(0, 16)
+    await mkdir(join(workspace, '.dsh', 'delegation', 'sessions'), { recursive: true })
+    await writeFile(
+      join(workspace, '.dsh', 'delegation', 'sessions', `${legacyName}.json`),
+      JSON.stringify({
+        session: SESSION,
+        changes: { [CHANGE]: { created: true, specChanged: true, tasks: [], completed: false } },
+      }),
+      'utf8',
+    )
+    await writeInvolvement(workspace, SESSION, [CHANGE])
+  }
   // A current whole-spec PASS settles the owned spec-review run on this close
   // so only the two gates under test decide.
   const specDigest = await currentSpecDigest(workspace, CHANGE)
@@ -818,6 +824,37 @@ describe('mixed gate ownership routes one note through both owners', () => {
     await closeTurn(host, 1)
     expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
     expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
+  })
+
+  it('establishes the owned gate involvement from the actual legacy task_progress path', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: true,
+        laneFanout: false,
+      },
+      { seedInvolvement: false },
+    )
+    await implementationWrite(host, workspace)
+    // A fresh session notes lane 1 through the legacy runtime: the legacy store
+    // is the only place that would attribute the change, so the workflows gate
+    // must learn the involvement from the same legacy call.
+    const engine = toolText(
+      await host.callTool('task_progress', {
+        task: '1.1 Engine task',
+        status: 'in-progress',
+        reason: 'engine stays serial',
+      }),
+    )
+    expect(engine).toContain('progress note written')
+    await closeTurn(host, 1)
+    const lane = host.steers.find((steer) => steer.kind === 'workflows-gate')
+    expect(lane?.text).toContain('Lane: 2. Docs')
+    expect(lane?.text).not.toContain('Lane: 1. Engine')
   })
 })
 
