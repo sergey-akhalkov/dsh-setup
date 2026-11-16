@@ -182,6 +182,15 @@ not fixture-local copies, so removing or changing a production evaluator fails t
 certifying a stale table. The engine-owned gate bodies land with tasks 1.6/1.9 and reuse the same
 decisions; the parity report records the replay counts and the declared integration difference.
 
+### D16 — Parity certification gates the retired signals at load and at the close
+
+`src/host/parity.ts` binds all five retired definitions and also any definition whose own step
+carries a retired review signal (the contributed `change-intake` owns `spec-review`), so a missing
+report, a missing retained group, or a recorded decision mismatch refuses the definition at load
+instead of letting the retired signal execute. Work-progress and lane gates certify their replayed
+retained cases before they act, and a failed report refuses the close with the per-signal rollback
+switch and the parity command as the remedy.
+
 ## Release, migration, and rollback
 
 1. Release A: engine + definitions + cards + switches + parity; the delegation row keeps its rules
