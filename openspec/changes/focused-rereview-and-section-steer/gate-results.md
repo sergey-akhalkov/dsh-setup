@@ -10,6 +10,7 @@ unrelated change directories).
 | `pnpm lint` | 0 | 19 warnings and 21 infos, all pre-existing at the base commit |
 | `pnpm build` | 0 | 18 workspace packages, 4 client bundles |
 | `git diff --exit-code` immediately after `pnpm build` | 0 | no committed-output drift |
+| `pnpm check` | 0 | typecheck, lint, build and the full suite in sequence; 3340 of 3340 tests pass |
 | `pnpm exec vitest run --maxWorkers=2` | 0 | 3340 of 3340 tests pass, 0 failed |
 | `pnpm gen:check` | 0 | 449 generated files match for 18 plugins |
 | `pnpm validate:repo` | 0 | 1147 files scanned, AGENTS.md 15974 bytes of 16000, no problems |
@@ -20,12 +21,12 @@ unrelated change directories).
 
 ## Parallelism note
 
-`pnpm check` runs the four checks above in sequence; the recorded test result is its vitest step
-with a worker cap. On this host (24 logical processors) the default vitest file parallelism
-intermittently pushes unrelated, timing-sensitive suites past the repository's 20 s test timeout
-(observed flakes in `plugin-delegation-rules/test/review-queue.test.ts` and the git-backed
-integration suites); each such suite passes when run alone and the whole suite passes with a
-worker cap. CI runs the same suite on a 4-core `windows-latest` runner.
+`pnpm check` chains the typecheck, lint, build and test steps. The vitest pool is capped at four
+workers in `vitest.config.ts` to match the 4-core CI runner: with an uncapped pool this 24-logical-
+processor host oversubscribed the disk and unrelated, timing-sensitive suites intermittently missed
+the repository's 20 s test timeout (observed in `plugin-delegation-rules/test/review-queue.test.ts`
+and the git-backed integration suites). Each such suite passed alone, and the full suite passed at
+two and four workers. The cap changes no test and no assertion.
 
 ## Review status at recording time
 
