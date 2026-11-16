@@ -113,7 +113,9 @@ installed, its rules — including a dormant `implementation-work` note rule —
 configured, and every gate switch off: the row is dormant, not emptied, so a flip restores its steer,
 a rolled-back `bundled:` instruction still resolves, and the legacy progress gate has a rule to
 enforce again. The review prompt assets are copied into workflows and the legacy copies stay until
-Release B. Release B deletes the plugin and folds its requirements. `Migration completion` forbids
+Release B. Release B deletes the plugin and folds its requirements, as the linked
+[`retire-delegation-rules`](../retire-delegation-rules/design.md) change records; it starts only after
+this change is archived and its live profile confirmation is recorded. `Migration completion` forbids
 deleting the code before the replacement has run in a live profile, so the deletion is a separate
 change created by this change's last task.
 
@@ -199,8 +201,10 @@ with the per-signal rollback switch and the parity command as the remedy.
    (including the dormant `implementation-work` note rule) and target configured and ships all five
    switches false, so it installs no steer.
 2. A live profile runs one review natively; the record and approval are inspected.
-3. Release B: delete the plugin, fold the requirements into `workflows` and `review-approval`, remove
-   the row, docs, skill, observability row, legacy prompt copies, and bundle entries.
+3. Release B: [delete the plugin, fold the requirements](../retire-delegation-rules/design.md) into
+   `workflows` and `review-approval`, remove the row, docs, skill, observability row, legacy prompt
+   copies, and bundle entries. It applies only after step 2 is recorded, and it removes the switches
+   below, so its rollback is a version downgrade rather than a flip.
 
 Rollback per signal: set the matching legacy switch back to true; the configured rule restores that
 steer, the shipped definition resolves to `defer` because of the switch, the owning workflow
