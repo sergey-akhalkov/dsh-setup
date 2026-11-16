@@ -2442,12 +2442,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         laneDecisionsFor(session, input.change).set(written.lane, 'serial')
       } else if (agentId !== undefined) {
         // The compat caller is the legacy runtime, which records its own lane.
-        const laneState = legacyLaneState()
-        laneState?.markSerial(agentId, input.change, written.lane)
-        // The retained lane gate evaluates only involved changes, so the note
-        // that decided its lane also attributes the change to this session.
-        await laneState?.establishInvolvement(workspace, session, input.change)
+        legacyLaneState()?.markSerial(agentId, input.change, written.lane)
       }
+    }
+    // A restored legacy gate evaluates only involved changes, and a note is a
+    // fresh session's only attribution: persist it for the progress owner this
+    // note's evidence went to, and for the lane owner the note decided a lane
+    // for. Neither depends on the other owner or on the task having a lane.
+    if (!progressOwned || (written.lane !== undefined && !laneOwned && agentId !== undefined)) {
+      await legacyLaneState()?.establishInvolvement(workspace, session, input.change)
     }
     await rememberInvolvement(workspace, session, input.change)
     return written

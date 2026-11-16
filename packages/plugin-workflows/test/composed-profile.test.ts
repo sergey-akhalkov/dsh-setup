@@ -793,6 +793,40 @@ describe('mixed gate ownership routes one note through both owners', () => {
     expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
   })
 
+  it('attributes a workflow note to the restored progress gate so a later edit is refused', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: true,
+        laneFanout: false,
+      },
+      { seedInvolvement: false },
+    )
+    // The note writes the restored progress gate's evidence, so it must also
+    // establish the involvement that gate filters on; a fresh session has no
+    // other attribution and the workflows progress gate is disabled here.
+    const output = toolText(
+      await host.callTool('workflows', {
+        action: 'note',
+        change: CHANGE,
+        task: '1.1 Engine task',
+        status: 'in-progress',
+        reason: 'engine stays serial',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    // The edit after the note moves the worktree digest, so the note is stale.
+    await implementationWrite(host, workspace)
+    await closeTurn(host, 1)
+    const legacy = host.steers.filter((steer) => steer.kind === 'delegation-rules')
+    expect(legacy).toHaveLength(1)
+    expect(legacy[0]?.text).toContain('changed implementation files')
+  })
+
   it('accepts the note the actual legacy task_progress path wrote', async () => {
     const workspace = await gitWorkspace(LANE_PLAN)
     const host = await openComposed(workspace, {
