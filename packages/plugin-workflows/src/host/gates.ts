@@ -842,7 +842,16 @@ export interface LaneParityInput {
   readonly implementationChanged: boolean
 }
 
-export function evaluateLaneParity(input: LaneParityInput): ParityGateDecision {
+/** One lane the lane gate reports, with its owned paths and plan position. */
+export interface LaneParityLane {
+  readonly n: number
+  readonly title: string
+  readonly owned: readonly string[]
+}
+
+export function evaluateLaneParity(
+  input: LaneParityInput,
+): ParityGateDecision & { readonly lanes?: readonly LaneParityLane[] } {
   const lanes = taskLanes(input.plan)
   const parallel = lanes.filter(
     (lane) => !lane.serial && lane.checked.length + lane.unchecked.length > 0,
@@ -866,6 +875,7 @@ export function evaluateLaneParity(input: LaneParityInput): ParityGateDecision {
     return {
       decision: 'refuse',
       reason: `unassigned lanes: ${unassigned.map((lane) => lane.title).join(', ')}`,
+      lanes: unassigned.map((lane) => ({ n: lane.n, title: lane.title, owned: lane.owned })),
     }
   }
   return { decision: 'allow', reason: 'no unassigned non-serial lane is actionable' }

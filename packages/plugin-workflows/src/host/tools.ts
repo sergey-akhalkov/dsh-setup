@@ -4,14 +4,15 @@ import type { Definition, Step } from './definitions.js'
 import { collectEvidencePaths, type EvidenceContext, verifyEvidence } from './evidence.js'
 import type { HumanQuestionService } from './executors.js'
 import type { HostAuth } from './host-auth.js'
+import { type NoteInput, PROGRESS_STATUSES, type ProgressStatus } from './notes.js'
 import { openRunCount, type WorkflowRun } from './runs.js'
 
 /**
  * The model-facing `workflows` tool. It is a bounded control surface: list,
  * start an allowed definition, resume, status, host-verified evidence, cancel,
- * and a user-confirmed adoption of an existing change. It never accepts a
- * script, a definition body, an install, a receipt write outside the adoption
- * path, or a text claim.
+ * a progress note, and a user-confirmed adoption of an existing change. It never
+ * accepts a script, a definition body, an install, a receipt write outside the
+ * adoption path, or a text claim.
  */
 
 export const WORKFLOWS_TOOL_ACTIONS = [
@@ -22,6 +23,7 @@ export const WORKFLOWS_TOOL_ACTIONS = [
   'evidence',
   'cancel',
   'adopt',
+  'note',
 ] as const
 export type WorkflowsToolAction = (typeof WORKFLOWS_TOOL_ACTIONS)[number]
 
@@ -30,10 +32,14 @@ export interface WorkflowsToolRequest {
   readonly definitionId?: string
   readonly runId?: string
   readonly stepId?: string
-  /** The existing change whose adoption the user must confirm. */
+  /** The existing change whose adoption the user must confirm, or the note's change. */
   readonly change?: string
   /** The host resolves and verifies the declared evidence; text is never it. */
   readonly evidence?: { readonly kind: string; readonly ref: string }
+  /** The note action's task text or stable task id. */
+  readonly task?: string
+  readonly status?: ProgressStatus
+  readonly reason?: string
 }
 
 export interface WorkflowsToolHost {
@@ -62,6 +68,8 @@ export interface WorkflowsToolHost {
   readRun(runId: string): Promise<WorkflowRun | undefined>
   /** Trusted session observations the evidence verifier may consume. */
   evidenceContext?(run: WorkflowRun, step: Step): Partial<EvidenceContext>
+  /** Write the owned progress note; absent means this host cannot record one. */
+  note?(input: NoteInput): Promise<string>
 }
 
 function fail(message: string): never {
@@ -78,7 +86,17 @@ function objectArgs(value: unknown): Record<string, unknown> {
 /** Parse and validate the tool arguments; an unknown field is refused. */
 export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
   const args = objectArgs(value)
-  const allowed = new Set(['action', 'definitionId', 'runId', 'stepId', 'change', 'evidence'])
+  const allowed = new Set([
+    'action',
+    'definitionId',
+    'runId',
+    'stepId',
+    'change',
+    'evidence',
+    'task',
+    'status',
+    'reason',
+  ])
   for (const key of Object.keys(args)) {
     if (!allowed.has(key)) {
       fail(`unknown field "${key}"; the tool has no raw script or definition input`)
@@ -114,10 +132,22 @@ export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
     }
     evidence = { kind: raw.kind, ref: raw.ref }
   }
+  let status: ProgressStatus | undefined
+  if (args.status !== undefined) {
+    if (
+      typeof args.status !== 'string' ||
+      !PROGRESS_STATUSES.includes(args.status as ProgressStatus)
+    ) {
+      fail(`status must be one of: ${PROGRESS_STATUSES.join(', ')}`)
+    }
+    status = args.status as ProgressStatus
+  }
   const definitionId = text('definitionId')
   const runId = text('runId')
   const stepId = text('stepId')
   const change = text('change')
+  const task = text('task')
+  const reason = text('reason')
   return {
     action: action as WorkflowsToolAction,
     ...(definitionId === undefined ? {} : { definitionId }),
@@ -125,6 +155,9 @@ export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
     ...(stepId === undefined ? {} : { stepId }),
     ...(change === undefined ? {} : { change }),
     ...(evidence === undefined ? {} : { evidence }),
+    ...(task === undefined ? {} : { task }),
+    ...(status === undefined ? {} : { status }),
+    ...(reason === undefined ? {} : { reason }),
   }
 }
 
@@ -318,6 +351,25 @@ export async function executeWorkflowsTool(
       })
       if (!adopted.ok) fail(adopted.reason)
       return `change "${request.change}" adopted`
+    }
+    case 'note': {
+      if (
+        request.change === undefined ||
+        request.task === undefined ||
+        request.status === undefined
+      ) {
+        fail('note needs a change, a task (text or stable id), and a status')
+      }
+      if (!CHANGE_NAME.test(request.change)) {
+        fail('change must be a plain change name, not a script or path')
+      }
+      if (host.note === undefined) fail('this host cannot record a progress note')
+      return host.note({
+        change: request.change,
+        task: request.task,
+        status: request.status,
+        ...(request.reason === undefined ? {} : { reason: request.reason }),
+      })
     }
     case 'cancel': {
       if (request.runId === undefined) fail('cancel needs a runId')

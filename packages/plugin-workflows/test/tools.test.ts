@@ -641,3 +641,46 @@ describe('workflows command and prompt context', () => {
     expect(layers[0]?.text({ scope: 'other' })).toBe('')
   })
 })
+
+describe('note action', () => {
+  it('validates the note fields and routes to the host note writer', async () => {
+    const calls: Array<Record<string, unknown>> = []
+    const target: WorkflowsToolHost = {
+      ...host([]),
+      note: async (input) => {
+        calls.push({ ...input })
+        return 'note written'
+      },
+    }
+    expect(
+      await executeWorkflowsTool(
+        {
+          action: 'note',
+          change: 'auth',
+          task: '1.1 First task',
+          status: 'in-progress',
+          reason: 'why',
+        },
+        target,
+      ),
+    ).toBe('note written')
+    expect(calls).toEqual([
+      { change: 'auth', task: '1.1 First task', status: 'in-progress', reason: 'why' },
+    ])
+    await expect(
+      executeWorkflowsTool(
+        { action: 'note', change: 'auth', task: '1.1 x', status: 'done' },
+        target,
+      ),
+    ).rejects.toThrow(/status must be one of/u)
+    await expect(
+      executeWorkflowsTool({ action: 'note', change: 'auth', status: 'blocked' }, target),
+    ).rejects.toThrow(/note needs a change, a task/u)
+    await expect(
+      executeWorkflowsTool(
+        { action: 'note', change: 'auth', task: '1.1 x', status: 'blocked' },
+        host([]),
+      ),
+    ).rejects.toThrow(/cannot record a progress note/u)
+  })
+})

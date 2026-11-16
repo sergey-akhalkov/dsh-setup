@@ -598,6 +598,7 @@ export function evaluateLaneParity(input) {
         return {
             decision: 'refuse',
             reason: `unassigned lanes: ${unassigned.map((lane) => lane.title).join(', ')}`,
+            lanes: unassigned.map((lane) => ({ n: lane.n, title: lane.title, owned: lane.owned })),
         };
     }
     return { decision: 'allow', reason: 'no unassigned non-serial lane is actionable' };
