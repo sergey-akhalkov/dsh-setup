@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -15,11 +17,13 @@ import type {
 } from '@deepseek-ai/dsh-subagent'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { expect, vi } from 'vitest'
+import { parse } from 'yaml'
 import {
   apply,
   type BundleConfig,
   type GatesConfig,
   type SettledRunState,
+  validateConfig,
   type WorkflowsReviewCompat,
 } from '../src/index.js'
 
@@ -676,9 +680,9 @@ export const ALL_GATES: GatesConfig = {
 }
 
 /**
- * The Release A shipped rules: all configured so one switch flip restores that
- * steer, and dormant while its switch is false. Mirrors the composition
- * fragment plus the dormant implementation-work note rule the progress gate needs.
+ * The synthetic Release A variant fixture: the composed rules plus the
+ * deprecated `lane-boundary` alias for the switch and gate cases. The rollback
+ * suite reads the real composed row with {@link composedReleaseAConfig}.
  */
 export function releaseARules(): NonNullable<BundleConfig['rules']> {
   return [
@@ -717,7 +721,7 @@ export function releaseARules(): NonNullable<BundleConfig['rules']> {
   ]
 }
 
-/** The exact shipped Release A configuration: rules and target kept, all five switches off. */
+/** A synthetic all-switches-off Release A variant for the switch and gate cases. */
 export function releaseAConfig(overrides: Partial<BundleConfig> = {}): BundleConfig {
   return {
     targets: { codex: { provider: 'codex-subagent' } },
@@ -729,6 +733,37 @@ export function releaseAConfig(overrides: Partial<BundleConfig> = {}): BundleCon
       taskProgress: false,
       laneFanout: false,
     },
+    ...overrides,
+  }
+}
+
+/**
+ * The exact composed Release A delegation configuration from the generated
+ * setup patch. The production config validator runs first, so an invalid or
+ * missing rollback rule fails here instead of being skipped by a fixture.
+ */
+export function composedReleaseAConfig(overrides: Partial<BundleConfig> = {}): BundleConfig {
+  const root = join(fileURLToPath(new URL('..', import.meta.url)), '..', '..')
+  type PatchEntry = { insert?: unknown; id?: unknown; config?: unknown }
+  const patch = parse(
+    readFileSync(join(root, 'packages', 'setup', 'cordis.patch.yml'), 'utf8'),
+  ) as PatchEntry[]
+  const rows = patch.flatMap((entry) =>
+    Array.isArray(entry.insert) ? (entry.insert as PatchEntry[]) : [entry],
+  )
+  const row = rows
+    .filter((entry) => entry.id === 'dsh-setup-delegation-rules' && entry.config !== undefined)
+    .at(-1)
+  if (row?.config === undefined) {
+    throw new Error('the composed setup patch has no dsh-setup-delegation-rules row config')
+  }
+  const config = validateConfig(row.config)
+  return {
+    targets: Object.fromEntries(config.targets),
+    rules: config.rules,
+    timeouts: config.timeouts,
+    reviewQueue: config.reviewQueue,
+    gates: config.gates,
     ...overrides,
   }
 }
