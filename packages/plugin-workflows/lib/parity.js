@@ -579,6 +579,8 @@ export function reviewerBinding(workspace) {
 }
 /** One task number list bounded so the steer's action never falls off the end. */
 const MAX_UNIT_NUMBERS = 20;
+/** The unit text bound: the completion prefix plus one unit must fit the steer note. */
+const MAX_UNIT_TEXT = 470;
 function boundedNumbers(tasks) {
     const shown = tasks
         .slice(0, MAX_UNIT_NUMBERS)
@@ -587,6 +589,17 @@ function boundedNumbers(tasks) {
     return tasks.length <= MAX_UNIT_NUMBERS
         ? shown
         : `${shown}, and ${String(tasks.length - MAX_UNIT_NUMBERS)} more`;
+}
+/** Bound a free-text field (a section key or title) without losing its start. */
+function clipped(text, maximum) {
+    return text.length <= maximum ? text : `${text.slice(0, maximum - 1)}…`;
+}
+/** Keep the action whole: the head may lose its tail, the remedy never does. */
+function clampUnitText(head, action) {
+    const room = MAX_UNIT_TEXT - action.length;
+    return head.length <= room
+        ? `${head}${action}`
+        : `${head.slice(0, Math.max(0, room - 1))}…${action}`;
 }
 /** The task ids one open run's recorded identity covers. */
 function runCoveredIds(run) {
@@ -630,9 +643,11 @@ export function reviewUnitText(change, unit, options = {}) {
         const task = unit.missing[0];
         if (task === undefined)
             return `change "${change}" has no outstanding review unit`;
-        return `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS/ERROR record${action(`task: "${task.id}"`)}`;
+        const head = `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS/ERROR record`;
+        return clampUnitText(head, action(`task: "${task.id}"`));
     }
-    return `section "${section.key}" (${section.title}) is one review unit covering checked tasks ${boundedNumbers(unit.covered)}; missing a ${rule} PASS/ERROR record: ${boundedNumbers(unit.missing)}${action(`section: "${section.key}"`)}`;
+    const head = `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) is one review unit; missing a ${rule} PASS/ERROR record: ${boundedNumbers(unit.missing)}`;
+    return clampUnitText(head, action(`section: "${section.key}"`));
 }
 /**
  * The portable completion/archive coverage: every checked task needs a portable

@@ -1156,6 +1156,20 @@ describe('the review unit steer', () => {
     expect(text.length).toBeLessThan(600)
   })
 
+  it('keeps the delivered completion note inside the steer budget for a long heading', async () => {
+    const root = await workspace(
+      '# Tasks\n\n## 2. Focused re-review (lane 1, owns `packages/plugin-workflows/src/host/review.ts`, `review-scheduler.ts`, `review-snapshot.ts`, `evidence.ts`, `projection.ts`, `parity.ts`)\n\n- [x] 2.1 First task\n- [x] 2.2 Second task\n- [x] 2.3 Third task\n- [x] 2.4 Fourth task\n',
+    )
+    const completion = taskReviewCompletion(root, 'change-a')
+    expect(completion?.ok).toBe(false)
+    expect(completion?.text).toContain('2.1, 2.2, 2.3, 2.4')
+    expect(completion?.text).toContain(
+      'delegate(rule: "task-review", change: "change-a", section: "2")',
+    )
+    // The gate bounds the delivered note to 600 characters; the action must survive.
+    expect(completion?.text?.length ?? 0).toBeLessThanOrEqual(600)
+  })
+
   it('carries the section unit into the completion steer', async () => {
     const root = await workspace(DONE_PLAN)
     await writeTaskPass(root, taskIdOf('Doc task'))

@@ -4353,6 +4353,27 @@ export function apply(ctx, config = {}) {
         const digest = await worktreeDigest(workspace, defaultGit);
         return digest !== undefined && digest === note.worktreeDigest ? note.taskId : undefined;
     };
+    /** The outstanding review units of one workspace, with their open runs. */
+    const reviewUnitLines = async (workspace, runs) => {
+        const openRuns = runs
+            .filter((run) => run.definition.id === 'task-review' &&
+            isOpenRun(run) &&
+            typeof run.context.name === 'string')
+            .map((run) => ({ id: run.id, change: String(run.context.name), context: run.context }));
+        const reviewOwner = legacySignalState().enabled.has('delegation-rules/task-review')
+            ? 'legacy'
+            : 'workflows';
+        const changes = [
+            ...new Set([...(await activeChangeNames(workspace)), ...openRuns.map((run) => run.change)]),
+        ].sort();
+        const units = [];
+        for (const name of changes) {
+            for (const unit of (await reviewUnits(workspace, name, reviewOwner)) ?? []) {
+                units.push(reviewUnitText(name, unit, { openRuns }));
+            }
+        }
+        return units;
+    };
     const compatStatus = async () => {
         const call = compatCallContext();
         const state = legacySignalState();
@@ -4361,26 +4382,7 @@ export function apply(ctx, config = {}) {
         const definitions = await definitionsFor(call.workspace);
         const runs = auth === undefined ? [] : await listAuthenticatedRuns(call.workspace, auth);
         const receipts = auth === undefined ? [] : await listReceipts(call.workspace, auth);
-        // The review units still missing a record, pointing at the open run that
-        // already covers one instead of a new start.
-        const openRuns = runs
-            .filter((run) => run.definition.id === 'task-review' &&
-            isOpenRun(run) &&
-            typeof run.context.name === 'string')
-            .map((run) => ({ id: run.id, change: String(run.context.name), context: run.context }));
-        const reviewOwner = state.enabled.has('delegation-rules/task-review') ? 'legacy' : 'workflows';
-        const changes = [
-            ...new Set([
-                ...(await activeChangeNames(call.workspace)),
-                ...openRuns.map((run) => run.change),
-            ]),
-        ].sort();
-        const units = [];
-        for (const name of changes) {
-            for (const unit of (await reviewUnits(call.workspace, name, reviewOwner)) ?? []) {
-                units.push(reviewUnitText(name, unit, { openRuns }));
-            }
-        }
+        const units = await reviewUnitLines(call.workspace, runs);
         return [
             'Workflows status',
             `review: ${owner('delegation-rules', 'task-review')} (task-review), ${owner('delegation-rules', 'spec-review')} (spec-review), ${owner('delegation-rules', 'integration-review')} (integration-review)`,
@@ -4561,7 +4563,11 @@ export function apply(ctx, config = {}) {
                             await recoverIfNeeded(workspace);
                             const runs = await listAuthenticatedRuns(workspace, auth);
                             const open = runs.filter((run) => run.status === 'running' || run.status === 'blocked');
-                            return `definitions: ${String(definitions.length)}; open runs: ${String(open.length)}; receipts: ${String((await listReceipts(workspace, auth)).length)}`;
+                            const units = await reviewUnitLines(workspace, runs);
+                            return [
+                                `definitions: ${String(definitions.length)}; open runs: ${String(open.length)}; receipts: ${String((await listReceipts(workspace, auth)).length)}`,
+                                ...(units.length === 0 ? [] : [`review units: ${units.join('; ')}`]),
+                            ].join('\n');
                         },
                     };
                     const result = await runWorkflowCommand(input, host);

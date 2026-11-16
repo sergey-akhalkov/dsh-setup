@@ -1642,6 +1642,63 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(created[0]?.context.taskIds).toHaveLength(2)
   })
 
+  it('names the review units in the native status summary', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n',
+      'utf8',
+    )
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    const status = async (): Promise<string> =>
+      (
+        await command?.handler({
+          agent: host.agent,
+          commandId: 'cmd-status',
+          rawInput: ' status',
+          attachments: [],
+          signal: new AbortController().signal,
+        })
+      )?.text ?? ''
+    const text = await status()
+    expect(text).toContain('review units:')
+    expect(text).toContain('section "1"')
+    expect(text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2')
+    // A pending section run is pointed at instead of a new start.
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const pending = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: sectionRecordId('1'),
+        section: '1',
+        sectionTitle: '1. Engine',
+        taskIds: [taskIdOf('First task'), taskIdOf('Second task')],
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, pending, auth)
+    const pendingText = await status()
+    expect(pendingText).toContain('the open review run')
+    expect(pendingText).not.toContain('delegate(')
+  })
+
   it('starts one section run for two missing tasks and no per-task run', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
