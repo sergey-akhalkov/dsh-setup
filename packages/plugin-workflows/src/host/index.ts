@@ -88,7 +88,7 @@ import {
   toolResultText,
   workflowsDirectory,
 } from './journal.js'
-import { type NoteInput, type WrittenNote, writeProgressNote } from './notes.js'
+import { type NoteInput, readProgressNote, type WrittenNote, writeProgressNote } from './notes.js'
 import {
   type CheckpointObservation,
   checkpointGateIssue,
@@ -5089,6 +5089,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     laneDecisionsFor(call.session, change).set(lane, 'serial')
     await rememberInvolvement(call.workspace, call.session, change)
   }
+  /**
+   * The workflow progress note one legacy lane boundary may accept: its task
+   * only while this session wrote it and the current worktree still matches the
+   * note's own digest format.
+   */
+  const compatFreshNoteTask = async (
+    workspace: string,
+    change: string,
+    session: string,
+  ): Promise<string | undefined> => {
+    const note = await readProgressNote(workspace, change, 'workflows')
+    if (note === undefined || note.session !== session) return undefined
+    const digest = await worktreeDigest(workspace, defaultGit)
+    return digest !== undefined && digest === note.worktreeDigest ? note.taskId : undefined
+  }
   const compatStatus = async (): Promise<string> => {
     const call = compatCallContext()
     const state = legacySignalState()
@@ -5110,6 +5125,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       delegate: compatDelegate,
       note: compatNote,
       markLaneSerial: compatMarkLaneSerial,
+      freshNoteTask: compatFreshNoteTask,
       status: compatStatus,
     })
   } catch (error) {

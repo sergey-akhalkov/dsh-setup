@@ -298,6 +298,12 @@ export interface WorkflowsReviewCompat {
     }>;
     /** Forward one legacy progress note's serial lane decision and session involvement. */
     markLaneSerial(change: string, lane: string): Promise<void>;
+    /**
+     * The task the workflow progress note names for one change while it is fresh
+     * for this session, or undefined. The note's owner checks its own digest
+     * format, so a stale or foreign note never escapes a legacy lane boundary.
+     */
+    freshNoteTask(workspace: string, change: string, session: string): Promise<string | undefined>;
     status(): Promise<string>;
 }
 /** Resolve a legacy undled:<name> instruction to its asset text. */

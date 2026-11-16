@@ -24,7 +24,7 @@ import { HostAuth } from './host-auth.js';
 import { advanceIntake } from './intake.js';
 import { readInvolvement, writeInvolvement } from './involvement.js';
 import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
-import { writeProgressNote } from './notes.js';
+import { readProgressNote, writeProgressNote } from './notes.js';
 import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifySettings, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
 import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
@@ -4207,6 +4207,18 @@ export function apply(ctx, config = {}) {
         laneDecisionsFor(call.session, change).set(lane, 'serial');
         await rememberInvolvement(call.workspace, call.session, change);
     };
+    /**
+     * The workflow progress note one legacy lane boundary may accept: its task
+     * only while this session wrote it and the current worktree still matches the
+     * note's own digest format.
+     */
+    const compatFreshNoteTask = async (workspace, change, session) => {
+        const note = await readProgressNote(workspace, change, 'workflows');
+        if (note === undefined || note.session !== session)
+            return undefined;
+        const digest = await worktreeDigest(workspace, defaultGit);
+        return digest !== undefined && digest === note.worktreeDigest ? note.taskId : undefined;
+    };
     const compatStatus = async () => {
         const call = compatCallContext();
         const state = legacySignalState();
@@ -4227,6 +4239,7 @@ export function apply(ctx, config = {}) {
             delegate: compatDelegate,
             note: compatNote,
             markLaneSerial: compatMarkLaneSerial,
+            freshNoteTask: compatFreshNoteTask,
             status: compatStatus,
         });
     }

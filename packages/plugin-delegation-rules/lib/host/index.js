@@ -2384,10 +2384,14 @@ async function ownedTaskReviewed(cwd, change, taskId) {
         return false;
     }
 }
-async function inspectNote(cwd, change) {
+/**
+ * Read one change's progress note from the OpenSpec workspace, where both note
+ * writers place it; a caller with a nested session directory passes its root.
+ */
+async function inspectNote(workspace, change) {
     let raw;
     try {
-        raw = await readFile(notePath(cwd, change), 'utf8');
+        raw = await readFile(notePath(workspace, change), 'utf8');
     }
     catch (error) {
         if (error.code === 'ENOENT')
@@ -2412,6 +2416,13 @@ async function inspectNote(cwd, change) {
     catch {
         return { kind: 'malformed' };
     }
+}
+/** The task a legacy note names while its worktree digest is still current. */
+async function freshLegacyNoteTask(workspace, change, digest) {
+    if (digest === undefined)
+        return undefined;
+    const note = await inspectNote(workspace, change);
+    return note.kind === 'note' && note.note.worktreeDigest === digest ? note.note.taskId : undefined;
 }
 /** The task-review rule whose portable PASS is the approval, with its reviewer binding. */
 async function approvalRuleId(config, openspecRoot) {
@@ -4314,7 +4325,9 @@ class DelegationEngine {
             worktreeDigest: digest,
             time: this.now(),
         };
-        const path = notePath(cwd, match.change.name);
+        // Both note writers keep one store at the resolved OpenSpec workspace, so a
+        // nested session's note is the one its own gate reads.
+        const path = notePath(workspaceRoot, match.change.name);
         await writeJsonAtomic(path, note);
         // The note is this session's serial decision for its lane; it stays decided
         // after later worktree changes, unlike the note's digest. The workflow lane
@@ -4457,7 +4470,7 @@ class DelegationEngine {
                     for (const gap of formatApprovalGapLines(coverage))
                         lines.push(`  ${gap}`);
                 }
-                const note = await inspectNote(cwd, change.name);
+                const note = await inspectNote(workspaceRoot, change.name);
                 if (note.kind === 'note') {
                     let digest;
                     try {
@@ -4469,10 +4482,10 @@ class DelegationEngine {
                     const task = tasks.find((entry) => entry.id === note.note.taskId);
                     const fresh = digest !== undefined && digest === note.note.worktreeDigest;
                     const completed = task === undefined || task.checked;
-                    lines.push(`  progress note: ${note.note.status}${task === undefined ? ' (task not found)' : ` for "${task.text}"`} - ${fresh && !completed ? 'active' : fresh ? 'stale (task completed)' : 'stale (worktree changed)'} at ${relativePath(cwd, notePath(cwd, change.name))}`);
+                    lines.push(`  progress note: ${note.note.status}${task === undefined ? ' (task not found)' : ` for "${task.text}"`} - ${fresh && !completed ? 'active' : fresh ? 'stale (task completed)' : 'stale (worktree changed)'} at ${relativePath(cwd, notePath(workspaceRoot, change.name))}`);
                 }
                 else if (note.kind === 'malformed') {
-                    lines.push(`  progress note: malformed at ${relativePath(cwd, notePath(cwd, change.name))}`);
+                    lines.push(`  progress note: malformed at ${relativePath(cwd, notePath(workspaceRoot, change.name))}`);
                 }
                 else {
                     lines.push('  progress note: none');
@@ -4920,7 +4933,7 @@ async function evaluateGate(deps, agent, turn, signal) {
                 }
                 const tickedReviewed = newlyChecked.some((task) => reviewedOwn.has(task.id));
                 let matchingNote = false;
-                const note = await inspectNote(cwd, change.name);
+                const note = await inspectNote(dirname(openspecRoot), change.name);
                 if (note.kind === 'note' && current.digest !== undefined) {
                     const task = tasks.find((entry) => entry.id === note.note.taskId);
                     matchingNote =
@@ -5149,13 +5162,16 @@ async function evaluateGate(deps, agent, turn, signal) {
                             lane.tasks.some((task) => !task.checked));
                         const remaining = candidates.filter((lane) => lane.owns.length > 0);
                         if (remaining.length > 0 && remaining.length === candidates.length) {
-                            const note = await inspectNote(cwd, change.name);
-                            const noteTask = note.kind === 'note' ? note.note.taskId : undefined;
-                            const escaped = noteTask !== undefined &&
-                                current.digest !== undefined &&
-                                note.kind === 'note' &&
-                                note.note.worktreeDigest === current.digest &&
-                                laneOfTask(remaining, noteTask) !== undefined;
+                            // The note follows the active progress owner: this row's store,
+                            // or the workflow store whose owner checks its own digest. Without
+                            // the compat service the legacy `task_progress` fallback wrote the
+                            // legacy note, so that store stays the one to read.
+                            const noteWorkspace = dirname(openspecRoot);
+                            const compat = deps.services.compat?.();
+                            const noteTask = signals.taskProgress || compat === undefined
+                                ? await freshLegacyNoteTask(noteWorkspace, change.name, current.digest)
+                                : await compat.freshNoteTask(noteWorkspace, change.name, thread);
+                            const escaped = noteTask !== undefined && laneOfTask(remaining, noteTask) !== undefined;
                             if (!escaped) {
                                 const ruleId = laneRules.find((rule) => rule.gate === 'strict')?.id ??
                                     laneRules[0]?.id ??

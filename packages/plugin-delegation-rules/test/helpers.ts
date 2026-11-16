@@ -253,6 +253,13 @@ export class FakeReviewCompat implements WorkflowsReviewCompat {
     this.laneSerialCalls.push({ change, lane })
   }
 
+  /** The task id a fresh workflow note names, for the lane-boundary escape. */
+  freshNoteTaskValue?: string
+
+  async freshNoteTask(): Promise<string | undefined> {
+    return this.freshNoteTaskValue
+  }
+
   async status(): Promise<string> {
     return this.statusText
   }

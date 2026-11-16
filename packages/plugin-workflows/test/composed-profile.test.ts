@@ -903,15 +903,24 @@ const LANE_PLAN = `# Tasks
 - [ ] 2.1 Doc task
 `
 
+const LANE_PLAN_TICKED = LANE_PLAN.replace('- [ ] 1.1 Engine task', '- [x] 1.1 Engine task')
+
 async function openComposed(
   workspace: string,
   gates: Record<string, boolean>,
-  options: { seedInvolvement?: boolean; dropProgressNoteRule?: boolean } = {},
+  options: {
+    seedInvolvement?: boolean
+    dropProgressNoteRule?: boolean
+    /** The session's directory when it is nested inside the OpenSpec workspace. */
+    sessionDir?: string
+    /** Extra legacy rules on top of the composed row, such as lane-boundary. */
+    extraRules?: Array<Record<string, unknown>>
+  } = {},
 ): Promise<FakeHost> {
   process.env.DSH_WORKFLOWS_HOST_KEY = KEY
   const delegation = await composedConfig('dsh-setup-delegation-rules')
   const workflows = await composedConfig('dsh-setup-workflows')
-  const host = fakeHost(workspace)
+  const host = fakeHost(options.sessionDir ?? workspace)
   // A worker-start tool must be visible for the legacy lane gate to act.
   ;(host.ctx.tools as { register(definition: unknown): unknown }).register({
     name: 'subagent',
@@ -919,11 +928,12 @@ async function openComposed(
   })
   // A progress switch with no covering note rule cannot steer, so the resolved
   // legacy signal is off even while the raw switch is on.
-  const rules = options.dropProgressNoteRule
+  const composedRules = options.dropProgressNoteRule
     ? (delegation.rules as Array<Record<string, unknown>>).filter(
         (rule) => !(rule.when === 'implementation-work' && rule.contract === 'note'),
       )
-    : delegation.rules
+    : (delegation.rules as Array<Record<string, unknown>>)
+  const rules = [...composedRules, ...(options.extraRules ?? [])]
   applyDelegation(host.ctx as never, { ...delegation, rules, gates } as never)
   apply(host.ctx as never, workflows as never)
   await waitFor(() => host.watch.length > 0)
@@ -993,6 +1003,22 @@ async function implementationWrite(host: FakeHost, workspace: string): Promise<v
     },
     { isError: false, content: [{ type: 'text', text: 'ok' }] },
   )
+}
+
+/** One canonical tasks.md write in the turn: the lane completion the boundary reads. */
+async function completeLane(
+  host: FakeHost,
+  workspace: string,
+  before: string,
+  after: string,
+): Promise<void> {
+  const file = join(workspace, 'openspec', 'changes', CHANGE, 'tasks.md')
+  await host.emit(
+    'tools/result',
+    { agent: host.agent, callId: 'lane-tick', name: 'write', arguments: { file_path: file } },
+    { isError: false, value: { path: file, before, after }, content: [] },
+  )
+  await writeFile(file, after, 'utf8')
 }
 
 describe('task_progress routes by the resolved legacy signal', () => {
@@ -1150,6 +1176,45 @@ describe('mixed gate ownership routes one note through both owners', () => {
     expect(legacy[0]?.text).not.toContain('Lane: 1. Engine')
     // The owned progress gate accepts the fresh workflow note.
     expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
+  })
+
+  it('escapes a legacy lane boundary from a progress-owned serial note', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: false,
+        laneFanout: true,
+      },
+      {
+        extraRules: [
+          { id: 'lane-boundary', when: 'lane-boundary', contract: 'note', gate: 'strict' },
+        ],
+      },
+    )
+    // Completing lane 1 in this turn makes the boundary refuse until the
+    // remaining lane records its serial decision. The note goes to the workflow
+    // store, so the legacy escape must read that owner's fresh note.
+    await completeLane(host, workspace, LANE_PLAN, LANE_PLAN_TICKED)
+    const output = toolText(
+      await host.callTool('task_progress', {
+        task: '2.1 Doc task',
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    expect(
+      await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeDefined()
+    expect(
+      await readJson(join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
+    ).toBeUndefined()
+    await closeTurn(host, 1)
+    expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
   })
 
   it('establishes the restored legacy involvement from a progress-owned note', async () => {
@@ -1487,5 +1552,44 @@ describe('nested session directories route to the OpenSpec workspace', () => {
     expect(
       await readJson(join(nested, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
     ).toBeUndefined()
+  })
+
+  it('accepts a workflows note from a nested session at the restored progress gate', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const nested = join(workspace, 'packages', 'app')
+    await mkdir(nested, { recursive: true })
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: true,
+        laneFanout: false,
+      },
+      { sessionDir: nested },
+    )
+    await implementationWrite(host, workspace)
+    // The restored progress gate owns the legacy store, and the workflow writer
+    // keeps it at the resolved OpenSpec workspace, so a nested session's note
+    // must land there for its own gate to accept it.
+    const output = toolText(
+      await host.callTool('workflows', {
+        action: 'note',
+        change: CHANGE,
+        task: '2.1 Doc task',
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      }),
+    )
+    expect(output).toContain('delegation/task-progress')
+    expect(
+      await readJson(join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
+    ).toBeDefined()
+    expect(
+      await readJson(join(nested, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
+    ).toBeUndefined()
+    await closeTurn(host, 1)
+    expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
   })
 })
