@@ -4299,11 +4299,14 @@ class DelegationEngine {
         const path = notePath(cwd, match.change.name);
         await writeJsonAtomic(path, note);
         // The note is this session's serial decision for its lane; it stays decided
-        // after later worktree changes, unlike the note's digest.
+        // after later worktree changes, unlike the note's digest. The workflow lane
+        // gate may own the lane signal while this progress signal stays legacy; the
+        // single note file cannot retain an earlier lane, so forward the decision.
         const lanes = await readTaskLanes(match.change.dir);
         const lane = laneOfTask(lanes, match.task.id);
         if (lane !== undefined && lane.title !== '') {
             this.services.state.markLaneSerial(String(agent.id), match.change.name, lane.title);
+            compat?.markLaneSerial(match.change.name, lane.title);
         }
         return [
             `progress note written for change "${match.change.name}" (${relativePath(cwd, path)})`,

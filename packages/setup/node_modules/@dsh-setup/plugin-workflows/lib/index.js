@@ -3970,6 +3970,18 @@ export function apply(ctx, config = {}) {
             ...(written.lane === undefined ? {} : { lane: written.lane }),
         };
     };
+    /**
+     * Keep a serial lane decision the legacy `task_progress` call made: the note
+     * file holds only its latest lane, so the owned lane gate's session state is
+     * the only place an earlier decision survives a later note. The legacy call
+     * writes its own note; this forwards the decision alone.
+     */
+    const compatMarkLaneSerial = (change, lane) => {
+        const call = compatCallContext();
+        if (legacySignalState().enabled.has('delegation-rules/lane-assignment'))
+            return;
+        laneDecisionsFor(call.session, change).set(lane, 'serial');
+    };
     const compatStatus = async () => {
         const call = compatCallContext();
         const state = legacySignalState();
@@ -3989,6 +4001,7 @@ export function apply(ctx, config = {}) {
         ctx.provide('workflowsReviewCompat', {
             delegate: compatDelegate,
             note: compatNote,
+            markLaneSerial: compatMarkLaneSerial,
             status: compatStatus,
         });
     }

@@ -782,6 +782,43 @@ describe('mixed gate ownership routes one note through both owners', () => {
     expect(lane?.text).toContain('Lane: 1. Engine')
     expect(lane?.text).not.toContain('Lane: 2. Docs')
   })
+
+  it('keeps an earlier legacy serial decision after the printed workflow note for another lane', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: true,
+      laneFanout: false,
+    })
+    await implementationWrite(host, workspace)
+    // The actual legacy task_progress path decides lane 1 and writes the only
+    // note file; its serial decision must outlive the next note.
+    const engine = toolText(
+      await host.callTool('task_progress', {
+        task: '1.1 Engine task',
+        status: 'in-progress',
+        reason: 'engine stays serial',
+      }),
+    )
+    expect(engine).toContain('progress note written')
+    // The lane gate's printed remedy for lane 2 is the workflows note, which
+    // overwrites that file; both lanes stay decided.
+    const docs = toolText(
+      await host.callTool('workflows', {
+        action: 'note',
+        change: CHANGE,
+        task: '2.1 Doc task',
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      }),
+    )
+    expect(docs).toContain('progress note written')
+    await closeTurn(host, 1)
+    expect(host.steers.filter((steer) => steer.kind === 'workflows-gate')).toEqual([])
+    expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
+  })
 })
 
 describe('goal-completion ownership', () => {

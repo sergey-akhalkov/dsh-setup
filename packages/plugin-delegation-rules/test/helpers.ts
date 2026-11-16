@@ -229,6 +229,7 @@ export interface CompatNoteCall {
 export class FakeReviewCompat implements WorkflowsReviewCompat {
   readonly delegateCalls: CompatDelegateCall[] = []
   readonly noteCalls: CompatNoteCall[] = []
+  readonly laneSerialCalls: Array<{ change: string; lane: string }> = []
   statusText = 'Workflows status: the native review runtime owns the signal.'
   /** The lane a note returns; undefined keeps the call lane-neutral. */
   lane?: string
@@ -244,6 +245,10 @@ export class FakeReviewCompat implements WorkflowsReviewCompat {
       text: `workflow note written for ${input.task}`,
       ...(this.lane === undefined ? {} : { lane: this.lane }),
     }
+  }
+
+  markLaneSerial(change: string, lane: string): void {
+    this.laneSerialCalls.push({ change, lane })
   }
 
   async status(): Promise<string> {

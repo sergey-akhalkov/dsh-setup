@@ -294,6 +294,8 @@ export interface WorkflowsReviewCompat {
         text: string;
         lane?: string;
     }>;
+    /** Forward one legacy progress note's serial lane decision to the owned gate. */
+    markLaneSerial(change: string, lane: string): void;
     status(): Promise<string>;
 }
 /** Resolve a legacy undled:<name> instruction to its asset text. */
