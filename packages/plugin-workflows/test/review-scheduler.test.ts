@@ -13,6 +13,8 @@ import {
   type ReviewSubagentRunner,
   resolveReviewers,
   reviewDigest,
+  type SectionReview,
+  sectionReviewDigest,
 } from '../src/host/review.ts'
 import type { QueueLimits } from '../src/host/review-queue.ts'
 import { ReviewScheduler } from '../src/host/review-scheduler.ts'
@@ -22,6 +24,7 @@ import {
   startSnapshotLease,
 } from '../src/host/review-snapshot.ts'
 import { createRun, type WorkflowRun } from '../src/host/runs.ts'
+import { sectionRecordId } from '../src/host/tasks.ts'
 
 const roots: string[] = []
 
@@ -281,6 +284,95 @@ describe('review scheduler', () => {
     })
     expect(full.kind).toBe('full')
     release?.()
+    scheduler.dispose()
+  })
+
+  it('reports a live section run as covering each of its recorded tasks', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const def = taskDefinition()
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const scheduler = new ReviewScheduler(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 1,
+        baseDelayMs: 0,
+        maxDelayMs: 0,
+        waitTimeoutMs: 10_000,
+      },
+      {
+        persistRun: async (_workspace, run) => run,
+        discardSnapshot: async () => undefined,
+      },
+    )
+    const section: SectionReview = {
+      key: '1',
+      title: '1. Engine',
+      recordId: sectionRecordId('1'),
+      covered: [
+        { id: 'a'.repeat(16), number: '1.1', text: 'First task' },
+        { id: 'b'.repeat(16), number: '1.2', text: 'Second task' },
+      ],
+      unchecked: [],
+    }
+    const run = createRun({
+      definition: def.id,
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace: root,
+      context: {
+        name: 'auth',
+        taskId: section.recordId,
+        section: section.key,
+        sectionTitle: section.title,
+        taskIds: section.covered.map((task) => task.id),
+      },
+      steps: ['review'],
+      now: 1_000,
+    })
+    const digestOf = sectionReviewDigest(section, digest)
+    const request: ReviewRunInput = {
+      run,
+      definition: def,
+      step: def.steps[0] as Definition['steps'][number],
+      reviewer: reviewers(),
+      runner: {
+        run: async () => {
+          await gate
+          return { childId: 'child-1', completed: true, text: fencedPASS(digestOf) }
+        },
+      },
+      context: { workspace: root, values: { name: 'auth' } },
+      change: 'auth',
+      prepared: { specDigest: digest, section },
+      timeoutMs: 5_000,
+      session: 'session-1',
+    }
+    const admission = await scheduler.enqueue({
+      workspace: root,
+      run,
+      request,
+      rule: 'task-review',
+      change: 'auth',
+      taskId: section.recordId,
+      digest: digestOf,
+    })
+    expect(admission.kind).toBe('accepted')
+    // A per-task request for a covered task is not a new review identity, but
+    // the coverage check sees the section run already reviewing it.
+    expect(scheduler.liveCovering(root, 'auth', [section.covered[0]?.id as string])?.id).toBe(
+      run.id,
+    )
+    expect(scheduler.liveCovering(root, 'auth', ['f'.repeat(16)])).toBeUndefined()
+    expect(
+      scheduler.liveCovering(root, 'other', [section.covered[0]?.id as string]),
+    ).toBeUndefined()
+    release?.()
+    await waitFor(async () => scheduler.summary().active === 0)
     scheduler.dispose()
   })
 

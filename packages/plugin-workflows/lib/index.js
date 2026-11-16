@@ -1342,19 +1342,24 @@ export function apply(ctx, config = {}) {
                                         if (attempted.has(recordId))
                                             continue;
                                         attempted.add(recordId);
-                                        const view = {
-                                            key: section.key,
-                                            title: section.title,
-                                            tasks: unit.covered,
-                                            covered: unit.covered,
-                                            unchecked: [],
-                                        };
-                                        const duplicate = liveRuns.find((run) => sameSectionCoverage(run.context, view, recordId));
-                                        if (duplicate !== undefined) {
+                                        // A live review that already covers one of the section's
+                                        // tasks makes the section unit a duplicate: the covered
+                                        // tasks wait for that run, and only the uncovered missing
+                                        // tasks start their own per-task review.
+                                        const coveredIds = unit.covered.map((task) => task.id);
+                                        const covering = liveRuns.find((run) => {
+                                            if (coveredIds.includes(String(run.context.taskId)))
+                                                return true;
+                                            const taskIds = run.context.taskIds;
+                                            return (Array.isArray(taskIds) && coveredIds.some((id) => taskIds.includes(id)));
+                                        });
+                                        if (covering !== undefined) {
                                             suppressed ??= {
                                                 ok: false,
-                                                reason: `a live run "${duplicate.id}" already covers section "${section.key}"`,
+                                                reason: `a live run "${covering.id}" already covers a task in section "${section.key}"`,
                                             };
+                                            for (const task of unit.missing)
+                                                startTask(task.id);
                                             continue;
                                         }
                                         const context = {
@@ -2665,6 +2670,17 @@ export function apply(ctx, config = {}) {
                         // run's steps with the foreign definition's.
                         return undefined;
                     }
+                    // A pending section run and a per-task run that it covers share no
+                    // record id, so the identity check above cannot see them overlap; a
+                    // pending review of any covered task keeps this unit waiting too.
+                    const coveredIds = sectionValue === undefined
+                        ? task === undefined
+                            ? []
+                            : [task.id]
+                        : sectionValue.covered.map((entry) => entry.id);
+                    const covering = reviewScheduler?.liveCovering(workspace, change, coveredIds);
+                    if (covering !== undefined && covering.id !== reviewRun.id)
+                        return undefined;
                 }
                 // Capture the complete reviewed input set before preparing it: a stat
                 // signature survives an edit-read-restore that a content digest hides.
@@ -4243,7 +4259,9 @@ export function apply(ctx, config = {}) {
         const pending = runs.find((run) => run.definition.id === definition.id &&
             run.context.name === input.change &&
             (section === undefined
-                ? task === undefined || run.context.taskId === task.id
+                ? task === undefined ||
+                    run.context.taskId === task.id ||
+                    (Array.isArray(run.context.taskIds) && run.context.taskIds.includes(task.id))
                 : sameSectionCoverage(run.context, section.section, section.recordId)) &&
             isOpenRun(run) &&
             services.agents.get(run.session) !== undefined);

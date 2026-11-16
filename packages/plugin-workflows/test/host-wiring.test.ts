@@ -1672,6 +1672,55 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(record.verdict).toBe('ERROR')
   })
 
+  it('starts only the uncovered task when a pending section run covers part of it', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    const plan = (box: string): string =>
+      `# Tasks\n\n## 1. Engine\n\n- [${box}] 1.1 First task\n- [${box}] 1.2 Second task\n- [${box}] 1.3 Third task\n`
+    await writeFile(join(changeDir, 'tasks.md'), plan(' '), 'utf8')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const [first, second, third] = ['First task', 'Second task', 'Third task'].map(taskIdOf)
+    // A section run covering the first two tasks is still pending when the
+    // third is ticked; re-reviewing the whole section would review them twice.
+    const pending = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: sectionRecordId('1'),
+        section: '1',
+        sectionTitle: '1. Engine',
+        taskIds: [first, second],
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, pending, auth)
+    await writeFile(join(changeDir, 'tasks.md'), plan('x'), 'utf8')
+    host.fireFs()
+    const reviewRuns = async (): Promise<Array<{ id: string; context: Record<string, unknown> }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth))
+        .filter((entry) => entry.definition.id === 'task-review')
+        .map((entry) => ({ id: entry.id, context: entry.context }))
+    await waitFor(async () => (await reviewRuns()).some((run) => run.context.taskId === third))
+    // Give a section start the chance to appear before asserting the fallback.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const created = (await reviewRuns()).filter((run) => run.id !== pending.id)
+    expect(created).toHaveLength(1)
+    expect(created[0]?.context).toMatchObject({ name: 'auth', taskId: third })
+    expect(created[0]?.context.section).toBeUndefined()
+  })
+
   it('suppresses a second run for a task a live run already covers', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()

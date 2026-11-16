@@ -180,6 +180,28 @@ export class ReviewScheduler {
         }
         return undefined;
     }
+    /**
+     * A live review of this change that already covers one of these task ids: a
+     * pending section run covers its recorded `taskIds`, a per-task run its own
+     * id. Used to keep a section and its covered task from being reviewed twice.
+     */
+    liveCovering(workspace, change, taskIds) {
+        if (taskIds.length === 0)
+            return undefined;
+        for (const entry of this.admitted.values()) {
+            if (entry.workspace !== workspace || entry.change !== change)
+                continue;
+            const section = entry.request.prepared.section;
+            const covered = section === undefined
+                ? entry.request.task === undefined
+                    ? []
+                    : [entry.request.task.id]
+                : section.covered.map((task) => task.id);
+            if (covered.some((id) => taskIds.includes(id)))
+                return entry.run;
+        }
+        return undefined;
+    }
     constructor(limits, host) {
         this.host = host;
         this.limits = limits;

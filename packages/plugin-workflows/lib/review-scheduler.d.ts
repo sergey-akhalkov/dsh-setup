@@ -101,6 +101,12 @@ export declare class ReviewScheduler {
         digest?: string;
         reviewer?: string;
     }): WorkflowRun | undefined;
+    /**
+     * A live review of this change that already covers one of these task ids: a
+     * pending section run covers its recorded `taskIds`, a per-task run its own
+     * id. Used to keep a section and its covered task from being reviewed twice.
+     */
+    liveCovering(workspace: string, change: string, taskIds: readonly string[]): WorkflowRun | undefined;
     constructor(limits: QueueLimits, host: ReviewSchedulerHost);
     /** The queue's start hook: start the target and report once it is live. */
     private start;
