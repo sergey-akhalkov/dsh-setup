@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { adoptChange } from './adoption.js';
@@ -184,10 +184,32 @@ function hostServices(ctx) {
     }
     return { agents, workingDirectory, fs, connection };
 }
+/**
+ * The OpenSpec project enclosing a session directory: the nearest ancestor with
+ * `openspec/changes`, as the legacy resolver searches. A nested session
+ * directory keeps one run, note, and record store at that root.
+ */
+function openSpecWorkspace(workspace) {
+    const start = resolve(workspace);
+    let current = start;
+    for (;;) {
+        try {
+            if (statSync(join(current, 'openspec', 'changes')).isDirectory())
+                return current;
+        }
+        catch {
+            // A missing or unreadable ancestor keeps walking up.
+        }
+        const parent = dirname(current);
+        if (parent === current)
+            return start;
+        current = parent;
+    }
+}
 /** The workspace one session's local files belong to, or undefined if it is gone. */
 function workspaceFor(services, session) {
     try {
-        return services.workingDirectory.get(session);
+        return openSpecWorkspace(services.workingDirectory.get(session));
     }
     catch {
         return undefined;
@@ -4387,9 +4409,19 @@ export function apply(ctx, config = {}) {
     registerActiveRunsContext(ctx, activePromptRuns);
     // The read-only API is optional at runtime but present on the Web host that
     // also carries the Client view; a host without Fetch keeps recording only.
+    // The routes resolve the same OpenSpec workspace the host uses, so a nested
+    // session directory still reads the run, note, and definition store it writes.
+    const resolvedDirectory = {
+        get: (session) => {
+            const workspace = workspaceFor(services, session);
+            if (workspace === undefined)
+                throw new Error('the session workspace is unavailable');
+            return workspace;
+        },
+    };
     registerWorkflowRoutes(ctx, {
         agents: services.agents,
-        workingDirectory: services.workingDirectory,
+        workingDirectory: resolvedDirectory,
         journal,
         healthFor,
         lastEventAtFor: (session) => sessionEventAt.get(session),
@@ -4408,7 +4440,7 @@ export function apply(ctx, config = {}) {
     // saved definition is approved exactly as a `/workflows install` would be.
     registerEditorRoutes(ctx, {
         agents: services.agents,
-        workingDirectory: services.workingDirectory,
+        workingDirectory: resolvedDirectory,
         auth: async () => (storedAuth === undefined ? ensureAuth() : storedAuth),
     });
 }

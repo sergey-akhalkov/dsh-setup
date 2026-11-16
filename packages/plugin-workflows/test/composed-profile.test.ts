@@ -1415,3 +1415,77 @@ describe('goal-completion ownership', () => {
     })
   })
 })
+
+describe('nested session directories route to the OpenSpec workspace', () => {
+  it('starts and executes the owned delegate review at the workspace root', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const nested = join(workspace, 'packages', 'app')
+    await mkdir(nested, { recursive: true })
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(nested)
+    applyDelegation(host.ctx as never, delegation as never)
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+
+    // The legacy resolver finds the change from the nested directory; the owned
+    // route must resolve the checked task and start the run at the same root.
+    const started = toolText(
+      await host.callTool('delegate', { rule: 'task-review', change: CHANGE, task: TASK_ID }),
+    )
+    expect(started).toMatch(/review started/u)
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const runs = (await listAuthenticatedRuns(workspace, auth)).filter(
+      (run) => run.definition.id === 'task-review',
+    )
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.context).toMatchObject({ name: CHANGE, taskId: TASK_ID })
+
+    // The next close advances that root run; the native review reads the root
+    // tasks.md and publishes its record and portable approval there.
+    await closeTurn(host, 2)
+    const recordPath = join(
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      CHANGE,
+      'tasks',
+      `${TASK_ID}.json`,
+    )
+    await waitFor(async () => (await readJson(join(workspace, recordPath)))?.verdict === 'PASS')
+    expect(
+      (await readJson(join(workspace, 'openspec', 'changes', CHANGE, 'reviews', `${TASK_ID}.json`)))
+        ?.verdict,
+    ).toBe('PASS')
+    expect(host.activations.filter((entry) => !entry.prompt.includes(NATIVE_HEADER))).toEqual([])
+  })
+
+  it('writes the owned progress note at the workspace root', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const nested = join(workspace, 'packages', 'app')
+    await mkdir(nested, { recursive: true })
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(nested)
+    applyDelegation(host.ctx as never, delegation as never)
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+
+    const output = toolText(
+      await host.callTool('task_progress', {
+        task: '1.2 Follow-up task',
+        status: 'in-progress',
+        reason: 'spans turns',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    const note = await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`))
+    expect(note?.taskId).toBe(taskIdOf('Follow-up task'))
+    expect(
+      await readJson(join(nested, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeUndefined()
+  })
+})
