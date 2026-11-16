@@ -889,3 +889,13 @@ adoption receipt, while `verifyAdoptionEvidence` still reads the legacy
 `/workflows adopt` refuses with `record-mismatch` on the stale legacy PASS. Owner follow-up: make
 adoption read the active review owner's whole-spec record, then adopt and archive the change. Per
 design D4 a section `FINDINGS` reopens the review obligation and never deletes an existing approval.
+
+The 0.41.1 patch fixes the archive path this change exposed: `adoptChange` and the archive gate read
+the whole-spec `PASS` only from the legacy `.dsh/delegation/spec-review/<change>/spec.json`, which the
+native review owner no longer writes after Release A, so a natively reviewed change could not be
+adopted or archived. Both now read the native store first and keep the legacy store as the
+compatibility fallback. It also raises the composed acceptance harness bound to the test timeout after
+a CI-only 10 s flake. Verified with `pnpm validate`, `pnpm dogfood`, the adoption tests (142/142) and a
+successful release workflow; the published index lists 0.41.1. The native whole-spec review, adoption
+receipt and archive for `focused-rereview-and-section-steer` are still pending the owner's install of
+0.41.1.
