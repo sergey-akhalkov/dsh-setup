@@ -57,8 +57,9 @@ export interface ProgressGateInput extends GateEvidence {
 }
 /**
  * The owned work-progress gate: a code-changing turn needs a newly checked and
- * reviewed task or a note whose digest matches the current worktree. A stale
- * note, a note for a completed task, and a note from another path refuse.
+ * reviewed task that is still checked, or a note whose digest matches the
+ * current worktree. A stale note, a note for a completed task, and a note from
+ * another path refuse.
  */
 export declare function evaluateOwnedProgressGate(input: ProgressGateInput): Promise<GateDecision>;
 /** The change and lane number one worker-start argument tree tags. */
@@ -94,7 +95,8 @@ export interface LaneGateDecision extends GateDecision {
 }
 /**
  * The owned lane-assignment gate. A serial note naming a task in a lane decides
- * only that lane; every other unassigned lane stays reported. The gate fails
+ * only that lane, and only while the note still names the current lane title or
+ * a current worktree; every other unassigned lane stays reported. The gate fails
  * open on an unreadable plan, a plan without level-2 headings, and a lane
  * without owned paths (the shared parity table enforces the last one).
  */

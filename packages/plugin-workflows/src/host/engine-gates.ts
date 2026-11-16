@@ -5,7 +5,7 @@ import type { Definition } from './definitions.js'
 import { lastCodeWriteAt, type ToolCallObservation } from './evidence.js'
 import { evaluateLaneParity, evaluateProgressParity, type LaneParityLane } from './gates.js'
 import { defaultGit, type GitRunner, worktreeDigest } from './git.js'
-import { type NoteOwner, readProgressNote } from './notes.js'
+import { type NoteOwner, type ProgressNote, readProgressNote } from './notes.js'
 import { reviewerBinding, taskReviewCoverage } from './parity.js'
 import { checkedTaskIds, numberedTasks, taskLanes } from './tasks.js'
 import { normalizedWorkspacePath } from './write-attribution.js'
@@ -174,14 +174,20 @@ export interface ProgressGateInput extends GateEvidence {
 
 /**
  * The owned work-progress gate: a code-changing turn needs a newly checked and
- * reviewed task or a note whose digest matches the current worktree. A stale
- * note, a note for a completed task, and a note from another path refuse.
+ * reviewed task that is still checked, or a note whose digest matches the
+ * current worktree. A stale note, a note for a completed task, and a note from
+ * another path refuse.
  */
 export async function evaluateOwnedProgressGate(input: ProgressGateInput): Promise<GateDecision> {
+  const plan = await readPlan(input.workspace, input.change)
+  const tasks = plan === undefined ? [] : numberedTasks(plan)
+  // A tick is evidence only while its task is still checked: a task reopened or
+  // removed before the close no longer earns its review record.
+  const checked = new Set(tasks.filter((task) => task.checked).map((task) => task.id))
   const ticked = [
     ...newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn),
     ...(input.retainedTicks ?? []),
-  ]
+  ].filter((taskId) => checked.has(taskId))
   let tickedReviewed = false
   for (const taskId of ticked) {
     if (await taskReviewEvidence(input.workspace, input.change, taskId, input.reviewOwner)) {
@@ -194,11 +200,7 @@ export async function evaluateOwnedProgressGate(input: ProgressGateInput): Promi
   if (input.codeChanged && !tickedReviewed) {
     const saved = await readProgressNote(input.workspace, input.change, input.noteOwner)
     if (saved !== undefined) {
-      const plan = await readPlan(input.workspace, input.change)
-      const current =
-        plan === undefined
-          ? undefined
-          : numberedTasks(plan).find((task) => task.id === saved.taskId)
+      const current = tasks.find((task) => task.id === saved.taskId)
       if (current !== undefined && !current.checked) {
         const digest = await worktreeDigest(input.workspace, input.runGit ?? defaultGit)
         note = { digest: saved.worktreeDigest, currentDigest: digest }
@@ -214,8 +216,7 @@ export async function evaluateOwnedProgressGate(input: ProgressGateInput): Promi
     ...(note === undefined ? {} : { note }),
   })
   if (decision.decision === 'allow') return decision
-  const next = (await readPlan(input.workspace, input.change)) ?? ''
-  const task = numberedTasks(next).find((entry) => !entry.checked)
+  const task = tasks.find((entry) => !entry.checked)
   const noteCall =
     task === undefined
       ? `workflows { action: "note", change: "${input.change}", task: "<task text>", status: "in-progress", reason: "..." }`
@@ -259,6 +260,32 @@ export function workerLaneTag(
   return laneTagOf(argumentsValue)
 }
 
+/** An argument value safe to print inside a double-quoted suggested call. */
+function quotedArg(text: string): string {
+  return text.replace(/"/gu, "'")
+}
+
+/**
+ * One ready-to-paste worker call for a lane. It carries the lane tag, and the
+ * worker gets its own sibling worktree and branch and never ticks `tasks.md`;
+ * ported from the legacy lane-assignment steer so the migrated gate keeps the
+ * same isolation instructions.
+ */
+function laneWorkerCall(change: string, lane: LaneParityLane): string {
+  const worktree = `wt-${change}-${lane.n}`
+  const branch = `lane-${change}-${lane.n}`
+  const prompt =
+    `lane-tag: ${change}#${lane.n}. Implement the unchecked tasks under the heading '${lane.title}' in openspec/changes/${change}/tasks.md. ` +
+    `Work in your own worktree: resolve the repository root with git rev-parse --show-toplevel, ` +
+    `then from that root run git worktree add ../${worktree} -b ${branch} ` +
+    '(pick another suffix if that path already exists; the worktree must be a sibling of the ' +
+    'repository, never inside it), then run pnpm install --frozen-lockfile inside it. ' +
+    `Read that change's proposal.md, design.md, and spec deltas first. ` +
+    `Work only inside ${lane.owned.join(', ')}. ` +
+    `Do not tick tasks.md; report the branch ${branch}, the files changed, and the commands you ran.`
+  return `subagent(description: "${quotedArg(`Lane: ${lane.title}`.slice(0, 80))}", prompt: "${quotedArg(prompt)}")`
+}
+
 /** How one lane was satisfied for the session: a tagged worker or a serial note. */
 export type LaneDecision = 'assigned' | 'serial'
 
@@ -300,8 +327,25 @@ export interface LaneGateDecision extends GateDecision {
 }
 
 /**
+ * Whether a persisted note still describes the lane it would decide serial. A
+ * note captures its lane title at write time, so a renamed lane or a relocated
+ * task no longer matches and needs a fresh note. A legacy note carries no
+ * title; its captured worktree digest is the only proof the plan is unchanged.
+ */
+async function noteDecidesLane(
+  input: LaneGateInput,
+  note: ProgressNote,
+  title: string,
+): Promise<boolean> {
+  if (note.lane !== undefined) return note.lane === title
+  const digest = await worktreeDigest(input.workspace, input.runGit ?? defaultGit)
+  return digest !== undefined && digest === note.worktreeDigest
+}
+
+/**
  * The owned lane-assignment gate. A serial note naming a task in a lane decides
- * only that lane; every other unassigned lane stays reported. The gate fails
+ * only that lane, and only while the note still names the current lane title or
+ * a current worktree; every other unassigned lane stays reported. The gate fails
  * open on an unreadable plan, a plan without level-2 headings, and a lane
  * without owned paths (the shared parity table enforces the last one).
  */
@@ -340,7 +384,9 @@ export async function evaluateOwnedLaneGate(input: LaneGateInput): Promise<LaneG
       const lane = lanes.find(
         (entry) => entry.checked.includes(task.number) || entry.unchecked.includes(task.number),
       )
-      if (lane !== undefined) assigned.add(lane.title)
+      if (lane !== undefined && (await noteDecidesLane(input, note, lane.title))) {
+        assigned.add(lane.title)
+      }
     }
   }
   const decision = evaluateLaneParity({
@@ -352,17 +398,21 @@ export async function evaluateOwnedLaneGate(input: LaneGateInput): Promise<LaneG
   if (decision.decision === 'allow') return decision
   const lines = [
     `rule "lane-assignment": lane assignment is missing in change "${input.change}": ${String(decision.lanes?.length ?? 0)} unassigned non-serial lane(s) with owned paths and unchecked tasks; this turn ticked a task or changed implementation files, and no tagged worker start or serial note covers them.`,
+    'commit the current worktree first, because a new checkout only sees commits; the :/ and :(top) pathspecs keep both commands anchored to the repository root:',
+    `  git add -A :/; git add -f ":(top)openspec/changes/${input.change}"; git commit -m "lane checkpoint before fan-out"`,
+    'start one worker per unassigned lane (they run in parallel); each call carries its lane-tag:',
   ]
+  for (const lane of decision.lanes ?? []) {
+    lines.push(`  ${laneWorkerCall(input.change, lane)}`)
+  }
+  lines.push('or record a serial decision for a lane that cannot run in parallel:')
   for (const lane of decision.lanes ?? []) {
     const planLane = lanes.find((entry) => entry.title === lane.title)
     const nextNumber = planLane?.unchecked.at(0)
     const task = tasks.find((entry) => entry.number === nextNumber)
-    lines.push(
-      `- lane "${lane.title}" (owns ${lane.owned.join(', ')}): start a worker whose prompt carries lane-tag: ${input.change}#${String(lane.n)}`,
-    )
     if (task !== undefined) {
       lines.push(
-        `  or record a serial decision: workflows { action: "note", change: "${input.change}", task: "${task.number} ${task.text}", status: "in-progress", reason: "why this lane stays serial" }`,
+        `  workflows { action: "note", change: "${input.change}", task: "${task.number} ${task.text}", status: "in-progress", reason: "why this lane stays serial" }`,
       )
     }
   }

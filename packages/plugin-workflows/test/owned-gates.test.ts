@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   codeChangedThisTurn,
@@ -9,7 +9,7 @@ import {
   pruneLaneDecisions,
   taskReviewEvidence,
 } from '../src/host/engine-gates.ts'
-import type { GitRunner } from '../src/host/git.ts'
+import { type GitRunner, worktreeDigest } from '../src/host/git.ts'
 import { notePathFor, readProgressNote, writeProgressNote } from '../src/host/notes.ts'
 import { taskIdOf } from '../src/host/tasks.ts'
 
@@ -61,6 +61,33 @@ async function workspace(plan = PLAN): Promise<string> {
   await writeFile(join(change, 'tasks.md'), plan, 'utf8')
   return root
 }
+
+/** The native task-review PASS the progress gate reads for a checked task. */
+async function writeTaskPass(root: string, taskId: string): Promise<void> {
+  const record = join(root, '.dsh', 'workflows', 'records', 'task-review', 'change-a', 'tasks')
+  await mkdir(record, { recursive: true })
+  await writeFile(
+    join(record, `${taskId}.json`),
+    JSON.stringify({
+      definition: 'task-review',
+      rule: 'task-review',
+      change: 'change-a',
+      phase: 'task',
+      scope: 'task',
+      taskId,
+      digest: 'a'.repeat(64),
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-11-14T10:00:00.000Z',
+    }),
+    'utf8',
+  )
+}
+
+/** The single-task plan the reopened/removed close regressions use. */
+const FIRST_PLAN = '# Tasks\n\n- [ ] 1.1 First task\n'
+const FIRST_CHECKED = '# Tasks\n\n- [x] 1.1 First task\n'
 
 describe('the note action', () => {
   it('persists a digest-bound note that names its lane', async () => {
@@ -155,29 +182,16 @@ describe('the owned work-progress gate', () => {
   })
 
   it('reads a native PASS for a newly checked task from the workflows store', async () => {
-    const root = await workspace(`# Tasks\n\n- [ ] 1.1 First task\n`)
+    const root = await workspace(FIRST_PLAN)
     const taskId = taskIdOf('First task')
-    const record = join(root, '.dsh', 'workflows', 'records', 'task-review', 'change-a', 'tasks')
-    await mkdir(record, { recursive: true })
-    await writeFile(
-      join(record, `${taskId}.json`),
-      JSON.stringify({
-        definition: 'task-review',
-        rule: 'task-review',
-        change: 'change-a',
-        phase: 'task',
-        scope: 'task',
-        taskId,
-        digest: 'a'.repeat(64),
-        verdict: 'PASS',
-        findings: [],
-        target: { provider: 'codex-subagent' },
-        time: '2026-11-14T10:00:00.000Z',
-      }),
-      'utf8',
-    )
+    await writeTaskPass(root, taskId)
     expect(await taskReviewEvidence(root, 'change-a', taskId, 'workflows')).toBe(true)
     expect(await taskReviewEvidence(root, 'change-a', taskId, 'legacy')).toBe(false)
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'tasks.md'),
+      FIRST_CHECKED,
+      'utf8',
+    )
     const calls = [
       {
         callId: 'tick-1',
@@ -185,8 +199,8 @@ describe('the owned work-progress gate', () => {
         arguments: { file_path: 'openspec/changes/change-a/tasks.md' },
         ok: true,
         turn: 1,
-        before: '# Tasks\n\n- [ ] 1.1 First task\n',
-        after: '# Tasks\n\n- [x] 1.1 First task\n',
+        before: FIRST_PLAN,
+        after: FIRST_CHECKED,
       },
     ]
     const decision = await evaluateOwnedProgressGate({
@@ -200,6 +214,84 @@ describe('the owned work-progress gate', () => {
       runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
     })
     expect(decision.decision).toBe('allow')
+  })
+
+  it('refuses a reviewed tick whose task was reopened before the close', async () => {
+    const root = await workspace(FIRST_PLAN)
+    const taskId = taskIdOf('First task')
+    await writeTaskPass(root, taskId)
+    const calls = [
+      {
+        callId: 'tick-1',
+        name: 'write',
+        arguments: { file_path: 'openspec/changes/change-a/tasks.md' },
+        ok: true,
+        turn: 1,
+        before: FIRST_PLAN,
+        after: FIRST_CHECKED,
+      },
+      {
+        callId: 'reopen-1',
+        name: 'write',
+        arguments: { file_path: 'openspec/changes/change-a/tasks.md' },
+        ok: true,
+        turn: 1,
+        before: FIRST_CHECKED,
+        after: FIRST_PLAN,
+      },
+    ]
+    const decision = await evaluateOwnedProgressGate({
+      workspace: root,
+      change: 'change-a',
+      calls,
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      reviewOwner: 'workflows',
+      runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
+    })
+    expect(decision.decision).toBe('refuse')
+    expect(decision.reason).toContain('without a reviewed tick or a current note')
+  })
+
+  it('refuses a reviewed tick whose task was removed before the close', async () => {
+    const root = await workspace(FIRST_PLAN)
+    const taskId = taskIdOf('First task')
+    await writeTaskPass(root, taskId)
+    const removed = '# Tasks\n'
+    await writeFile(join(root, 'openspec', 'changes', 'change-a', 'tasks.md'), removed, 'utf8')
+    const calls = [
+      {
+        callId: 'tick-1',
+        name: 'write',
+        arguments: { file_path: 'openspec/changes/change-a/tasks.md' },
+        ok: true,
+        turn: 1,
+        before: FIRST_PLAN,
+        after: FIRST_CHECKED,
+      },
+      {
+        callId: 'remove-1',
+        name: 'write',
+        arguments: { file_path: 'openspec/changes/change-a/tasks.md' },
+        ok: true,
+        turn: 1,
+        before: FIRST_CHECKED,
+        after: removed,
+      },
+    ]
+    const decision = await evaluateOwnedProgressGate({
+      workspace: root,
+      change: 'change-a',
+      calls,
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      reviewOwner: 'workflows',
+      runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
+    })
+    expect(decision.decision).toBe('refuse')
+    expect(decision.reason).toContain('without a reviewed tick or a current note')
   })
 })
 
@@ -231,6 +323,14 @@ describe('the owned lane-assignment gate', () => {
     ])
     expect(decision.steer).toContain('lane-tag: change-a#1')
     expect(decision.steer).toContain('workflows { action: "note"')
+    expect(decision.steer).toContain('git add -A :/; git add -f ":(top)openspec/changes/change-a"')
+    expect(decision.steer).toContain('git commit -m "lane checkpoint before fan-out"')
+    expect(decision.steer).toContain('git worktree add ../wt-change-a-1 -b lane-change-a-1')
+    expect(decision.steer).toContain('Do not tick tasks.md')
+    expect(decision.steer).toContain('Work only inside packages/engine/**')
+    expect(decision.steer.indexOf('lane checkpoint before fan-out')).toBeLessThan(
+      decision.steer.indexOf('subagent('),
+    )
   })
 
   it('accepts the lane identity captured at the worker start', async () => {
@@ -289,6 +389,48 @@ describe('the owned lane-assignment gate', () => {
     })
     expect(decision.decision).toBe('refuse')
     expect(decision.lanes?.map((lane) => lane.n)).toEqual([1])
+  })
+
+  it('refuses an old serial note after its lane is renamed', async () => {
+    const root = await workspace()
+    const runGit = fakeGit(() => IMPLEMENTATION_STATUS, root)
+    await writeProgressNote(
+      root,
+      { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
+      { runGit },
+    )
+    const renamed = PLAN.replace('2. Docs', '2. Documentation')
+    await writeFile(join(root, 'openspec', 'changes', 'change-a', 'tasks.md'), renamed, 'utf8')
+    const decisions = new Map<string, 'assigned' | 'serial'>([
+      ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
+    ])
+    const refused = await evaluateOwnedLaneGate({
+      workspace: root,
+      change: 'change-a',
+      calls: implementation,
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      decisions,
+    })
+    expect(refused.decision).toBe('refuse')
+    expect(refused.lanes?.map((lane) => lane.n)).toEqual([2])
+    // Fresh evidence for the renamed lane decides it again.
+    await writeProgressNote(
+      root,
+      { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
+      { runGit },
+    )
+    const allowed = await evaluateOwnedLaneGate({
+      workspace: root,
+      change: 'change-a',
+      calls: implementation,
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      decisions,
+    })
+    expect(allowed.decision).toBe('allow')
   })
 
   it('fails open on an unreadable plan and on a single-lane plan', async () => {
@@ -407,5 +549,47 @@ describe('mixed ownership', () => {
     })
     expect(lane.decision).toBe('refuse')
     expect(lane.lanes?.map((entry) => entry.n)).toEqual([1])
+  })
+
+  it('accepts a title-less legacy serial note only while its worktree is current', async () => {
+    const root = await workspace()
+    let status = IMPLEMENTATION_STATUS
+    const runGit = fakeGit(() => status, root)
+    const digest = await worktreeDigest(root, runGit)
+    expect(digest).toBeDefined()
+    const path = join(root, notePathFor('legacy', 'change-a'))
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(
+      path,
+      JSON.stringify({
+        taskId: taskIdOf('Doc task'),
+        status: 'in-progress',
+        reason: 'legacy serial',
+        worktreeDigest: digest,
+        time: '2026-11-16T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    const decisions = new Map<string, 'assigned' | 'serial'>([
+      ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
+    ])
+    const gate = (): ReturnType<typeof evaluateOwnedLaneGate> =>
+      evaluateOwnedLaneGate({
+        workspace: root,
+        change: 'change-a',
+        calls: [],
+        turn: 1,
+        codeChanged: true,
+        noteOwner: 'legacy',
+        decisions,
+        runGit,
+      })
+    expect((await gate()).decision).toBe('allow')
+    // A plan change makes the captured digest stale, so the old serial note is
+    // no longer evidence for the renamed lane.
+    status = ' M packages/engine/src/engine.ts\n M packages/engine/src/other.ts\0'
+    const stale = await gate()
+    expect(stale.decision).toBe('refuse')
+    expect(stale.lanes?.map((lane) => lane.n)).toEqual([2])
   })
 })

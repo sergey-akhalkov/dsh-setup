@@ -7215,6 +7215,11 @@ describe('engine-owned gates', () => {
     expect(text).toContain('lane assignment is missing in change "auth"')
     expect(text).toContain('lane-tag: auth#1')
     expect(text).toContain('workflows { action: "note"')
+    expect(text).toContain('git add -A :/; git add -f ":(top)openspec/changes/auth"')
+    expect(text).toContain('git commit -m "lane checkpoint before fan-out"')
+    expect(text).toContain('git worktree add ../wt-auth-1 -b lane-auth-1')
+    expect(text).toContain('Do not tick tasks.md')
+    expect(text.indexOf('lane checkpoint before fan-out')).toBeLessThan(text.indexOf('subagent('))
   })
 
   it('accepts a tagged worker start for the reported lane', async () => {
@@ -7236,8 +7241,8 @@ describe('engine-owned gates', () => {
     )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const text = steered(host)
-    expect(text).toContain('lane "2. Docs')
-    expect(text).not.toContain('lane "1. Engine')
+    expect(text).toContain('Lane: 2. Docs')
+    expect(text).not.toContain('Lane: 1. Engine')
   })
 
   it('lets the note action decide one lane serial for the workflow gate', async () => {
@@ -7264,8 +7269,8 @@ describe('engine-owned gates', () => {
     expect(output?.text).toContain('progress note written')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const text = steered(host)
-    expect(text).toContain('lane "1. Engine')
-    expect(text).not.toContain('lane "2. Docs')
+    expect(text).toContain('Lane: 1. Engine')
+    expect(text).not.toContain('Lane: 2. Docs')
     const note = JSON.parse(
       await readFile(join(workspace, '.dsh', 'workflows', 'notes', 'auth.json'), 'utf8'),
     ) as { lane?: string; worktreeDigest?: string }
@@ -7313,13 +7318,13 @@ describe('engine-owned gates', () => {
       )
     await note('2.1 Doc task')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    expect(steered(host)).toContain('lane "1. Engine')
+    expect(steered(host)).toContain('Lane: 1. Engine')
     const refusals = host.steers.length
     // The later note replaces the note file; the earlier serial decision stays.
     await note('1.1 Engine task')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(host.steers.length).toBe(refusals)
-    expect(steered(host)).not.toContain('lane "2. Docs')
+    expect(steered(host)).not.toContain('Lane: 2. Docs')
   })
 
   it('keeps a tagged worker assignment after the tool buffer evicts it', async () => {
@@ -7365,8 +7370,8 @@ describe('engine-owned gates', () => {
     )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const text = steered(host)
-    expect(text).toContain('lane "2. Docs')
-    expect(text).not.toContain('lane "1. Engine')
+    expect(text).toContain('Lane: 2. Docs')
+    expect(text).not.toContain('Lane: 1. Engine')
   })
 
   it('does not gate implementation work after an involved change is archived', async () => {
@@ -7406,6 +7411,12 @@ describe('engine-owned gates', () => {
       },
     )
     const taskId = createHash('sha256').update('First task').digest('hex').slice(0, 16)
+    // The ticked task is still checked in the live plan at the close.
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'tasks.md'),
+      plan.replace('- [ ] 1.1', '- [x] 1.1'),
+      'utf8',
+    )
     const record = join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks')
     await mkdir(record, { recursive: true })
     await writeFile(
@@ -7463,8 +7474,8 @@ describe('engine-owned gates', () => {
     await gateWrite(host, 'src/app.ts')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const text = steered(host)
-    expect(text).toContain('lane "1. Runtime')
-    expect(text).not.toContain('lane "1. Engine')
+    expect(text).toContain('Lane: 1. Runtime')
+    expect(text).not.toContain('Lane: 1. Engine')
   })
 
   it('does not reassign a reordered lane from an old worker tag', async () => {
@@ -7502,8 +7513,8 @@ describe('engine-owned gates', () => {
     await gateWrite(host, 'src/app.ts')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const text = steered(host)
-    expect(text).toContain('lane "2. Docs')
-    expect(text).not.toContain('lane "1. Engine')
+    expect(text).toContain('Lane: 2. Docs')
+    expect(text).not.toContain('Lane: 1. Engine')
   })
 
   it('refuses a stale note and accepts a fresh one', async () => {
