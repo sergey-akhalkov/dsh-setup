@@ -10,8 +10,9 @@ import { taskIdOf, taskLanes } from './tasks.js'
  * `.dsh/workflows/notes/<change>.json`. The note is the only evidence that
  * lets a code-changing turn close with its task still unchecked: it is bound to
  * the worktree digest it was written against, so a later write makes it stale.
- * A serial note also names its lane, so the engine lane gate reads the active
- * note path and treats that one lane as the serial decision.
+ * A serial note also names its lane and the session that wrote it, so the
+ * workflow lane gate treats that one lane as the serial decision only for the
+ * writing session; a legacy note has no lane and falls back to its digest.
  */
 
 /** Where each owner keeps its progress note. */
@@ -35,6 +36,8 @@ export interface ProgressNote {
   readonly time: string
   /** The lane the note decided serial; absent on a legacy note or outside a lane. */
   readonly lane?: string
+  /** The session whose serial decision the lane is; absent on a legacy note. */
+  readonly session?: string
 }
 
 export interface NoteInput {
@@ -62,6 +65,7 @@ export function parseProgressNote(value: unknown): ProgressNote | undefined {
   }
   if (typeof record.time !== 'string') return undefined
   if (record.lane !== undefined && typeof record.lane !== 'string') return undefined
+  if (record.session !== undefined && typeof record.session !== 'string') return undefined
   return {
     taskId: record.taskId,
     status: record.status,
@@ -69,6 +73,9 @@ export function parseProgressNote(value: unknown): ProgressNote | undefined {
     worktreeDigest: record.worktreeDigest,
     time: record.time,
     ...(typeof record.lane === 'string' && record.lane !== '' ? { lane: record.lane } : {}),
+    ...(typeof record.session === 'string' && record.session !== ''
+      ? { session: record.session }
+      : {}),
   }
 }
 
@@ -153,7 +160,13 @@ export interface WrittenNote {
 export async function writeProgressNote(
   workspace: string,
   input: NoteInput,
-  options: { readonly owner?: NoteOwner; readonly runGit?: GitRunner; readonly now?: number } = {},
+  options: {
+    readonly owner?: NoteOwner
+    readonly runGit?: GitRunner
+    readonly now?: number
+    /** The writing session, so the lane decision is bound to it. */
+    readonly session?: string
+  } = {},
 ): Promise<WrittenNote> {
   const owner = options.owner ?? 'workflows'
   let markdown: string
@@ -183,6 +196,9 @@ export async function writeProgressNote(
     worktreeDigest: digest,
     time: new Date(options.now ?? Date.now()).toISOString(),
     ...(task.lane === undefined ? {} : { lane: task.lane }),
+    ...(options.session === undefined || options.session === ''
+      ? {}
+      : { session: options.session }),
   }
   const relative = notePathFor(owner, input.change)
   const path = join(workspace, relative)

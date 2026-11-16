@@ -7591,6 +7591,34 @@ describe('engine-owned gates', () => {
     expect(host.steers.length).toBe(refusals)
   })
 
+  it('attributes a note to its session so a note-only turn still refuses a stale close', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks\n\n- [ ] 1.1 First task\n`)
+    // No other change write: only the note can attribute this change to the session.
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: true })
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | { execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }> }
+      | undefined
+    const note = {
+      action: 'note',
+      change: 'auth',
+      task: '1.1 First task',
+      status: 'in-progress',
+      reason: 'still open',
+    }
+    await tool?.execute(note, { agent: host.agent })
+    // The implementation changes after the note, so the note is stale.
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const refused = steered(host)
+    expect(refused).toContain('changed implementation files in change "auth"')
+    expect(refused).toContain('stale')
+    const refusals = host.steers.length
+    await tool?.execute(note, { agent: host.agent })
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBe(refusals)
+  })
+
   it('refuses goal completion without a portable PASS and allows it with one', async () => {
     const workspace = await tempWorkspace()
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY

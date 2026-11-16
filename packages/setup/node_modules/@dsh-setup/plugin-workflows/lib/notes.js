@@ -9,8 +9,9 @@ import { taskIdOf, taskLanes } from './tasks.js';
  * `.dsh/workflows/notes/<change>.json`. The note is the only evidence that
  * lets a code-changing turn close with its task still unchecked: it is bound to
  * the worktree digest it was written against, so a later write makes it stale.
- * A serial note also names its lane, so the engine lane gate reads the active
- * note path and treats that one lane as the serial decision.
+ * A serial note also names its lane and the session that wrote it, so the
+ * workflow lane gate treats that one lane as the serial decision only for the
+ * writing session; a legacy note has no lane and falls back to its digest.
  */
 /** Where each owner keeps its progress note. */
 export const NOTES_DIR = '.dsh/workflows/notes';
@@ -43,6 +44,8 @@ export function parseProgressNote(value) {
         return undefined;
     if (record.lane !== undefined && typeof record.lane !== 'string')
         return undefined;
+    if (record.session !== undefined && typeof record.session !== 'string')
+        return undefined;
     return {
         taskId: record.taskId,
         status: record.status,
@@ -50,6 +53,9 @@ export function parseProgressNote(value) {
         worktreeDigest: record.worktreeDigest,
         time: record.time,
         ...(typeof record.lane === 'string' && record.lane !== '' ? { lane: record.lane } : {}),
+        ...(typeof record.session === 'string' && record.session !== ''
+            ? { session: record.session }
+            : {}),
     };
 }
 /** The active owner's note for a change, or undefined when absent or malformed. */
@@ -122,6 +128,9 @@ export async function writeProgressNote(workspace, input, options = {}) {
         worktreeDigest: digest,
         time: new Date(options.now ?? Date.now()).toISOString(),
         ...(task.lane === undefined ? {} : { lane: task.lane }),
+        ...(options.session === undefined || options.session === ''
+            ? {}
+            : { session: options.session }),
     };
     const relative = notePathFor(owner, input.change);
     const path = join(workspace, relative);

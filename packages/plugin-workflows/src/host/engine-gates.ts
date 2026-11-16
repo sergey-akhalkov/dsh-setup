@@ -313,6 +313,8 @@ export async function pruneLaneDecisions(
 export interface LaneGateInput extends GateEvidence {
   readonly codeChanged: boolean
   readonly noteOwner: NoteOwner
+  /** The calling session; its own lane decisions and session-bound notes decide. */
+  readonly session: string
   /**
    * The session's satisfied lanes for this change, kept beyond the bounded tool
    * buffer and the single latest note; the host records them as they happen. A
@@ -327,27 +329,32 @@ export interface LaneGateDecision extends GateDecision {
 }
 
 /**
- * Whether a persisted note still describes the lane it would decide serial. A
- * note captures its lane title at write time, so a renamed lane or a relocated
- * task no longer matches and needs a fresh note. A legacy note carries no
- * title; its captured worktree digest is the only proof the plan is unchanged.
+ * Whether a persisted note still describes the lane it would decide serial for
+ * the calling session. A workflow note records its lane title and its writing
+ * session, so another session's note never decides this session's lane. A legacy
+ * note carries no title or session; its captured worktree digest is the only
+ * proof the plan is unchanged.
  */
 async function noteDecidesLane(
   input: LaneGateInput,
   note: ProgressNote,
   title: string,
 ): Promise<boolean> {
-  if (note.lane !== undefined) return note.lane === title
+  if (note.lane !== undefined) {
+    return note.session === input.session && note.lane === title
+  }
+  if (note.session !== undefined) return false
   const digest = await worktreeDigest(input.workspace, input.runGit ?? defaultGit)
   return digest !== undefined && digest === note.worktreeDigest
 }
 
 /**
  * The owned lane-assignment gate. A serial note naming a task in a lane decides
- * only that lane, and only while the note still names the current lane title or
- * a current worktree; every other unassigned lane stays reported. The gate fails
- * open on an unreadable plan, a plan without level-2 headings, and a lane
- * without owned paths (the shared parity table enforces the last one).
+ * only that lane, only for the session that wrote it, and only while the note
+ * still names the current lane title; a legacy note needs a current worktree.
+ * Every other unassigned lane stays reported. The gate fails open on an
+ * unreadable plan, a plan without level-2 headings, and a lane without owned
+ * paths (the shared parity table enforces the last one).
  */
 export async function evaluateOwnedLaneGate(input: LaneGateInput): Promise<LaneGateDecision> {
   const plan = await readPlan(input.workspace, input.change)

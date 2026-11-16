@@ -728,6 +728,22 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   /** Every change a session is involved in, for turn-close conditions. */
   const involvedChangesBySession = new Map<string, Set<string>>()
   /**
+   * Bind one change to a session's involvement and persist it, so a successful
+   * note attributes the change even in a session that wrote nothing else.
+   */
+  const rememberInvolvement = async (
+    workspace: string,
+    session: string,
+    change: string,
+  ): Promise<void> => {
+    const key = `${workspace}\0${session}`
+    const changes = new Set(involvedChangesBySession.get(key) ?? [])
+    for (const stored of await readInvolvement(workspace, session)) changes.add(stored)
+    changes.add(change)
+    involvedChangesBySession.set(key, changes)
+    await writeInvolvement(workspace, session, [...changes])
+  }
+  /**
    * This turn's change-artifact writes, kept per session beyond the bounded
    * tool observation buffer so a long turn cannot lose its changedSpec
    * attribution, and as a set so a second change does not replace a first.
@@ -3926,6 +3942,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             turn,
             codeChanged,
             noteOwner,
+            session,
             decisions,
             ...(retainedTicks === undefined ? {} : { retainedTicks: [...retainedTicks] }),
           })
@@ -4502,12 +4519,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         return committed
       },
       note: async (input: NoteInput) => {
-        const written = await writeProgressNote(workspace, input, { now: journal.time() })
-        // The note is the session's serial decision; it stays decided after the
-        // note file is replaced by a later note for another lane.
+        const session = String(agent.session.id)
+        const written = await writeProgressNote(workspace, input, {
+          now: journal.time(),
+          session,
+        })
+        // The note is this session's serial decision; it stays decided after the
+        // note file is replaced by a later note for another lane. The note also
+        // attributes the change to this session, so the close evaluates its gates.
         if (written.lane !== undefined) {
-          laneDecisionsFor(String(agent.session.id), input.change).set(written.lane, 'serial')
+          laneDecisionsFor(session, input.change).set(written.lane, 'serial')
         }
+        await rememberInvolvement(workspace, session, input.change)
         return written.text
       },
     }
@@ -4719,11 +4742,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     readonly reason?: string
   }): Promise<{ readonly text: string; readonly lane?: string }> => {
     const call = compatCallContext()
-    const written = await writeProgressNote(call.workspace, input, { now: journal.time() })
-    // While the lane gate is owned, this call decides its serial lane too.
+    const written = await writeProgressNote(call.workspace, input, {
+      now: journal.time(),
+      session: call.session,
+    })
+    // While the lane gate is owned, this call decides its serial lane too, and
+    // it attributes the change to the calling session for the close's gates.
     if (written.lane !== undefined) {
       laneDecisionsFor(call.session, input.change).set(written.lane, 'serial')
     }
+    await rememberInvolvement(call.workspace, call.session, input.change)
     return {
       text: written.text,
       ...(written.lane === undefined ? {} : { lane: written.lane }),

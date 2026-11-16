@@ -82,6 +82,8 @@ export declare function pruneLaneDecisions(workspace: string, change: string, de
 export interface LaneGateInput extends GateEvidence {
     readonly codeChanged: boolean;
     readonly noteOwner: NoteOwner;
+    /** The calling session; its own lane decisions and session-bound notes decide. */
+    readonly session: string;
     /**
      * The session's satisfied lanes for this change, kept beyond the bounded tool
      * buffer and the single latest note; the host records them as they happen. A
@@ -95,10 +97,11 @@ export interface LaneGateDecision extends GateDecision {
 }
 /**
  * The owned lane-assignment gate. A serial note naming a task in a lane decides
- * only that lane, and only while the note still names the current lane title or
- * a current worktree; every other unassigned lane stays reported. The gate fails
- * open on an unreadable plan, a plan without level-2 headings, and a lane
- * without owned paths (the shared parity table enforces the last one).
+ * only that lane, only for the session that wrote it, and only while the note
+ * still names the current lane title; a legacy note needs a current worktree.
+ * Every other unassigned lane stays reported. The gate fails open on an
+ * unreadable plan, a plan without level-2 headings, and a lane without owned
+ * paths (the shared parity table enforces the last one).
  */
 export declare function evaluateOwnedLaneGate(input: LaneGateInput): Promise<LaneGateDecision>;
 export interface GoalGuardInput {

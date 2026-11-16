@@ -90,7 +90,7 @@ const FIRST_PLAN = '# Tasks\n\n- [ ] 1.1 First task\n'
 const FIRST_CHECKED = '# Tasks\n\n- [x] 1.1 First task\n'
 
 describe('the note action', () => {
-  it('persists a digest-bound note that names its lane', async () => {
+  it('persists a digest-bound note that names its lane and writing session', async () => {
     const root = await workspace()
     const written = await writeProgressNote(
       root,
@@ -100,16 +100,21 @@ describe('the note action', () => {
         status: 'in-progress',
         reason: 'docs stay serial',
       },
-      { runGit: fakeGit(() => IMPLEMENTATION_STATUS, root), now: 1_000 },
+      {
+        runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
+        now: 1_000,
+        session: 'session-1',
+      },
     )
     expect(written.lane).toBe('2. Docs (lane 2, owns `docs/**`)')
     expect(written.text).toContain(notePathFor('workflows', 'change-a'))
     const note = await readProgressNote(root, 'change-a', 'workflows')
     expect(note?.taskId).toBe(taskIdOf('Doc task'))
+    expect(note?.session).toBe('session-1')
     expect(note?.worktreeDigest).toMatch(/^[0-9a-f]{64}$/u)
     expect(
       JSON.parse(await readFile(join(root, notePathFor('workflows', 'change-a')), 'utf8')),
-    ).toMatchObject({ lane: '2. Docs (lane 2, owns `docs/**`)' })
+    ).toMatchObject({ lane: '2. Docs (lane 2, owns `docs/**`)', session: 'session-1' })
   })
 
   it('refuses a checked task and an unknown change', async () => {
@@ -315,6 +320,7 @@ describe('the owned lane-assignment gate', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'workflows',
+      session: 'session-1',
     })
     expect(decision.decision).toBe('refuse')
     expect(decision.lanes?.map((lane) => lane.title)).toEqual([
@@ -341,6 +347,7 @@ describe('the owned lane-assignment gate', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'workflows',
+      session: 'session-1',
       decisions: new Map([['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned']]),
     })
     expect(decision.decision).toBe('refuse')
@@ -366,6 +373,7 @@ describe('the owned lane-assignment gate', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'workflows',
+      session: 'session-1',
       decisions: new Map(),
     })
     expect(decision.lanes?.map((lane) => lane.n)).toEqual([1, 2])
@@ -376,7 +384,7 @@ describe('the owned lane-assignment gate', () => {
     await writeProgressNote(
       root,
       { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
-      { runGit: fakeGit(() => IMPLEMENTATION_STATUS, root) },
+      { runGit: fakeGit(() => IMPLEMENTATION_STATUS, root), session: 'session-1' },
     )
     const decision = await evaluateOwnedLaneGate({
       workspace: root,
@@ -385,9 +393,46 @@ describe('the owned lane-assignment gate', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'workflows',
+      session: 'session-1',
     })
     expect(decision.decision).toBe('refuse')
     expect(decision.lanes?.map((lane) => lane.n)).toEqual([1])
+  })
+
+  it("does not let another session's serial note decide this session's lane", async () => {
+    const root = await workspace()
+    await writeProgressNote(
+      root,
+      { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
+      { runGit: fakeGit(() => IMPLEMENTATION_STATUS, root), session: 'session-a' },
+    )
+    const decisions = new Map<string, 'assigned' | 'serial'>([
+      ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
+    ])
+    const foreign = await evaluateOwnedLaneGate({
+      workspace: root,
+      change: 'change-a',
+      calls: implementation,
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      session: 'session-b',
+      decisions,
+    })
+    expect(foreign.decision).toBe('refuse')
+    expect(foreign.lanes?.map((lane) => lane.n)).toEqual([2])
+    // The same note still decides its lane for the session that wrote it.
+    const own = await evaluateOwnedLaneGate({
+      workspace: root,
+      change: 'change-a',
+      calls: implementation,
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      session: 'session-a',
+      decisions,
+    })
+    expect(own.decision).toBe('allow')
   })
 
   it('refuses an old serial note after its lane is renamed', async () => {
@@ -396,7 +441,7 @@ describe('the owned lane-assignment gate', () => {
     await writeProgressNote(
       root,
       { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
-      { runGit },
+      { runGit, session: 'session-1' },
     )
     const renamed = PLAN.replace('2. Docs', '2. Documentation')
     await writeFile(join(root, 'openspec', 'changes', 'change-a', 'tasks.md'), renamed, 'utf8')
@@ -410,6 +455,7 @@ describe('the owned lane-assignment gate', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'workflows',
+      session: 'session-1',
       decisions,
     })
     expect(refused.decision).toBe('refuse')
@@ -418,7 +464,7 @@ describe('the owned lane-assignment gate', () => {
     await writeProgressNote(
       root,
       { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
-      { runGit },
+      { runGit, session: 'session-1' },
     )
     const allowed = await evaluateOwnedLaneGate({
       workspace: root,
@@ -427,6 +473,7 @@ describe('the owned lane-assignment gate', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'workflows',
+      session: 'session-1',
       decisions,
     })
     expect(allowed.decision).toBe('allow')
@@ -444,6 +491,7 @@ describe('the owned lane-assignment gate', () => {
           turn: 1,
           codeChanged: true,
           noteOwner: 'workflows',
+          session: 'session-1',
         })
       ).decision,
     ).toBe('allow')
@@ -457,6 +505,7 @@ describe('the owned lane-assignment gate', () => {
           turn: 1,
           codeChanged: true,
           noteOwner: 'workflows',
+          session: 'session-1',
         })
       ).decision,
     ).toBe('allow')
@@ -494,6 +543,7 @@ describe('the kept lane decisions', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'workflows',
+      session: 'session-1',
       decisions: new Map([['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned']]),
     })
     expect(decision.decision).toBe('refuse')
@@ -508,7 +558,7 @@ describe('mixed ownership', () => {
     await writeProgressNote(
       root,
       { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
-      { owner: 'legacy', runGit, now: 1_000 },
+      { owner: 'legacy', runGit, now: 1_000, session: 'session-1' },
     )
     expect(await readProgressNote(root, 'change-a', 'legacy')).toBeDefined()
     expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
@@ -545,6 +595,7 @@ describe('mixed ownership', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'legacy',
+      session: 'session-1',
     })
     expect(lane.decision).toBe('refuse')
     expect(lane.lanes?.map((entry) => entry.n)).toEqual([1])
@@ -580,6 +631,7 @@ describe('mixed ownership', () => {
         turn: 1,
         codeChanged: true,
         noteOwner: 'legacy',
+        session: 'session-1',
         decisions,
         runGit,
       })

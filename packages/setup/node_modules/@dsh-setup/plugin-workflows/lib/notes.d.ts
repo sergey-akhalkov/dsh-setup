@@ -4,8 +4,9 @@ import { type GitRunner } from './git.js';
  * `.dsh/workflows/notes/<change>.json`. The note is the only evidence that
  * lets a code-changing turn close with its task still unchecked: it is bound to
  * the worktree digest it was written against, so a later write makes it stale.
- * A serial note also names its lane, so the engine lane gate reads the active
- * note path and treats that one lane as the serial decision.
+ * A serial note also names its lane and the session that wrote it, so the
+ * workflow lane gate treats that one lane as the serial decision only for the
+ * writing session; a legacy note has no lane and falls back to its digest.
  */
 /** Where each owner keeps its progress note. */
 export declare const NOTES_DIR = ".dsh/workflows/notes";
@@ -21,6 +22,8 @@ export interface ProgressNote {
     readonly time: string;
     /** The lane the note decided serial; absent on a legacy note or outside a lane. */
     readonly lane?: string;
+    /** The session whose serial decision the lane is; absent on a legacy note. */
+    readonly session?: string;
 }
 export interface NoteInput {
     readonly change: string;
@@ -50,4 +53,6 @@ export declare function writeProgressNote(workspace: string, input: NoteInput, o
     readonly owner?: NoteOwner;
     readonly runGit?: GitRunner;
     readonly now?: number;
+    /** The writing session, so the lane decision is bound to it. */
+    readonly session?: string;
 }): Promise<WrittenNote>;
