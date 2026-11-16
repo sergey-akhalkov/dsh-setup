@@ -47,7 +47,7 @@
 - [x] 4.4 Update the delegation tests to the dormant shipped set and the five switches, keeping every
   queue, record, approval, and snapshot case that moved. Verify
   `pnpm exec vitest run packages/plugin-delegation-rules/test` passes.
-- [ ] 4.5 Add rollback tests from the exact shipped Release A configuration: flip one switch, run the
+- [x] 4.5 Add rollback tests from the exact shipped Release A configuration: flip one switch, run the
   call the restored steer prints (`delegate` or `task_progress`), and prove the restored gate is
   satisfied through the legacy runtime and its state; cover the mixed ownership combinations
   (progress owned with a legacy lane gate and the converse) through the printed serial-note
