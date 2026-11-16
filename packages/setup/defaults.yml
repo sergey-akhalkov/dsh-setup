@@ -235,10 +235,10 @@
         window: week
         minSamples: 20
         guardrail: failure-rate
-# The workflows engine owns the checkpoint, task-review and verification closes
-# in this release; the verification-gate row stays installed but disabled for
-# one release. The verify definition has no shipped commands, matching the
-# inert legacy row, until a profile configures them.
+# The workflows engine owns the checkpoint, review, work-progress, lane and
+# verification closes in this release; the verification-gate row stays installed
+# but disabled for one release. The verify definition has no shipped commands,
+# matching the inert legacy row, until a profile configures them.
 - id: dsh-setup-workflows
   config:
     checkpointApplicability:
@@ -255,6 +255,16 @@
         provider: codex-subagent
         model: gpt-6-astra
         reasoningEffort: xhigh
+    reviewQueue:
+      enabled: true
+      concurrency: 2
+      maxQueued: 16
+      maxAttempts: 3
+      baseDelayMs: 5000
+      maxDelayMs: 60000
+      waitTimeoutMs: 300000
+    timeouts:
+      review: 600000
 - id: dsh-setup-verification-gate
   disabled: true
 
@@ -293,6 +303,9 @@
       bottleneckAge: 2
       laneStaleCheckpoints: 2
       automation: false
+# Dormant Release A row: the rules and target stay configured for rollback, and
+# every legacy switch is off so the installed profile runs no legacy steer; the
+# review executor and engine-owned gates above own those signals until Release B.
 - id: dsh-setup-delegation-rules
   config:
     targets:
