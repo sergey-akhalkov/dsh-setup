@@ -10,6 +10,7 @@ import {
   goalCompletionRefusal,
   pruneLaneDecisions,
   type ReviewUnit,
+  reviewRunSteer,
   reviewUnits,
   reviewUnitText,
   taskReviewEvidence,
@@ -79,6 +80,27 @@ async function writeTaskPass(root: string, taskId: string): Promise<void> {
       rule: 'task-review',
       change: 'change-a',
       phase: 'task',
+      scope: 'task',
+      taskId,
+      digest: 'a'.repeat(64),
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-11-14T10:00:00.000Z',
+    }),
+    'utf8',
+  )
+}
+
+/** The committed portable approval the completion coverage reads. */
+async function writePortablePass(root: string, taskId: string): Promise<void> {
+  const reviews = join(root, 'openspec', 'changes', 'change-a', 'reviews')
+  await mkdir(reviews, { recursive: true })
+  await writeFile(
+    join(reviews, `${taskId}.json`),
+    JSON.stringify({
+      rule: 'task-review',
+      change: 'change-a',
       scope: 'task',
       taskId,
       digest: 'a'.repeat(64),
@@ -1033,6 +1055,44 @@ describe('the review unit steer', () => {
     })
     expect(text).toContain('the open review run "run-2" covers it')
     expect(text).not.toContain('delegate(')
+  })
+
+  it('names the run unit while unchecked tasks defer the completion coverage', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    await writeTaskPass(root, taskIdOf('Doc task'))
+    const text = await reviewRunSteer(root, 'change-a', {
+      name: 'change-a',
+      taskId: sectionRecordId('1'),
+      section: '1',
+      sectionTitle: '1. Engine (lane 1, owns `packages/engine/**`)',
+      taskIds: [taskIdOf('Engine task'), taskIdOf('Engine follow-up')],
+    })
+    expect(text).toContain('section "1" (1. Engine')
+    expect(text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2, 1.3')
+    expect(text).toContain('delegate(rule: "task-review", change: "change-a", section: "1")')
+  })
+
+  it('points the completion steer at a pending section run instead of a new start', async () => {
+    const root = await workspace(DONE_PLAN)
+    await writePortablePass(root, taskIdOf('Doc task'))
+    const completion = taskReviewCompletion(root, 'change-a', {
+      openRuns: [
+        {
+          id: 'run-1',
+          change: 'change-a',
+          context: {
+            name: 'change-a',
+            taskId: sectionRecordId('1'),
+            section: '1',
+            sectionTitle: '1. Engine (lane 1, owns `packages/engine/**`)',
+            taskIds: [taskIdOf('Engine task'), taskIdOf('Engine follow-up')],
+          },
+        },
+      ],
+    })
+    expect(completion?.ok).toBe(false)
+    expect(completion?.text).toContain('the open review run "run-1" covers it')
+    expect(completion?.text).not.toContain('delegate(')
   })
 
   it('carries the section unit into the completion steer', async () => {

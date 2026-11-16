@@ -620,7 +620,7 @@ export function reviewUnitText(change, unit, options = {}) {
  * tasks without a portable PASS is one section gap; a single missing task keeps
  * its own line.
  */
-export function taskReviewCoverage(workspace, change, rule = 'task-review') {
+export function taskReviewCoverage(workspace, change, rule = 'task-review', options = {}) {
     let markdown;
     try {
         markdown = readFileSync(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
@@ -697,7 +697,7 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review') {
             section: { key: section.key, title: section.title },
             covered: section.covered,
             missing: absent,
-        }, { rule }));
+        }, { rule, ...(options.openRuns === undefined ? {} : { openRuns: options.openRuns }) }));
         for (const task of absent)
             grouped.add(task.id);
     }
@@ -963,7 +963,7 @@ export function checkpointCloseIssue(input) {
     return undefined;
 }
 /** The completion branch: applies only when the task list is fully checked. */
-export function taskReviewCompletion(workspace, change) {
+export function taskReviewCompletion(workspace, change, options = {}) {
     let markdown;
     try {
         markdown = readFileSync(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
@@ -973,7 +973,7 @@ export function taskReviewCompletion(workspace, change) {
     }
     if (/^\s*-\s*\[ \]\s+\d+(?:\.\d+)*\s+\S/mu.test(markdown))
         return undefined;
-    const coverage = taskReviewCoverage(workspace, change);
+    const coverage = taskReviewCoverage(workspace, change, 'task-review', options);
     return {
         ok: coverage.ok,
         ...(coverage.gaps.length === 0

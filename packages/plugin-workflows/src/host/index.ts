@@ -44,6 +44,7 @@ import {
   goalCompletionRefusal,
   type LaneDecision,
   pruneLaneDecisions,
+  reviewRunSteer,
   reviewUnits,
   reviewUnitText,
   taskReviewEvidence,
@@ -1712,7 +1713,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       services.agents.get(run.session) !== undefined,
                   )
                   const attempted = new Set<string>()
-                  const start = (context: Readonly<Record<string, unknown>>): void => {
+                  // Task ids a review started by this event already covers: two
+                  // sections can share a task (identical text hashes alike), and
+                  // the pre-event live list does not see either start.
+                  const startedCovered = new Set<string>()
+                  const start = (context: Readonly<Record<string, unknown>>): StartRunOutcome => {
                     const outcome = startDefinitionRun(
                       workspace,
                       definition,
@@ -1726,11 +1731,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     } else {
                       suppressed ??= outcome
                     }
+                    return outcome
                   }
                   // Task identity hashes only the text, so two checked tasks with
                   // the same text share an id and must not start two runs.
                   const startTask = (taskId: string): void => {
-                    if (attempted.has(taskId)) return
+                    if (attempted.has(taskId) || startedCovered.has(taskId)) return
                     attempted.add(taskId)
                     const duplicate = liveRuns.find(
                       (run) =>
@@ -1745,7 +1751,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       }
                       return
                     }
-                    start({ name: capture, taskId })
+                    if (start({ name: capture, taskId }).ok) startedCovered.add(taskId)
                   }
                   if (taskReviewUnits === undefined) {
                     // An unreadable plan keeps the per-task start.
@@ -1764,22 +1770,29 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       const recordId = sectionRecordId(section.key)
                       if (attempted.has(recordId)) continue
                       attempted.add(recordId)
-                      // A live review that already covers one of the section's
-                      // tasks makes the section unit a duplicate: the covered
-                      // tasks wait for that run, and only the uncovered missing
-                      // tasks start their own per-task review.
+                      // A live review, or one this same event already started,
+                      // that covers one of the section's tasks makes the section
+                      // unit a duplicate: the covered tasks wait for that run,
+                      // and only the uncovered missing tasks start their own
+                      // per-task review.
                       const coveredIds = unit.covered.map((task) => task.id)
-                      const covering = liveRuns.find((run) => {
-                        if (coveredIds.includes(String(run.context.taskId))) return true
-                        const taskIds = run.context.taskIds
-                        return (
-                          Array.isArray(taskIds) && coveredIds.some((id) => taskIds.includes(id))
-                        )
-                      })
-                      if (covering !== undefined) {
+                      const startedOverlap = coveredIds.some((id) => startedCovered.has(id))
+                      const covering = startedOverlap
+                        ? undefined
+                        : liveRuns.find((run) => {
+                            if (coveredIds.includes(String(run.context.taskId))) return true
+                            const taskIds = run.context.taskIds
+                            return (
+                              Array.isArray(taskIds) &&
+                              coveredIds.some((id) => taskIds.includes(id))
+                            )
+                          })
+                      if (startedOverlap || covering !== undefined) {
                         suppressed ??= {
                           ok: false,
-                          reason: `a live run "${covering.id}" already covers a task in section "${section.key}"`,
+                          reason: startedOverlap
+                            ? `a review started by this tasks.md change already covers a task in section "${section.key}"`
+                            : `a live run "${covering?.id ?? ''}" already covers a task in section "${section.key}"`,
                         }
                         for (const task of unit.missing) startTask(task.id)
                         continue
@@ -1797,7 +1810,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                         for (const task of unit.missing) startTask(task.id)
                         continue
                       }
-                      start(context)
+                      if (start(context).ok) for (const id of coveredIds) startedCovered.add(id)
                     }
                   }
                   return (
@@ -4592,9 +4605,34 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(call.detail === undefined ? {} : { detail: call.detail }),
             ...(call.seq === undefined ? {} : { seq: call.seq }),
           }))
+          // The pending task-review runs this close may point at instead of
+          // asking for a new start.
+          const reviewOpenRuns = ordered
+            .filter(
+              (run) =>
+                run.definition.id === 'task-review' &&
+                isOpenRun(run) &&
+                typeof run.context.name === 'string',
+            )
+            .map((run) => ({ id: run.id, change: String(run.context.name), context: run.context }))
           const completion =
             definition.id === 'task-review' && typeof current.context.name === 'string'
-              ? taskReviewCompletion(workspace, current.context.name)
+              ? taskReviewCompletion(workspace, current.context.name, { openRuns: reviewOpenRuns })
+              : undefined
+          // While unchecked tasks remain the completion coverage is deferred, so
+          // the review step's own steer names the selected unit instead.
+          const unitIssue =
+            completion === undefined &&
+            definition.id === 'task-review' &&
+            isOpenRun(current) &&
+            typeof current.context.name === 'string'
+              ? await reviewRunSteer(workspace, current.context.name, current.context, {
+                  openRuns: reviewOpenRuns,
+                }).then((text) =>
+                  text === undefined
+                    ? undefined
+                    : { ok: false, text: `rule "task-review": ${text}` },
+                )
               : undefined
           const checkpointIssue =
             definition.id === 'retro' && typeof current.context.checkpoint === 'string'
@@ -4644,7 +4682,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             installedLegacy: legacy.installed,
             enabledLegacy: legacy.enabled,
             provisionalReviews: await provisionalReviewSteps(current, definition, closeContext),
-            ...(completion === undefined ? {} : { completion }),
+            ...(completion === undefined && unitIssue === undefined
+              ? {}
+              : { completion: completion ?? unitIssue }),
             ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
             onError: (error) => publishListenerError(workspace, error),
           })

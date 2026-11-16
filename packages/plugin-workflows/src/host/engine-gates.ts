@@ -6,7 +6,13 @@ import { lastCodeWriteAt, type ToolCallObservation } from './evidence.js'
 import { evaluateLaneParity, evaluateProgressParity, type LaneParityLane } from './gates.js'
 import { defaultGit, type GitRunner, legacyWorktreeDigest, worktreeDigest } from './git.js'
 import { type NoteOwner, notePathFor, type ProgressNote, readProgressNote } from './notes.js'
-import { type ReviewUnit, reviewerBinding, reviewUnitText, taskReviewCoverage } from './parity.js'
+import {
+  type ReviewUnit,
+  type ReviewUnitTextOptions,
+  reviewerBinding,
+  reviewUnitText,
+  taskReviewCoverage,
+} from './parity.js'
 import { checkedTaskIds, numberedTasks, taskLanes, taskSections } from './tasks.js'
 import { normalizedWorkspacePath } from './write-attribution.js'
 
@@ -230,6 +236,29 @@ export async function reviewUnits(
     units.push({ covered: [task], missing: [task] })
   }
   return units
+}
+
+/**
+ * The selected unit of one task-review run, rendered for an intermediate close:
+ * a run whose review step is still open names its section and missing tasks
+ * even while unchecked tasks remain (the completion coverage only speaks once
+ * every task is checked).
+ */
+export async function reviewRunSteer(
+  workspace: string,
+  change: string,
+  context: Readonly<Record<string, unknown>>,
+  options: ReviewUnitTextOptions = {},
+): Promise<string | undefined> {
+  const units = await reviewUnits(workspace, change, 'workflows')
+  if (units === undefined) return undefined
+  const sectionKey = typeof context.section === 'string' ? context.section : undefined
+  const taskId = typeof context.taskId === 'string' ? context.taskId : undefined
+  const unit =
+    sectionKey === undefined
+      ? units.find((entry) => entry.missing.some((task) => task.id === taskId))
+      : units.find((entry) => entry.section?.key === sectionKey)
+  return unit === undefined ? undefined : reviewUnitText(change, unit, options)
 }
 
 export interface ProgressGateInput extends GateEvidence {

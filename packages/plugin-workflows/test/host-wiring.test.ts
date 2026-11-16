@@ -1611,6 +1611,37 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(await taskRuns()).toHaveLength(2)
   })
 
+  it('keeps one review for repeated task text across two sections', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    const plan = (box: string): string =>
+      `# Tasks\n\n## 1. Engine\n\n- [${box}] 1.1 Run tests\n- [${box}] 1.2 Implement engine\n\n## 2. Docs\n\n- [${box}] 2.1 Run tests\n`
+    await writeFile(join(changeDir, 'tasks.md'), plan(' '), 'utf8')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await writeFile(join(changeDir, 'tasks.md'), plan('x'), 'utf8')
+    host.fireFs()
+    const reviewRuns = async (): Promise<Array<{ id: string; context: Record<string, unknown> }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth))
+        .filter((entry) => entry.definition.id === 'task-review')
+        .map((entry) => ({ id: entry.id, context: entry.context }))
+    await waitFor(async () => (await reviewRuns()).length >= 1)
+    // Give the overlapping per-task start the chance to appear.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const created = await reviewRuns()
+    // The section unit covers both engine tasks; the docs task has the same
+    // text, so its task id is already covered by that section run.
+    expect(created).toHaveLength(1)
+    expect(created[0]?.context.section).toBe('1')
+    expect(created[0]?.context.taskIds).toHaveLength(2)
+  })
+
   it('starts one section run for two missing tasks and no per-task run', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()

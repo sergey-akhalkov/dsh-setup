@@ -147,7 +147,7 @@ export interface TaskReviewCoverage {
  * tasks without a portable PASS is one section gap; a single missing task keeps
  * its own line.
  */
-export declare function taskReviewCoverage(workspace: string, change: string, rule?: string): TaskReviewCoverage;
+export declare function taskReviewCoverage(workspace: string, change: string, rule?: string, options?: ReviewUnitTextOptions): TaskReviewCoverage;
 export interface CheckpointCloseRecord {
     readonly checkpoint?: unknown;
     readonly outcome?: unknown;
@@ -199,7 +199,7 @@ export declare function checkpointCloseIssue(input: {
     readonly checkpointSeq?: number;
 }): string | undefined;
 /** The completion branch: applies only when the task list is fully checked. */
-export declare function taskReviewCompletion(workspace: string, change: string): {
+export declare function taskReviewCompletion(workspace: string, change: string, options?: ReviewUnitTextOptions): {
     readonly ok: boolean;
     readonly text?: string;
 } | undefined;

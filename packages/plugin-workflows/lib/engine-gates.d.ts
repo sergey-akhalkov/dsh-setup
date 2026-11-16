@@ -3,7 +3,7 @@ import { type ToolCallObservation } from './evidence.js';
 import { type LaneParityLane } from './gates.js';
 import { type GitRunner } from './git.js';
 import { type NoteOwner } from './notes.js';
-import { type ReviewUnit, reviewUnitText } from './parity.js';
+import { type ReviewUnit, type ReviewUnitTextOptions, reviewUnitText } from './parity.js';
 export { type ReviewUnit, reviewUnitText };
 /**
  * The engine-owned gates: work progress, lane assignment, and goal completion.
@@ -60,6 +60,13 @@ export declare function taskReviewEvidence(workspace: string, change: string, ta
  * unit. Undefined when the plan is unreadable.
  */
 export declare function reviewUnits(workspace: string, change: string, owner: ReviewOwner): Promise<ReviewUnit[] | undefined>;
+/**
+ * The selected unit of one task-review run, rendered for an intermediate close:
+ * a run whose review step is still open names its section and missing tasks
+ * even while unchecked tasks remain (the completion coverage only speaks once
+ * every task is checked).
+ */
+export declare function reviewRunSteer(workspace: string, change: string, context: Readonly<Record<string, unknown>>, options?: ReviewUnitTextOptions): Promise<string | undefined>;
 export interface ProgressGateInput extends GateEvidence {
     readonly codeChanged: boolean;
     readonly noteOwner: NoteOwner;

@@ -832,6 +832,7 @@ export function taskReviewCoverage(
   workspace: string,
   change: string,
   rule = 'task-review',
+  options: ReviewUnitTextOptions = {},
 ): TaskReviewCoverage {
   let markdown: string
   try {
@@ -907,7 +908,7 @@ export function taskReviewCoverage(
           covered: section.covered,
           missing: absent,
         },
-        { rule },
+        { rule, ...(options.openRuns === undefined ? {} : { openRuns: options.openRuns }) },
       ),
     )
     for (const task of absent) grouped.add(task.id)
@@ -1261,6 +1262,7 @@ export function checkpointCloseIssue(input: {
 export function taskReviewCompletion(
   workspace: string,
   change: string,
+  options: ReviewUnitTextOptions = {},
 ): { readonly ok: boolean; readonly text?: string } | undefined {
   let markdown: string
   try {
@@ -1269,7 +1271,7 @@ export function taskReviewCompletion(
     return undefined
   }
   if (/^\s*-\s*\[ \]\s+\d+(?:\.\d+)*\s+\S/mu.test(markdown)) return undefined
-  const coverage = taskReviewCoverage(workspace, change)
+  const coverage = taskReviewCoverage(workspace, change, 'task-review', options)
   return {
     ok: coverage.ok,
     ...(coverage.gaps.length === 0
