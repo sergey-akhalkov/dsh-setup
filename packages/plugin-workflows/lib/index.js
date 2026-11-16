@@ -433,6 +433,29 @@ function sectionReviewOf(section, covered, recordId) {
         })),
     };
 }
+/**
+ * The task-review runs whose review step has not settled: a pending reviewer the
+ * steer may point at. A settled PASS or a provisional ERROR is a finished review,
+ * so an ERROR's remedy is a new start, never "continue that run".
+ */
+function pendingReviewRuns(runs, definitions) {
+    const pending = [];
+    for (const run of runs) {
+        if (run.definition.id !== 'task-review' || !isOpenRun(run))
+            continue;
+        if (typeof run.context.name !== 'string')
+            continue;
+        const definition = definitions.find((entry) => entry.id === run.definition.id);
+        const reviewStep = definition?.steps.find((step) => step.executor === 'review');
+        const state = reviewStep === undefined
+            ? undefined
+            : run.steps.find((step) => step.id === reviewStep.id)?.state;
+        if (state === 'done' || state === 'failed' || state === 'cancelled')
+            continue;
+        pending.push({ id: run.id, change: String(run.context.name), context: run.context });
+    }
+    return pending;
+}
 /** Read one change's tasks.md; a review cannot resolve its tasks without it. */
 async function readTasksPlan(workspace, change) {
     try {
@@ -3837,11 +3860,9 @@ export function apply(ctx, config = {}) {
                 }));
                 // The pending task-review runs this close may point at instead of
                 // asking for a new start.
-                const reviewOpenRuns = ordered
-                    .filter((run) => run.definition.id === 'task-review' &&
-                    isOpenRun(run) &&
-                    typeof run.context.name === 'string')
-                    .map((run) => ({ id: run.id, change: String(run.context.name), context: run.context }));
+                // Pending reviews come from every live session's runs, not only this
+                // session's, and only while their review step is still unsettled.
+                const reviewOpenRuns = pendingReviewRuns(runs, definitions);
                 const completion = definition.id === 'task-review' && typeof current.context.name === 'string'
                     ? taskReviewCompletion(workspace, current.context.name, { openRuns: reviewOpenRuns })
                     : undefined;
@@ -4354,12 +4375,8 @@ export function apply(ctx, config = {}) {
         return digest !== undefined && digest === note.worktreeDigest ? note.taskId : undefined;
     };
     /** The outstanding review units of one workspace, with their open runs. */
-    const reviewUnitLines = async (workspace, runs) => {
-        const openRuns = runs
-            .filter((run) => run.definition.id === 'task-review' &&
-            isOpenRun(run) &&
-            typeof run.context.name === 'string')
-            .map((run) => ({ id: run.id, change: String(run.context.name), context: run.context }));
+    const reviewUnitLines = async (workspace, runs, definitions) => {
+        const openRuns = pendingReviewRuns(runs, definitions);
         const reviewOwner = legacySignalState().enabled.has('delegation-rules/task-review')
             ? 'legacy'
             : 'workflows';
@@ -4382,7 +4399,7 @@ export function apply(ctx, config = {}) {
         const definitions = await definitionsFor(call.workspace);
         const runs = auth === undefined ? [] : await listAuthenticatedRuns(call.workspace, auth);
         const receipts = auth === undefined ? [] : await listReceipts(call.workspace, auth);
-        const units = await reviewUnitLines(call.workspace, runs);
+        const units = await reviewUnitLines(call.workspace, runs, definitions);
         return [
             'Workflows status',
             `review: ${owner('delegation-rules', 'task-review')} (task-review), ${owner('delegation-rules', 'spec-review')} (spec-review), ${owner('delegation-rules', 'integration-review')} (integration-review)`,
@@ -4563,7 +4580,7 @@ export function apply(ctx, config = {}) {
                             await recoverIfNeeded(workspace);
                             const runs = await listAuthenticatedRuns(workspace, auth);
                             const open = runs.filter((run) => run.status === 'running' || run.status === 'blocked');
-                            const units = await reviewUnitLines(workspace, runs);
+                            const units = await reviewUnitLines(workspace, runs, definitions);
                             return [
                                 `definitions: ${String(definitions.length)}; open runs: ${String(open.length)}; receipts: ${String((await listReceipts(workspace, auth)).length)}`,
                                 ...(units.length === 0 ? [] : [`review units: ${units.join('; ')}`]),

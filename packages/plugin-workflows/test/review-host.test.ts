@@ -767,6 +767,61 @@ describe('section review publication through the host', () => {
     }
   })
 
+  it('replaces a malformed approval instead of preserving it', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await sectionWorkspace()
+    const definition = reviewDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+      // A malformed approval that matches the reviewer identity but not the
+      // portable schema: completion coverage rejects it, so the section PASS
+      // must replace it rather than preserve its bytes.
+      const malformed = `${JSON.stringify(
+        {
+          rule: definition.id,
+          change: 'auth',
+          scope: 'whole',
+          taskId: SECTION_IDS[0],
+          digest: 'not-a-digest',
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: '2026-01-01T00:00:00.000Z',
+        },
+        null,
+        2,
+      )}\n`
+      const path = join(changeDir, 'reviews', `${SECTION_IDS[0]}.json`)
+      await writeFile(path, malformed, 'utf8')
+      const { recordPath } = await startSectionRun(workspace, definition)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.digests.length === 1)
+      host.releases[0]?.()
+      await waitFor(
+        async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
+      )
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as { digest: string }
+      const replaced = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+      expect(replaced).toMatchObject({
+        rule: definition.id,
+        change: 'auth',
+        scope: 'task',
+        taskId: SECTION_IDS[0],
+        digest: record.digest,
+        verdict: 'PASS',
+      })
+      expect(replaced.digest).toMatch(/^[0-9a-f]{64}$/u)
+    } finally {
+      unregister()
+    }
+  })
+
   it('reopens the covered section tasks on a section FINDINGS', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await sectionWorkspace()

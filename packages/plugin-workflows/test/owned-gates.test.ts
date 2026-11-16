@@ -1170,6 +1170,44 @@ describe('the review unit steer', () => {
     expect(completion?.text?.length ?? 0).toBeLessThanOrEqual(600)
   })
 
+  it('accepts a section PASS record as evidence for each covered task', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    const directory = join(root, '.dsh', 'workflows', 'records', 'task-review', 'change-a', 'tasks')
+    await mkdir(directory, { recursive: true })
+    const sectionId = sectionRecordId('1')
+    await writeFile(
+      join(directory, `${sectionId}.json`),
+      JSON.stringify({
+        definition: 'task-review',
+        rule: 'task-review',
+        change: 'change-a',
+        phase: 'task',
+        scope: 'task',
+        taskId: sectionId,
+        section: '1',
+        sectionTitle: '1. Engine (lane 1, owns `packages/engine/**`)',
+        taskIds: ['Engine task', 'Engine follow-up', 'Engine cleanup'].map(taskIdOf),
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T10:00:00.000Z',
+      }),
+      'utf8',
+    )
+    expect(await taskReviewEvidence(root, 'change-a', taskIdOf('Engine task'), 'workflows')).toBe(
+      true,
+    )
+    expect(await taskReviewEvidence(root, 'change-a', taskIdOf('Doc task'), 'workflows')).toBe(
+      false,
+    )
+    // The selection sees the covered section tasks as reviewed.
+    const units = await reviewUnits(root, 'change-a', 'workflows')
+    expect(units?.some((unit) => unit.missing.some((task) => task.text === 'Engine task'))).toBe(
+      false,
+    )
+  })
+
   it('carries the section unit into the completion steer', async () => {
     const root = await workspace(DONE_PLAN)
     await writeTaskPass(root, taskIdOf('Doc task'))

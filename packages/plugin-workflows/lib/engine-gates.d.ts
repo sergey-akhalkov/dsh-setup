@@ -49,7 +49,8 @@ export declare function newlyCheckedTaskIds(calls: readonly ToolCallObservation[
  * Whether one task has a matching task-review PASS/ERROR record in the active
  * review owner's store. The native record is a superset of the legacy one, so
  * one predicate covers both; a record that changed its reviewed inputs or
- * failed internally never approves.
+ * failed internally never approves. A section record approves every checked
+ * task it covers, the same way its publication writes one approval each.
  */
 export declare function taskReviewEvidence(workspace: string, change: string, taskId: string, owner: ReviewOwner): Promise<boolean>;
 /**

@@ -1324,6 +1324,16 @@ async function approvalSatisfies(workspace, record, taskId) {
         const target = raw.target;
         if (!isRecord(target))
             return false;
+        // The portable schema: a matching approval stays byte-identical, but a
+        // malformed one is replaced rather than preserved into the archive audit.
+        if (typeof raw.digest !== 'string' ||
+            !/^[0-9a-f]{64}$/u.test(raw.digest) ||
+            raw.scope !== 'task' ||
+            typeof raw.time !== 'string' ||
+            (raw.worktreeDigest !== undefined &&
+                (typeof raw.worktreeDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(raw.worktreeDigest)))) {
+            return false;
+        }
         return (raw.rule === record.rule &&
             raw.change === record.change &&
             raw.taskId === taskId &&

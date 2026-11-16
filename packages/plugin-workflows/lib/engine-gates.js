@@ -80,29 +80,13 @@ export function newlyCheckedTaskIds(calls, workspace, change, turn) {
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-/**
- * Whether one task has a matching task-review PASS/ERROR record in the active
- * review owner's store. The native record is a superset of the legacy one, so
- * one predicate covers both; a record that changed its reviewed inputs or
- * failed internally never approves.
- */
-export async function taskReviewEvidence(workspace, change, taskId, owner) {
-    const relative = owner === 'workflows'
-        ? `.dsh/workflows/records/task-review/${change}/tasks/${taskId}.json`
-        : `.dsh/delegation/task-review/${change}/tasks/${taskId}.json`;
-    let value;
-    try {
-        value = JSON.parse(await readFile(join(workspace, relative), 'utf8'));
-    }
-    catch {
-        return false;
-    }
+/** Whether one parsed record satisfies the task-review contract for a task. */
+function recordApprovesTask(value, change, owner) {
     if (!isRecord(value))
         return false;
     if (value.rule !== 'task-review' ||
         value.change !== change ||
         value.scope !== 'task' ||
-        value.taskId !== taskId ||
         (value.verdict !== 'PASS' && value.verdict !== 'ERROR') ||
         (value.verdict === 'ERROR' &&
             (value.failureClass === 'reviewed-inputs-changed' ||
@@ -119,14 +103,61 @@ export async function taskReviewEvidence(workspace, change, taskId, owner) {
         return false;
     if (value.verdict === 'PASS' && value.findings.length !== 0)
         return false;
+    return true;
+}
+/** Whether one record names this task: its own id, or a section it covers. */
+function recordNamesTask(value, taskId) {
+    if (!isRecord(value))
+        return false;
+    if (value.taskId === taskId)
+        return true;
+    return Array.isArray(value.taskIds) && value.taskIds.includes(taskId);
+}
+/**
+ * Whether one task has a matching task-review PASS/ERROR record in the active
+ * review owner's store. The native record is a superset of the legacy one, so
+ * one predicate covers both; a record that changed its reviewed inputs or
+ * failed internally never approves. A section record approves every checked
+ * task it covers, the same way its publication writes one approval each.
+ */
+export async function taskReviewEvidence(workspace, change, taskId, owner) {
+    const directory = owner === 'workflows'
+        ? `.dsh/workflows/records/task-review/${change}/tasks`
+        : `.dsh/delegation/task-review/${change}/tasks`;
+    let entries;
+    try {
+        entries = await readdir(join(workspace, directory));
+    }
+    catch {
+        return false;
+    }
+    const names = [
+        ...(entries.includes(`${taskId}.json`) ? [`${taskId}.json`] : []),
+        ...entries.filter((name) => name !== `${taskId}.json` && name.endsWith('.json')),
+    ];
     const binding = reviewerBinding(workspace);
     if (binding?.invalid !== undefined)
         return false;
-    if (binding?.provider !== undefined && value.target.provider !== binding.provider)
-        return false;
-    if (binding?.model !== undefined && value.target.model !== binding.model)
-        return false;
-    return true;
+    for (const name of names) {
+        let value;
+        try {
+            value = JSON.parse(await readFile(join(workspace, directory, name), 'utf8'));
+        }
+        catch {
+            continue;
+        }
+        if (!recordNamesTask(value, taskId))
+            continue;
+        if (!recordApprovesTask(value, change, owner))
+            continue;
+        const target = value.target;
+        if (binding?.provider !== undefined && target.provider !== binding.provider)
+            continue;
+        if (binding?.model !== undefined && target.model !== binding.model)
+            continue;
+        return true;
+    }
+    return false;
 }
 /**
  * The section-first review units of one change: checked tasks without a matching
