@@ -17,7 +17,7 @@ Top-level fields: `v`, `id` (lowercase kebab, also the install file name), `name
 
 A step has `id`, `title`, `executor` (`main`, `subagent`, `tool`, `branch`, `loop`, `human`), optional `prompt`, an `evidence` completion contract, `next` (a step id or `end`), optional `blockTurnClose`, `nonCritical`, `ownership`, `legacy`, and the executor-specific object. A `branch` step declares `branch: {predicate, then, else}`; a `loop` step declares `loop: {maxIterations (≤50), stop, next, cap}` and must be the only way to iterate. An `all` evidence contract is a non-empty recursive list, passes only when every item passes, and its failure names the first failing item path (`items[0].items[1]`).
 
-Installed definitions: the engine ships `task-review`, `retro`, and `verify` as the remaining legacy-retirement exceptions (the setup keeps their legacy switches off); `@dsh-setup/plugin-openspec` contributes `change-intake` (active, own, `settings.gate: "intake"`, with the `spec-review` step deferred to the strict `spec-review` rule) when the engine's registry service is available.
+Installed definitions: the engine ships `task-review`, `retro`, and `verify` as the remaining legacy-retirement exceptions (the setup keeps their legacy switches off); `@dsh-setup/plugin-openspec` contributes `change-intake` (active, own, `settings.gate: "intake"`, with its `spec-review` step owned by the review executor on the shared whole-spec review identity and only the signal's legacy switch re-deferring it) when the engine's registry service is available.
 
 ### Definition registry
 
