@@ -822,6 +822,60 @@ describe('section review publication through the host', () => {
     }
   })
 
+  it('keeps an existing approval byte-identical when a section FINDINGS names it', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await sectionWorkspace()
+    const definition = reviewDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'FINDINGS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+      // A review already approved the first task. Design D4 reopens the review
+      // obligation on a section FINDINGS; it never deletes that approval.
+      const approval = `${JSON.stringify(
+        {
+          rule: definition.id,
+          change: 'auth',
+          scope: 'task',
+          taskId: SECTION_IDS[0],
+          digest: 'c'.repeat(64),
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: '2026-01-01T00:00:00.000Z',
+        },
+        null,
+        2,
+      )}\n`
+      const path = join(changeDir, 'reviews', `${SECTION_IDS[0]}.json`)
+      await writeFile(path, approval, 'utf8')
+      const { runId, recordPath } = await startSectionRun(workspace, definition)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.digests.length === 1)
+      host.releases[0]?.()
+      await waitFor(
+        async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
+      )
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as { verdict: string }
+      expect(record.verdict).toBe('FINDINGS')
+      expect(await readFile(path, 'utf8')).toBe(approval)
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      await waitFor(
+        async () =>
+          (await readAuthenticatedRun(workspace, runId, auth))?.steps[0]?.state === 'blocked',
+      )
+      const steersBefore = host.steers.length
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      expect(host.steers.length).toBeGreaterThan(steersBefore)
+    } finally {
+      unregister()
+    }
+  })
+
   it('reopens the covered section tasks on a section FINDINGS', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await sectionWorkspace()

@@ -1877,7 +1877,7 @@ async function approvalSatisfies(
       !/^[0-9a-f]{64}$/u.test(raw.digest) ||
       raw.scope !== 'task' ||
       typeof raw.time !== 'string' ||
-      raw.time === '' ||
+      raw.time.trim() === '' ||
       typeof target.provider !== 'string' ||
       target.provider === '' ||
       (raw.worktreeDigest !== undefined &&
