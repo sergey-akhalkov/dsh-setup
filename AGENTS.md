@@ -143,8 +143,9 @@ validates, builds the market index pinned to the tag, and deploys Pages last. De
 Vitest covers `packages/*/test/**` and `scripts/test/**`: `pnpm test`, or
 `pnpm exec vitest run <file>` / `-t "<name>"` for one file or test. Tests that load built `lib/**`
 output need `pnpm build` first. A live acceptance runs locally in a throwaway `DSH_HOME` with a fake
-change; never ask the owner to drive it, and report a visual check you could not run instead of
-faking it. Detail: [docs/contributing.md](docs/contributing.md#tests).
+change; never ask the owner to drive it. Use the Nuphus MCP browser for the Workflows view (load the
+`nuphus-discipline` skill first) instead of reporting a visual check as unavailable.
+Detail: [docs/contributing.md](docs/contributing.md#tests).
 
 ## 10. CI gate
 

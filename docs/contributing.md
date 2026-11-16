@@ -417,8 +417,9 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
   built bundles into that `DSH_HOME`, create a fake OpenSpec change in a temp workspace, and drive
   the scenarios (native task review with record plus committed approval, whole-spec review, a
   refused close with a missing record, a lane steer) through the composed runtime or the throwaway
-  web host. Verify the records, approvals, and the Workflows route's data; the browser click-through
-  is reported as not run when browser control is absent, never emulated. Never install into or reload
+  web host. Verify the records, approvals, and the Workflows route's data; use the Nuphus MCP browser
+  (load the `nuphus-discipline` skill first) for the visual Workflows-view check, never the live
+  desktop profile. Never install into or reload
   the live desktop profile for this, and always delete the temp home after the run.
 - **Never hand-edit generated files** (`packages/*/cordis.patch.yml`, `packages/*/lib/**`,
   `packages/setup/package.json`, `packages/setup/cordis.patch.yml`,
