@@ -899,3 +899,14 @@ a CI-only 10 s flake. Verified with `pnpm validate`, `pnpm dogfood`, the adoptio
 successful release workflow; the published index lists 0.41.1. The native whole-spec review, adoption
 receipt and archive for `focused-rereview-and-section-steer` are still pending the owner's install of
 0.41.1.
+
+A second engine defect blocks the same archive on the installed 0.41.1: the native `spec-review`
+trigger never matches in this workspace. Every turn close evaluates `definition:spec-review` as
+`condition-false` although the session's involvement record exists at
+`.dsh/workflows/involvement/<session>.json` and reads correctly, and no `spec-review` run has ever been
+created natively here (the existing whole-spec PASS is the pre-Release-A legacy record). Without a
+native whole-spec PASS the archive gate cannot authorize the archive, so `focused-rereview-and-section-steer`
+was moved into `openspec/changes/archive/` by the owner from an external PowerShell
+(`Move-Item openspec\changes\focused-rereview-and-section-steer openspec\changes\archive\2026-11-17-focused-rereview-and-section-steer`)
+after the delta was synced. Owner follow-up: reproduce and fix the trigger condition (involvement is
+present yet the condition is false) before the next release that expects a native whole-spec review.
