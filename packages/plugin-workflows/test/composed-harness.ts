@@ -74,7 +74,9 @@ export async function composedConfig(id: string): Promise<Record<string, unknown
 
 export function waitFor(
   check: () => boolean | Promise<boolean>,
-  timeoutMs = 10_000,
+  // A loaded CI runner can spend more than ten seconds on the git-backed
+  // snapshot of one composed scenario; this bound matches the test timeout.
+  timeoutMs = 30_000,
 ): Promise<void> {
   const started = Date.now()
   return (async () => {
