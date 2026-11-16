@@ -259,11 +259,13 @@ The active `move-review-runtime-into-workflows` change is Release A of a two-rel
 workflows engine owns the review executor, the trigger `condition`, reviewer routing and the review
 queue, the `.dsh/workflows/records/` store, the work-progress and lane gates, and the goal-complete
 guard, while the delegation row stays installed dormant with its rules, target, and all five `gates`
-switches false. Release B is `retire-delegation-rules`, created by this change's task 6.1 and started
-only after the installed profile has run one native review that produced a local record and its
-committed approval. It deletes the plugin, the row, `docs/delegation-rules.md`, the skill, the
-observability row, the legacy prompt copies, the `reviews:export` legacy-store fallback, and the
-bundle entries, and folds the plugin's requirements into `workflows` and `review-approval`. Rollback
+switches false. Release B is `retire-delegation-rules`
+(`openspec/changes/retire-delegation-rules/`), created by this change's task 6.1 with deletion-only
+tasks and started only after the installed profile has run one native review that produced a local
+record and its committed approval. It deletes the plugin, the row, `docs/delegation-rules.md`, the
+skill, the observability row, the legacy prompt copies, the `reviews:export` legacy-store fallback,
+and the bundle entries, and folds the plugin's requirements into `workflows` and
+`review-approval`. Rollback
 before Release B is one switch flip per signal (`workflowOwned`, `specReview`, `integrationReview`,
 `taskProgress`, `laneFanout`).
 
