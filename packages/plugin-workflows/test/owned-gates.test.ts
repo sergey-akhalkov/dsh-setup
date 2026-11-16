@@ -2,10 +2,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { Definition } from '../src/host/definitions.ts'
 import {
   codeChangedThisTurn,
   evaluateOwnedLaneGate,
   evaluateOwnedProgressGate,
+  goalCompletionRefusal,
   pruneLaneDecisions,
   taskReviewEvidence,
 } from '../src/host/engine-gates.ts'
@@ -133,6 +135,21 @@ describe('the note action', () => {
         { runGit: fakeGit(() => IMPLEMENTATION_STATUS, root) },
       ),
     ).rejects.toThrow(/no readable tasks\.md/u)
+  })
+})
+
+describe('the goal-complete guard', () => {
+  const taskReview = { id: 'task-review' } as unknown as Definition
+
+  it('refuses an unnumbered checked task that the task parser cannot match', async () => {
+    const root = await workspace('# Tasks\n\n- [x] Implement feature\n')
+    const refusal = await goalCompletionRefusal({
+      workspace: root,
+      definitions: [taskReview],
+      exec: { name: 'update_goal', arguments: { action: 'complete' } },
+    })
+    expect(refusal).toContain('goal completion refused')
+    expect(refusal).toContain('is not a numbered task')
   })
 })
 
@@ -520,7 +537,10 @@ describe('the kept lane decisions', () => {
       ['2. Docs (lane 2, owns `docs/**`)', 'serial'],
       ['3. Gone (owns `src/**`)', 'assigned'],
     ])
-    await pruneLaneDecisions(root, 'change-a', decisions)
+    await pruneLaneDecisions(root, 'change-a', decisions, {
+      owner: 'workflows',
+      session: 'session-1',
+    })
     expect([...decisions.keys()]).toEqual([
       '1. Engine (lane 1, owns `packages/engine/**`)',
       '2. Docs (lane 2, owns `docs/**`)',
@@ -530,8 +550,67 @@ describe('the kept lane decisions', () => {
     const kept = new Map<string, 'assigned' | 'serial'>([
       ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
     ])
-    await pruneLaneDecisions(completed, 'change-a', kept)
+    await pruneLaneDecisions(completed, 'change-a', kept, {
+      owner: 'workflows',
+      session: 'session-1',
+    })
     expect(kept.size).toBe(0)
+  })
+
+  it('invalidates a serial note when its lane completes and is reopened', async () => {
+    const root = await workspace()
+    const runGit = fakeGit(() => IMPLEMENTATION_STATUS, root)
+    const decisions = new Map<string, 'assigned' | 'serial'>([
+      ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
+      ['2. Docs (lane 2, owns `docs/**`)', 'serial'],
+    ])
+    await writeProgressNote(
+      root,
+      { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
+      { runGit, session: 'session-1' },
+    )
+    const tasks = join(root, 'openspec', 'changes', 'change-a', 'tasks.md')
+    // Completion prunes the serial decision together with its persisted note.
+    await writeFile(tasks, PLAN.replace('- [ ] 2.1', '- [x] 2.1'), 'utf8')
+    await pruneLaneDecisions(root, 'change-a', decisions, {
+      owner: 'workflows',
+      session: 'session-1',
+    })
+    expect(decisions.has('2. Docs (lane 2, owns `docs/**`)')).toBe(false)
+    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
+    // Reopening the lane does not resurrect the completed lane's old note.
+    await writeFile(tasks, PLAN, 'utf8')
+    const calls = [
+      {
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'packages/engine/src/engine.ts' },
+        ok: true,
+        turn: 1,
+      },
+    ]
+    const gate = (): ReturnType<typeof evaluateOwnedLaneGate> =>
+      evaluateOwnedLaneGate({
+        workspace: root,
+        change: 'change-a',
+        calls,
+        turn: 1,
+        codeChanged: true,
+        noteOwner: 'workflows',
+        session: 'session-1',
+        decisions,
+        runGit,
+      })
+    const reopened = await gate()
+    expect(reopened.decision).toBe('refuse')
+    expect(reopened.lanes?.map((lane) => lane.n)).toEqual([2])
+    // Fresh evidence written for the reopened lane decides it again.
+    await writeProgressNote(
+      root,
+      { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
+      { runGit, session: 'session-1' },
+    )
+    expect((await gate()).decision).toBe('allow')
   })
 
   it('satisfies a lane from a kept decision after the tool buffer lost the tag', async () => {

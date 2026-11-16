@@ -75,10 +75,15 @@ export declare function workerLaneTag(name: string, ok: boolean, argumentsValue:
 export type LaneDecision = 'assigned' | 'serial';
 /**
  * Forget decisions for lanes that disappeared, lost their tasks, or completed.
- * A renamed lane is a new title and therefore a new, unassigned lane. An
- * unreadable plan keeps the decisions: the gate already fails open there.
+ * A completed lane also drops its own session's persisted serial note, so
+ * reopening the lane needs fresh evidence instead of the old note. A renamed
+ * lane is a new title and therefore a new, unassigned lane. An unreadable plan
+ * keeps the decisions: the gate already fails open there.
  */
-export declare function pruneLaneDecisions(workspace: string, change: string, decisions: Map<string, LaneDecision>): Promise<void>;
+export declare function pruneLaneDecisions(workspace: string, change: string, decisions: Map<string, LaneDecision>, note: {
+    readonly owner: NoteOwner;
+    readonly session: string;
+}): Promise<void>;
 export interface LaneGateInput extends GateEvidence {
     readonly codeChanged: boolean;
     readonly noteOwner: NoteOwner;

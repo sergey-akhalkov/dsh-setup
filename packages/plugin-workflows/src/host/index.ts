@@ -3934,7 +3934,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         if (laneOwned) {
           const decisions = laneDecisionsFor(session, change)
-          await pruneLaneDecisions(workspace, change, decisions)
+          await pruneLaneDecisions(workspace, change, decisions, { owner: noteOwner, session })
           const decision = await evaluateOwnedLaneGate({
             workspace,
             change,

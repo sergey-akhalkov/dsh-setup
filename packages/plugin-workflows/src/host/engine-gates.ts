@@ -1,11 +1,11 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
 import type { Definition } from './definitions.js'
 import { lastCodeWriteAt, type ToolCallObservation } from './evidence.js'
 import { evaluateLaneParity, evaluateProgressParity, type LaneParityLane } from './gates.js'
 import { defaultGit, type GitRunner, worktreeDigest } from './git.js'
-import { type NoteOwner, type ProgressNote, readProgressNote } from './notes.js'
+import { type NoteOwner, notePathFor, type ProgressNote, readProgressNote } from './notes.js'
 import { reviewerBinding, taskReviewCoverage } from './parity.js'
 import { checkedTaskIds, numberedTasks, taskLanes } from './tasks.js'
 import { normalizedWorkspacePath } from './write-attribution.js'
@@ -291,22 +291,39 @@ export type LaneDecision = 'assigned' | 'serial'
 
 /**
  * Forget decisions for lanes that disappeared, lost their tasks, or completed.
- * A renamed lane is a new title and therefore a new, unassigned lane. An
- * unreadable plan keeps the decisions: the gate already fails open there.
+ * A completed lane also drops its own session's persisted serial note, so
+ * reopening the lane needs fresh evidence instead of the old note. A renamed
+ * lane is a new title and therefore a new, unassigned lane. An unreadable plan
+ * keeps the decisions: the gate already fails open there.
  */
 export async function pruneLaneDecisions(
   workspace: string,
   change: string,
   decisions: Map<string, LaneDecision>,
+  note: { readonly owner: NoteOwner; readonly session: string },
 ): Promise<void> {
   if (decisions.size === 0) return
   const plan = await readPlan(workspace, change)
   if (plan === undefined) return
   const lanes = taskLanes(plan)
+  const pruned: string[] = []
   for (const title of [...decisions.keys()]) {
     const lane = lanes.find((entry) => entry.title === title)
     const tasks = lane === undefined ? 0 : lane.checked.length + lane.unchecked.length
-    if (lane === undefined || (tasks > 0 && lane.unchecked.length === 0)) decisions.delete(title)
+    if (lane === undefined || (tasks > 0 && lane.unchecked.length === 0)) {
+      decisions.delete(title)
+      pruned.push(title)
+    }
+  }
+  if (pruned.length === 0) return
+  // Another session's note is that session's evidence and stays untouched.
+  const saved = await readProgressNote(workspace, change, note.owner)
+  if (
+    saved?.lane !== undefined &&
+    saved.session === note.session &&
+    pruned.includes(saved.lane)
+  ) {
+    await unlink(join(workspace, notePathFor(note.owner, change))).catch(() => undefined)
   }
 }
 
@@ -466,7 +483,9 @@ export async function goalCompletionRefusal(input: GoalGuardInput): Promise<stri
     } catch {
       return `goal completion refused: change "${name}" has no readable tasks.md; repair it or archive the change. The goal stays active.`
     }
-    if (checkedTaskIds(markdown).length === 0) continue
+    // A checked line the task parser cannot read is still an unapproved checked
+    // task; the coverage below reports it instead of skipping the change.
+    if (!/^\s*[-*+]\s*\[[xX]\]/mu.test(markdown)) continue
     const coverage = taskReviewCoverage(input.workspace, name)
     if (coverage.ok) continue
     gaps.push(
