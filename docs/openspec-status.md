@@ -255,6 +255,18 @@ rule, the portable record, and the audit commands are in [review-approval.md](re
 
 ## Open owner follow-ups
 
+The active `move-review-runtime-into-workflows` change is Release A of a two-release migration: the
+workflows engine owns the review executor, the trigger `condition`, reviewer routing and the review
+queue, the `.dsh/workflows/records/` store, the work-progress and lane gates, and the goal-complete
+guard, while the delegation row stays installed dormant with its rules, target, and all five `gates`
+switches false. Release B is `retire-delegation-rules`, created by this change's task 6.1 and started
+only after the installed profile has run one native review that produced a local record and its
+committed approval. It deletes the plugin, the row, `docs/delegation-rules.md`, the skill, the
+observability row, the legacy prompt copies, the `reviews:export` legacy-store fallback, and the
+bundle entries, and folds the plugin's requirements into `workflows` and `review-approval`. Rollback
+before Release B is one switch flip per signal (`workflowOwned`, `specReview`, `integrationReview`,
+`taskProgress`, `laneFanout`).
+
 The archived parent change (`2026-10-26-add-portable-dsh-setup`) tasks record 32/35. Open owner
 follow-ups: 7.1 first published release/tag verification, 7.4 second release update visibility, 8.1
 clean-machine rehearsal. (7.2 dogfood verification, 7.3 commit-pinned throwaway-profile install, and

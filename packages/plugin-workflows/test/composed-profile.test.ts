@@ -295,8 +295,37 @@ describe('composed Release A profile', () => {
       taskProgress: false,
       laneFanout: false,
     })
+    // The rules and target stay configured for rollback; every switch above is off.
+    expect(delegation.targets).toMatchObject({
+      codex: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
+    })
+    expect(delegation.rules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'spec-review', when: 'spec-ready' }),
+        expect.objectContaining({ id: 'task-review', when: 'spec-task-ready' }),
+        expect.objectContaining({ id: 'integration-review', when: 'implementation-complete' }),
+        expect.objectContaining({ id: 'lane-fanout', when: 'lane-assignment' }),
+        expect.objectContaining({
+          id: 'implementation-work',
+          when: 'implementation-work',
+          contract: 'note',
+        }),
+      ]),
+    )
     expect(workflows.reviewers).toMatchObject({
       codex: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
+    })
+    expect(workflows).toMatchObject({
+      reviewQueue: {
+        enabled: true,
+        concurrency: 2,
+        maxQueued: 16,
+        maxAttempts: 3,
+        baseDelayMs: 5000,
+        maxDelayMs: 60000,
+        waitTimeoutMs: 300000,
+      },
+      timeouts: { review: 600000 },
     })
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const change = join(workspace, 'openspec', 'changes', CHANGE)

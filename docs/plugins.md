@@ -472,8 +472,12 @@ ordered step table as the fallback, its trigger binding, its runs and its evalua
 the session's all-runs feed with one run's detail page. The design page is a workbench: a left rail
 with the workflow list and the engine's building blocks, the editor canvas, the inspector, and a
 secondary `Diagnostics` disclosure for the trigger catalog and the receipts. Neither surface steers,
-injects, blocks, or runs a workflow. **Breaking:** the `Journal` segment is removed; its content moved
-to the workflow page's evaluation history.
+injects, blocks, or runs a workflow. The overview renders each engine-owned gate (work-progress, lane
+assignment, goal completion, and archive) as a read-only contract card with its trigger condition,
+evidence, record path, and steer payload, and the workflow page renders each review step's contract
+card with its instruction, scope and phase, digest scope, verdict schema, reuse policy, and record
+path; neither kind is drawn as a definition. **Breaking:** the `Journal` segment is removed; its
+content moved to the workflow page's evaluation history.
 
 The Host records `agent/pre-step`, `agent/turn-stopping`, `tools/result`, `subagent/start` and
 `subagent/end` events as one bounded JSONL record per event under
@@ -536,29 +540,42 @@ together.
 
 The same bundle also hosts the obligation engine added by `add-workflow-obligations`. It stores JSON
 definitions, runs them from a durable run store, evaluates deterministic triggers through the same
-journal, executes `main`, `subagent`, `tool`, `human`, `branch` and `loop` steps, verifies file, record,
-tool, check, human and recursive `all` evidence, and enforces the turn-close and pre-execute gates.
-Every action comes from an owned or explicitly deferred definition step; shadow triggers never steer.
-A local definition or override is active only with a host-signed approval in
-`.dsh/workflows/approved.json`; the host key is held outside `.dsh` and gives tamper-evidence against
-model-mediated writes, while a hostile same-user shell is outside the threat model. Completed intake
-and adoption write authenticated receipts under `.dsh/workflows/receipts/`. The engine ships
-`task-review`, `retro`, and `verify` (active, `own`, with their legacy source recorded); the OpenSpec
-plugin contributes `change-intake` (active, see
+journal, executes `main`, `subagent`, `tool`, `human`, `branch`, `loop` and `review` steps, verifies
+file, record, tool, check, human and recursive `all` evidence, and enforces the turn-close and
+pre-execute gates. A trigger may declare a bounded JSONLogic `condition` over the event, the change's
+tasks and lanes, the current records and digests, and the session's involvement; it is evaluated at
+every turn close and a false condition starts no run. Every action comes from an owned or explicitly
+deferred definition step; shadow triggers never steer. A local definition or override is active only
+with a host-signed approval in `.dsh/workflows/approved.json`; the host key is held outside `.dsh` and
+gives tamper-evidence against model-mediated writes, while a hostile same-user shell is outside the
+threat model. Completed intake and adoption write authenticated receipts under
+`.dsh/workflows/receipts/`. The engine ships `spec-review`, `task-review`, `integration-review`,
+`retro`, and `verify` (active, `own`, with their legacy source recorded); the three review definitions
+run on the `review` executor, and the OpenSpec plugin contributes `change-intake` (active, see
 [OpenSpec workflow contribution](#openspec-workflow-contribution)).
-The `workflows` tool exposes list, start, resume, status, evidence, cancel and adopt; `adopt` asks the
-user in the question UI and writes the host-authenticated receipt only after a yes. The `/workflows`
-command family covers run, resume, install, adopt and status; `/workflows` itself names the Workflows
-tab as the session entry and the `Workflow design` card as the editor entry and opens nothing. The
-design page holds the definition list, the editor, the trigger catalog with its last evaluation and the
-receipts; the session tab keeps the run detail with step state, evidence, failure class and violations.
-The bundle also contributes a bounded `workflows-active-runs` system-prompt context (at most five lines,
-and no section when none). The engine is inert without its host
-services. Its configuration includes `checkpointApplicability` (`minToolCalls` default 4,
-`requireWrite` default true) for the deferred `retro` definition; the operator must mirror the installed
-`goal-continuity` checkpoint settings because one plugin row cannot read another's config. The setup
-default row is `- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates,
-intake/adoption flow and migration are documented in [workflows](workflows.md).
+The review executor resolves a target from the workflows row's `reviewers` map, starts the provider
+with the configured model and effort, accepts one fenced JSON verdict that echoes the prepared digest,
+and writes the local record and the portable task approval under `.dsh/workflows/records/` and
+`openspec/changes/<change>/reviews/` (see [workflows](workflows.md#review-executor)). The engine also
+owns the work-progress, lane-assignment, goal-complete, and archive gates, each rendered as a
+read-only contract card in the Workflows overview rather than a definition. The progress, lane, and
+archive gates are active only while their per-signal legacy switch is false, and the goal-complete
+guard is engine-owned in every combination; one switch flip restores the matching retained delegation
+steer for rollback. The `workflows` tool exposes list, start, resume, status, evidence, cancel, adopt and note;
+`adopt` asks the user in the question UI and writes the host-authenticated receipt only after a yes.
+The `/workflows` command family covers run, resume, install, adopt and status; `/workflows` itself
+names the Workflows tab as the session entry and the `Workflow design` card as the editor entry and
+opens nothing. The design page holds the definition list, the editor, the trigger catalog with its
+last evaluation and the receipts; the session tab keeps the run detail with step state, evidence,
+failure class and violations, and renders the engine gate cards and each review step's contract card.
+The bundle also contributes a bounded `workflows-active-runs` system-prompt context (at most five
+lines, and no section when none). The engine is inert without its host services. Its configuration
+includes `checkpointApplicability` (`minToolCalls` default 4, `requireWrite` default true) for the
+`retro` definition — the operator must mirror the installed `goal-continuity` checkpoint settings
+because one plugin row cannot read another's config — plus `reviewers` (the shipped `codex`
+model/effort), `reviewQueue`, and `timeouts.review` (default 600000 ms). The setup default row is
+`- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates, intake/adoption
+flow, per-signal switches, and the Release B plan are documented in [workflows](workflows.md).
 
 ### Editor and Workflow design page
 
