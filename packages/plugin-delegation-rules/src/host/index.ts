@@ -3550,6 +3550,8 @@ export interface WorkflowsReviewCompat {
     change: string
     task?: string
     section?: string
+    context?: string
+    objective?: string
   }): Promise<string>
   note(input: {
     change: string
@@ -4043,6 +4045,8 @@ class DelegationEngine {
           change: opened.change.name,
           ...(args.task === undefined ? {} : { task: args.task }),
           ...(args.section === undefined ? {} : { section: args.section }),
+          ...(args.context === undefined ? {} : { context: args.context }),
+          ...(args.objective === undefined ? {} : { objective: args.objective }),
         })
       }
     }

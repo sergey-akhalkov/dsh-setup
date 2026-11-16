@@ -589,6 +589,9 @@ export interface ReviewPromptInput {
   readonly digest: string
   readonly snapshot: boolean
   readonly extra?: string
+  /** Caller-supplied facts carried by the delegate alias into this review. */
+  readonly context?: string
+  readonly objective?: string
 }
 
 /** Render the bundled instruction with the review's digest-bound context. */
@@ -631,8 +634,12 @@ export function renderReviewPrompt(input: ReviewPromptInput): string {
       ? '- Reviewed state: a frozen worktree snapshot taken when the review started; later writes are not in it.'
       : '- Reviewed state: the live worktree; a changed input discards the verdict.',
   )
-  if (input.extra !== undefined && input.extra.trim() !== '') {
-    lines.push('', '## Context', '', input.extra.trim())
+  const contextParts = [input.extra, input.context]
+    .map((value) => value?.trim() ?? '')
+    .filter((value) => value !== '')
+  if (contextParts.length > 0) lines.push('', '## Context', '', contextParts.join('\n\n'))
+  if (input.objective !== undefined && input.objective.trim() !== '') {
+    lines.push('', '## Objective', '', input.objective.trim())
   }
   lines.push(
     '',
@@ -845,6 +852,9 @@ export interface ReviewRunInput {
   readonly baseline?: ReviewRecordBaseline
   /** True once the run settled completed-soft; a late verdict is discarded. */
   readonly cancelled?: () => boolean
+  /** The delegate alias's caller payload, persisted in the run context. */
+  readonly callerContext?: string
+  readonly callerObjective?: string
   /** Test seams; production writes the real stores. */
   readonly writePortable?: typeof writePortableApproval
   readonly writeLocal?: typeof writeLocalReviewRecord
@@ -1238,6 +1248,8 @@ function prepareAttempt(
     digest: record.digest,
     snapshot: input.prepared.reviewCwd !== undefined,
     ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
+    ...(input.callerContext === undefined ? {} : { context: input.callerContext }),
+    ...(input.callerObjective === undefined ? {} : { objective: input.callerObjective }),
   }
   try {
     const prompt = (input.renderPrompt ?? renderReviewPrompt)(promptInput)

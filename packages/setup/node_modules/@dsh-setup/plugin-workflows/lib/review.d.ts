@@ -178,6 +178,9 @@ export interface ReviewPromptInput {
     readonly digest: string;
     readonly snapshot: boolean;
     readonly extra?: string;
+    /** Caller-supplied facts carried by the delegate alias into this review. */
+    readonly context?: string;
+    readonly objective?: string;
 }
 /** Render the bundled instruction with the review's digest-bound context. */
 export declare function renderReviewPrompt(input: ReviewPromptInput): string;
@@ -243,6 +246,9 @@ export interface ReviewRunInput {
     readonly baseline?: ReviewRecordBaseline;
     /** True once the run settled completed-soft; a late verdict is discarded. */
     readonly cancelled?: () => boolean;
+    /** The delegate alias's caller payload, persisted in the run context. */
+    readonly callerContext?: string;
+    readonly callerObjective?: string;
     /** Test seams; production writes the real stores. */
     readonly writePortable?: typeof writePortableApproval;
     readonly writeLocal?: typeof writeLocalReviewRecord;

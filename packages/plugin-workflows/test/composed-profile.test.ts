@@ -65,6 +65,10 @@ const CHANGE = 'auth'
 const TASK_TEXT = 'Review the composed profile'
 const TASK_ID = taskIdOf(TASK_TEXT)
 const NATIVE_HEADER = '## Native review'
+const OWNED_CONTEXT = 'owned failure output: the retry test failed'
+const OWNED_OBJECTIVE = 'owned objective: prove the native review keeps the caller payload'
+const LEGACY_CONTEXT = 'legacy failure output: the retry test failed'
+const LEGACY_OBJECTIVE = 'legacy objective: prove the legacy review keeps the caller payload'
 const REPO = join(import.meta.dirname, '..', '..', '..')
 const TEMP_DIRECTORIES: string[] = []
 
@@ -606,6 +610,103 @@ describe('deprecated aliases route by effective owner', () => {
         (run) => run.definition.id === 'task-review',
       ),
     ).toHaveLength(0)
+  })
+
+  it('carries the caller context and objective into the owned reviewer prompt', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(workspace)
+    applyDelegation(host.ctx as never, delegation as never)
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+
+    const started = toolText(
+      await host.callTool('delegate', {
+        rule: 'task-review',
+        change: CHANGE,
+        task: TASK_ID,
+        context: OWNED_CONTEXT,
+        objective: OWNED_OBJECTIVE,
+      }),
+    )
+    expect(started).toMatch(/review started/u)
+    // The offered fields persist on the run the next turn advances.
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const runs = (await listAuthenticatedRuns(workspace, auth)).filter(
+      (run) => run.definition.id === 'task-review',
+    )
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.context).toMatchObject({
+      name: CHANGE,
+      taskId: TASK_ID,
+      context: OWNED_CONTEXT,
+      objective: OWNED_OBJECTIVE,
+    })
+
+    await closeTurn(host, 2)
+    await waitFor(() =>
+      host.activations.some(
+        (activation) =>
+          activation.rule === 'task-review' && activation.prompt.includes(NATIVE_HEADER),
+      ),
+    )
+    const prompt =
+      host.activations.find(
+        (activation) =>
+          activation.rule === 'task-review' && activation.prompt.includes(NATIVE_HEADER),
+      )?.prompt ?? ''
+    expect(prompt).toContain('## Context')
+    expect(prompt).toContain(OWNED_CONTEXT)
+    expect(prompt).toContain('## Objective')
+    expect(prompt).toContain(OWNED_OBJECTIVE)
+    const recordPath = join(
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      CHANGE,
+      'tasks',
+      `${TASK_ID}.json`,
+    )
+    await waitFor(async () => (await readJson(join(workspace, recordPath)))?.verdict === 'PASS')
+  })
+
+  it('carries the caller context and objective into the legacy reviewer prompt', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(workspace)
+    applyDelegation(
+      host.ctx as never,
+      {
+        ...delegation,
+        gates: { ...(delegation.gates as Record<string, boolean>), workflowOwned: true },
+      } as never,
+    )
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+
+    const before = host.activations.length
+    const started = toolText(
+      await host.callTool('delegate', {
+        rule: 'task-review',
+        change: CHANGE,
+        task: TASK_ID,
+        context: LEGACY_CONTEXT,
+        objective: LEGACY_OBJECTIVE,
+      }),
+    )
+    expect(started).toMatch(/review started|run:/u)
+    await waitFor(() => host.activations.length > before)
+    const prompt = host.activations.at(-1)?.prompt ?? ''
+    expect(prompt).not.toContain(NATIVE_HEADER)
+    expect(prompt).toContain('## Context')
+    expect(prompt).toContain(LEGACY_CONTEXT)
+    expect(prompt).toContain('## Objective')
+    expect(prompt).toContain(LEGACY_OBJECTIVE)
   })
 
   it('returns the lane the legacy lane gate needs when progress is owned and the lane signal is legacy', async () => {

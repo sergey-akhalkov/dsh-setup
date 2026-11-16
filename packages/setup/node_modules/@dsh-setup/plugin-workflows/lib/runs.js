@@ -562,3 +562,48 @@ export function boundContext(context, maxBytes = MAX_CONTEXT_BYTES) {
     }
     return candidate;
 }
+const PROMPT_TRUNCATED = ' ... (truncated to fit the run context)';
+/** Normalize one caller prompt field; an empty value is not payload. */
+function promptText(value) {
+    return value === undefined || value.trim() === '' ? undefined : { text: value, truncated: false };
+}
+function halved(text) {
+    if (text.text.length <= 1)
+        return undefined;
+    return { text: text.text.slice(0, Math.floor(text.text.length / 2)).trimEnd(), truncated: true };
+}
+function promptValue(text) {
+    if (text === undefined)
+        return undefined;
+    return text.truncated ? `${text.text}${PROMPT_TRUNCATED}` : text.text;
+}
+/**
+ * Build a run context with the delegate alias's optional caller payload. When
+ * that payload would overflow the persisted cap it shrinks with a visible
+ * marker; the run's identity keys are never cut, so the review still resolves.
+ */
+export function boundedPromptContext(base, context, objective) {
+    let callerContext = promptText(context);
+    let callerObjective = promptText(objective);
+    const build = () => ({
+        ...base,
+        ...(callerContext === undefined ? {} : { context: promptValue(callerContext) }),
+        ...(callerObjective === undefined ? {} : { objective: promptValue(callerObjective) }),
+    });
+    while ((callerContext !== undefined || callerObjective !== undefined) &&
+        Buffer.byteLength(JSON.stringify(build()), 'utf8') > MAX_CONTEXT_BYTES) {
+        // Shrink the longer payload first so a short objective survives a long
+        // failure log; both are prompt-only and either may disappear entirely.
+        if (callerObjective !== undefined &&
+            (callerContext === undefined || callerObjective.text.length > callerContext.text.length)) {
+            callerObjective = halved(callerObjective);
+        }
+        else if (callerContext !== undefined) {
+            callerContext = halved(callerContext);
+        }
+        else if (callerObjective !== undefined) {
+            callerObjective = halved(callerObjective);
+        }
+    }
+    return build();
+}

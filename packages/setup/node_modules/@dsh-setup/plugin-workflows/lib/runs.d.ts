@@ -227,3 +227,9 @@ export declare function activeStep(run: WorkflowRun): RunStep | undefined;
 export declare function requestStep(run: WorkflowRun, stepId: string, now?: number): WorkflowRun;
 /** A bounded copy of a run context: an oversized value keeps its keys and a marker. */
 export declare function boundContext(context: Readonly<Record<string, unknown>>, maxBytes?: number): Readonly<Record<string, unknown>>;
+/**
+ * Build a run context with the delegate alias's optional caller payload. When
+ * that payload would overflow the persisted cap it shrinks with a visible
+ * marker; the run's identity keys are never cut, so the review still resolves.
+ */
+export declare function boundedPromptContext(base: Readonly<Record<string, unknown>>, context: string | undefined, objective: string | undefined): Readonly<Record<string, unknown>>;

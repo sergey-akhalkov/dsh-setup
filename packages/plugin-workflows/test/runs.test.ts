@@ -34,6 +34,7 @@ import {
   addViolation,
   assertRunSession,
   boundContext,
+  boundedPromptContext,
   createRun,
   DAY_MS,
   hasTamperedRuns,
@@ -602,6 +603,26 @@ it('keeps a truncated context under the byte cap even for oversized keys', () =>
   expect(Buffer.byteLength(JSON.stringify(bounded), 'utf8')).toBeLessThanOrEqual(200)
   const multibyte = boundContext({ ['é'.repeat(500)]: 'ü'.repeat(500) }, 200)
   expect(Buffer.byteLength(JSON.stringify(multibyte), 'utf8')).toBeLessThanOrEqual(200)
+})
+
+it('keeps the alias prompt payload inside the run context cap without cutting identity', () => {
+  const base = { name: 'auth', taskId: 'a1b2c3d4e5f60718' }
+  const long = 'x'.repeat(10_000)
+  const bounded = boundedPromptContext(base, long, 'the objective')
+  expect(bounded.name).toBe('auth')
+  expect(bounded.taskId).toBe('a1b2c3d4e5f60718')
+  expect(Buffer.byteLength(JSON.stringify(bounded), 'utf8')).toBeLessThanOrEqual(4096)
+  // The short objective survives; the long context shrinks with a marker.
+  expect(bounded.objective).toBe('the objective')
+  expect(String(bounded.context)).toContain('truncated to fit the run context')
+  expect(String(bounded.context).length).toBeLessThan(long.length)
+  // A payload that fits is persisted unchanged; blank values are not payload.
+  expect(boundedPromptContext(base, 'failure output', 'goal')).toEqual({
+    ...base,
+    context: 'failure output',
+    objective: 'goal',
+  })
+  expect(boundedPromptContext(base, '  ', '')).toEqual(base)
 })
 
 it('refuses a second request while a requested step is blocked', () => {

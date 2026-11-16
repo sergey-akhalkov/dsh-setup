@@ -456,8 +456,13 @@ export function renderReviewPrompt(input) {
     lines.push(input.snapshot
         ? '- Reviewed state: a frozen worktree snapshot taken when the review started; later writes are not in it.'
         : '- Reviewed state: the live worktree; a changed input discards the verdict.');
-    if (input.extra !== undefined && input.extra.trim() !== '') {
-        lines.push('', '## Context', '', input.extra.trim());
+    const contextParts = [input.extra, input.context]
+        .map((value) => value?.trim() ?? '')
+        .filter((value) => value !== '');
+    if (contextParts.length > 0)
+        lines.push('', '## Context', '', contextParts.join('\n\n'));
+    if (input.objective !== undefined && input.objective.trim() !== '') {
+        lines.push('', '## Objective', '', input.objective.trim());
     }
     lines.push('', 'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with `class`, `title`, `evidence`, and `fix`. Prose outside that block is ignored.');
     return lines.join('\n');
@@ -863,6 +868,8 @@ function prepareAttempt(input, now) {
         digest: record.digest,
         snapshot: input.prepared.reviewCwd !== undefined,
         ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
+        ...(input.callerContext === undefined ? {} : { context: input.callerContext }),
+        ...(input.callerObjective === undefined ? {} : { objective: input.callerObjective }),
     };
     try {
         const prompt = (input.renderPrompt ?? renderReviewPrompt)(promptInput);

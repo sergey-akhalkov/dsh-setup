@@ -3080,6 +3080,8 @@ class DelegationEngine {
                     change: opened.change.name,
                     ...(args.task === undefined ? {} : { task: args.task }),
                     ...(args.section === undefined ? {} : { section: args.section }),
+                    ...(args.context === undefined ? {} : { context: args.context }),
+                    ...(args.objective === undefined ? {} : { objective: args.objective }),
                 });
             }
         }

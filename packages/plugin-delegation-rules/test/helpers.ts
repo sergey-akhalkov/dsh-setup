@@ -215,6 +215,8 @@ export interface CompatDelegateCall {
   change: string
   task?: string
   section?: string
+  context?: string
+  objective?: string
 }
 
 /** One recorded workflows-compat note call. */

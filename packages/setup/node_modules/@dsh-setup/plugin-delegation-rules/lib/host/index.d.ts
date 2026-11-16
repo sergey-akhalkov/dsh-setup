@@ -284,6 +284,8 @@ export interface WorkflowsReviewCompat {
         change: string;
         task?: string;
         section?: string;
+        context?: string;
+        objective?: string;
     }): Promise<string>;
     note(input: {
         change: string;

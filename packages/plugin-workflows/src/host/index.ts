@@ -130,6 +130,7 @@ import {
 } from './review-snapshot.js'
 import {
   addViolation,
+  boundedPromptContext,
   completeNotApplicable,
   createRun,
   DEFAULT_MAX_RUNS,
@@ -3012,6 +3013,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const reviewRunner = hostSubagentRunner(agent)
         const change = reviewRun.context.name
         if (typeof change !== 'string' || !CHANGE_NAME.test(change)) return undefined
+        // The delegate alias persists its caller payload on the run context, so
+        // a review started on a later turn still carries the supplied facts.
+        const callerContext = reviewRun.context.context
+        const callerObjective = reviewRun.context.objective
         const initialSpecDigest = await currentSpecDigest(workspace, change)
         if (initialSpecDigest === undefined) {
           return settleStep(reviewRun, step.id, 'failed', {
@@ -3402,6 +3407,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           context,
           change,
           ...(task === undefined ? {} : { task }),
+          ...(typeof callerContext === 'string' ? { callerContext } : {}),
+          ...(typeof callerObjective === 'string' ? { callerObjective } : {}),
           prepared: current.prepared,
           timeoutMs: reviewTimeoutMs,
           session: sessionId,
@@ -4926,6 +4933,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     readonly change: string
     readonly task?: string
     readonly section?: string
+    readonly context?: string
+    readonly objective?: string
   }): Promise<string> => {
     const call = compatCallContext()
     const definition = await compatDefinition(call.workspace, input.rule)
@@ -4961,18 +4970,22 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       call.session,
       auth,
       definition,
-      section === undefined
-        ? {
-            name: input.change,
-            ...(task === undefined ? {} : { taskId: task.id }),
-          }
-        : {
-            name: input.change,
-            taskId: section.recordId,
-            section: section.section.key,
-            sectionTitle: section.section.title,
-            taskIds: section.section.covered.map((entry) => entry.id),
-          },
+      boundedPromptContext(
+        section === undefined
+          ? {
+              name: input.change,
+              ...(task === undefined ? {} : { taskId: task.id }),
+            }
+          : {
+              name: input.change,
+              taskId: section.recordId,
+              section: section.section.key,
+              sectionTitle: section.section.title,
+              taskIds: section.section.covered.map((entry) => entry.id),
+            },
+        input.context,
+        input.objective,
+      ),
     )
     void refreshPromptRuns(call.workspace)
     return section === undefined

@@ -33,7 +33,7 @@ import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
 import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, sectionReviewDigest, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
-import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
+import { addViolation, boundedPromptContext, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
@@ -2438,6 +2438,10 @@ export function apply(ctx, config = {}) {
                 const change = reviewRun.context.name;
                 if (typeof change !== 'string' || !CHANGE_NAME.test(change))
                     return undefined;
+                // The delegate alias persists its caller payload on the run context, so
+                // a review started on a later turn still carries the supplied facts.
+                const callerContext = reviewRun.context.context;
+                const callerObjective = reviewRun.context.objective;
                 const initialSpecDigest = await currentSpecDigest(workspace, change);
                 if (initialSpecDigest === undefined) {
                     return settleStep(reviewRun, step.id, 'failed', {
@@ -2786,6 +2790,8 @@ export function apply(ctx, config = {}) {
                     context,
                     change,
                     ...(task === undefined ? {} : { task }),
+                    ...(typeof callerContext === 'string' ? { callerContext } : {}),
+                    ...(typeof callerObjective === 'string' ? { callerObjective } : {}),
                     prepared: current.prepared,
                     timeoutMs: reviewTimeoutMs,
                     session: sessionId,
@@ -4096,7 +4102,7 @@ export function apply(ctx, config = {}) {
         if (pending !== undefined) {
             return `rule "${input.rule}" review already pending\nrun: ${pending.id}`;
         }
-        const run = await startRunFor(call.workspace, call.session, auth, definition, section === undefined
+        const run = await startRunFor(call.workspace, call.session, auth, definition, boundedPromptContext(section === undefined
             ? {
                 name: input.change,
                 ...(task === undefined ? {} : { taskId: task.id }),
@@ -4107,7 +4113,7 @@ export function apply(ctx, config = {}) {
                 section: section.section.key,
                 sectionTitle: section.section.title,
                 taskIds: section.section.covered.map((entry) => entry.id),
-            });
+            }, input.context, input.objective));
         void refreshPromptRuns(call.workspace);
         return section === undefined
             ? `rule "${input.rule}" review started\nrun: ${run.id}`
