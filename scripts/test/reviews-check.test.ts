@@ -290,6 +290,7 @@ describe('reviews:check --change', () => {
       'add-goal-block-review',
       'adopt-agent-best-practices',
       'fix-delegation-review-build-inputs',
+      'move-review-runtime-into-workflows',
     ])
   })
 

@@ -603,7 +603,7 @@ describe('condition context path boundary', () => {
     const root = join(fileURLToPath(new URL('..', import.meta.url)), '..', '..')
     const context = await buildConditionContext({
       workspace: root,
-      change: 'move-review-runtime-into-workflows',
+      change: 'retire-delegation-rules',
       event: { kind: 'turn.stopping' },
     })
     expect(context.change.tasks.items.length).toBeGreaterThan(0)
