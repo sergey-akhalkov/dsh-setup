@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveOwnership, SWITCH_BY_SIGNAL, } from './definitions.js';
-import { sectionRecordId, taskSections } from './tasks.js';
+import { taskSections } from './tasks.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -577,33 +577,54 @@ export function reviewerBinding(workspace) {
         taskRule: raw.taskRule,
     };
 }
-/** Whether one open run's recorded identity covers every missing task of the unit. */
-function runCoversUnit(run, unit) {
+/** One task number list bounded so the steer's action never falls off the end. */
+const MAX_UNIT_NUMBERS = 20;
+function boundedNumbers(tasks) {
+    const shown = tasks
+        .slice(0, MAX_UNIT_NUMBERS)
+        .map((task) => task.number)
+        .join(', ');
+    return tasks.length <= MAX_UNIT_NUMBERS
+        ? shown
+        : `${shown}, and ${String(tasks.length - MAX_UNIT_NUMBERS)} more`;
+}
+/** The task ids one open run's recorded identity covers. */
+function runCoveredIds(run) {
     const context = run.context;
     const covered = Array.isArray(context.taskIds)
         ? context.taskIds.filter((entry) => typeof entry === 'string')
         : [];
-    if (unit.section !== undefined) {
-        return (context.section === unit.section.key &&
-            context.sectionTitle === unit.section.title &&
-            context.taskId === sectionRecordId(unit.section.key) &&
-            covered.length === unit.covered.length &&
-            unit.covered.every((task) => covered.includes(task.id)));
+    if (typeof context.taskId === 'string' && !covered.includes(context.taskId)) {
+        covered.push(context.taskId);
     }
-    return unit.missing.every((task) => context.taskId === task.id || covered.includes(task.id));
+    return covered;
+}
+/** The open runs of this change that cover at least one missing task of the unit. */
+function pendingRunsOf(change, unit, openRuns) {
+    return openRuns.filter((run) => run.change === change && unit.missing.some((task) => runCoveredIds(run).includes(task.id)));
 }
 /**
  * The one-line review unit: the section key and the missing task numbers (or the
- * single task) and the start action that covers them — or the open run that
- * already does. Shared by the turn-close steer and the status summary.
+ * single task) and the start action that covers them — or the open runs that
+ * already cover them (or part of them). Shared by the turn-close steer and the
+ * status summary.
  */
 export function reviewUnitText(change, unit, options = {}) {
     const rule = options.rule ?? 'task-review';
-    const numbers = (tasks) => tasks.map((task) => task.number).join(', ');
-    const pending = (options.openRuns ?? []).find((run) => run.change === change && runCoversUnit(run, unit));
-    const action = (selector) => pending === undefined
-        ? `; start it with delegate(rule: "${rule}", change: "${change}", ${selector})`
-        : `; the open review run "${pending.id}" covers it, so continue that run instead of a new start`;
+    const pending = pendingRunsOf(change, unit, options.openRuns ?? []);
+    const uncovered = unit.missing.filter((task) => !pending.some((run) => runCoveredIds(run).includes(task.id)));
+    const names = pending.map((run) => `"${run.id}"`).join(', ');
+    const action = (selector) => {
+        if (pending.length === 0) {
+            return `; start it with delegate(rule: "${rule}", change: "${change}", ${selector})`;
+        }
+        const reference = pending.length === 1
+            ? `the open review run ${names} covers ${uncovered.length === 0 ? 'it' : 'part of it'}`
+            : `the open review runs ${names} cover ${uncovered.length === 0 ? 'it' : 'part of it'}`;
+        return uncovered.length === 0
+            ? `; ${reference}, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`
+            : `; ${reference}, so start only the uncovered tasks with delegate(rule: "${rule}", change: "${change}", task: "<task id>")`;
+    };
     const section = unit.section;
     if (section === undefined) {
         const task = unit.missing[0];
@@ -611,7 +632,7 @@ export function reviewUnitText(change, unit, options = {}) {
             return `change "${change}" has no outstanding review unit`;
         return `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS/ERROR record${action(`task: "${task.id}"`)}`;
     }
-    return `section "${section.key}" (${section.title}) is one review unit covering checked tasks ${numbers(unit.covered)}; missing a ${rule} PASS/ERROR record: ${numbers(unit.missing)}${action(`section: "${section.key}"`)}`;
+    return `section "${section.key}" (${section.title}) is one review unit covering checked tasks ${boundedNumbers(unit.covered)}; missing a ${rule} PASS/ERROR record: ${boundedNumbers(unit.missing)}${action(`section: "${section.key}"`)}`;
 }
 /**
  * The portable completion/archive coverage: every checked task needs a portable
@@ -669,9 +690,14 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review', opti
                 mismatch.push(`target model "${String(target.model)}"`);
             }
         }
-        return mismatch.length === 0
-            ? undefined
-            : `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`;
+        if (mismatch.length === 0)
+            return undefined;
+        const unitTask = { ...task, checked: true };
+        const pending = pendingRunsOf(change, { covered: [unitTask], missing: [unitTask] }, options.openRuns ?? []);
+        const action = pending.length === 0
+            ? `run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`
+            : `the open review run${pending.length === 1 ? '' : 's'} ${pending.map((run) => `"${run.id}"`).join(', ')} cover${pending.length === 1 ? 's' : ''} it, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`;
+        return `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); ${action}`;
     };
     const taskGaps = checkedTaskLines(markdown).map((task) => ({ task, gap: taskGap(task) }));
     const missing = new Set(taskGaps.filter((entry) => entry.gap !== undefined).map((e) => e.task.id));

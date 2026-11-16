@@ -1095,6 +1095,67 @@ describe('the review unit steer', () => {
     expect(completion?.text).not.toContain('delegate(')
   })
 
+  it('points a single-task completion gap at the pending run that covers it', async () => {
+    const root = await workspace('# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n')
+    const completion = taskReviewCompletion(root, 'change-a', {
+      openRuns: [
+        {
+          id: 'run-1',
+          change: 'change-a',
+          context: { name: 'change-a', taskId: taskIdOf('Engine task') },
+        },
+      ],
+    })
+    expect(completion?.ok).toBe(false)
+    expect(completion?.text).toContain('the open review run "run-1" covers it')
+    expect(completion?.text).not.toContain('delegate(')
+  })
+
+  it('points an expanded section at the pending runs that cover its tasks', async () => {
+    const root = await workspace(
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n- [x] 1.2 Engine follow-up\n- [x] 1.3 Engine cleanup\n\n## 2. Docs\n\n- [x] 2.1 Doc task\n',
+    )
+    await writePortablePass(root, taskIdOf('Doc task'))
+    const completion = taskReviewCompletion(root, 'change-a', {
+      openRuns: [
+        {
+          id: 'run-1',
+          change: 'change-a',
+          context: {
+            name: 'change-a',
+            taskId: sectionRecordId('1'),
+            section: '1',
+            sectionTitle: '1. Engine',
+            taskIds: [taskIdOf('Engine task'), taskIdOf('Engine follow-up')],
+          },
+        },
+        {
+          id: 'run-2',
+          change: 'change-a',
+          context: { name: 'change-a', taskId: taskIdOf('Engine cleanup') },
+        },
+      ],
+    })
+    expect(completion?.ok).toBe(false)
+    expect(completion?.text).toContain('the open review runs "run-1", "run-2" cover it')
+    expect(completion?.text).not.toContain('delegate(')
+  })
+
+  it('keeps the start action inside the bounded steer for a large section', async () => {
+    const tasks = Array.from(
+      { length: 40 },
+      (_, index) => `- [x] 1.${String(index + 1)} Task number ${String(index + 1)}`,
+    ).join('\n')
+    const root = await workspace(`# Tasks\n\n## 1. Engine\n\n${tasks}\n`)
+    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const first = units?.[0]
+    if (first === undefined) throw new Error('no review unit was selected')
+    const text = reviewUnitText('change-a', first)
+    expect(text).toContain('delegate(rule: "task-review", change: "change-a", section: "1")')
+    expect(text).toContain('and 20 more')
+    expect(text.length).toBeLessThan(600)
+  })
+
   it('carries the section unit into the completion steer', async () => {
     const root = await workspace(DONE_PLAN)
     await writeTaskPass(root, taskIdOf('Doc task'))

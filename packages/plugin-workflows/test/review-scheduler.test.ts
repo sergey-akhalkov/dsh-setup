@@ -376,6 +376,129 @@ describe('review scheduler', () => {
     scheduler.dispose()
   })
 
+  it('refuses a task review covered by an already-admitted section review', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const def = taskDefinition()
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const scheduler = new ReviewScheduler(
+      {
+        enabled: true,
+        concurrency: 2,
+        maxQueued: 2,
+        maxAttempts: 1,
+        baseDelayMs: 0,
+        maxDelayMs: 0,
+        waitTimeoutMs: 10_000,
+      },
+      {
+        persistRun: async (_workspace, run) => run,
+        discardSnapshot: async () => undefined,
+      },
+    )
+    const [firstTask, secondTask] = ['a'.repeat(16), 'b'.repeat(16)]
+    const section: SectionReview = {
+      key: '1',
+      title: '1. Engine',
+      recordId: sectionRecordId('1'),
+      covered: [
+        { id: firstTask, number: '1.1', text: 'First task' },
+        { id: secondTask, number: '1.2', text: 'Second task' },
+      ],
+      unchecked: [],
+    }
+    const sectionRun = createRun({
+      definition: def.id,
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace: root,
+      context: {
+        name: 'auth',
+        taskId: section.recordId,
+        section: section.key,
+        sectionTitle: section.title,
+        taskIds: section.covered.map((task) => task.id),
+      },
+      steps: ['review'],
+      now: 1_000,
+    })
+    const sectionDigest = sectionReviewDigest(section, digest)
+    const sectionAdmission = await scheduler.enqueue({
+      workspace: root,
+      run: sectionRun,
+      request: {
+        run: sectionRun,
+        definition: def,
+        step: def.steps[0] as Definition['steps'][number],
+        reviewer: reviewers(),
+        runner: {
+          run: async () => {
+            await gate
+            return { childId: 'child-1', completed: true, text: fencedPASS(sectionDigest) }
+          },
+        },
+        context: { workspace: root, values: { name: 'auth' } },
+        change: 'auth',
+        prepared: { specDigest: digest, section },
+        timeoutMs: 5_000,
+        session: 'session-1',
+      },
+      rule: 'task-review',
+      change: 'auth',
+      taskId: section.recordId,
+      digest: sectionDigest,
+    })
+    expect(sectionAdmission.kind).toBe('accepted')
+    // The section already reviews the first task; a per-task admission for it
+    // must not start a second reviewer.
+    const taskRun = createRun({
+      definition: def.id,
+      trigger: 'fs.change',
+      session: 'session-2',
+      workspace: root,
+      context: { name: 'auth', taskId: firstTask },
+      steps: ['review'],
+      now: 1_100,
+    })
+    const duplicate = await scheduler.enqueue({
+      workspace: root,
+      run: taskRun,
+      request: {
+        run: taskRun,
+        definition: def,
+        step: def.steps[0] as Definition['steps'][number],
+        reviewer: reviewers(),
+        runner: {
+          run: async () => {
+            await gate
+            return {
+              childId: 'child-2',
+              completed: true,
+              text: fencedPASS(reviewDigest({ scope: 'task', specDigest: digest })),
+            }
+          },
+        },
+        context: { workspace: root, values: { name: 'auth', taskId: firstTask } },
+        change: 'auth',
+        task: { id: firstTask, number: '1.1', text: 'First task' },
+        prepared: { specDigest: digest },
+        timeoutMs: 5_000,
+        session: 'session-1',
+      },
+      rule: 'task-review',
+      change: 'auth',
+      taskId: firstTask,
+      digest: reviewDigest({ scope: 'task', specDigest: digest }),
+    })
+    expect(duplicate).toEqual({ kind: 'duplicate', runId: sectionRun.id })
+    expect(scheduler.summary().active).toBe(1)
+    release?.()
+    await waitFor(async () => scheduler.summary().active === 0)
+    scheduler.dispose()
+  })
+
   it('cancels a queued review when its run is fenced before it starts', async () => {
     const { root, digest } = await reviewWorkspace()
     const def = definition()

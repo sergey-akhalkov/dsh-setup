@@ -131,8 +131,9 @@ export interface ReviewUnitTextOptions {
 }
 /**
  * The one-line review unit: the section key and the missing task numbers (or the
- * single task) and the start action that covers them — or the open run that
- * already does. Shared by the turn-close steer and the status summary.
+ * single task) and the start action that covers them — or the open runs that
+ * already cover them (or part of them). Shared by the turn-close steer and the
+ * status summary.
  */
 export declare function reviewUnitText(change: string, unit: ReviewUnit, options?: ReviewUnitTextOptions): string;
 export interface TaskReviewCoverage {

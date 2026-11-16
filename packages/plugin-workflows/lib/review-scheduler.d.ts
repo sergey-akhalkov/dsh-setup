@@ -104,9 +104,17 @@ export declare class ReviewScheduler {
     /**
      * A live review of this change that already covers one of these task ids: a
      * pending section run covers its recorded `taskIds`, a per-task run its own
-     * id. Used to keep a section and its covered task from being reviewed twice.
+     * id. A run with exactly this coverage is this unit's own successor and is
+     * left to the queue's identity check, so a retry is never blocked here.
      */
     liveCovering(workspace: string, change: string, taskIds: readonly string[]): WorkflowRun | undefined;
+    /**
+     * An already-admitted review whose coverage intersects this entry's under a
+     * different unit shape: a section and one of its covered tasks must not both
+     * admit. Same-shape admissions keep their own identity (a successor attempt
+     * for the same unit with a new digest is a legitimate new review).
+     */
+    private coveringEntry;
     constructor(limits: QueueLimits, host: ReviewSchedulerHost);
     /** The queue's start hook: start the target and report once it is live. */
     private start;

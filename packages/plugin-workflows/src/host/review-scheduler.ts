@@ -150,6 +150,13 @@ function queueFile(input: ScheduledReview): QueueRunFile {
   }
 }
 
+/** The task ids one review request's recorded coverage names. */
+function coverageOf(request: ReviewRunInput): string[] {
+  const section = request.prepared.section
+  if (section !== undefined) return section.covered.map((task) => task.id)
+  return request.task === undefined ? [] : [request.task.id]
+}
+
 /** The bounded wait for a child teardown; an unresponsive dispose is unconfirmed. */
 const MAX_TEARDOWN_WAIT_MS = 30_000
 
@@ -317,7 +324,8 @@ export class ReviewScheduler {
   /**
    * A live review of this change that already covers one of these task ids: a
    * pending section run covers its recorded `taskIds`, a per-task run its own
-   * id. Used to keep a section and its covered task from being reviewed twice.
+   * id. A run with exactly this coverage is this unit's own successor and is
+   * left to the queue's identity check, so a retry is never blocked here.
    */
   liveCovering(
     workspace: string,
@@ -327,14 +335,31 @@ export class ReviewScheduler {
     if (taskIds.length === 0) return undefined
     for (const entry of this.admitted.values()) {
       if (entry.workspace !== workspace || entry.change !== change) continue
-      const section = entry.request.prepared.section
-      const covered =
-        section === undefined
-          ? entry.request.task === undefined
-            ? []
-            : [entry.request.task.id]
-          : section.covered.map((task) => task.id)
+      const covered = coverageOf(entry.request)
+      if (covered.length === 0) continue
+      if (covered.length === taskIds.length && covered.every((id) => taskIds.includes(id))) {
+        continue
+      }
       if (covered.some((id) => taskIds.includes(id))) return entry.run
+    }
+    return undefined
+  }
+
+  /**
+   * An already-admitted review whose coverage intersects this entry's under a
+   * different unit shape: a section and one of its covered tasks must not both
+   * admit. Same-shape admissions keep their own identity (a successor attempt
+   * for the same unit with a new digest is a legitimate new review).
+   */
+  private coveringEntry(entry: ScheduledEntry): ScheduledEntry | undefined {
+    const covered = coverageOf(entry.request)
+    if (covered.length === 0) return undefined
+    const entrySection = entry.request.prepared.section !== undefined
+    for (const other of this.admitted.values()) {
+      if (other === entry) continue
+      if (other.workspace !== entry.workspace || other.change !== entry.change) continue
+      if ((other.request.prepared.section !== undefined) === entrySection) continue
+      if (coverageOf(other.request).some((id) => covered.includes(id))) return other
     }
     return undefined
   }
@@ -853,6 +878,14 @@ export class ReviewScheduler {
       ...(input.reprepare === undefined ? {} : { reprepare: input.reprepare }),
     }
     this.admitted.set(entry.run.id, entry)
+    // Reserve the coverage before awaiting the queue: a section and a task that
+    // it covers must not both admit when two sessions advance at once.
+    const overlapping = this.coveringEntry(entry)
+    if (overlapping !== undefined) {
+      this.admitted.delete(entry.run.id)
+      void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined)
+      return { kind: 'duplicate', runId: overlapping.run.id }
+    }
     let admission: Awaited<ReturnType<ReviewQueue<ScheduledEntry>['submit']>>
     try {
       admission = await this.queue.submit(entry)
