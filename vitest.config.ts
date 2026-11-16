@@ -5,8 +5,10 @@ export default defineConfig({
     include: ['packages/*/test/**/*.test.ts', 'scripts/test/**/*.test.ts'],
     environment: 'node',
     passWithNoTests: true,
-    testTimeout: 20_000,
-    hookTimeout: 20_000,
+    // The git-backed suites run real git worktrees; under a busy Windows host a
+    // 20 s cap is tight, so the cap matches the slower integration budget.
+    testTimeout: 40_000,
+    hookTimeout: 40_000,
     // CI runs on a 4-core runner; an uncapped pool on a many-core machine
     // oversubscribes the disk and the git-backed suites miss the 20 s timeout.
     maxWorkers: 4,
