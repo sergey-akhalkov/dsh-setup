@@ -1,17 +1,13 @@
-import { readFileSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parse } from 'yaml'
 import type { BundleConfig, GatesConfig } from '../src/index.js'
 import {
-  ALL_GATES,
+  composedReleaseAConfig,
   FakeReviewCompat,
   FakeSubagents,
   Harness,
   makeWorkspace,
-  releaseAConfig,
   runIdFrom,
   steerTexts,
   taskIdFor,
@@ -55,7 +51,9 @@ const COMPLETE_PLAN_DONE = COMPLETE_PLAN.replaceAll('- [ ]', '- [x]')
 
 function providers(): FakeSubagents {
   const agents = new FakeSubagents()
-  agents.addProvider('codex-subagent')
+  // The composed target carries model/effort, which a target rejects unless
+  // its provider advertises agentOptions support.
+  agents.addProvider('codex-subagent', { agentOptions: true })
   return agents
 }
 
@@ -102,7 +100,7 @@ async function tickLaneOne(root: string, dir: string, config: BundleConfig): Pro
 
 /** One turn that completes the whole task list with every Release A switch off. */
 async function completeWithEverySwitchOff(root: string, dir: string): Promise<void> {
-  const harness = new Harness({ cwd: root, config: releaseAConfig(), agents: providers() })
+  const harness = new Harness({ cwd: root, config: composedReleaseAConfig(), agents: providers() })
   await harness.preStep(1)
   harness.git.status = IMPLEMENTATION_STATUS
   harness.git.diff = IMPLEMENTATION_DIFF
@@ -118,10 +116,68 @@ async function completeWithEverySwitchOff(root: string, dir: string): Promise<vo
   expect(steer(harness)).toBe('')
 }
 
+describe('composed Release A configuration', () => {
+  it('carries every rollback rule, trigger, target, and the five off switches', () => {
+    const config = composedReleaseAConfig()
+    expect(config.gates).toEqual({
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: false,
+    })
+    const codex = config.targets?.codex
+    if (codex === undefined) throw new Error('the composed delegation row has no codex target')
+    expect(codex).toMatchObject({
+      provider: 'codex-subagent',
+      model: 'gpt-6-astra',
+      reasoningEffort: 'xhigh',
+    })
+    // Every rollback case below drives this parsed row, so a missing rule or a
+    // changed trigger fails here before a synthetic fixture can hide it.
+    const rules = config.rules ?? []
+    for (const expected of [
+      {
+        id: 'spec-review',
+        when: 'spec-ready',
+        to: 'codex',
+        contract: 'review',
+        phase: 'spec',
+        scope: 'whole',
+        gate: 'strict',
+        instruction: 'bundled:review-spec',
+      },
+      {
+        id: 'task-review',
+        when: 'spec-task-ready',
+        to: 'codex',
+        contract: 'review',
+        scope: 'task',
+        gate: 'strict',
+        instruction: 'bundled:review-task',
+      },
+      {
+        id: 'integration-review',
+        when: 'implementation-complete',
+        to: 'codex',
+        contract: 'review',
+        phase: 'integration',
+        scope: 'whole',
+        gate: 'soft',
+        instruction: 'bundled:review-integration',
+      },
+      { id: 'lane-fanout', when: 'lane-assignment', contract: 'note', gate: 'strict' },
+      { id: 'implementation-work', when: 'implementation-work', contract: 'note', gate: 'strict' },
+    ] as const) {
+      expect(rules).toContainEqual(expect.objectContaining(expected))
+    }
+  })
+})
+
 describe('rollback from the shipped Release A configuration', () => {
   it('restores the whole-spec steer and satisfies it through the legacy record', async () => {
     const { root, dir } = await workspaceWithPlan(COMPLETE_PLAN)
-    const off = new Harness({ cwd: root, config: releaseAConfig(), agents: providers() })
+    const off = new Harness({ cwd: root, config: composedReleaseAConfig(), agents: providers() })
     await off.preStep(1)
     await off.writeResult(
       join(dir, 'proposal.md'),
@@ -134,7 +190,7 @@ describe('rollback from the shipped Release A configuration', () => {
 
     const on = new Harness({
       cwd: root,
-      config: releaseAConfig({ gates: oneSwitchOn('specReview') }),
+      config: composedReleaseAConfig({ gates: oneSwitchOn('specReview') }),
       agents: providers(),
     })
     await on.preStep(1)
@@ -167,7 +223,7 @@ describe('rollback from the shipped Release A configuration', () => {
 
     const on = new Harness({
       cwd: root,
-      config: releaseAConfig({ gates: oneSwitchOn('workflowOwned') }),
+      config: composedReleaseAConfig({ gates: oneSwitchOn('workflowOwned') }),
       agents: providers(),
     })
     await on.preStep(1)
@@ -209,14 +265,14 @@ describe('rollback from the shipped Release A configuration', () => {
 
   it('restores the progress steer and its note satisfies the legacy gate', async () => {
     const { root, dir } = await workspaceWithPlan(LANE_PLAN)
-    await tickLaneOne(root, dir, releaseAConfig())
+    await tickLaneOne(root, dir, composedReleaseAConfig())
 
     // Mixed ownership, converse: the progress signal is legacy and the lane
     // gate is native. The printed task_progress call writes the legacy note
     // path the native lane gate reads.
     const on = new Harness({
       cwd: root,
-      config: releaseAConfig({ gates: oneSwitchOn('taskProgress') }),
+      config: composedReleaseAConfig({ gates: oneSwitchOn('taskProgress') }),
       agents: providers(),
     })
     await on.preStep(1)
@@ -252,7 +308,7 @@ describe('rollback from the shipped Release A configuration', () => {
 
     const on = new Harness({
       cwd: root,
-      config: releaseAConfig({ gates: oneSwitchOn('integrationReview') }),
+      config: composedReleaseAConfig({ gates: oneSwitchOn('integrationReview') }),
       agents: providers(),
     })
     await on.preStep(1)
@@ -282,11 +338,11 @@ describe('rollback from the shipped Release A configuration', () => {
 
   it('restores the lane-assignment steer and its serial note decides the lane', async () => {
     const { root, dir } = await workspaceWithPlan(LANE_PLAN)
-    await tickLaneOne(root, dir, releaseAConfig())
+    await tickLaneOne(root, dir, composedReleaseAConfig())
 
     const on = new Harness({
       cwd: root,
-      config: releaseAConfig({ gates: oneSwitchOn('laneFanout') }),
+      config: composedReleaseAConfig({ gates: oneSwitchOn('laneFanout') }),
       agents: providers(),
     })
     await on.preStep(1)
@@ -311,7 +367,7 @@ describe('rollback from the shipped Release A configuration', () => {
 
   it('satisfies a legacy lane gate from a progress-owned serial note', async () => {
     const { root, dir } = await workspaceWithPlan(LANE_PLAN)
-    await tickLaneOne(root, dir, releaseAConfig())
+    await tickLaneOne(root, dir, composedReleaseAConfig())
 
     // Mixed ownership: the progress signal is owned by the workflow and the
     // lane gate is legacy. The note's returned lane decides the legacy lane.
@@ -319,16 +375,7 @@ describe('rollback from the shipped Release A configuration', () => {
     compat.lane = '2. Docs (lane 2, owns `docs/**`)'
     const on = new Harness({
       cwd: root,
-      config: releaseAConfig({
-        gates: {
-          ...ALL_GATES,
-          workflowOwned: false,
-          specReview: false,
-          integrationReview: false,
-          taskProgress: false,
-          laneFanout: true,
-        },
-      }),
+      config: composedReleaseAConfig({ gates: oneSwitchOn('laneFanout') }),
       agents: providers(),
       services: { workflowsReviewCompat: compat },
     })
@@ -401,7 +448,7 @@ describe('rollback from the shipped Release A configuration', () => {
 
     const harness = new Harness({
       cwd: workspace.root,
-      config: releaseAConfig({ gates }),
+      config: composedReleaseAConfig({ gates }),
       agents: providers(),
     })
     await harness.preStep(1)
@@ -477,7 +524,7 @@ describe('rollback from the shipped Release A configuration', () => {
     const compat = new FakeReviewCompat()
     const on = new Harness({
       cwd: root,
-      config: releaseAConfig(),
+      config: composedReleaseAConfig(),
       agents: providers(),
       services: { workflowsReviewCompat: compat },
     })
@@ -505,7 +552,7 @@ describe('deprecated alias status', () => {
     const compat = new FakeReviewCompat()
     const harness = new Harness({
       cwd: workspace.root,
-      config: releaseAConfig(),
+      config: composedReleaseAConfig(),
       agents: providers(),
       services: { workflowsReviewCompat: compat },
     })
@@ -524,34 +571,11 @@ describe('deprecated alias status', () => {
     await writeChange(workspace.root, 'change-a', [])
     const harness = new Harness({
       cwd: workspace.root,
-      config: releaseAConfig(),
+      config: composedReleaseAConfig(),
       agents: providers(),
     })
     const text = await harness.toolText('delegation_status', {})
     expect(text).toContain('Delegation status')
     expect(text).not.toMatch(DEPRECATION)
-  })
-
-  it('matches the composed setup row to the Release A fixture', async () => {
-    const root = join(fileURLToPath(new URL('..', import.meta.url)), '..', '..')
-    const patch = parse(
-      readFileSync(join(root, 'packages', 'setup', 'cordis.patch.yml'), 'utf8'),
-    ) as Array<
-      | { insert?: Array<{ id?: string; config?: Record<string, unknown> }> }
-      | { id?: string; config?: Record<string, unknown> }
-    >
-    const rows = patch.flatMap((entry) => ('insert' in entry ? (entry.insert ?? []) : [entry]))
-    const row = rows
-      .filter((entry) => entry.id === 'dsh-setup-delegation-rules' && entry.config !== undefined)
-      .at(-1)
-    const config = releaseAConfig()
-    expect(row?.config?.gates).toEqual(config.gates)
-    const composedCodex = (row?.config as { targets?: { codex?: { provider?: string } } }).targets
-      ?.codex
-    expect(composedCodex?.provider).toBe(config.targets.codex.provider)
-    // The fixture must carry at least one rule for every composed trigger so a
-    // flip has a restored steer to print.
-    const triggers = (config.rules ?? []).map((rule) => rule.when)
-    for (const rule of row?.config?.rules ?? []) expect(triggers).toContain(rule.when)
   })
 })
