@@ -8,6 +8,6 @@
     "add-goal-block-review": "post-hoc integration review PASS after fixes on review-v0-12-0; no per-task review",
     "adopt-agent-best-practices": "post-hoc integration review PASS after fixes on review-v0-12-0; no per-task review",
     "fix-delegation-review-build-inputs": "post-hoc integration review PASS after fixes on review-v0-12-0; no per-task review",
-    "move-review-runtime-into-workflows": "5.4 live-view check accepted with a documented limitation: the four scenarios passed in the local composed acceptance harness and the throwaway web UI booted with the copied profile, but the throwaway profile needed interactive sign-in for its own view run; the portable task-review PASS record is 7c416e17cdcea47e and the owner accepted the remaining live-view confirmation."
+    "move-review-runtime-into-workflows": "5.4 live-view check accepted with a documented limitation: the four scenarios passed in the local composed acceptance harness and the throwaway web UI booted with the copied profile, but the throwaway profile needed interactive sign-in for its own view run; the portable task-review PASS record is 7c416e17cdcea47e, pnpm reviews:check reports 28/28 PASS, and the owner accepted the remaining live-view confirmation."
   }
 }
