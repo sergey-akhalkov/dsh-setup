@@ -19,6 +19,8 @@ export interface GateEvidence {
     readonly calls: readonly ToolCallObservation[];
     readonly turn?: number;
     readonly runGit?: GitRunner;
+    /** The turn's newly checked task ids the host retained beyond its bounded buffer. */
+    readonly retainedTicks?: readonly string[];
 }
 export interface GateDecision {
     readonly decision: 'allow' | 'refuse';
@@ -27,8 +29,18 @@ export interface GateDecision {
     /** The ready-to-paste remedy a steer prints; present on a refusal. */
     readonly steer?: string;
 }
+/** The active change names; the archive collection is not an active change. */
+export declare function activeChangeNames(workspace: string): Promise<Set<string>>;
 /** Whether the turn wrote a non-documentation file. */
 export declare function codeChangedThisTurn(calls: readonly ToolCallObservation[], workspace: string, turn: number | undefined): boolean;
+/**
+ * The checked task ids one successful canonical `tasks.md` write newly ticks,
+ * attributed to its change.
+ */
+export declare function taskTicksOf(workspace: string, call: ToolCallObservation): {
+    readonly change: string;
+    readonly taskIds: string[];
+} | undefined;
 /** The task ids one turn's canonical `tasks.md` writes newly checked. */
 export declare function newlyCheckedTaskIds(calls: readonly ToolCallObservation[], workspace: string, change: string, turn: number | undefined): string[];
 /**
@@ -58,11 +70,6 @@ export interface LaneTag {
 export declare function laneTagOf(argumentsValue: Readonly<Record<string, unknown>>): LaneTag | undefined;
 /** The lane tag of a successful worker start, or undefined for any other tool call. */
 export declare function workerLaneTag(name: string, ok: boolean, argumentsValue: Readonly<Record<string, unknown>>): LaneTag | undefined;
-/** The lane titles covered by a successful tagged worker start in this session. */
-export declare function taggedLaneTitles(calls: readonly ToolCallObservation[], change: string, lanes: readonly {
-    readonly n: number;
-    readonly title: string;
-}[]): string[];
 /** How one lane was satisfied for the session: a tagged worker or a serial note. */
 export type LaneDecision = 'assigned' | 'serial';
 /**
@@ -76,7 +83,9 @@ export interface LaneGateInput extends GateEvidence {
     readonly noteOwner: NoteOwner;
     /**
      * The session's satisfied lanes for this change, kept beyond the bounded tool
-     * buffer and the single latest note; the host records them as they happen.
+     * buffer and the single latest note; the host records them as they happen. A
+     * tagged worker start records the lane title captured at start time, never a
+     * numeric tag resolved against a later plan.
      */
     readonly decisions?: ReadonlyMap<string, LaneDecision>;
 }

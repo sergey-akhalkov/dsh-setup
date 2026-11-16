@@ -233,8 +233,23 @@ describe('the owned lane-assignment gate', () => {
     expect(decision.steer).toContain('workflows { action: "note"')
   })
 
-  it('accepts a tagged worker start for the reported lane', async () => {
+  it('accepts the lane identity captured at the worker start', async () => {
     const root = await workspace()
+    const decision = await evaluateOwnedLaneGate({
+      workspace: root,
+      change: 'change-a',
+      calls: implementation,
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      decisions: new Map([['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned']]),
+    })
+    expect(decision.decision).toBe('refuse')
+    expect(decision.lanes?.map((lane) => lane.n)).toEqual([2])
+  })
+
+  it('does not reinterpret an old numeric tag against a renamed plan', async () => {
+    const root = await workspace(PLAN.replace('1. Engine', '1. Runtime'))
     const calls = [
       ...implementation,
       {
@@ -252,9 +267,9 @@ describe('the owned lane-assignment gate', () => {
       turn: 1,
       codeChanged: true,
       noteOwner: 'workflows',
+      decisions: new Map(),
     })
-    expect(decision.decision).toBe('refuse')
-    expect(decision.lanes?.map((lane) => lane.n)).toEqual([2])
+    expect(decision.lanes?.map((lane) => lane.n)).toEqual([1, 2])
   })
 
   it('lets a serial note decide only its own lane', async () => {

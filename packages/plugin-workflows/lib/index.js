@@ -12,7 +12,7 @@ import { runWorkflowCommand } from './commands.js';
 import { buildConditionContext, conditionNeedsWorktree, evaluateConditions } from './condition.js';
 import { KNOWN_LEGACY_SOURCES, resolveOwnership, reviewIdentityOf, workspaceDefinitionsDirectory, } from './definitions.js';
 import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
-import { codeChangedThisTurn, evaluateOwnedLaneGate, evaluateOwnedProgressGate, goalCompletionRefusal, pruneLaneDecisions, taskReviewEvidence, workerLaneTag, } from './engine-gates.js';
+import { activeChangeNames, codeChangedThisTurn, evaluateOwnedLaneGate, evaluateOwnedProgressGate, goalCompletionRefusal, pruneLaneDecisions, taskReviewEvidence, taskTicksOf, workerLaneTag, } from './engine-gates.js';
 import { evaluateEvent } from './evaluate.js';
 import { commandMatches, currentSpecDigest, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
@@ -999,7 +999,7 @@ export function apply(ctx, config = {}) {
         const existing = turnMetrics.get(session);
         if (existing !== undefined && existing.turn === turn)
             return existing;
-        const fresh = { turn, toolCalls: 0, written: 0, workers: 0 };
+        const fresh = { turn, toolCalls: 0, written: 0, workers: 0, ticked: new Map() };
         turnMetrics.set(session, fresh);
         return fresh;
     };
@@ -1622,7 +1622,7 @@ export function apply(ctx, config = {}) {
             const writeResult = typeof result.value === 'object' && result.value !== null
                 ? result.value
                 : undefined;
-            observed.push({
+            const observation = {
                 callId: String(exec.callId),
                 name: exec.name,
                 arguments: args,
@@ -1636,7 +1636,20 @@ export function apply(ctx, config = {}) {
                     : {}),
                 ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
                 ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
-            });
+            };
+            observed.push(observation);
+            // The rolling buffer is not the only tick evidence: later results can
+            // evict a checked task's tick, so retain its ids for this turn.
+            const ticks = taskTicksOf(workspace, observation);
+            if (ticks !== undefined && ticks.taskIds.length > 0) {
+                let retained = metrics.ticked.get(ticks.change);
+                if (retained === undefined) {
+                    retained = new Set();
+                    metrics.ticked.set(ticks.change, retained);
+                }
+                for (const taskId of ticks.taskIds)
+                    retained.add(taskId);
+            }
             if (observed.length > 100)
                 observed.shift();
             sessionToolCalls.set(sessionId, observed);
@@ -3213,6 +3226,14 @@ export function apply(ctx, config = {}) {
             changes.add(change);
         if (changes.size === 0)
             return undefined;
+        // A persisted involvement outlives the change's archive: its tasks.md is
+        // gone, so neither a reviewed tick nor a note could ever satisfy the gate.
+        const active = await activeChangeNames(workspace);
+        for (const change of [...changes])
+            if (!active.has(change))
+                changes.delete(change);
+        if (changes.size === 0)
+            return undefined;
         // A shell edit leaves no write observation; compare the implementation state
         // the turn started from with the state at this close.
         const baseline = implementationBaseline.get(session);
@@ -3229,6 +3250,9 @@ export function apply(ctx, config = {}) {
         const noteOwner = progressOwned ? 'workflows' : 'legacy';
         const texts = [];
         for (const change of [...changes].sort()) {
+            // The tick that completed this change's task may already be evicted from
+            // the bounded observation buffer; the host retained its ids this turn.
+            const retainedTicks = metrics !== undefined && metrics.turn === turn ? metrics.ticked.get(change) : undefined;
             try {
                 if (progressOwned) {
                     const decision = await evaluateOwnedProgressGate({
@@ -3239,6 +3263,7 @@ export function apply(ctx, config = {}) {
                         codeChanged,
                         noteOwner,
                         reviewOwner,
+                        ...(retainedTicks === undefined ? {} : { retainedTicks: [...retainedTicks] }),
                     });
                     if (decision.decision === 'refuse' && decision.steer !== undefined) {
                         texts.push(decision.steer);
@@ -3255,6 +3280,7 @@ export function apply(ctx, config = {}) {
                         codeChanged,
                         noteOwner,
                         decisions,
+                        ...(retainedTicks === undefined ? {} : { retainedTicks: [...retainedTicks] }),
                     });
                     if (decision.decision === 'refuse' && decision.steer !== undefined) {
                         texts.push(decision.steer);

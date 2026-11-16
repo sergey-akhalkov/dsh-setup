@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { CHANGE_NAME } from './command-parse.js'
 import type { Definition } from './definitions.js'
 import { lastCodeWriteAt, type ToolCallObservation } from './evidence.js'
 import { evaluateLaneParity, evaluateProgressParity, type LaneParityLane } from './gates.js'
@@ -27,6 +28,8 @@ export interface GateEvidence {
   readonly calls: readonly ToolCallObservation[]
   readonly turn?: number
   readonly runGit?: GitRunner
+  /** The turn's newly checked task ids the host retained beyond its bounded buffer. */
+  readonly retainedTicks?: readonly string[]
 }
 
 export interface GateDecision {
@@ -50,6 +53,17 @@ async function readPlan(workspace: string, change: string): Promise<string | und
   }
 }
 
+/** The active change names; the archive collection is not an active change. */
+export async function activeChangeNames(workspace: string): Promise<Set<string>> {
+  let names: string[]
+  try {
+    names = await readdir(join(workspace, 'openspec', 'changes'))
+  } catch {
+    return new Set()
+  }
+  return new Set(names.filter((name) => CHANGE_NAME.test(name) && name !== 'archive'))
+}
+
 /** Whether the turn wrote a non-documentation file. */
 export function codeChangedThisTurn(
   calls: readonly ToolCallObservation[],
@@ -62,6 +76,25 @@ export function codeChangedThisTurn(
   return lastCodeWriteAt(current, workspace) !== undefined
 }
 
+/**
+ * The checked task ids one successful canonical `tasks.md` write newly ticks,
+ * attributed to its change.
+ */
+export function taskTicksOf(
+  workspace: string,
+  call: ToolCallObservation,
+): { readonly change: string; readonly taskIds: string[] } | undefined {
+  if (call.name !== 'write' && call.name !== 'edit') return undefined
+  if (call.ok === false || call.after === undefined) return undefined
+  const raw = call.arguments.file_path ?? call.arguments.path
+  if (typeof raw !== 'string') return undefined
+  const rel = normalizedWorkspacePath(workspace, raw)
+  const change = /^openspec\/changes\/([^/]+)\/tasks\.md$/u.exec(rel ?? '')?.[1]
+  if (change === undefined) return undefined
+  const before = new Set(checkedTaskIds(call.before ?? ''))
+  return { change, taskIds: checkedTaskIds(call.after).filter((id) => !before.has(id)) }
+}
+
 /** The task ids one turn's canonical `tasks.md` writes newly checked. */
 export function newlyCheckedTaskIds(
   calls: readonly ToolCallObservation[],
@@ -69,17 +102,12 @@ export function newlyCheckedTaskIds(
   change: string,
   turn: number | undefined,
 ): string[] {
-  const wanted = `openspec/changes/${change}/tasks.md`
   const ids = new Set<string>()
   for (const call of calls) {
     if (turn !== undefined && call.turn !== undefined && call.turn !== turn) continue
-    if (call.name !== 'write' && call.name !== 'edit') continue
-    if (call.ok === false || call.after === undefined) continue
-    const raw = call.arguments.file_path ?? call.arguments.path
-    if (typeof raw !== 'string') continue
-    if (normalizedWorkspacePath(workspace, raw) !== wanted) continue
-    const before = new Set(checkedTaskIds(call.before ?? ''))
-    for (const id of checkedTaskIds(call.after)) if (!before.has(id)) ids.add(id)
+    const ticks = taskTicksOf(workspace, call)
+    if (ticks === undefined || ticks.change !== change) continue
+    for (const id of ticks.taskIds) ids.add(id)
   }
   return [...ids]
 }
@@ -150,7 +178,10 @@ export interface ProgressGateInput extends GateEvidence {
  * note, a note for a completed task, and a note from another path refuse.
  */
 export async function evaluateOwnedProgressGate(input: ProgressGateInput): Promise<GateDecision> {
-  const ticked = newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn)
+  const ticked = [
+    ...newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn),
+    ...(input.retainedTicks ?? []),
+  ]
   let tickedReviewed = false
   for (const taskId of ticked) {
     if (await taskReviewEvidence(input.workspace, input.change, taskId, input.reviewOwner)) {
@@ -228,22 +259,6 @@ export function workerLaneTag(
   return laneTagOf(argumentsValue)
 }
 
-/** The lane titles covered by a successful tagged worker start in this session. */
-export function taggedLaneTitles(
-  calls: readonly ToolCallObservation[],
-  change: string,
-  lanes: readonly { readonly n: number; readonly title: string }[],
-): string[] {
-  const titles = new Set<string>()
-  for (const call of calls) {
-    const tag = workerLaneTag(call.name, call.ok !== false, call.arguments)
-    if (tag === undefined || tag.change !== change) continue
-    const lane = lanes.find((entry) => entry.n === tag.n)
-    if (lane !== undefined) titles.add(lane.title)
-  }
-  return [...titles]
-}
-
 /** How one lane was satisfied for the session: a tagged worker or a serial note. */
 export type LaneDecision = 'assigned' | 'serial'
 
@@ -273,7 +288,9 @@ export interface LaneGateInput extends GateEvidence {
   readonly noteOwner: NoteOwner
   /**
    * The session's satisfied lanes for this change, kept beyond the bounded tool
-   * buffer and the single latest note; the host records them as they happen.
+   * buffer and the single latest note; the host records them as they happen. A
+   * tagged worker start records the lane title captured at start time, never a
+   * numeric tag resolved against a later plan.
    */
   readonly decisions?: ReadonlyMap<string, LaneDecision>
 }
@@ -302,11 +319,14 @@ export async function evaluateOwnedLaneGate(input: LaneGateInput): Promise<LaneG
   }
   const tasks = numberedTasks(plan)
   const ticked = new Set(
-    newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn)
+    [
+      ...newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn),
+      ...(input.retainedTicks ?? []),
+    ]
       .map((taskId) => tasks.find((task) => task.id === taskId)?.number)
       .filter((number): number is string => number !== undefined),
   )
-  const assigned = new Set(taggedLaneTitles(input.calls, input.change, lanes))
+  const assigned = new Set<string>()
   // A kept decision outlives the tool buffer and a later note for another lane;
   // a decision whose lane completed or disappeared no longer counts.
   for (const title of input.decisions?.keys() ?? []) {

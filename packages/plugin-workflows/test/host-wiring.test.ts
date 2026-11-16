@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7363,6 +7363,143 @@ describe('engine-owned gates', () => {
       },
       gateShellResult(workspace),
     )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('lane "2. Docs')
+    expect(text).not.toContain('lane "1. Engine')
+  })
+
+  it('does not gate implementation work after an involved change is archived', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    // Archiving moves the change out of the active tree; its tasks.md is gone.
+    const archive = join(workspace, 'openspec', 'changes', 'archive')
+    await mkdir(archive, { recursive: true })
+    await rename(join(workspace, 'openspec', 'changes', 'auth'), join(archive, '2026-11-16-auth'))
+    await gateWrite(host, 'src/app.ts')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(steered(host)).not.toContain('change "auth"')
+  })
+
+  it('keeps a reviewed final tick after the observation buffer evicts it', async () => {
+    const plan = '# Tasks\n\n- [ ] 1.1 First task\n'
+    const workspace = await gitGateWorkspace(plan)
+    // Keep the unrelated checkpoint run out of this close.
+    const host = await engineGateHost(
+      workspace,
+      { taskProgress: false, laneFanout: true },
+      { checkpointApplicability: { minToolCalls: 1000 } },
+    )
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'tick-1',
+        name: 'edit',
+        arguments: { file_path: 'openspec/changes/auth/tasks.md' },
+      },
+      {
+        isError: false,
+        content: [{ type: 'text', text: 'ok' }],
+        value: { before: plan, after: plan.replace('- [ ] 1.1', '- [x] 1.1') },
+      },
+    )
+    const taskId = createHash('sha256').update('First task').digest('hex').slice(0, 16)
+    const record = join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks')
+    await mkdir(record, { recursive: true })
+    await writeFile(
+      join(record, `${taskId}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-16T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    for (let index = 0; index < 100; index += 1) {
+      await host.emit(
+        'tools/result',
+        { agent: host.agent, callId: `read-${String(index)}`, name: 'read', arguments: {} },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    // The tick left the buffer after 100 results; the change write and the code
+    // write keep this turn attributed and code-changing.
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await gateWrite(host, 'src/app.ts')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(steered(host)).not.toContain('rule "task-progress"')
+  })
+
+  it('does not reassign a renamed lane from an old worker tag', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await engineGateHost(workspace, { taskProgress: true, laneFanout: false })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'worker-1',
+        name: 'subagent',
+        arguments: { prompt: 'lane-tag: auth#1. Implement lane 1.' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'started' }] },
+    )
+    // The captured lane title no longer exists; the old numeric tag must not
+    // describe the replacement lane.
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'tasks.md'),
+      GATE_PLAN.replace('1. Engine', '1. Runtime').replace('1.1 Engine task', '1.1 Runtime task'),
+      'utf8',
+    )
+    await gateWrite(host, 'src/app.ts')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('lane "1. Runtime')
+    expect(text).not.toContain('lane "1. Engine')
+  })
+
+  it('does not reassign a reordered lane from an old worker tag', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await engineGateHost(workspace, { taskProgress: true, laneFanout: false })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'worker-1',
+        name: 'subagent',
+        arguments: { prompt: 'lane-tag: auth#1. Implement lane 1.' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'started' }] },
+    )
+    // The engine lane moved to position 2; the old tag's position 1 is now
+    // another lane, which must stay unassigned.
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'tasks.md'),
+      [
+        '# Tasks',
+        '',
+        '## 2. Docs (lane 2, owns `docs/**`)',
+        '',
+        '- [ ] 2.1 Doc task',
+        '',
+        '## 1. Engine (lane 1, owns `src/engine/**`)',
+        '',
+        '- [ ] 1.1 Engine task',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    await gateWrite(host, 'src/app.ts')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const text = steered(host)
     expect(text).toContain('lane "2. Docs')

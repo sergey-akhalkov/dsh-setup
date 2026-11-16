@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { CHANGE_NAME } from './command-parse.js';
 import { lastCodeWriteAt } from './evidence.js';
 import { evaluateLaneParity, evaluateProgressParity } from './gates.js';
 import { defaultGit, worktreeDigest } from './git.js';
@@ -18,31 +19,52 @@ async function readPlan(workspace, change) {
         return undefined;
     }
 }
+/** The active change names; the archive collection is not an active change. */
+export async function activeChangeNames(workspace) {
+    let names;
+    try {
+        names = await readdir(join(workspace, 'openspec', 'changes'));
+    }
+    catch {
+        return new Set();
+    }
+    return new Set(names.filter((name) => CHANGE_NAME.test(name) && name !== 'archive'));
+}
 /** Whether the turn wrote a non-documentation file. */
 export function codeChangedThisTurn(calls, workspace, turn) {
     const current = calls.filter((call) => turn === undefined || call.turn === undefined || call.turn === turn);
     return lastCodeWriteAt(current, workspace) !== undefined;
 }
+/**
+ * The checked task ids one successful canonical `tasks.md` write newly ticks,
+ * attributed to its change.
+ */
+export function taskTicksOf(workspace, call) {
+    if (call.name !== 'write' && call.name !== 'edit')
+        return undefined;
+    if (call.ok === false || call.after === undefined)
+        return undefined;
+    const raw = call.arguments.file_path ?? call.arguments.path;
+    if (typeof raw !== 'string')
+        return undefined;
+    const rel = normalizedWorkspacePath(workspace, raw);
+    const change = /^openspec\/changes\/([^/]+)\/tasks\.md$/u.exec(rel ?? '')?.[1];
+    if (change === undefined)
+        return undefined;
+    const before = new Set(checkedTaskIds(call.before ?? ''));
+    return { change, taskIds: checkedTaskIds(call.after).filter((id) => !before.has(id)) };
+}
 /** The task ids one turn's canonical `tasks.md` writes newly checked. */
 export function newlyCheckedTaskIds(calls, workspace, change, turn) {
-    const wanted = `openspec/changes/${change}/tasks.md`;
     const ids = new Set();
     for (const call of calls) {
         if (turn !== undefined && call.turn !== undefined && call.turn !== turn)
             continue;
-        if (call.name !== 'write' && call.name !== 'edit')
+        const ticks = taskTicksOf(workspace, call);
+        if (ticks === undefined || ticks.change !== change)
             continue;
-        if (call.ok === false || call.after === undefined)
-            continue;
-        const raw = call.arguments.file_path ?? call.arguments.path;
-        if (typeof raw !== 'string')
-            continue;
-        if (normalizedWorkspacePath(workspace, raw) !== wanted)
-            continue;
-        const before = new Set(checkedTaskIds(call.before ?? ''));
-        for (const id of checkedTaskIds(call.after))
-            if (!before.has(id))
-                ids.add(id);
+        for (const id of ticks.taskIds)
+            ids.add(id);
     }
     return [...ids];
 }
@@ -103,7 +125,10 @@ export async function taskReviewEvidence(workspace, change, taskId, owner) {
  * note, a note for a completed task, and a note from another path refuse.
  */
 export async function evaluateOwnedProgressGate(input) {
-    const ticked = newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn);
+    const ticked = [
+        ...newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn),
+        ...(input.retainedTicks ?? []),
+    ];
     let tickedReviewed = false;
     for (const taskId of ticked) {
         if (await taskReviewEvidence(input.workspace, input.change, taskId, input.reviewOwner)) {
@@ -167,19 +192,6 @@ export function workerLaneTag(name, ok, argumentsValue) {
         return undefined;
     return laneTagOf(argumentsValue);
 }
-/** The lane titles covered by a successful tagged worker start in this session. */
-export function taggedLaneTitles(calls, change, lanes) {
-    const titles = new Set();
-    for (const call of calls) {
-        const tag = workerLaneTag(call.name, call.ok !== false, call.arguments);
-        if (tag === undefined || tag.change !== change)
-            continue;
-        const lane = lanes.find((entry) => entry.n === tag.n);
-        if (lane !== undefined)
-            titles.add(lane.title);
-    }
-    return [...titles];
-}
 /**
  * Forget decisions for lanes that disappeared, lost their tasks, or completed.
  * A renamed lane is a new title and therefore a new, unassigned lane. An
@@ -218,10 +230,13 @@ export async function evaluateOwnedLaneGate(input) {
         return { decision: 'allow', reason: 'the plan has no level-2 lane headings' };
     }
     const tasks = numberedTasks(plan);
-    const ticked = new Set(newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn)
+    const ticked = new Set([
+        ...newlyCheckedTaskIds(input.calls, input.workspace, input.change, input.turn),
+        ...(input.retainedTicks ?? []),
+    ]
         .map((taskId) => tasks.find((task) => task.id === taskId)?.number)
         .filter((number) => number !== undefined));
-    const assigned = new Set(taggedLaneTitles(input.calls, input.change, lanes));
+    const assigned = new Set();
     // A kept decision outlives the tool buffer and a later note for another lane;
     // a decision whose lane completed or disappeared no longer counts.
     for (const title of input.decisions?.keys() ?? []) {
