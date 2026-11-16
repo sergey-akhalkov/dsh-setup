@@ -65,8 +65,8 @@
 
 ## 6. Release handoff (serial, owns `openspec/changes/**`)
 
-- [ ] 6.1 Create the Release B change `retire-delegation-rules` through the intake flow, with proposal, design, tasks, and delta specs scoped to deletion only: removing the plugin, folding its 70 requirements into `workflows` and `review-approval`, and removing the row, docs, skill, observability row, legacy prompt copies, and bundle entries. Verify `openspec validate retire-delegation-rules --strict` exits 0 and its tasks name the deletion with no new behavior.
-- [ ] 6.2 Link the Release B change from this change's proposal and design, and confirm it starts only after this change's live profile has run a native review. Verify a reader of either change sees the two-release order and the rollback flips.
+- [x] 6.1 Create the Release B change `retire-delegation-rules` through the intake flow, with proposal, design, tasks, and delta specs scoped to deletion only: removing the plugin, folding its 70 requirements into `workflows` and `review-approval`, and removing the row, docs, skill, observability row, legacy prompt copies, and bundle entries. Verify `openspec validate retire-delegation-rules --strict` exits 0 and its tasks name the deletion with no new behavior.
+- [x] 6.2 Link the Release B change from this change's proposal and design, and confirm it starts only after this change's live profile has run a native review. Verify a reader of either change sees the two-release order and the rollback flips.
 
 ## Workflow follow-up
 
