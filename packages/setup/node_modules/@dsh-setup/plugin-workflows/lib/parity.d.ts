@@ -1,4 +1,4 @@
-import { type Definition } from './definitions.js';
+import { type Definition, type LegacySignalState } from './definitions.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -37,12 +37,14 @@ export interface ParityReport {
  */
 export declare function templateHash(definition: Definition): string;
 /**
- * The report binds the five retirement ids whenever owned, independent of
- * settings.legacy, plus any definition that effectively owns a retirement
- * review signal through a step of its own: the contributed change-intake runs
- * the spec-review decision itself, so it needs that signal's certification.
+ * The report binds the five retirement ids whenever effectively owned, plus any
+ * definition that effectively owns a retirement review signal through a step of
+ * its own: the contributed change-intake runs the spec-review decision itself,
+ * so it needs that signal's certification. An enabled legacy signal resolves
+ * the matching definition or step to defer, so a rollback is not bound and the
+ * legacy owner executes instead.
  */
-export declare function reportBoundDefinitions(definitions: readonly Definition[]): Definition[];
+export declare function reportBoundDefinitions(definitions: readonly Definition[], legacy?: LegacySignalState): Definition[];
 /** The assets/parity directory, resolving from src and from lib. */
 export declare function parityAssetDirectory(): string;
 export declare function shippedParityReportPath(): string;
@@ -67,7 +69,12 @@ export interface ParityLoadResult {
     readonly issues: readonly string[];
     readonly refused: ReadonlySet<string>;
 }
-export declare function parityLoadIssues(definitions: readonly Definition[], report: ParityReport | undefined, reportPath: string, reportError: string | undefined): ParityLoadResult;
+/**
+ * Every parity issue that blocks one effectively owned definition from loading,
+ * with its id. The profile's legacy signal state resolves a rolled-back
+ * definition or step to defer, so it is none of parity's business.
+ */
+export declare function parityLoadIssues(definitions: readonly Definition[], report: ParityReport | undefined, reportPath: string, reportError: string | undefined, legacy?: LegacySignalState): ParityLoadResult;
 /** The profile's verify settings: validated values outside the template hash. */
 export interface VerifySettings {
     readonly commands: readonly string[];

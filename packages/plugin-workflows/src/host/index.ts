@@ -1070,6 +1070,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           parity.report,
           shippedParityReportPath(),
           parity.error,
+          legacy,
         )
         const loadErrors = [...loaded.errors, ...parityCheck.issues]
         const accepted = loaded.definitions

@@ -245,6 +245,8 @@ export interface ResolvedStepOwnership {
     readonly legacy?: LegacySource;
 }
 export interface OwnershipResolution {
+    /** The definition-level ownership after the profile switch resolves it. */
+    readonly ownership: GateOwnership;
     readonly steps: readonly ResolvedStepOwnership[];
     /** One load-refusing line per illegal combination. */
     readonly issues: readonly string[];

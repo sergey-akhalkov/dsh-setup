@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SWITCH_BY_SIGNAL } from './definitions.js';
+import { resolveOwnership, SWITCH_BY_SIGNAL, } from './definitions.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -53,16 +53,27 @@ const RETIREMENT_BINDINGS = {
     'spec-review': { plugin: 'delegation-rules', signal: 'spec-review' },
     'integration-review': { plugin: 'delegation-rules', signal: 'integration-review' },
 };
+/** No legacy signal steers, so a definition keeps its declared ownership. */
+const NO_LEGACY = { installed: new Set(), enabled: new Set() };
+/** The profile's effective ownership of a definition and its steps. */
+function effectiveOwnership(definition, legacy) {
+    return resolveOwnership(definition, legacy?.installed ?? NO_LEGACY.installed, legacy?.enabled ?? NO_LEGACY.enabled);
+}
 /**
- * The report binds the five retirement ids whenever owned, independent of
- * settings.legacy, plus any definition that effectively owns a retirement
- * review signal through a step of its own: the contributed change-intake runs
- * the spec-review decision itself, so it needs that signal's certification.
+ * The report binds the five retirement ids whenever effectively owned, plus any
+ * definition that effectively owns a retirement review signal through a step of
+ * its own: the contributed change-intake runs the spec-review decision itself,
+ * so it needs that signal's certification. An enabled legacy signal resolves
+ * the matching definition or step to defer, so a rollback is not bound and the
+ * legacy owner executes instead.
  */
-export function reportBoundDefinitions(definitions) {
-    return definitions.filter((definition) => definition.settings.gateOwnership === 'own' &&
-        (RETIREMENT_BINDINGS[definition.id] !== undefined ||
-            ownedRetirementSignals(definition).length > 0));
+export function reportBoundDefinitions(definitions, legacy) {
+    return definitions.filter((definition) => {
+        const resolved = effectiveOwnership(definition, legacy);
+        return (resolved.ownership === 'own' &&
+            (RETIREMENT_BINDINGS[definition.id] !== undefined ||
+                ownedRetirementSignals(definition, resolved).length > 0));
+    });
 }
 /** The rollback switch for one retirement definition id. */
 function retirementSwitch(definitionId) {
@@ -200,16 +211,18 @@ function gateKeyOf(definitionId) {
     return definitionId;
 }
 /**
- * The retirement review signals a definition owns through its own steps. A
- * contributed definition such as change-intake runs the spec-review decision
- * itself, so the signal's retained replay certifies that path too.
+ * The retirement review signals a definition effectively owns through its own
+ * steps. A contributed definition such as change-intake runs the spec-review
+ * decision itself, so the signal's retained replay certifies that path too. An
+ * effectively deferred definition or step owns nothing.
  */
-function ownedRetirementSignals(definition) {
-    if (definition.settings.gateOwnership !== 'own')
+function ownedRetirementSignals(definition, resolved) {
+    if (resolved.ownership !== 'own')
         return [];
     const signals = new Set();
     for (const step of definition.steps) {
-        if ((step.ownership ?? 'own') !== 'own')
+        const ownership = resolved.steps.find((entry) => entry.id === step.id)?.ownership ?? step.ownership ?? 'own';
+        if (ownership !== 'own')
             continue;
         const signal = step.legacy?.signal;
         if (signal === 'spec-review' || signal === 'integration-review')
@@ -248,17 +261,23 @@ export function retiredGateIssue(report, reportError, reportPath, group) {
     }
     return undefined;
 }
-export function parityLoadIssues(definitions, report, reportPath, reportError) {
-    const bound = reportBoundDefinitions(definitions);
+/**
+ * Every parity issue that blocks one effectively owned definition from loading,
+ * with its id. The profile's legacy signal state resolves a rolled-back
+ * definition or step to defer, so it is none of parity's business.
+ */
+export function parityLoadIssues(definitions, report, reportPath, reportError, legacy) {
+    const bound = reportBoundDefinitions(definitions, legacy);
     const issues = [];
     const refused = new Set();
+    const ownedSignals = (definition) => ownedRetirementSignals(definition, effectiveOwnership(definition, legacy));
     if (bound.length === 0)
         return { issues, refused };
     if (report === undefined) {
         for (const definition of bound) {
             refused.add(definition.id);
             if (RETIREMENT_BINDINGS[definition.id] === undefined) {
-                for (const signal of ownedRetirementSignals(definition)) {
+                for (const signal of ownedSignals(definition)) {
                     issues.push(`workflow definition "${definition.id}": set ${legacySwitchFor('delegation-rules', signal)} to fall back to the legacy gate; the parity report is missing at "${reportPath}" (${reportError ?? 'no report'})`);
                 }
                 continue;
@@ -277,7 +296,7 @@ export function parityLoadIssues(definitions, report, reportPath, reportError) {
             // A contributed step owns the signal and writes the shared record, so the
             // signal's replayed retained cases certify it; no template hash covers a
             // definition the workflows plugin does not ship.
-            for (const signal of ownedRetirementSignals(definition)) {
+            for (const signal of ownedSignals(definition)) {
                 const retained = retiredGateIssue(report, undefined, reportPath, signal);
                 if (retained === undefined)
                     continue;
