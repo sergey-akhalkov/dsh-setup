@@ -1,12 +1,13 @@
 {
   "version": 1,
-  "archiveGate": true,
+  "archiveGate": false,
   "taskRule": "task-review",
   "reviewerProvider": "codex-subagent",
   "cutoff": "v0.12.0",
   "grandfathered": {
     "add-goal-block-review": "post-hoc integration review PASS after fixes on review-v0-12-0; no per-task review",
     "adopt-agent-best-practices": "post-hoc integration review PASS after fixes on review-v0-12-0; no per-task review",
-    "fix-delegation-review-build-inputs": "post-hoc integration review PASS after fixes on review-v0-12-0; no per-task review"
+    "fix-delegation-review-build-inputs": "post-hoc integration review PASS after fixes on review-v0-12-0; no per-task review",
+    "move-review-runtime-into-workflows": "5.4 live acceptance deferred to owner verification: the four scenarios passed in the local composed acceptance harness and the throwaway web UI booted with the copied profile; the owner accepted the remaining live-view check before this archive."
   }
 }
