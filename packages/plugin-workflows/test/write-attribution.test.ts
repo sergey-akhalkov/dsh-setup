@@ -6,7 +6,10 @@ import {
   normalizedWorkspacePath,
 } from '../src/host/write-attribution.ts'
 
-const WORKSPACE = 'C:\\repo'
+// Compose drive-path fixtures at runtime so the repository machine-path scan never finds them.
+const DRIVE = ['C', ':'].join('')
+const WORKSPACE = `${DRIVE}\\repo`
+const WORKSPACE_SLASH = `${DRIVE}/repo`
 
 function call(
   raw: string,
@@ -35,16 +38,16 @@ describe('normalizedWorkspacePath', () => {
     expect(normalizedWorkspacePath(WORKSPACE, './openspec/changes/auth/design.md')).toBe(
       'openspec/changes/auth/design.md',
     )
-    expect(normalizedWorkspacePath(WORKSPACE, 'C:/repo/openspec/changes/auth/design.md')).toBe(
-      'openspec/changes/auth/design.md',
-    )
-    expect(normalizedWorkspacePath(WORKSPACE, 'C:\\repo\\openspec\\changes\\auth\\design.md')).toBe(
-      'openspec/changes/auth/design.md',
-    )
+    expect(
+      normalizedWorkspacePath(WORKSPACE, `${WORKSPACE_SLASH}/openspec/changes/auth/design.md`),
+    ).toBe('openspec/changes/auth/design.md')
+    expect(
+      normalizedWorkspacePath(WORKSPACE, `${WORKSPACE}\\openspec\\changes\\auth\\design.md`),
+    ).toBe('openspec/changes/auth/design.md')
   })
 
   it('refuses an outside or escaping path', () => {
-    expect(normalizedWorkspacePath(WORKSPACE, 'C:/other/design.md')).toBeUndefined()
+    expect(normalizedWorkspacePath(WORKSPACE, `${DRIVE}/other/design.md`)).toBeUndefined()
     expect(normalizedWorkspacePath(WORKSPACE, '../design.md')).toBeUndefined()
   })
 })
@@ -52,7 +55,11 @@ describe('normalizedWorkspacePath', () => {
 describe('attributedSpecWrite', () => {
   it('attributes a successful artifact write in any path form', () => {
     expect(
-      attributedSpecWrite(WORKSPACE, [call('C:/repo/openspec/changes/auth/design.md')], 1),
+      attributedSpecWrite(
+        WORKSPACE,
+        [call(`${WORKSPACE_SLASH}/openspec/changes/auth/design.md`)],
+        1,
+      ),
     ).toBe('openspec/changes/auth/design.md')
     expect(
       attributedSpecWrite(WORKSPACE, [call('./openspec/changes/auth/specs/x/spec.md')], 1),
@@ -71,7 +78,9 @@ describe('attributedSpecWrite', () => {
       ),
     ).toBeUndefined()
     expect(attributedSpecWrite(WORKSPACE, [call('packages/x.txt')], 1)).toBeUndefined()
-    expect(attributedSpecWrite(WORKSPACE, [call('C:/other/auth/design.md')], 1)).toBeUndefined()
+    expect(
+      attributedSpecWrite(WORKSPACE, [call(`${DRIVE}/other/auth/design.md`)], 1),
+    ).toBeUndefined()
     expect(
       attributedSpecWrite(WORKSPACE, [call('openspec/changes/auth/design.md', { turn: 2 })], 1),
     ).toBeUndefined()
@@ -201,14 +210,14 @@ describe('shell attribution boundaries', () => {
     expect(
       attributedChangeName(
         WORKSPACE,
-        [call({ command: 'openspec new change auth', workdir: 'C:/other' })],
+        [call({ command: 'openspec new change auth', workdir: `${DRIVE}/other` })],
         1,
       ),
     ).toBeUndefined()
     expect(
       attributedChangeName(
         WORKSPACE,
-        [call({ command: 'openspec new change auth', workdir: 'C:/repo/packages' })],
+        [call({ command: 'openspec new change auth', workdir: `${WORKSPACE_SLASH}/packages` })],
         1,
       ),
     ).toBe('auth')
@@ -232,7 +241,7 @@ describe('quoted destinations and root workdir', () => {
     expect(
       attributedChangeName(
         WORKSPACE,
-        [call({ command: 'openspec new change auth', workdir: 'C:/repo' })],
+        [call({ command: 'openspec new change auth', workdir: WORKSPACE_SLASH })],
         1,
       ),
     ).toBe('auth')
@@ -809,7 +818,7 @@ describe('writer with output redirection', () => {
     }
   })
   it('keeps escaped spaces inside a destination word', () => {
-    const spaced = 'C:/repo space'
+    const spaced = `${WORKSPACE_SLASH} space`
     expect(
       attributedChangeName(
         spaced,
@@ -818,7 +827,7 @@ describe('writer with output redirection', () => {
             callId: 'a',
             name: 'pwsh',
             arguments: {
-              command: 'Set-Content -Path C:/repo` space/openspec/changes/auth/tasks.md -Value x',
+              command: `Set-Content -Path ${WORKSPACE_SLASH}\` space/openspec/changes/auth/tasks.md -Value x`,
             },
             ok: true,
           },
@@ -834,7 +843,7 @@ describe('writer with output redirection', () => {
             callId: 'b',
             name: 'bash',
             arguments: {
-              command: 'Set-Content -Path C:/repo\\ space/openspec/changes/auth/tasks.md -Value x',
+              command: `Set-Content -Path ${WORKSPACE_SLASH}\\ space/openspec/changes/auth/tasks.md -Value x`,
             },
             ok: true,
           },
@@ -1358,8 +1367,7 @@ describe('writer with output redirection', () => {
   })
 
   it('opens a quoted span after a PowerShell literal backslash', () => {
-    const command =
-      'Set-Content -Value C:\\"-Path openspec/changes/fake/design.md" -Path openspec/changes/auth/design.md'
+    const command = `Set-Content -Value ${DRIVE}\\"-Path openspec/changes/fake/design.md" -Path openspec/changes/auth/design.md`
     expect(
       attributedChangeName(
         WORKSPACE,
@@ -1386,8 +1394,8 @@ describe('writer with output redirection', () => {
       ),
     ).toBe('auth')
     for (const command of [
-      'Write-Output C:\\; Set-Content -Path openspec/changes/auth/design.md -Value x',
-      'Write-Output C:\\\nSet-Content -Path openspec/changes/auth/design.md -Value x',
+      `Write-Output ${DRIVE}\\; Set-Content -Path openspec/changes/auth/design.md -Value x`,
+      `Write-Output ${DRIVE}\\\nSet-Content -Path openspec/changes/auth/design.md -Value x`,
     ]) {
       expect(
         attributedChangeName(

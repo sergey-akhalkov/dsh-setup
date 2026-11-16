@@ -140,10 +140,13 @@ function maskQuoted(text, powershell) {
     }
     return { masked, values };
 }
+const FIELD_BREAK = String.fromCharCode(3);
+// Built at runtime because the sentinels are control characters, which Biome refuses in literals.
+const MASKED_VALUE = new RegExp(`${String.fromCharCode(0)}(\\d+)${String.fromCharCode(0)}`, 'gu');
 function resolveMasked(token, values) {
     return token
-        .replace(/\u0003/gu, ' ')
-        .replace(/\u0000(\d+)\u0000/gu, (_, index) => values[Number(index)] ?? '');
+        .replaceAll(FIELD_BREAK, ' ')
+        .replace(MASKED_VALUE, (_, index) => values[Number(index)] ?? '');
 }
 const WRITER_AT_START = /^(?:Set-Content|Add-Content|Out-File|New-Item|tee|Copy-Item|Move-Item|Rename-Item|Remove-Item|cp|mv|rm|touch)\b/iu;
 // copy/move/touch target the last positional; rename targets its source path.

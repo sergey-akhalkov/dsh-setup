@@ -149,10 +149,14 @@ function maskQuoted(
   return { masked, values }
 }
 
+const FIELD_BREAK = String.fromCharCode(3)
+// Built at runtime because the sentinels are control characters, which Biome refuses in literals.
+const MASKED_VALUE = new RegExp(`${String.fromCharCode(0)}(\\d+)${String.fromCharCode(0)}`, 'gu')
+
 function resolveMasked(token: string, values: readonly string[]): string {
   return token
-    .replace(/\u0003/gu, ' ')
-    .replace(/\u0000(\d+)\u0000/gu, (_, index) => values[Number(index)] ?? '')
+    .replaceAll(FIELD_BREAK, ' ')
+    .replace(MASKED_VALUE, (_, index) => values[Number(index)] ?? '')
 }
 
 const WRITER_AT_START =

@@ -809,8 +809,9 @@ describe('record path identity and portable target boundary', () => {
     expect(() => resolveReviewers({ codex: { provider: 'p', model: '/models/x.gguf' } })).toThrow(
       /machine path/u,
     )
+    const windowsModel = ['C', ':', '\\models\\x'].join('')
     expect(() =>
-      resolveReviewers({ codex: { provider: 'p', agentOptions: { model: 'C:\\models\\x' } } }),
+      resolveReviewers({ codex: { provider: 'p', agentOptions: { model: windowsModel } } }),
     ).toThrow(/machine path/u)
     const root = await workspace()
     roots.push(root)

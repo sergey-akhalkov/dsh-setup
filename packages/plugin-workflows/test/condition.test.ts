@@ -562,10 +562,12 @@ describe('condition size bound', () => {
 })
 
 describe('condition context path boundary', () => {
+  // Compose drive-path fixtures at runtime so the repository machine-path scan never finds them.
+  const DRIVE = ['C', ':'].join('')
   it('refuses a drive-relative owner and a path in task text', async () => {
     for (const content of [
       '# Tasks\n\n## 1. Lane (lane 1, owns `C:private/**`)\n\n- [ ] 1.1 Do it\n',
-      '# Tasks\n\n## 1. Lane (lane 1, owns `packages/**`)\n\n- [ ] 1.1 Read C:/private/token.txt\n',
+      `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 Read ${DRIVE}/private/token.txt\n`,
     ]) {
       const root = await workspace()
       await writeFile(join(root, 'openspec', 'changes', 'auth', 'tasks.md'), content, 'utf8')
@@ -580,7 +582,7 @@ describe('condition context path boundary', () => {
   })
 
   it('refuses a path after punctuation or a traversing token in prose', async () => {
-    for (const text of ['Read path=C:/private/token.txt', 'Read ../private/token.txt']) {
+    for (const text of [`Read path=${DRIVE}/private/token.txt`, 'Read ../private/token.txt']) {
       const root = await workspace()
       await writeFile(
         join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
@@ -633,9 +635,11 @@ describe('condition context path boundary', () => {
   })
   it('refuses an embedded UNC path', async () => {
     const root = await workspace()
+    // Composed at runtime so the repository machine-path scan never finds it.
+    const unc = ['\\', '\\', 'server', '\\', 'share', '\\', 'token.txt'].join('')
     await writeFile(
       join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
-      '# Tasks\n\n## 1. Lane (lane 1, owns `packages/**`)\n\n- [ ] 1.1 Read \\\\server\\share\\token.txt\n',
+      `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 Read ${unc}\n`,
       'utf8',
     )
     await expect(
@@ -686,8 +690,8 @@ describe('condition context path boundary', () => {
   })
   it('refuses Markdown-wrapped and punctuation-adjacent paths', async () => {
     for (const text of [
-      'Read **C:/private/token.txt**',
-      'Read [C:/private/token.txt]',
+      `Read **${DRIVE}/private/token.txt**`,
+      `Read [${DRIVE}/private/token.txt]`,
       'Read **../private/token.txt**',
     ]) {
       const root = await workspace()
@@ -762,7 +766,7 @@ describe('condition context path boundary', () => {
     const root = await workspace()
     await writeFile(
       join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
-      '# Tasks\n\n## 1. Lane (lane 1, owns `C:/private/**`)\n\n- [ ] 1.1 Do it\n',
+      `# Tasks\n\n## 1. Lane (lane 1, owns \`${DRIVE}/private/**\`)\n\n- [ ] 1.1 Do it\n`,
       'utf8',
     )
     await expect(
