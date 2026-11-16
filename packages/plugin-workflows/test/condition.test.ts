@@ -609,6 +609,21 @@ describe('condition context path boundary', () => {
     expect(context.change.tasks.items.length).toBeGreaterThan(0)
   })
 
+  it('builds a context for prose that uses a range with dots', async () => {
+    const root = await workspace()
+    await writeFile(
+      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+      '# Tasks\n\n## 1. Lane (lane 1, owns `packages/**`)\n\n- [ ] 1.1 Key the ids as `f1`..`fn` and keep them stable\n',
+      'utf8',
+    )
+    const context = await buildConditionContext({
+      workspace: root,
+      change: 'auth',
+      event: { kind: 'turn.stopping' },
+    })
+    expect(context.change.tasks.items).toHaveLength(1)
+  })
+
   it('refuses delimiter-adjacent paths and a terminal traversal', async () => {
     for (const text of [
       'Read </etc/private/token.txt>',

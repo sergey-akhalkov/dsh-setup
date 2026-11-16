@@ -1673,9 +1673,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             involved: conditionChange !== undefined,
             changedSpec: changedSpecFor(change),
           })
-        } catch {
+        } catch (error) {
           // A malformed context only disables the conditional definitions; an
-          // unconditional one must still be evaluated for this event.
+          // unconditional one must still be evaluated for this event. The cause
+          // stays visible instead of looking like a false condition.
+          publishListenerError(workspace, error)
           return new Map(conditionalDefinitions.map((definition) => [definition.id, false]))
         }
         return evaluateConditions(conditionalDefinitions, conditionContext)
