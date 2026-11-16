@@ -10,12 +10,20 @@ The plugin adds three tools (`delegate`, `task_progress`, `delegation_status`), 
 `delegation-rules` skill, and an `agent/turn-stopping` gate. It registers no always-on
 system-prompt section.
 
+Release A moved the review runtime and the retained gates into `@dsh-setup/plugin-workflows` (see
+[workflows](workflows.md)). The shipped `dsh-setup-delegation-rules` row is dormant: its rules —
+including the dormant `implementation-work` note rule — and its `codex` target stay configured, and
+all five `gates` switches are false, so the installed profile runs no legacy steer. This page
+documents the retained runtime that a switch flip restores; Release B
+(`retire-delegation-rules`) deletes the plugin, this page, and its assets.
+
 ## Row opt-out and removal
 
-Disabling or removing the `dsh-setup-delegation-rules` row removes the tools, the gate, and the
-skill, and stops all enforcement. Delegation records (`.dsh/delegation/`), session involvement
-files, progress notes, and change artifacts remain on disk. There is no in-session
-bypass: the only opt-out is disabling the row. Records are a process-integrity check, not
+Disabling or removing the `dsh-setup-delegation-rules` row removes the legacy tools, gate, and
+skill. It does not stop enforcement in Release A: the workflows engine owns the review,
+work-progress, lane, and archive signals, and its definitions and gate cards keep enforcing when
+this row is absent. Legacy delegation records (`.dsh/delegation/`), session involvement files,
+progress notes, and change artifacts remain on disk. Records are a process-integrity check, not
 anti-forgery — a model with full filesystem access could write a record-shaped file.
 
 ## The rule model
@@ -256,7 +264,9 @@ runs the installed engine, not this checkout.
 
 ### Review queue contract
 
-`reviewQueue` bounds concurrent review targets per profile. Defaults:
+`reviewQueue` bounds concurrent review targets per profile. The queue moved to the workflows row in
+Release A (see [workflows](workflows.md#review-executor)); the legacy runtime keeps the same block
+for a switch-flipped rollback. Defaults:
 
 | Option          | Default  | Meaning                                                                                                                                                         |
 | --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -346,47 +356,59 @@ The export copies only a local task-scope `PASS` whose rule, change, and task id
 task; it refuses `ERROR`/`FINDINGS`, a foreign change, and a task-id mismatch, and it cannot invent
 an approval.
 
-### Gate-only retirement switch
+### Per-signal retirement switches
 
-`gates.workflowOwned: false` moves enforcement of the task-review turn-stopping rule and the archive
-guard to the workflow definitions, while the review runtime stays exactly as documented here. The
-`delegate` tool, the review queue, runs, records, `task_progress` notes, the rule data, the
-whole-spec `spec-review` rule, and the task-progress and lane-assignment/lane-boundary gates remain.
-Only two signals stop: the task-review rule that refuses a close for a checked task without a
-`PASS`/`ERROR` record (including the completion-coverage branch for a freshly completed list), and
-the archive guard that refuses `openspec archive`/`mv`/`Move-Item`/`git mv` without a portable
-`PASS`. The goal-complete guard below is not part of the flip: no workflow definition owns goal
-completion. A `defer` `task-review` definition beside `gates.workflowOwned: false` is refused at
-load; the
-`spec-review` signal stays enabled, so `change-intake` keeps its deferred spec-review step and a
-missing spec review still steers. The default is `true`. Rollback is one config flip: set
-`gates.workflowOwned: true` and return the definition to `defer`; records, queue state, and notes are
-never rewritten. The tracked parity report at
+`gates` is a per-signal map `{workflowOwned, specReview, integrationReview, taskProgress, laneFanout}`,
+each defaulting to `true` for an existing profile; an unknown key fails load naming the accepted
+keys. Each `false` value disables exactly one legacy signal and hands it to the workflows engine:
+
+| Switch              | Legacy signal it disables                                          |
+| ------------------- | ------------------------------------------------------------------ |
+| `workflowOwned`     | the task-review rule and the archive guard                         |
+| `specReview`        | the whole-spec `spec-review` rule                                  |
+| `integrationReview` | the `implementation-complete` integration rule                     |
+| `taskProgress`      | the progress gate plus the dormant `implementation-work` note rule |
+| `laneFanout`        | the `lane-assignment` and deprecated `lane-boundary` triggers      |
+
+The five switches are independent; the tools, records, queue, and notes stay readable in every
+combination. The goal-complete guard is not part of any switch: the workflows listener owns it in
+Release A. Effective ownership resolves from the switch: a shipped workflow definition that declares
+`own` acts only while the matching legacy switch is false, and a local override that contradicts the
+switch (`defer` beside a disabled signal or `own` beside an enabled one) is refused at load with the
+definition, declaration, switch, and remedy. The shipped setup sets all five false; rollback is one
+flip, after which the configured legacy rule steers again and the workflow counterpart yields.
+Records, queue state, and notes are never rewritten. The tracked parity report at
 `packages/plugin-workflows/assets/parity/retire-legacy-gates.json` must pass
 (`node scripts/workflows-parity.ts --check`; the release gate wires the `pnpm workflows:parity`
-alias) before the switch is
-flipped in a shipped profile.
+alias) before a signal is retired in a shipped profile.
 
 ### Migration and settings
 
 Migrate in this order: the tracked parity report passes for the current and the retired behavior;
-flip the two gate-only switches, disable the `dsh-setup-verification-gate` row, and set the three
-definitions to `own` in one config change (the loader refuses `own` while its signal is enabled and
-`defer` while it is disabled, so a half-flipped state fails loudly); keep the legacy provider rows
-installed for one release so rollback is a config flip; delete only the retired rows after a clean
-release, keeping the providers the retained spec-review and lane gates use. The workflows row carries
-the mirrored settings:
-`checkpointApplicability` (`minToolCalls`, `requireWrite`, `bottleneckAge`, `stepInterval`,
-`enforceParallel`) and `verify.commands`/`verify.maxBlocks`. The parity settings matrix must cover at
-least two non-empty command lists and two positive caps with one above 128. The release gate runs
+flip the five per-signal switches false, disable the `dsh-setup-verification-gate` row, and confirm
+the shipped definitions resolve to `own` in one config change (a local override that contradicts a
+switch fails load, so a half-flipped state fails loudly); keep the legacy row installed with its
+rules, target, and copied review prompts for one release so rollback is a config flip; delete the
+plugin only in Release B, after the installed profile has run one native review. The workflows row
+carries the mirrored settings: `checkpointApplicability` (`minToolCalls`, `requireWrite`,
+`bottleneckAge`, `stepInterval`, `enforceParallel`), `reviewers`, `reviewQueue`, `timeouts.review`,
+and `verify.commands`/`verify.maxBlocks`. The parity settings matrix must cover at least two non-empty
+command lists and two positive caps with one above 128. The release gate runs
 `node scripts/workflows-parity.ts --check` (the `pnpm workflows:parity` alias is wired with the
-release job). Rollback is per signal as described above; the whole-spec `spec-review`, task-progress,
-and lane gates are never part of the flip.
+release job). Rollback is per signal as described above; records and notes are never rewritten.
+
+Release B is `retire-delegation-rules`, created by this change's last task. It starts only after a
+live profile has produced one native review record plus its committed approval, and it deletes the
+plugin, the row, this page, the skill, the observability row, the legacy prompt copies, and the
+bundle entries while folding the plugin's requirements into `workflows` and `review-approval`. The
+`reviews:export` legacy local-store fallback is removed there too.
 
 ### Change-level approval and the archive gate
 
 `delegation_status` and `pnpm reviews:check` compute approval from the change, not from the session
-that wrote it. Every checked `tasks.md` task needs a committed `reviews/<taskId>.json` PASS whose
+that wrote it. The active review owner — the workflows executor while a signal is owned, the legacy
+runtime while it is enabled — writes the same committed file, so the audit and the archive gate are
+unchanged. Every checked `tasks.md` task needs a committed `reviews/<taskId>.json` PASS whose
 rule, change, and task id match; `ERROR`, `FINDINGS`, a missing or malformed record, and a checked
 line that is not a numbered task are unapproved, while unchecked tasks are reported but not
 required. The status line is
@@ -411,7 +433,9 @@ command runs: it names every missing task and the exact `delegate` calls and lea
 active. It applies to subagents too, and it fails closed on an unreadable `tasks.md` or record, an
 invalid marker rule, or any evaluation failure. Without the marker, or with `archiveGate: false`,
 nothing changes. The guard recognizes the documented forms only; the push audit and CI are the
-backstop for another form.
+backstop for another form. While `workflowOwned` is false the workflows pre-execute archive gate owns
+this check and the legacy guard stays dormant; the portable approval audit is the same under either
+owner.
 
 Audit commands:
 
@@ -425,10 +449,10 @@ Audit commands:
 
 `update_goal` with `action: "complete"` is refused while any active change has a checked task without
 its portable task-review `PASS`; the refusal is the same coverage report, with each missing task's
-record path and exact `delegate` call, and the goal stays active. It needs no
-`openspec/review-approval.json` marker and is independent of `gates.workflowOwned`: no workflow
-definition owns goal completion, so a session that never started a run cannot complete its goal
-unreviewed. A profile that declares no strict `spec-task-ready` task-scope review rule has no
+record path and exact review call, and the goal stays active. It needs no
+`openspec/review-approval.json` marker and is independent of the per-signal switches: the guard moved
+from the delegation listener to the workflows gate listener in Release A, so disabling this row does
+not remove it. A profile that declares no strict `spec-task-ready` task-scope review rule has no
 obligation, and a change without a checked task is not part of the check; an unreadable `tasks.md`
 fails closed. The way out is the review itself, or archiving the change, which keeps its own gate.
 
@@ -439,8 +463,9 @@ Every review finding carries a `class` from a fixed vocabulary: `spec-ambiguity`
 `plan-shape`, `docs-drift`, `security`, `other`. The review instructions request it, the verdict
 parser stores a valid class, and an absent or unknown class is stored as `other` — a malformed
 class never rejects a verdict. A `PASS` record carries no findings, so the portable approval is
-unchanged. The finding history is gone; read the review records in `.dsh/delegation/<rule>/<change>/`
-for the findings, and use Hindsight for durable lessons.
+unchanged. The finding history is gone; read the review records in
+`.dsh/workflows/records/<definition>/<change>/` (or `.dsh/delegation/<rule>/<change>/` under a
+switch-flipped legacy runtime) for the findings, and use Hindsight for durable lessons.
 
 ### Targets
 
@@ -501,24 +526,30 @@ rules:
 The shipped defaults target the installed-Codex provider with `gpt-6-astra` at `xhigh`. They are
 data; one target can select a different model/effort and the same rule contract and gate apply. The
 engine has no Codex dependency, so a standalone install composes with any provider and reports
-Codex-targeted rules as unavailable until a target is configured.
+Codex-targeted rules as unavailable until a target is configured. In the shipped Release A profile
+the same model and effort are also configured as `reviewers.codex` on the workflows row; the
+delegation target stays configured for rollback and is removed with the plugin in Release B.
 
 ## Default rules
 
 The shipped defaults live in this package's composition fragment:
 
-| Rule                 | Trigger                   | Contract                           | Gate   |
-| -------------------- | ------------------------- | ---------------------------------- | ------ |
-| `spec-review`        | `spec-ready`              | review, whole, phase `spec`        | strict |
-| `task-review`        | `spec-task-ready`         | review, task, section supported    | strict |
-| `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft   |
-| `lane-fanout`        | `lane-assignment`         | note                               | strict |
+| Rule                  | Trigger                   | Contract                           | Gate   |
+| --------------------- | ------------------------- | ---------------------------------- | ------ |
+| `spec-review`         | `spec-ready`              | review, whole, phase `spec`        | strict |
+| `task-review`         | `spec-task-ready`         | review, task, section supported    | strict |
+| `integration-review`  | `implementation-complete` | review, whole, phase `integration` | soft   |
+| `lane-fanout`         | `lane-assignment`         | note                               | strict |
+| `implementation-work` | `implementation-work`     | note                               | strict |
 
 The shipped set includes the strict `lane-fanout` rule: a multi-lane change must start one tagged
-worker per unassigned lane or record a per-lane serial note before the turn closes. It ships no
-rule on the `implementation-work` or deprecated `lane-boundary` triggers; the goal-continuity
-`work-checkpoints` capability still owns the pause-time progress and parallel decision and requires
-a `work_checkpoint` call at each substantial pause.
+worker per unassigned lane or record a per-lane serial note before the turn closes. The shipped
+`implementation-work` note rule is dormant in Release A: the five switches above disable its
+trigger's gate, and re-enabling `taskProgress` uses it for rollback. The rule set ships no rule on
+the deprecated `lane-boundary` trigger; the goal-continuity `work-checkpoints` capability still owns
+the pause-time progress and parallel decision and requires a `work_checkpoint` call at each
+substantial pause. The workflows runtime keeps the same coverage through its own definitions and
+owned gates while the switches are false.
 
 Override `targets`/`rules` in the profile's `cordis.patch.yml`; a patch replaces the whole config
 object, so restate every target and rule the session needs. Do not edit the fragment for
@@ -527,6 +558,12 @@ machine-local values.
 ## Task-by-task workflow
 
 The gate exists to make incremental review the normal path:
+
+In the shipped Release A profile the workflows runtime owns this behavior: the `delegate` and
+`task_progress` calls below are deprecated compatibility aliases that route to the native review
+executor and the `note` action, and their records live under `.dsh/workflows/records/` and
+`.dsh/workflows/notes/` (see [workflows](workflows.md#review-executor)). The paths in this section
+describe the legacy runtime that a switch flip restores.
 
 1. Implement the smallest reviewable task.
 2. Mark that task `[x]` in the change's `tasks.md`.
@@ -593,15 +630,18 @@ task_progress(task: "2.1 Extract the parser", status: "in-progress", reason: "ha
 ```
 
 `task_progress` writes `.dsh/delegation/task-progress/<change>.json` with the task id, status
-(`in-progress` or `blocked`), reason, current worktree digest, and time. It runs no model and
-writes no `PASS`. When a profile configures a `task-progress` rule on `implementation-work`, the note
-authorizes a code-changing turn to close only while its digest still matches the worktree and the
-task is still unchecked. Any further file change makes it stale, so
+(`in-progress` or `blocked`), reason, current worktree digest, and time. While the workflow owns the
+progress signal it writes `.dsh/workflows/notes/<change>.json` instead (the `workflows` tool's `note`
+action is the same call). It runs no model and writes no `PASS`. When the legacy progress signal is
+enabled by `gates.taskProgress: true`, the shipped `implementation-work` note rule authorizes a
+code-changing turn to close only while its digest still matches the worktree and the task is still
+unchecked. Any further file change makes it stale, so
 the next turn must refresh the note or tick the task and run its review. A checked task never
 accepts a note and a note never counts as a task-review `PASS`. A note may be written from any
 session, and it attributes the change to that session; task lookup skips an unrelated change whose
 `tasks.md` is unreadable and validates the selected readable task. A successful note also records a
-serial decision for the task's lane in this session's lane ledger (see
+serial decision for the task's lane in this session's lane ledger — under either owner, so a
+progress-owned note satisfies a legacy lane gate and the converse (see
 [the lane assignment gate](#the-lane-assignment-gate)); one note covers one lane.
 
 ## Parallel writers
@@ -702,6 +742,11 @@ worker-assigned task lane is refused and the steer names the lane, while an unre
 task-lane plan fails open. The goal-continuity owner rule still applies independently.
 
 ## Digests and records
+
+Release A's active review store is `.dsh/workflows/records/<definition>/<change>/` (see
+[workflows](workflows.md#review-executor)); the legacy `.dsh/delegation/` paths below belong to a
+switch-flipped runtime. The committed `reviews/<taskId>.json` approval is the same file and field set
+under either owner, written by the active owner first and never rewritten by a rollback.
 
 - The whole-spec digest hashes every file in the change directory except `.openspec.yaml` and the
   root `reviews/` approval directory, with
