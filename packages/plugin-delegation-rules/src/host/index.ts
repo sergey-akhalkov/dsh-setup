@@ -630,6 +630,17 @@ function effectiveSignals(config: EngineConfig): GatesConfig & { taskReview: boo
 }
 
 /**
+ * Whether the legacy task-review rule still produces the review evidence. The
+ * delegate route and the workflows loader resolve the same pair of signals; a
+ * disabled rule leaves the workflow runtime owning the review and writing the
+ * native record store.
+ */
+function legacyTaskReviewOwned(config: EngineConfig): boolean {
+  const signals = effectiveSignals(config)
+  return signals.workflowOwned && signals.taskReview
+}
+
+/**
  * Validate the review queue block. An omitted block enables the documented
  * defaults; an invalid field fails plugin load with the field and its range.
  */
@@ -3084,26 +3095,41 @@ export function recordSatisfies(
 }
 
 /** Where the owned review runtime keeps one intermediate task review record. */
-function ownedTaskRecordPath(cwd: string, change: string, taskId: string): string {
-  return join(cwd, '.dsh', 'workflows', 'records', 'task-review', change, 'tasks', `${taskId}.json`)
+function ownedTaskRecordPath(workspaceRoot: string, change: string, taskId: string): string {
+  return join(
+    workspaceRoot,
+    '.dsh',
+    'workflows',
+    'records',
+    'task-review',
+    change,
+    'tasks',
+    `${taskId}.json`,
+  )
 }
 
 /**
  * The active review owner's intermediate evidence: a PASS/ERROR record for this
- * change and task in the workflow record store. The native record is a superset
- * of the legacy one, so the shared predicate decides the match.
+ * change and task in the workflow record store. The owned runtime writes it at
+ * the resolved OpenSpec workspace root, so a nested session passes that root
+ * rather than its own directory. The native record is a superset of the legacy
+ * one, so the shared predicate decides the match.
  */
-async function ownedTaskReviewed(cwd: string, change: string, taskId: string): Promise<boolean> {
+async function ownedTaskReviewed(
+  workspaceRoot: string,
+  change: string,
+  taskId: string,
+): Promise<boolean> {
   let raw: string
   try {
-    raw = await readFile(ownedTaskRecordPath(cwd, change, taskId), 'utf8')
+    raw = await readFile(ownedTaskRecordPath(workspaceRoot, change, taskId), 'utf8')
   } catch {
     return false
   }
   try {
     const value: unknown = JSON.parse(raw)
     if (!isRecord(value)) return false
-    const reviewer = await readReviewerBinding(join(cwd, 'openspec'))
+    const reviewer = await readReviewerBinding(join(workspaceRoot, 'openspec'))
     if (reviewer.error !== undefined) return false
     if (
       value.rule !== 'task-review' ||
@@ -4035,7 +4061,7 @@ class DelegationEngine {
     // Route from the state the workflows loader consumes, not the raw switches:
     // a switch alone never keeps its legacy signal steering.
     const signals = effectiveSignals(this.config)
-    if (ruleId === 'task-review') return !(signals.workflowOwned && signals.taskReview)
+    if (ruleId === 'task-review') return !legacyTaskReviewOwned(this.config)
     if (ruleId === 'spec-review') return !signals.specReview
     if (ruleId === 'integration-review') return !signals.integrationReview
     return false
@@ -6308,10 +6334,13 @@ async function evaluateGate(
         )
         const ownChecked = tasks.filter((task) => task.checked && entry.tasks.includes(task.id))
         const reviewedOwn = new Set<string>()
+        // The review signal's owner is the only producer of its evidence, and a
+        // native record lives at the resolved workspace root, not at the session cwd.
+        const legacyReview = legacyTaskReviewOwned(deps.config)
         for (const task of ownChecked) {
-          // The review signal's owner is the only producer of its evidence.
-          if (!signals.workflowOwned) {
-            if (await ownedTaskReviewed(cwd, change.name, task.id)) reviewedOwn.add(task.id)
+          if (!legacyReview) {
+            if (await ownedTaskReviewed(dirname(openspecRoot), change.name, task.id))
+              reviewedOwn.add(task.id)
             continue
           }
           for (const rule of taskRules) {

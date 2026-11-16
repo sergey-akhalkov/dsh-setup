@@ -915,6 +915,8 @@ async function openComposed(
     sessionDir?: string
     /** Extra legacy rules on top of the composed row, such as lane-boundary. */
     extraRules?: Array<Record<string, unknown>>
+    /** Turn the composed task-review rule off so the workflows runtime owns it. */
+    disableTaskReviewRule?: boolean
   } = {},
 ): Promise<FakeHost> {
   process.env.DSH_WORKFLOWS_HOST_KEY = KEY
@@ -933,7 +935,14 @@ async function openComposed(
         (rule) => !(rule.when === 'implementation-work' && rule.contract === 'note'),
       )
     : (delegation.rules as Array<Record<string, unknown>>)
-  const rules = [...composedRules, ...(options.extraRules ?? [])]
+  const rules = [...composedRules, ...(options.extraRules ?? [])].map((rule) =>
+    options.disableTaskReviewRule === true &&
+    rule.when === 'spec-task-ready' &&
+    rule.contract === 'review' &&
+    rule.scope === 'task'
+      ? { ...rule, gate: 'none' }
+      : rule,
+  )
   applyDelegation(host.ctx as never, { ...delegation, rules, gates } as never)
   apply(host.ctx as never, workflows as never)
   await waitFor(() => host.watch.length > 0)
@@ -1021,6 +1030,28 @@ async function completeLane(
   await writeFile(file, after, 'utf8')
 }
 
+/** The native task-review PASS the owned runtime publishes for one checked task. */
+async function writeNativeTaskPass(workspace: string, taskId: string): Promise<void> {
+  const records = join(workspace, '.dsh', 'workflows', 'records', 'task-review', CHANGE, 'tasks')
+  await mkdir(records, { recursive: true })
+  await writeFile(
+    join(records, `${taskId}.json`),
+    JSON.stringify({
+      rule: 'task-review',
+      change: CHANGE,
+      phase: 'task',
+      scope: 'task',
+      taskId,
+      digest: 'a'.repeat(64),
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-11-14T10:00:00.000Z',
+    }),
+    'utf8',
+  )
+}
+
 describe('task_progress routes by the resolved legacy signal', () => {
   it('writes the owned note path when the switch is on but no note rule covers it', async () => {
     const workspace = await gitWorkspace(MIXED_TASKS)
@@ -1079,6 +1110,29 @@ describe('composed rollback of each engine gate', () => {
     expect(host.steers.find((steer) => steer.kind === 'workflows-gate')?.text).toContain(
       'lane assignment is missing',
     )
+  })
+
+  it('accepts the native PASS while workflowOwned is on and the task-review rule is off', async () => {
+    const workspace = await gitWorkspace(UNCHECKED_TASKS)
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: true,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: true,
+        laneFanout: false,
+      },
+      { disableTaskReviewRule: true },
+    )
+    // The disabled rule routes delegate to the workflows runtime, whose PASS is
+    // native; the restored gate must read that store even though the raw
+    // workflowOwned switch is on.
+    await writeNativeTaskPass(workspace, TASK_ID)
+    await completeLane(host, workspace, UNCHECKED_TASKS, CHECKED_TASKS)
+    await implementationWrite(host, workspace)
+    await closeTurn(host, 1)
+    expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
   })
 
   it('restores the legacy lane steer while the owned progress gate keeps steering', async () => {
@@ -1589,6 +1643,30 @@ describe('nested session directories route to the OpenSpec workspace', () => {
     expect(
       await readJson(join(nested, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
     ).toBeUndefined()
+    await closeTurn(host, 1)
+    expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
+  })
+
+  it('accepts a reviewed tick from a nested session at the restored progress gate', async () => {
+    const workspace = await gitWorkspace(UNCHECKED_TASKS)
+    const nested = join(workspace, 'packages', 'app')
+    await mkdir(nested, { recursive: true })
+    const host = await openComposed(
+      workspace,
+      {
+        workflowOwned: false,
+        specReview: false,
+        integrationReview: false,
+        taskProgress: true,
+        laneFanout: false,
+      },
+      { sessionDir: nested },
+    )
+    // The owned runtime publishes the task PASS at the resolved workspace root;
+    // the restored gate must read that store, not the nested session directory.
+    await writeNativeTaskPass(workspace, TASK_ID)
+    await completeLane(host, workspace, UNCHECKED_TASKS, CHECKED_TASKS)
+    await implementationWrite(host, workspace)
     await closeTurn(host, 1)
     expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
   })
