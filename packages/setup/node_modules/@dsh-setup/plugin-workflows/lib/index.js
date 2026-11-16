@@ -25,7 +25,7 @@ import { advanceIntake } from './intake.js';
 import { readInvolvement, writeInvolvement } from './involvement.js';
 import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
 import { readProgressNote, writeProgressNote } from './notes.js';
-import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifySettings, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
+import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifySettings, retiredGateIssue, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
 import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
@@ -3452,6 +3452,22 @@ export function apply(ctx, config = {}) {
                 changes.delete(change);
         if (changes.size === 0)
             return undefined;
+        // An owned gate acts only when the tracked report certifies its replayed
+        // cases; an uncertified gate refuses the close instead of passing silently.
+        const texts = [];
+        const parity = readParityReport();
+        for (const [owned, group] of [
+            [progressOwned, 'task-progress'],
+            [laneOwned, 'lane-assignment'],
+        ]) {
+            if (!owned)
+                continue;
+            const issue = retiredGateIssue(parity.report, parity.error, shippedParityReportPath(), group);
+            if (issue !== undefined)
+                texts.push(`rule "${group}": ${issue}`);
+        }
+        if (texts.length > 0)
+            return texts.join('\n');
         // A shell edit leaves no write observation; compare the implementation state
         // the turn started from with the state at this close.
         const baseline = implementationBaseline.get(session);
@@ -3466,7 +3482,6 @@ export function apply(ctx, config = {}) {
         // The task-review evidence and the note both follow their signal's owner.
         const reviewOwner = legacy.enabled.has('delegation-rules/task-review') ? 'legacy' : 'workflows';
         const noteOwner = progressOwned ? 'workflows' : 'legacy';
-        const texts = [];
         for (const change of [...changes].sort()) {
             // The tick that completed this change's task may already be evicted from
             // the bounded observation buffer; the host retained its ids this turn.

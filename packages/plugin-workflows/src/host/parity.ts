@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Definition } from './definitions.js'
+import { type Definition, SWITCH_BY_SIGNAL } from './definitions.js'
 
 /**
  * The release-bound retirement parity: the tracked report, its template
@@ -25,6 +25,12 @@ export interface ParityGateEntry {
   readonly status: string
 }
 
+export interface ParityRetainedEntry {
+  readonly cases: number
+  readonly replayed: number
+  readonly status: string
+}
+
 export interface ParityReport {
   readonly v: 1
   readonly change: string
@@ -32,7 +38,7 @@ export interface ParityReport {
   readonly templates: Readonly<Record<string, string>>
   readonly settings: Readonly<Record<string, ParitySettingsEntry>>
   readonly gates: Readonly<Record<string, ParityGateEntry>>
-  readonly retained: Readonly<Record<string, { readonly cases: number; readonly status: string }>>
+  readonly retained: Readonly<Record<string, ParityRetainedEntry>>
   readonly mismatches: readonly string[]
 }
 
@@ -72,11 +78,13 @@ export function templateHash(definition: Definition): string {
 }
 
 /** Definitions that declare a legacy signal are report-bound when `own`. */
-/** The three retirement definitions, bound by id even if editable metadata is removed. */
+/** The five retirement ids, bound by id even if editable metadata is removed. */
 const RETIREMENT_BINDINGS: Readonly<Record<string, { plugin: string; signal: string }>> = {
   retro: { plugin: 'goal-continuity', signal: 'work_checkpoint' },
   'task-review': { plugin: 'delegation-rules', signal: 'task-review' },
   verify: { plugin: 'verification-gate', signal: 'verification-gate' },
+  'spec-review': { plugin: 'delegation-rules', signal: 'spec-review' },
+  'integration-review': { plugin: 'delegation-rules', signal: 'integration-review' },
 }
 
 /** The report binds these ids whenever owned, independent of settings.legacy. */
@@ -144,6 +152,23 @@ function gateEntries(value: unknown): Record<string, ParityGateEntry> | undefine
   return entries
 }
 
+function retainedEntries(value: unknown): Record<string, ParityRetainedEntry> | undefined {
+  if (!isRecord(value)) return undefined
+  const entries: Record<string, ParityRetainedEntry> = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.cases !== 'number' ||
+      typeof entry.replayed !== 'number' ||
+      typeof entry.status !== 'string'
+    ) {
+      return undefined
+    }
+    entries[key] = { cases: entry.cases, replayed: entry.replayed, status: entry.status }
+  }
+  return entries
+}
+
 /** Read and shape-check the tracked report. */
 export function readParityReport(file: string = shippedParityReportPath()): {
   report?: ParityReport
@@ -176,10 +201,13 @@ export function readParityReport(file: string = shippedParityReportPath()): {
   if (settings === undefined || gates === undefined) {
     return { error: 'the parity report settings and gates sections are malformed' }
   }
-  const retained = value.retained
-  if (!isRecord(retained)) return { error: 'the parity report must carry the retained cases' }
-  if (!Array.isArray(value.mismatches)) {
-    return { error: 'the parity report mismatches must be a list' }
+  const retained = retainedEntries(value.retained)
+  if (retained === undefined) return { error: 'the parity report retained cases are malformed' }
+  if (
+    !Array.isArray(value.mismatches) ||
+    !value.mismatches.every((entry) => typeof entry === 'string')
+  ) {
+    return { error: 'the parity report mismatches must be a list of strings' }
   }
   return {
     report: {
@@ -189,25 +217,75 @@ export function readParityReport(file: string = shippedParityReportPath()): {
       templates: templates as Record<string, string>,
       settings,
       gates,
-      retained: retained as ParityReport['retained'],
-      mismatches: value.mismatches as string[],
+      retained,
+      mismatches: value.mismatches,
     },
   }
 }
 
 /** The rollback switch a refused definition names. */
 export function legacySwitchFor(plugin: string, signal: string): string {
-  if (plugin === 'delegation-rules') return 'delegation.gates.workflowOwned: true'
+  if (plugin === 'delegation-rules') {
+    const switchName = SWITCH_BY_SIGNAL[signal]
+    return switchName === undefined ? 'the per-signal gate switch' : `${switchName}: true`
+  }
   if (plugin === 'goal-continuity') return 'checkpoint.automation: true'
   if (plugin === 'verification-gate') return 'enable the verification-gate row'
   return `enable "${plugin}/${signal}"`
 }
 
-/** The report gate key for one definition id. */
+/** The report gate key for one legacy-gate definition id. */
 function gateKeyOf(definitionId: string): string {
   if (definitionId === 'retro') return 'checkpoint'
   if (definitionId === 'verify') return 'verification'
   return definitionId
+}
+
+/** A retired gate certified by the report's replayed retained cases. */
+export type RetainedGate =
+  | 'spec-review'
+  | 'integration-review'
+  | 'task-progress'
+  | 'lane-assignment'
+
+/** Whether every case of one retained group replayed with a matching decision. */
+function retainedCertified(entry: ParityRetainedEntry | undefined): boolean {
+  return (
+    entry !== undefined &&
+    entry.status === 'replayed' &&
+    entry.cases > 0 &&
+    entry.replayed === entry.cases
+  )
+}
+
+/**
+ * The runtime certification of one retired gate: a recorded mismatch, an absent
+ * case table, or a replay that did not complete is a failure. A missing or
+ * changed evaluator surfaces as such an entry, so the gate is never certified
+ * from a stale table. Returns one line naming the cause and the rollback.
+ */
+export function retiredGateIssue(
+  report: ParityReport | undefined,
+  reportError: string | undefined,
+  reportPath: string,
+  group: RetainedGate,
+): string | undefined {
+  const remedy = `set ${legacySwitchFor('delegation-rules', group)} to restore the legacy gate, or run pnpm workflows:parity`
+  if (report === undefined) {
+    return `the parity report is missing or unreadable at "${reportPath}" (${reportError ?? 'no report'}); ${remedy}`
+  }
+  const entry = report.retained[group]
+  if (entry === undefined) {
+    return `the parity report does not carry the retained "${group}" cases; a missing evaluator fails certification; ${remedy}`
+  }
+  if (!retainedCertified(entry)) {
+    return `the retained "${group}" parity cases did not replay (status ${entry.status}, ${String(entry.replayed)}/${String(entry.cases)}); a missing evaluator or a decision mismatch fails certification; ${remedy}`
+  }
+  if (report.mismatches.length > 0) {
+    const first = (report.mismatches[0] ?? '').slice(0, 200)
+    return `the parity report records ${String(report.mismatches.length)} mismatch(es) ("${first}"); a decision mismatch fails certification; ${remedy}`
+  }
+  return undefined
 }
 
 /** Every issue that blocks one `own` definition from loading, with its id. */
@@ -236,9 +314,18 @@ export function parityLoadIssues(
     }
     return { issues, refused }
   }
+  const mismatch =
+    report.mismatches.length === 0
+      ? undefined
+      : `the parity report records ${String(report.mismatches.length)} mismatch(es) ("${(report.mismatches[0] ?? '').slice(0, 200)}"); a decision mismatch fails certification`
   const verifyIsBound = bound.some((definition) => definition.id === 'verify')
   for (const definition of bound) {
     const rollback = retirementSwitch(definition.id)
+    if (mismatch !== undefined) {
+      refused.add(definition.id)
+      issues.push(`workflow definition "${definition.id}": set ${rollback}; ${mismatch}`)
+      continue
+    }
     const expected = report.templates[definition.id]
     const actual = templateHash(definition)
     if (expected === undefined) {
@@ -253,6 +340,14 @@ export function parityLoadIssues(
       issues.push(
         `workflow definition "${definition.id}": template hash ${actual} does not match the report's ${expected}; set ${rollback} or run pnpm workflows:parity`,
       )
+      continue
+    }
+    if (definition.id === 'spec-review' || definition.id === 'integration-review') {
+      const retained = retiredGateIssue(report, undefined, reportPath, definition.id)
+      if (retained !== undefined) {
+        refused.add(definition.id)
+        issues.push(`workflow definition "${definition.id}": ${retained}`)
+      }
       continue
     }
     const gate = report.gates[gateKeyOf(definition.id)]

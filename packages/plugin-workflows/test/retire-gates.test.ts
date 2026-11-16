@@ -128,7 +128,7 @@ describe('parity load gate and verify settings', () => {
     )
     for (const issue of missing.issues) {
       expect(issue.slice(0, 300)).toMatch(
-        /checkpoint\.automation: true|delegation\.gates\.workflowOwned: true|verification-gate/u,
+        /checkpoint\.automation: true|delegation\.gates\.(?:workflowOwned|specReview|integrationReview): true|verification-gate/u,
       )
     }
   })

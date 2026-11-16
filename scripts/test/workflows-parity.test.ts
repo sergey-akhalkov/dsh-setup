@@ -3,7 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { shippedParityReportPath } from '../../packages/plugin-workflows/src/host/parity.ts'
+import { loadShippedDefinitions } from '../../packages/plugin-workflows/src/host/definitions.ts'
+import {
+  parityLoadIssues,
+  retiredGateIssue,
+  shippedParityReportPath,
+} from '../../packages/plugin-workflows/src/host/parity.ts'
 import {
   assertArchiveRecognition,
   PARITY_CASES,
@@ -211,6 +216,57 @@ describe('retirement parity report', () => {
     expect(text).toContain('retained-missing-workflow: the workflow evaluator is missing')
     expect(text).toContain('retained-missing-legacy: the legacy evaluator is missing')
     expect(parityExitCode(report)).toBe(1)
+  })
+
+  it('fails --check and the matching ownership gate on a mismatch or an absent evaluator', async () => {
+    const allow = { decision: 'allow' as const, reason: 'the close is allowed' }
+    const refuse = { decision: 'refuse' as const, reason: 'the close is refused' }
+    const mismatch = {
+      id: 'retained-integration-mismatch',
+      gate: 'retained' as const,
+      retained: { group: 'integration-review' as const },
+      legacy: refuse,
+      sequence: {
+        legacy: async () => [refuse, allow],
+        workflow: async () => [allow, allow],
+      },
+    }
+    const missingEvaluator = {
+      id: 'retained-progress-missing-evaluator',
+      gate: 'retained' as const,
+      retained: { group: 'task-progress' as const },
+      legacy: allow,
+      // No workflow evaluator: the retained case cannot replay.
+    }
+    const casesByDetail = [
+      [[...PARITY_CASES, mismatch], 'retained-integration-mismatch'] as const,
+      [[...PARITY_CASES, missingEvaluator], 'retained-progress-missing-evaluator'] as const,
+    ]
+    for (const [cases, detail] of casesByDetail) {
+      const report = await buildParityReport(new Date('2026-11-08T00:00:00.000Z'), cases)
+      expect(report.mismatches.join('\n'), detail).toContain(detail)
+      // `node scripts/workflows-parity.ts --check` calls this same check.
+      const check = await checkParityReport(shippedParityReportPath(), cases)
+      expect(check.ok, detail).toBe(false)
+      expect(check.detail, detail).toContain(detail)
+    }
+    const mismatchReport = await buildParityReport(new Date(), [...PARITY_CASES, mismatch])
+    const refused = parityLoadIssues(
+      loadShippedDefinitions(),
+      mismatchReport,
+      shippedParityReportPath(),
+      undefined,
+    )
+    expect([...refused.refused]).toContain('integration-review')
+    const missingReport = await buildParityReport(new Date(), [...PARITY_CASES, missingEvaluator])
+    const gateIssue = retiredGateIssue(
+      missingReport,
+      undefined,
+      shippedParityReportPath(),
+      'task-progress',
+    )
+    expect(gateIssue).toContain('task-progress')
+    expect(gateIssue).toContain('delegation.gates.taskProgress: true')
   })
 
   it('fails when an exhausted soft run still blocks an authorized archive', async () => {
