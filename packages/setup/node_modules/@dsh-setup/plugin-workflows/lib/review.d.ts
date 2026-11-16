@@ -100,6 +100,26 @@ export declare function localReviewRecordPath(input: {
 }): string;
 /** The committed portable approval path; the format is unchanged. */
 export declare function portableApprovalPath(change: string, taskId: string): string;
+/** One section-scope task review: the resolved section and its checked coverage. */
+export interface SectionReview {
+    readonly key: string;
+    readonly title: string;
+    /** The stable 16-hex id the step's record evidence names in place of a task id. */
+    readonly recordId: string;
+    readonly covered: ReadonlyArray<{
+        readonly id: string;
+        readonly number: string;
+        readonly text: string;
+    }>;
+    readonly unchecked: ReadonlyArray<{
+        readonly id: string;
+        readonly number: string;
+        readonly text: string;
+    }>;
+}
+/** The section digest: key, title, sorted covered ids/numbers/texts, the frozen
+ * change artifacts, and the snapshot tree. Any coverage change invalidates it. */
+export declare function sectionReviewDigest(section: SectionReview, artifactDigest: string, tree?: string): string;
 /** One review record; the local file is a provenance superset of the approval. */
 export interface ReviewRecord {
     readonly definition: string;
@@ -108,6 +128,10 @@ export interface ReviewRecord {
     readonly phase: string;
     readonly scope: 'whole' | 'task';
     readonly taskId?: string;
+    /** A section-scope task review: the section key, title, and covered task ids. */
+    readonly section?: string;
+    readonly sectionTitle?: string;
+    readonly taskIds?: readonly string[];
     readonly digest: string;
     readonly worktreeDigest?: string;
     readonly verdict: ReviewVerdict;
@@ -150,6 +174,7 @@ export interface ReviewPromptInput {
         readonly number?: string;
         readonly text: string;
     };
+    readonly section?: SectionReview;
     readonly digest: string;
     readonly snapshot: boolean;
     readonly extra?: string;
@@ -205,6 +230,8 @@ export interface ReviewRunInput {
         readonly artifactDigest?: string;
         /** The frozen checkout to run in; absent means the live worktree. */
         readonly reviewCwd?: string;
+        /** The authoritative section coverage of a section-scope task review. */
+        readonly section?: SectionReview;
         /** Re-check the reviewed input set after the run; a reason discards the verdict. */
         readonly liveGuard?: () => Promise<string | undefined>;
     };
@@ -239,9 +266,9 @@ export interface ReviewRecordBaseline {
     readonly fingerprint: string | undefined;
 }
 /** The local record path one review attempt publishes to. */
-export declare function reviewRecordPathOf(input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task'>): string;
+export declare function reviewRecordPathOf(input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task' | 'prepared'>): string;
 /** Read the authoritative record's comparable fingerprint; absent or unreadable is undefined. */
-export declare function readReviewRecordFingerprint(workspace: string, input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task'>): Promise<string | undefined>;
+export declare function readReviewRecordFingerprint(workspace: string, input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task' | 'prepared'>): Promise<string | undefined>;
 /** Record an engine-side failure (queue full, timeout) as an ERROR review record. */
 export declare function recordReviewFailure(input: {
     readonly run: WorkflowRun;

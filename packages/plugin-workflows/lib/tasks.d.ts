@@ -42,3 +42,32 @@ export interface TaskLaneView {
  * to it. A title carrying "serial" is the plan's tail and never parallel work.
  */
 export declare function taskLanes(markdown: string): TaskLaneView[];
+/** One `tasks.md` level-2 section with its numbered tasks and checked coverage. */
+export interface TaskSection {
+    readonly key: string;
+    readonly title: string;
+    readonly tasks: readonly NumberedTaskLine[];
+    readonly covered: readonly NumberedTaskLine[];
+    readonly unchecked: readonly NumberedTaskLine[];
+}
+/**
+ * The stable 16-hex record id a section run's evidence path names in place of a
+ * task id. It is not a task id: the section record covers several tasks.
+ */
+export declare function sectionRecordId(key: string): string;
+/**
+ * Resolve a section selector against the level-2 task groups: the heading
+ * number (`1`), its wildcard form (`1.x`), the normalized or bare title, or
+ * `untitled`. Every rejection names the available sections.
+ */
+export declare function resolveTaskSection(markdown: string, wanted: string, change: string): TaskSection;
+/**
+ * Re-resolve one section by key and prove its submitted covered ids are still
+ * checked; a changed set or checkbox needs a fresh review, never a widened one.
+ */
+export declare function sectionCoverage(markdown: string, key: string, taskIds: readonly string[]): {
+    readonly section: TaskSection;
+    readonly covered: NumberedTaskLine[];
+} | {
+    readonly error: string;
+};

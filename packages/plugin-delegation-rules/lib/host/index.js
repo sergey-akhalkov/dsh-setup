@@ -354,6 +354,20 @@ export function resolveLegacySignals(config) {
     };
 }
 /**
+ * The effective legacy signal state this row publishes and both runtimes route
+ * by: a switch is on and a rule that enforces it is configured, plus the
+ * task-review rule coverage the workflow loader reads separately.
+ */
+function effectiveSignals(config) {
+    return {
+        ...resolveLegacySignals(config),
+        taskReview: config.rules.some((rule) => rule.when === 'spec-task-ready' &&
+            rule.contract === 'review' &&
+            rule.scope === 'task' &&
+            rule.gate !== 'none'),
+    };
+}
+/**
  * Validate the review queue block. An omitted block enables the documented
  * defaults; an invalid field fails plugin load with the field and its range.
  */
@@ -3034,13 +3048,15 @@ class DelegationEngine {
         this.sectionIdentities.set(key, { identity: run.file.identity, seq });
     }
     signalOwned(ruleId) {
-        const gates = this.config.gates;
+        // Route from the state the workflows loader consumes, not the raw switches:
+        // a switch alone never keeps its legacy signal steering.
+        const signals = effectiveSignals(this.config);
         if (ruleId === 'task-review')
-            return !gates.workflowOwned;
+            return !(signals.workflowOwned && signals.taskReview);
         if (ruleId === 'spec-review')
-            return !gates.specReview;
+            return !signals.specReview;
         if (ruleId === 'integration-review')
-            return !gates.integrationReview;
+            return !signals.integrationReview;
         return false;
     }
     async runDelegate(args, context) {
@@ -5568,14 +5584,7 @@ export function apply(ctx, config = {}, options = {}) {
     // from this status; the review runtime stays mounted either way. A signal is
     // reported enabled only when its switch is on and a covering rule is
     // configured, so a switch alone never keeps a `defer` definition alive.
-    const signals = resolveLegacySignals(validated);
-    provideStatus(ctx, 'delegationRulesStatus', Object.freeze({
-        ...signals,
-        taskReview: validated.rules.some((rule) => rule.when === 'spec-task-ready' &&
-            rule.contract === 'review' &&
-            rule.scope === 'task' &&
-            rule.gate !== 'none'),
-    }));
+    provideStatus(ctx, 'delegationRulesStatus', Object.freeze(effectiveSignals(validated)));
     const state = new DelegationState();
     // The workflows note action records the serial lane here while this row still
     // owns the lane signal; the caller resolves ownership. That note is the only

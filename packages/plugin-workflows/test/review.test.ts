@@ -26,6 +26,8 @@ import {
   resolveReviewers,
   reviewDigest,
   runReviewStep,
+  type SectionReview,
+  sectionReviewDigest,
   writeLocalReviewRecord,
   writePortableApproval,
 } from '../src/host/review.ts'
@@ -200,6 +202,76 @@ describe('runReviewStep', () => {
         reasoningEffort: 'xhigh',
       },
       time: '1970-01-01T00:00:02.000Z',
+    })
+  })
+
+  it('publishes one approval per covered section task and preserves a matching one', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const section: SectionReview = {
+      key: '1',
+      title: '1. Compose the profile',
+      recordId: 'fedcba9876543210',
+      covered: [
+        { id: '0123456789abcdef', number: '1.1', text: 'First covered' },
+        { id: '1111111111111111', number: '1.2', text: 'Second covered' },
+      ],
+      unchecked: [],
+    }
+    const digest = sectionReviewDigest(section, DIGEST)
+    const preservedPath = join(root, portableApprovalPath('auth', '0123456789abcdef'))
+    await mkdir(join(preservedPath, '..'), { recursive: true })
+    const preserved = `${JSON.stringify(
+      {
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: '0123456789abcdef',
+        digest: 'b'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
+        time: '2026-01-01T00:00:00.000Z',
+      },
+      null,
+      2,
+    )}\n`
+    await writeFile(preservedPath, preserved, 'utf8')
+    const result = await invoke(
+      root,
+      runnerFor(fenced({ digest, verdict: 'PASS', findings: [] })),
+      {
+        prepared: { specDigest: DIGEST, section },
+        context: {
+          workspace: root,
+          values: {
+            name: 'auth',
+            taskId: section.recordId,
+            taskIds: section.covered.map((task) => task.id),
+          },
+        },
+        task: undefined,
+      },
+    )
+    expect(result.run.steps[0]?.state).toBe('done')
+    expect(result.record).toMatchObject({
+      scope: 'task',
+      taskId: section.recordId,
+      section: '1',
+      taskIds: section.covered.map((task) => task.id),
+      digest,
+    })
+    // The matching approval stays byte-identical; the other covered task gets one.
+    expect(await readFile(preservedPath, 'utf8')).toBe(preserved)
+    const written = JSON.parse(
+      await readFile(join(root, portableApprovalPath('auth', '1111111111111111')), 'utf8'),
+    ) as Record<string, unknown>
+    expect(written).toMatchObject({
+      rule: 'task-review',
+      change: 'auth',
+      taskId: '1111111111111111',
+      digest,
+      verdict: 'PASS',
     })
   })
 

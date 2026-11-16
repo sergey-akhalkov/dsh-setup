@@ -12,7 +12,7 @@ import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
 import { writeInvolvement } from '../src/host/involvement.ts'
 import { listAuthenticatedRuns } from '../src/host/runs.ts'
-import { taskIdOf } from '../src/host/tasks.ts'
+import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
 
 /**
  * The composed Release A profile: the delegation row and the workflows row are
@@ -407,6 +407,23 @@ describe('composed Release A profile', () => {
 const MIXED_TASKS = `${UNCHECKED_TASKS.replace('- [ ] 1.1', '- [x] 1.1')}- [ ] 1.2 Follow-up task
 `
 
+const SECOND_TASK_TEXT = 'Second covered task'
+const SECOND_TASK_ID = taskIdOf(SECOND_TASK_TEXT)
+const UNCHECKED_TASK_ID = taskIdOf('Unchecked follow-up')
+const SECTION_RECORD_ID = sectionRecordId('1')
+const SECTION_TASKS = `# Tasks
+
+## 1. Compose the profile (lane 1, owns \`packages/plugin-workflows/**\`)
+
+- [x] 1.1 ${TASK_TEXT}
+- [x] 1.2 ${SECOND_TASK_TEXT}
+- [ ] 1.3 Unchecked follow-up
+
+## 2. Docs (lane 2, owns \`docs/**\`)
+
+- [ ] 2.1 Doc task
+`
+
 function toolText(value: unknown): string {
   return typeof value === 'object' && value !== null && 'text' in value
     ? String((value as { text: unknown }).text)
@@ -461,6 +478,84 @@ describe('deprecated aliases route by effective owner', () => {
     expect(status.match(/delegation_status is deprecated; use the workflows tool/gu)).toHaveLength(
       1,
     )
+  })
+
+  it('reviews a whole section through the owned definition run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(SECTION_TASKS)
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(workspace)
+    applyDelegation(host.ctx as never, delegation as never)
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+    await writeInvolvement(workspace, SESSION, [CHANGE])
+    const change = join(workspace, 'openspec', 'changes', CHANGE)
+
+    // The switch-only section call starts one owned definition run whose
+    // context names the section and every checked task it covers.
+    const started = toolText(
+      await host.callTool('delegate', { rule: 'task-review', change: CHANGE, section: '1' }),
+    )
+    expect(started).toMatch(/section "1" review started/u)
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const runs = (await listAuthenticatedRuns(workspace, auth)).filter(
+      (run) => run.definition.id === 'task-review',
+    )
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.context).toMatchObject({
+      name: CHANGE,
+      taskId: SECTION_RECORD_ID,
+      section: '1',
+      taskIds: [TASK_ID, SECOND_TASK_ID],
+    })
+
+    await closeTurn(host, 2)
+    const recordPath = join(
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      CHANGE,
+      'tasks',
+      `${SECTION_RECORD_ID}.json`,
+    )
+    await waitFor(async () => (await readJson(join(workspace, recordPath)))?.verdict === 'PASS')
+    const record = await readJson(join(workspace, recordPath))
+    expect(record).toMatchObject({ scope: 'task', section: '1', verdict: 'PASS' })
+    expect(record?.taskIds).toEqual([TASK_ID, SECOND_TASK_ID])
+    // One prompt covers both checked tasks and never the unchecked one's id.
+    const activations = host.activations.filter((activation) => activation.rule === 'task-review')
+    expect(activations).toHaveLength(1)
+    expect(activations[0]?.prompt).toContain(TASK_TEXT)
+    expect(activations[0]?.prompt).toContain(SECOND_TASK_TEXT)
+    expect(activations[0]?.prompt).not.toContain(UNCHECKED_TASK_ID)
+    // One portable approval per covered checked task; none for the unchecked one.
+    await waitFor(
+      async () =>
+        (await readJson(join(change, 'reviews', `${SECOND_TASK_ID}.json`)))?.verdict === 'PASS',
+    )
+    expect(await readJson(join(change, 'reviews', `${TASK_ID}.json`))).toMatchObject({
+      rule: 'task-review',
+      change: CHANGE,
+      taskId: TASK_ID,
+      verdict: 'PASS',
+    })
+    expect(await readJson(join(change, 'reviews', `${SECOND_TASK_ID}.json`))).toMatchObject({
+      rule: 'task-review',
+      change: CHANGE,
+      taskId: SECOND_TASK_ID,
+      verdict: 'PASS',
+    })
+    expect(await readJson(join(change, 'reviews', `${UNCHECKED_TASK_ID}.json`))).toBeUndefined()
+    // The completion coverage step settles from those approvals.
+    await closeTurn(host, 3)
+    await waitFor(async () => {
+      const run = (await listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.id === runs[0]?.id,
+      )
+      return run?.status === 'completed'
+    })
   })
 
   it('keeps the legacy runtime and the legacy note path while the switches are enabled', async () => {

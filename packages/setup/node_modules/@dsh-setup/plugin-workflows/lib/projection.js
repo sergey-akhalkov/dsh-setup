@@ -313,6 +313,17 @@ export function localRecordError(record) {
             return 'task-scoped record needs a 16-hex taskId';
         }
     }
+    if (record.section !== undefined && typeof record.section !== 'string') {
+        return 'field "section" must be a string';
+    }
+    if (record.sectionTitle !== undefined && typeof record.sectionTitle !== 'string') {
+        return 'field "sectionTitle" must be a string';
+    }
+    if (record.taskIds !== undefined &&
+        (!Array.isArray(record.taskIds) ||
+            !record.taskIds.every((id) => typeof id === 'string' && TASK_ID.test(id)))) {
+        return 'field "taskIds" must be a list of 16-hex task ids';
+    }
     if (record.session !== undefined && typeof record.session !== 'string') {
         return 'field "session" must be a string';
     }

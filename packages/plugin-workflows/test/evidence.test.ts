@@ -259,6 +259,49 @@ describe('record and tool evidence', () => {
     ).toMatchObject({ ok: false, failure: { reason: 'missing-file' } })
   })
 
+  it('refuses a section record that covers a different checked set', async () => {
+    const workspace = await tempWorkspace()
+    const recordId = 'a'.repeat(16)
+    const covered = ['0123456789abcdef', 'fedcba9876543210']
+    await writeJson(workspace, `.dsh/workflows/records/task-review/auth/tasks/${recordId}.json`, {
+      definition: 'task-review',
+      rule: 'task-review',
+      change: 'auth',
+      phase: 'task',
+      scope: 'task',
+      taskId: recordId,
+      section: '1',
+      sectionTitle: '1. Compose the profile',
+      taskIds: covered,
+      digest: 'c'.repeat(64),
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-01-01T00:00:00.000Z',
+    })
+    const evidence: Evidence = {
+      kind: 'record',
+      rule: 'task-review',
+      change: '{name}',
+      scope: 'task',
+      task: '{taskId}',
+      verdicts: ['PASS'],
+      path: '.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json',
+    }
+    const base = { name: 'auth', taskId: recordId }
+    expect(
+      (await verifyEvidence(evidence, { workspace, values: { ...base, taskIds: covered } })).ok,
+    ).toBe(true)
+    const changed = await verifyEvidence(evidence, {
+      workspace,
+      values: { ...base, taskIds: [covered[0], '1111111111111111'] },
+    })
+    expect(changed).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
+    if (!changed.ok) {
+      expect(changed.failure.detail).toMatch(/covers a different checked task set/u)
+    }
+  })
+
   it('accepts a checkpoint record and refuses a non-checkpoint file', async () => {
     const workspace = await tempWorkspace()
     const checkpointPath = `.dsh/work-checkpoints/${'a'.repeat(16)}/3.json`

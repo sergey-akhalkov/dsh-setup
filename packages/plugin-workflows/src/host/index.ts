@@ -115,6 +115,8 @@ import {
   resolveReviewTimeout,
   reviewDigest,
   reviewPhase,
+  type SectionReview,
+  sectionReviewDigest,
   TASK_ID_PATTERN,
 } from './review.js'
 import { type ReviewReprepareOutcome, ReviewScheduler } from './review-scheduler.js'
@@ -151,7 +153,12 @@ import {
   checkedTaskIds,
   findTaskOf,
   isTaskChecked,
+  type NumberedTaskLine,
   numberedTasks,
+  resolveTaskSection,
+  sectionCoverage,
+  sectionRecordId,
+  type TaskSection,
   taskLanes,
   taskOf,
 } from './tasks.js'
@@ -599,6 +606,78 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
     enforceParallel:
       (enforceParallel as boolean | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.enforceParallel,
   }
+}
+
+/** The run context of one section-scope task review. */
+interface SectionRun {
+  readonly key: string
+  /** The stable 16-hex record id the step's evidence path names. */
+  readonly recordId: string
+  readonly taskIds: readonly string[]
+}
+
+/** Read a section run's context; a single-task run has no section key. */
+function sectionRunOf(context: Readonly<Record<string, unknown>>): SectionRun | undefined {
+  const key = context.section
+  const recordId = context.taskId
+  const raw = context.taskIds
+  if (typeof key !== 'string' || key === '') return undefined
+  if (typeof recordId !== 'string' || !TASK_ID_PATTERN.test(recordId)) return undefined
+  if (!Array.isArray(raw)) return undefined
+  const taskIds = raw.filter(
+    (entry): entry is string => typeof entry === 'string' && TASK_ID_PATTERN.test(entry),
+  )
+  return taskIds.length === raw.length ? { key, recordId, taskIds } : undefined
+}
+
+/** Build one section coverage record from the parsed section and covered tasks. */
+function sectionReviewOf(
+  section: TaskSection,
+  covered: readonly NumberedTaskLine[],
+  recordId: string,
+): SectionReview {
+  return {
+    key: section.key,
+    title: section.title,
+    recordId,
+    covered: covered.map((task) => ({ id: task.id, number: task.number, text: task.text })),
+    unchecked: section.unchecked.map((task) => ({
+      id: task.id,
+      number: task.number,
+      text: task.text,
+    })),
+  }
+}
+
+/** Read one change's tasks.md; a review cannot resolve its tasks without it. */
+async function readTasksPlan(workspace: string, change: string): Promise<string> {
+  try {
+    return await readFile(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8')
+  } catch {
+    throw new Error(
+      `the change "${change}" has no readable tasks.md; fix openspec/changes/${change}/tasks.md and retry`,
+    )
+  }
+}
+
+/**
+ * Resolve a section run against one tasks.md copy: the submitted covered ids
+ * must still be checked tasks of the same section, so a changed set needs a
+ * fresh review instead of a silently widened one.
+ */
+function resolveSectionReview(
+  markdown: string,
+  run: SectionRun,
+  change: string,
+  frozen: boolean,
+): SectionReview {
+  const coverage = sectionCoverage(markdown, run.key, run.taskIds)
+  if ('error' in coverage) {
+    throw new InputMutationError(
+      `section "${run.key}" in change "${change}" ${frozen ? 'changed while the review snapshot was prepared' : 'changed before the review'}: ${coverage.error}; re-run the review`,
+    )
+  }
+  return sectionReviewOf(coverage.section, coverage.covered, run.recordId)
 }
 
 /**
@@ -2942,11 +3021,33 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         let specDigest: string = initialSpecDigest
         const changeDir = join(workspace, 'openspec', 'changes', change)
+        const section = sectionRunOf(reviewRun.context)
         const taskId = reviewRun.context.taskId
         const task =
-          spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
+          section === undefined &&
+          spec.scope === 'task' &&
+          typeof taskId === 'string' &&
+          TASK_ID_PATTERN.test(taskId)
             ? taskOf(workspace, change, taskId)
             : undefined
+        // A section run cannot write an ERROR record without its resolved
+        // coverage, so resolve it before any failure can publish one.
+        let sectionValue: SectionReview | undefined
+        if (section !== undefined) {
+          try {
+            sectionValue = resolveSectionReview(
+              await readTasksPlan(workspace, change),
+              section,
+              change,
+              false,
+            )
+          } catch (error) {
+            return settleStep(reviewRun, step.id, 'failed', {
+              at: journal.time(),
+              reason: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
         const failurePrepared = async (): Promise<ReviewRunInput['prepared']> => {
           const liveTree =
             spec.scope === 'task' || bindsWorktree
@@ -2956,6 +3057,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             specDigest,
             artifactDigest: specDigest,
             ...(liveTree === undefined ? {} : { tree: liveTree }),
+            ...(sectionValue === undefined ? {} : { section: sectionValue }),
           }
         }
         if (!resolved.ok) {
@@ -2996,6 +3098,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           })
           return failure.run
         }
+        // The admission identity is the single task id or the section record id;
+        // the digest keeps two section contents apart.
+        const recordId = section?.recordId ?? task?.id
         let startEpoch = mutationEpochs.get(workspace) ?? 0
         const reviewRule = reviewIdentityOf(reviewDefinition, step)
         // The pre-snapshot admission identity names the reviewed worktree
@@ -3004,10 +3109,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           spec.scope === 'task' || bindsWorktree
             ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
             : undefined
-        const liveDigest =
+        const taskDigest =
           admissionTree === undefined
             ? reviewDigest({ scope: spec.scope, specDigest })
             : reviewDigest({ scope: spec.scope, specDigest, tree: admissionTree })
+        const liveDigest =
+          sectionValue === undefined
+            ? taskDigest
+            : admissionTree === undefined
+              ? sectionReviewDigest(sectionValue, specDigest)
+              : sectionReviewDigest(sectionValue, specDigest, admissionTree)
         if (reviewQueue.enabled) {
           // The same workflow run must keep its one admission even when live
           // inputs changed; a new digest does not license a second snapshot.
@@ -3017,7 +3128,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             workspace,
             rule: reviewRule,
             change,
-            ...(task === undefined ? {} : { taskId: task.id }),
+            ...(recordId === undefined ? {} : { taskId: recordId }),
             phase: reviewPhase(spec.scope, spec.phase),
             digest: liveDigest,
             reviewer: resolved.reviewer.id,
@@ -3073,7 +3184,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         const prepareInputs = async (signature: InputSignature): Promise<PreparedReview> => {
           const taskScope =
-            spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
+            spec.scope === 'task' &&
+            (section !== undefined || (typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)))
           if (!taskScope) {
             const tree = bindsWorktree
               ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
@@ -3103,7 +3215,46 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             AbortSignal.timeout(reviewTimeoutMs),
           ).catch(() => undefined)
           const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+          // Re-resolve the section from the live plan: the submitted covered set
+          // never widens, and a changed checkbox needs a fresh review.
+          const liveSection =
+            section === undefined
+              ? undefined
+              : resolveSectionReview(await readTasksPlan(workspace, change), section, change, false)
           if (snapshot !== undefined) {
+            if (section !== undefined && liveSection !== undefined) {
+              // The frozen checkout is authoritative: the submitted coverage
+              // must still be checked in its copied tasks.md.
+              let frozenPlan: string | undefined
+              try {
+                frozenPlan = readFileSync(
+                  join(snapshot.worktree, 'openspec', 'changes', change, 'tasks.md'),
+                  'utf8',
+                )
+              } catch {
+                frozenPlan = undefined
+              }
+              if (frozenPlan === undefined) {
+                throw new InputMutationError(
+                  `the frozen tasks.md for change "${change}" is unreadable; re-run the review`,
+                )
+              }
+              const frozen = resolveSectionReview(frozenPlan, section, change, true)
+              return {
+                prepared: {
+                  specDigest,
+                  artifactDigest: snapshot.specDigest,
+                  tree: snapshot.tree,
+                  reviewCwd: snapshot.worktree,
+                  section: frozen,
+                },
+                digest: sectionReviewDigest(frozen, snapshot.specDigest, snapshot.tree),
+                liveDigest:
+                  liveTree === undefined
+                    ? sectionReviewDigest(liveSection, specDigest)
+                    : sectionReviewDigest(liveSection, specDigest, liveTree),
+              }
+            }
             if (task !== undefined) {
               // The frozen checkout is authoritative: the selected task must
               // still exist and be checked in its copied tasks.md.
@@ -3143,6 +3294,22 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 liveTree === undefined
                   ? reviewDigest({ scope: 'task', specDigest })
                   : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
+            }
+          }
+          if (section !== undefined && liveSection !== undefined) {
+            return {
+              prepared: {
+                specDigest,
+                artifactDigest: specDigest,
+                ...(liveTree === undefined ? {} : { tree: liveTree }),
+                liveGuard: guardFor(signature, liveTree),
+                section: liveSection,
+              },
+              digest: sectionReviewDigest(liveSection, specDigest, liveTree),
+              liveDigest:
+                liveTree === undefined
+                  ? sectionReviewDigest(liveSection, specDigest)
+                  : sectionReviewDigest(liveSection, specDigest, liveTree),
             }
           }
           if (task !== undefined && !isTaskChecked(workspace, change, task.id)) {
@@ -3260,7 +3427,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           request,
           rule: reviewRule,
           change,
-          ...(task === undefined ? {} : { taskId: task.id }),
+          ...(recordId === undefined ? {} : { taskId: recordId }),
           phase: reviewPhase(spec.scope, spec.phase),
           liveDigest: current.liveDigest,
           digest: current.digest,
@@ -4702,14 +4869,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   > => {
     const step = definition.steps.find((entry) => entry.executor === 'review')
     if (step?.review?.scope !== 'task') return undefined
-    let plan: string
-    try {
-      plan = await readFile(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8')
-    } catch {
-      throw new Error(
-        `the change "${change}" has no readable tasks.md; fix openspec/changes/${change}/tasks.md and retry`,
-      )
-    }
+    const plan = await readTasksPlan(workspace, change)
     const tasks = numberedTasks(plan)
     const checked = tasks.filter((task) => task.checked)
     if (checked.length === 0) {
@@ -4742,6 +4902,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
     return task
   }
+  /**
+   * Resolve a section selector to one owned run: the section key, its stable
+   * record id, and every checked task id the single verdict covers.
+   */
+  const compatReviewSection = async (
+    workspace: string,
+    change: string,
+    definition: Definition,
+    wanted: string,
+  ): Promise<{ readonly section: TaskSection; readonly recordId: string }> => {
+    const step = definition.steps.find((entry) => entry.executor === 'review')
+    if (step?.review?.scope !== 'task') {
+      throw new Error(
+        `rule "${definition.id}" reviews the whole scope; omit section (only a task-scoped review accepts one)`,
+      )
+    }
+    const section = resolveTaskSection(await readTasksPlan(workspace, change), wanted, change)
+    return { section, recordId: sectionRecordId(section.key) }
+  }
   const compatDelegate = async (input: {
     readonly rule: string
     readonly change: string
@@ -4749,13 +4928,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     readonly section?: string
   }): Promise<string> => {
     const call = compatCallContext()
-    if (input.section !== undefined) {
-      throw new Error(
-        `the native review executor has no section scope; review one checked task at a time with delegate(rule: "${input.rule}", change: "${input.change}", task: "<taskId>")`,
-      )
-    }
     const definition = await compatDefinition(call.workspace, input.rule)
-    const task = await compatReviewTask(call.workspace, input.change, definition, input.task)
+    const section =
+      input.section === undefined
+        ? undefined
+        : await compatReviewSection(call.workspace, input.change, definition, input.section)
+    const task =
+      section === undefined
+        ? await compatReviewTask(call.workspace, input.change, definition, input.task)
+        : undefined
     const auth = storedAuth ?? (await ensureAuth())
     if (auth === undefined) {
       throw new Error('the workflows host key is unavailable; no review run was created')
@@ -4766,19 +4947,37 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       (run) =>
         run.definition.id === definition.id &&
         run.context.name === input.change &&
-        (task === undefined || run.context.taskId === task.id) &&
+        (section === undefined
+          ? task === undefined || run.context.taskId === task.id
+          : run.context.section === section.section.key) &&
         isOpenRun(run) &&
         services.agents.get(run.session) !== undefined,
     )
     if (pending !== undefined) {
       return `rule "${input.rule}" review already pending\nrun: ${pending.id}`
     }
-    const run = await startRunFor(call.workspace, call.session, auth, definition, {
-      name: input.change,
-      ...(task === undefined ? {} : { taskId: task.id }),
-    })
+    const run = await startRunFor(
+      call.workspace,
+      call.session,
+      auth,
+      definition,
+      section === undefined
+        ? {
+            name: input.change,
+            ...(task === undefined ? {} : { taskId: task.id }),
+          }
+        : {
+            name: input.change,
+            taskId: section.recordId,
+            section: section.section.key,
+            sectionTitle: section.section.title,
+            taskIds: section.section.covered.map((entry) => entry.id),
+          },
+    )
     void refreshPromptRuns(call.workspace)
-    return `rule "${input.rule}" review started\nrun: ${run.id}`
+    return section === undefined
+      ? `rule "${input.rule}" review started\nrun: ${run.id}`
+      : `rule "${input.rule}" section "${section.section.key}" review started\nrun: ${run.id}`
   }
   const compatNote = async (input: {
     readonly change: string

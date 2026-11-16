@@ -14,6 +14,7 @@ import {
   Harness,
   makeWorkspace,
   releaseAConfig,
+  releaseARules,
   runIdFrom,
   steerTexts,
   taskIdFor,
@@ -436,6 +437,33 @@ describe('a split state has exactly one runtime per signal', () => {
       expect(await harness.waitForRun(run)).toContain('state=completed')
       expect(compat.delegateCalls, rule).toHaveLength(0)
       expect(harness.subagents.runs.length, rule).toBeGreaterThan(0)
+    }
+  })
+
+  it('routes to the workflows runtime while the switch is on but its rule enables no signal', async () => {
+    for (const [rule, signal] of reviewRules) {
+      const workspace = await makeWorkspace()
+      cleanups.push(workspace.cleanup)
+      const dir = await writeChange(workspace.root, 'change-a', [
+        { number: '1.1', text: 'First task', checked: true },
+      ])
+      await writeFile(join(dir, 'tasks.md'), '# Tasks\n\n- [x] 1.1 First task\n', 'utf8')
+      // The switch is on, but this rule is gate-only, so the effective signal
+      // is disabled and the workflow loader resolves the definition as `own`.
+      const rules = releaseARules().map((entry) =>
+        entry.id === rule ? { ...entry, gate: 'none' as const } : entry,
+      )
+      const compat = node()
+      const harness = new Harness({
+        cwd: workspace.root,
+        config: releaseAConfig({ gates: { ...ALL_GATES, [signal]: true }, rules }),
+        agents: providers(),
+        services: { workflowsReviewCompat: compat },
+      })
+      const text = await harness.toolText('delegate', { rule, change: 'change-a' })
+      expect(text, rule).toContain('workflow definition run started')
+      expect(compat.delegateCalls, rule).toEqual([{ rule, change: 'change-a' }])
+      expect(harness.subagents.runs, rule).toHaveLength(0)
     }
   })
 

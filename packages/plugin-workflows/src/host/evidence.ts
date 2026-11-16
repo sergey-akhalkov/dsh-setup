@@ -696,6 +696,17 @@ async function recordCheck(
   if (task !== undefined && record.taskId !== task.text) {
     return mismatch(`the record task is not "${task.text}"`, path.text, item)
   }
+  // A section record binds the submitted checked-task set: the section key
+  // keeps the path stable, so a changed coverage must not reuse the old verdict.
+  if (record.section !== undefined && Array.isArray(record.taskIds)) {
+    const submitted = Array.isArray(context.values.taskIds)
+      ? context.values.taskIds.filter((entry): entry is string => typeof entry === 'string')
+      : undefined
+    const covered = record.taskIds.filter((entry): entry is string => typeof entry === 'string')
+    if (submitted === undefined || submitted.join('\u0000') !== covered.join('\u0000')) {
+      return mismatch('the section record covers a different checked task set', path.text, item)
+    }
+  }
   const accepted =
     evidence.verdicts !== undefined
       ? evidence.verdicts

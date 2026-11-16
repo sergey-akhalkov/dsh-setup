@@ -30,12 +30,12 @@ import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, TASK_ID_PATTERN, } from './review.js';
+import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, sectionReviewDigest, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
-import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, taskLanes, taskOf, } from './tasks.js';
+import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, obligationDedupeKey, } from './triggers.js';
 import { attributedChangeNames } from './write-attribution.js';
@@ -366,6 +366,55 @@ function resolveCheckpointApplicability(raw) {
         stepInterval: stepInterval ?? DEFAULT_CHECKPOINT_APPLICABILITY.stepInterval,
         enforceParallel: enforceParallel ?? DEFAULT_CHECKPOINT_APPLICABILITY.enforceParallel,
     };
+}
+/** Read a section run's context; a single-task run has no section key. */
+function sectionRunOf(context) {
+    const key = context.section;
+    const recordId = context.taskId;
+    const raw = context.taskIds;
+    if (typeof key !== 'string' || key === '')
+        return undefined;
+    if (typeof recordId !== 'string' || !TASK_ID_PATTERN.test(recordId))
+        return undefined;
+    if (!Array.isArray(raw))
+        return undefined;
+    const taskIds = raw.filter((entry) => typeof entry === 'string' && TASK_ID_PATTERN.test(entry));
+    return taskIds.length === raw.length ? { key, recordId, taskIds } : undefined;
+}
+/** Build one section coverage record from the parsed section and covered tasks. */
+function sectionReviewOf(section, covered, recordId) {
+    return {
+        key: section.key,
+        title: section.title,
+        recordId,
+        covered: covered.map((task) => ({ id: task.id, number: task.number, text: task.text })),
+        unchecked: section.unchecked.map((task) => ({
+            id: task.id,
+            number: task.number,
+            text: task.text,
+        })),
+    };
+}
+/** Read one change's tasks.md; a review cannot resolve its tasks without it. */
+async function readTasksPlan(workspace, change) {
+    try {
+        return await readFile(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
+    }
+    catch {
+        throw new Error(`the change "${change}" has no readable tasks.md; fix openspec/changes/${change}/tasks.md and retry`);
+    }
+}
+/**
+ * Resolve a section run against one tasks.md copy: the submitted covered ids
+ * must still be checked tasks of the same section, so a changed set needs a
+ * fresh review instead of a silently widened one.
+ */
+function resolveSectionReview(markdown, run, change, frozen) {
+    const coverage = sectionCoverage(markdown, run.key, run.taskIds);
+    if ('error' in coverage) {
+        throw new InputMutationError(`section "${run.key}" in change "${change}" ${frozen ? 'changed while the review snapshot was prepared' : 'changed before the review'}: ${coverage.error}; re-run the review`);
+    }
+    return sectionReviewOf(coverage.section, coverage.covered, run.recordId);
 }
 export function apply(ctx, config = {}) {
     if (config.allowIntent !== undefined && typeof config.allowIntent !== 'boolean') {
@@ -2398,10 +2447,28 @@ export function apply(ctx, config = {}) {
                 }
                 let specDigest = initialSpecDigest;
                 const changeDir = join(workspace, 'openspec', 'changes', change);
+                const section = sectionRunOf(reviewRun.context);
                 const taskId = reviewRun.context.taskId;
-                const task = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)
+                const task = section === undefined &&
+                    spec.scope === 'task' &&
+                    typeof taskId === 'string' &&
+                    TASK_ID_PATTERN.test(taskId)
                     ? taskOf(workspace, change, taskId)
                     : undefined;
+                // A section run cannot write an ERROR record without its resolved
+                // coverage, so resolve it before any failure can publish one.
+                let sectionValue;
+                if (section !== undefined) {
+                    try {
+                        sectionValue = resolveSectionReview(await readTasksPlan(workspace, change), section, change, false);
+                    }
+                    catch (error) {
+                        return settleStep(reviewRun, step.id, 'failed', {
+                            at: journal.time(),
+                            reason: error instanceof Error ? error.message : String(error),
+                        });
+                    }
+                }
                 const failurePrepared = async () => {
                     const liveTree = spec.scope === 'task' || bindsWorktree
                         ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
@@ -2410,6 +2477,7 @@ export function apply(ctx, config = {}) {
                         specDigest,
                         artifactDigest: specDigest,
                         ...(liveTree === undefined ? {} : { tree: liveTree }),
+                        ...(sectionValue === undefined ? {} : { section: sectionValue }),
                     };
                 };
                 if (!resolved.ok) {
@@ -2450,6 +2518,9 @@ export function apply(ctx, config = {}) {
                     });
                     return failure.run;
                 }
+                // The admission identity is the single task id or the section record id;
+                // the digest keeps two section contents apart.
+                const recordId = section?.recordId ?? task?.id;
                 let startEpoch = mutationEpochs.get(workspace) ?? 0;
                 const reviewRule = reviewIdentityOf(reviewDefinition, step);
                 // The pre-snapshot admission identity names the reviewed worktree
@@ -2457,9 +2528,14 @@ export function apply(ctx, config = {}) {
                 const admissionTree = spec.scope === 'task' || bindsWorktree
                     ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
                     : undefined;
-                const liveDigest = admissionTree === undefined
+                const taskDigest = admissionTree === undefined
                     ? reviewDigest({ scope: spec.scope, specDigest })
                     : reviewDigest({ scope: spec.scope, specDigest, tree: admissionTree });
+                const liveDigest = sectionValue === undefined
+                    ? taskDigest
+                    : admissionTree === undefined
+                        ? sectionReviewDigest(sectionValue, specDigest)
+                        : sectionReviewDigest(sectionValue, specDigest, admissionTree);
                 if (reviewQueue.enabled) {
                     // The same workflow run must keep its one admission even when live
                     // inputs changed; a new digest does not license a second snapshot.
@@ -2470,7 +2546,7 @@ export function apply(ctx, config = {}) {
                         workspace,
                         rule: reviewRule,
                         change,
-                        ...(task === undefined ? {} : { taskId: task.id }),
+                        ...(recordId === undefined ? {} : { taskId: recordId }),
                         phase: reviewPhase(spec.scope, spec.phase),
                         digest: liveDigest,
                         reviewer: resolved.reviewer.id,
@@ -2521,7 +2597,8 @@ export function apply(ctx, config = {}) {
                     return undefined;
                 };
                 const prepareInputs = async (signature) => {
-                    const taskScope = spec.scope === 'task' && typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId);
+                    const taskScope = spec.scope === 'task' &&
+                        (section !== undefined || (typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)));
                     if (!taskScope) {
                         const tree = bindsWorktree
                             ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
@@ -2545,7 +2622,40 @@ export function apply(ctx, config = {}) {
                     // the live worktree is reviewed under the mutation guard.
                     const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, reviewRun.id, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined);
                     const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
+                    // Re-resolve the section from the live plan: the submitted covered set
+                    // never widens, and a changed checkbox needs a fresh review.
+                    const liveSection = section === undefined
+                        ? undefined
+                        : resolveSectionReview(await readTasksPlan(workspace, change), section, change, false);
                     if (snapshot !== undefined) {
+                        if (section !== undefined && liveSection !== undefined) {
+                            // The frozen checkout is authoritative: the submitted coverage
+                            // must still be checked in its copied tasks.md.
+                            let frozenPlan;
+                            try {
+                                frozenPlan = readFileSync(join(snapshot.worktree, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
+                            }
+                            catch {
+                                frozenPlan = undefined;
+                            }
+                            if (frozenPlan === undefined) {
+                                throw new InputMutationError(`the frozen tasks.md for change "${change}" is unreadable; re-run the review`);
+                            }
+                            const frozen = resolveSectionReview(frozenPlan, section, change, true);
+                            return {
+                                prepared: {
+                                    specDigest,
+                                    artifactDigest: snapshot.specDigest,
+                                    tree: snapshot.tree,
+                                    reviewCwd: snapshot.worktree,
+                                    section: frozen,
+                                },
+                                digest: sectionReviewDigest(frozen, snapshot.specDigest, snapshot.tree),
+                                liveDigest: liveTree === undefined
+                                    ? sectionReviewDigest(liveSection, specDigest)
+                                    : sectionReviewDigest(liveSection, specDigest, liveTree),
+                            };
+                        }
                         if (task !== undefined) {
                             // The frozen checkout is authoritative: the selected task must
                             // still exist and be checked in its copied tasks.md.
@@ -2578,6 +2688,21 @@ export function apply(ctx, config = {}) {
                             liveDigest: liveTree === undefined
                                 ? reviewDigest({ scope: 'task', specDigest })
                                 : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
+                        };
+                    }
+                    if (section !== undefined && liveSection !== undefined) {
+                        return {
+                            prepared: {
+                                specDigest,
+                                artifactDigest: specDigest,
+                                ...(liveTree === undefined ? {} : { tree: liveTree }),
+                                liveGuard: guardFor(signature, liveTree),
+                                section: liveSection,
+                            },
+                            digest: sectionReviewDigest(liveSection, specDigest, liveTree),
+                            liveDigest: liveTree === undefined
+                                ? sectionReviewDigest(liveSection, specDigest)
+                                : sectionReviewDigest(liveSection, specDigest, liveTree),
                         };
                     }
                     if (task !== undefined && !isTaskChecked(workspace, change, task.id)) {
@@ -2685,7 +2810,7 @@ export function apply(ctx, config = {}) {
                     request,
                     rule: reviewRule,
                     change,
-                    ...(task === undefined ? {} : { taskId: task.id }),
+                    ...(recordId === undefined ? {} : { taskId: recordId }),
                     phase: reviewPhase(spec.scope, spec.phase),
                     liveDigest: current.liveDigest,
                     digest: current.digest,
@@ -3909,13 +4034,7 @@ export function apply(ctx, config = {}) {
         const step = definition.steps.find((entry) => entry.executor === 'review');
         if (step?.review?.scope !== 'task')
             return undefined;
-        let plan;
-        try {
-            plan = await readFile(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
-        }
-        catch {
-            throw new Error(`the change "${change}" has no readable tasks.md; fix openspec/changes/${change}/tasks.md and retry`);
-        }
+        const plan = await readTasksPlan(workspace, change);
         const tasks = numberedTasks(plan);
         const checked = tasks.filter((task) => task.checked);
         if (checked.length === 0) {
@@ -3940,13 +4059,27 @@ export function apply(ctx, config = {}) {
         }
         return task;
     };
+    /**
+     * Resolve a section selector to one owned run: the section key, its stable
+     * record id, and every checked task id the single verdict covers.
+     */
+    const compatReviewSection = async (workspace, change, definition, wanted) => {
+        const step = definition.steps.find((entry) => entry.executor === 'review');
+        if (step?.review?.scope !== 'task') {
+            throw new Error(`rule "${definition.id}" reviews the whole scope; omit section (only a task-scoped review accepts one)`);
+        }
+        const section = resolveTaskSection(await readTasksPlan(workspace, change), wanted, change);
+        return { section, recordId: sectionRecordId(section.key) };
+    };
     const compatDelegate = async (input) => {
         const call = compatCallContext();
-        if (input.section !== undefined) {
-            throw new Error(`the native review executor has no section scope; review one checked task at a time with delegate(rule: "${input.rule}", change: "${input.change}", task: "<taskId>")`);
-        }
         const definition = await compatDefinition(call.workspace, input.rule);
-        const task = await compatReviewTask(call.workspace, input.change, definition, input.task);
+        const section = input.section === undefined
+            ? undefined
+            : await compatReviewSection(call.workspace, input.change, definition, input.section);
+        const task = section === undefined
+            ? await compatReviewTask(call.workspace, input.change, definition, input.task)
+            : undefined;
         const auth = storedAuth ?? (await ensureAuth());
         if (auth === undefined) {
             throw new Error('the workflows host key is unavailable; no review run was created');
@@ -3955,18 +4088,30 @@ export function apply(ctx, config = {}) {
         const runs = await listAuthenticatedRuns(call.workspace, auth);
         const pending = runs.find((run) => run.definition.id === definition.id &&
             run.context.name === input.change &&
-            (task === undefined || run.context.taskId === task.id) &&
+            (section === undefined
+                ? task === undefined || run.context.taskId === task.id
+                : run.context.section === section.section.key) &&
             isOpenRun(run) &&
             services.agents.get(run.session) !== undefined);
         if (pending !== undefined) {
             return `rule "${input.rule}" review already pending\nrun: ${pending.id}`;
         }
-        const run = await startRunFor(call.workspace, call.session, auth, definition, {
-            name: input.change,
-            ...(task === undefined ? {} : { taskId: task.id }),
-        });
+        const run = await startRunFor(call.workspace, call.session, auth, definition, section === undefined
+            ? {
+                name: input.change,
+                ...(task === undefined ? {} : { taskId: task.id }),
+            }
+            : {
+                name: input.change,
+                taskId: section.recordId,
+                section: section.section.key,
+                sectionTitle: section.section.title,
+                taskIds: section.section.covered.map((entry) => entry.id),
+            });
         void refreshPromptRuns(call.workspace);
-        return `rule "${input.rule}" review started\nrun: ${run.id}`;
+        return section === undefined
+            ? `rule "${input.rule}" review started\nrun: ${run.id}`
+            : `rule "${input.rule}" section "${section.section.key}" review started\nrun: ${run.id}`;
     };
     const compatNote = async (input) => {
         const call = compatCallContext();

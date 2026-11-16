@@ -11,6 +11,7 @@ import {
   type ReviewRunResult,
   readReviewRecordFingerprint,
   recordReviewFailure,
+  sectionReviewDigest,
 } from './review.js'
 import {
   type ClassifiedFailure,
@@ -214,8 +215,9 @@ export class ReviewScheduler {
     const definition = entry.request.definition.id
     const scope = entry.request.step.review?.scope ?? 'whole'
     const phase = entry.request.step.review?.phase ?? 'spec'
+    const recordId = entry.request.prepared.section?.recordId ?? entry.request.task?.id
     return scope === 'task'
-      ? `${entry.workspace}\u0000${definition}\u0000${entry.change}\u0000task\u0000${entry.request.task?.id ?? ''}`
+      ? `${entry.workspace}\u0000${definition}\u0000${entry.change}\u0000task\u0000${recordId ?? ''}`
       : `${entry.workspace}\u0000${definition}\u0000${entry.change}\u0000whole\u0000${phase}`
   }
 
@@ -239,16 +241,26 @@ export class ReviewScheduler {
     const definition = entry.request.definition.id
     const scope = entry.request.step.review?.scope ?? 'whole'
     const phase = entry.request.step.review?.phase
-    const taskId = entry.request.task?.id
+    const section = entry.request.prepared.section
+    const taskId = section?.recordId ?? entry.request.task?.id
     const suffix = scope === 'task' ? `tasks/${taskId ?? ''}.json` : `${phase ?? 'spec'}.json`
-    const expectedDigest = reviewDigest({
-      scope,
-      specDigest: entry.request.prepared.specDigest,
-      ...(entry.request.prepared.tree === undefined ? {} : { tree: entry.request.prepared.tree }),
-      ...(entry.request.prepared.artifactDigest === undefined
-        ? {}
-        : { artifactDigest: entry.request.prepared.artifactDigest }),
-    })
+    const expectedDigest =
+      section === undefined
+        ? reviewDigest({
+            scope,
+            specDigest: entry.request.prepared.specDigest,
+            ...(entry.request.prepared.tree === undefined
+              ? {}
+              : { tree: entry.request.prepared.tree }),
+            ...(entry.request.prepared.artifactDigest === undefined
+              ? {}
+              : { artifactDigest: entry.request.prepared.artifactDigest }),
+          })
+        : sectionReviewDigest(
+            section,
+            entry.request.prepared.artifactDigest ?? entry.request.prepared.specDigest,
+            entry.request.prepared.tree,
+          )
     const removeIfOwned = async (relative: string): Promise<void> => {
       // Never follow a linked ancestor outside the workspace, and never remove
       // a record published by another digest.
@@ -265,7 +277,12 @@ export class ReviewScheduler {
       if (digest === expectedDigest) await unlink(target).catch(() => undefined)
     }
     await removeIfOwned(`.dsh/workflows/records/${definition}/${entry.change}/${suffix}`)
-    if (taskId !== undefined) {
+    if (section !== undefined) {
+      // A section PASS published one approval per covered checked task.
+      for (const task of section.covered) {
+        await removeIfOwned(`openspec/changes/${entry.change}/reviews/${task.id}.json`)
+      }
+    } else if (taskId !== undefined) {
       await removeIfOwned(`openspec/changes/${entry.change}/reviews/${taskId}.json`)
     }
   }

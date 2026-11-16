@@ -110,11 +110,29 @@ export async function advanceIntake(input) {
             return { run: completedRun, completed: true };
         }
         // A task-review obligation whose checked task disappeared is superseded
-        // before any step runs, including a run already waiting at await-review.
+        // before any step runs, including a run already waiting at await-review. A
+        // section run is superseded only when one of its covered ids moved away.
         if (input.definition.id === 'task-review') {
             const name = run.context.name;
             const taskId = run.context.taskId;
-            if (typeof name === 'string' && typeof taskId === 'string') {
+            const section = typeof run.context.section === 'string' ? run.context.section : undefined;
+            const sectionTaskIds = Array.isArray(run.context.taskIds)
+                ? run.context.taskIds.filter((entry) => typeof entry === 'string')
+                : [];
+            if (typeof name === 'string' && section !== undefined) {
+                const checked = checkedTaskIdsOf(input.evidenceContext.workspace, name);
+                const missing = sectionTaskIds.filter((id) => checked?.includes(id) !== true);
+                if (checked === undefined || missing.length > 0) {
+                    const reason = checked === undefined
+                        ? `openspec/changes/${name}/tasks.md is unreadable; the run is superseded`
+                        : `section "${section}" no longer covers checked task ${missing.join(', ')} in openspec/changes/${name}/tasks.md; the run is superseded`;
+                    return {
+                        run: setRunStatus(settleStep(run, pending.step.id, 'cancelled', { at, reason }), 'cancelled', at, reason),
+                        completed: false,
+                    };
+                }
+            }
+            else if (typeof name === 'string' && typeof taskId === 'string') {
                 const checked = checkedTaskIdsOf(input.evidenceContext.workspace, name);
                 if (checked === undefined || !checked.includes(taskId)) {
                     const reason = checked === undefined

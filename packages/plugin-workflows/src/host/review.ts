@@ -374,6 +374,46 @@ export function portableApprovalPath(change: string, taskId: string): string {
   return `openspec/changes/${change}/reviews/${taskId}.json`
 }
 
+/** One section-scope task review: the resolved section and its checked coverage. */
+export interface SectionReview {
+  readonly key: string
+  readonly title: string
+  /** The stable 16-hex id the step's record evidence names in place of a task id. */
+  readonly recordId: string
+  readonly covered: ReadonlyArray<{
+    readonly id: string
+    readonly number: string
+    readonly text: string
+  }>
+  readonly unchecked: ReadonlyArray<{
+    readonly id: string
+    readonly number: string
+    readonly text: string
+  }>
+}
+
+/** The section digest: key, title, sorted covered ids/numbers/texts, the frozen
+ * change artifacts, and the snapshot tree. Any coverage change invalidates it. */
+export function sectionReviewDigest(
+  section: SectionReview,
+  artifactDigest: string,
+  tree?: string,
+): string {
+  const covered = [...section.covered].sort((left, right) => {
+    const leftKey = `${left.id}\u0000${left.number}`
+    const rightKey = `${right.id}\u0000${right.number}`
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0
+  })
+  return hashParts([
+    'section-review-v2',
+    section.key,
+    section.title,
+    ...covered.flatMap((task) => [task.id, task.number, task.text]),
+    artifactDigest,
+    tree ?? '',
+  ])
+}
+
 /** One review record; the local file is a provenance superset of the approval. */
 export interface ReviewRecord {
   readonly definition: string
@@ -382,6 +422,10 @@ export interface ReviewRecord {
   readonly phase: string
   readonly scope: 'whole' | 'task'
   readonly taskId?: string
+  /** A section-scope task review: the section key, title, and covered task ids. */
+  readonly section?: string
+  readonly sectionTitle?: string
+  readonly taskIds?: readonly string[]
   readonly digest: string
   readonly worktreeDigest?: string
   readonly verdict: ReviewVerdict
@@ -541,6 +585,7 @@ export interface ReviewPromptInput {
   readonly scope: 'whole' | 'task'
   readonly phase?: string
   readonly task?: { readonly id: string; readonly number?: string; readonly text: string }
+  readonly section?: SectionReview
   readonly digest: string
   readonly snapshot: boolean
   readonly extra?: string
@@ -561,6 +606,24 @@ export function renderReviewPrompt(input: ReviewPromptInput): string {
   if (input.task !== undefined) {
     lines.push(`- Task: ${input.task.number ?? ''} ${input.task.text}`.trimEnd())
     lines.push(`- Task id: ${input.task.id}`)
+  }
+  if (input.section !== undefined) {
+    lines.push(
+      `- Section: ${input.section.title === '' ? '(untitled)' : input.section.title} (key ${input.section.key})`,
+    )
+    lines.push('- Covered checked tasks:')
+    for (const task of input.section.covered) {
+      lines.push(`  - ${task.number} ${task.text} (${task.id})`)
+    }
+    if (input.section.unchecked.length > 0) {
+      lines.push('- Unchecked tasks in this section (not reviewed):')
+      for (const task of input.section.unchecked) {
+        lines.push(`  - ${task.number} ${task.text}`)
+      }
+    }
+    lines.push(
+      '- One verdict covers the whole section. Name the affected task number in every finding, and report a finding when one covered task is incomplete.',
+    )
   }
   lines.push(`- Digest: ${input.digest}`)
   lines.push(
@@ -769,6 +832,8 @@ export interface ReviewRunInput {
     readonly artifactDigest?: string
     /** The frozen checkout to run in; absent means the live worktree. */
     readonly reviewCwd?: string
+    /** The authoritative section coverage of a section-scope task review. */
+    readonly section?: SectionReview
     /** Re-check the reviewed input set after the run; a reason discards the verdict. */
     readonly liveGuard?: () => Promise<string | undefined>
   }
@@ -807,23 +872,24 @@ export interface ReviewRecordBaseline {
 
 /** The local record path one review attempt publishes to. */
 export function reviewRecordPathOf(
-  input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task'>,
+  input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task' | 'prepared'>,
 ): string {
   const spec = input.step.review
   if (spec === undefined) throw new Error(`step "${input.step.id}" declares no review`)
+  const taskId = input.prepared.section?.recordId ?? input.task?.id
   return localReviewRecordPath({
     definition: reviewStoreOf(input.definition, input.step),
     change: input.change,
     scope: spec.scope,
     ...(spec.phase === undefined ? {} : { phase: spec.phase }),
-    ...(input.task === undefined ? {} : { taskId: input.task.id }),
+    ...(taskId === undefined ? {} : { taskId }),
   })
 }
 
 /** Read the authoritative record's comparable fingerprint; absent or unreadable is undefined. */
 export async function readReviewRecordFingerprint(
   workspace: string,
-  input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task'>,
+  input: Pick<ReviewRunInput, 'definition' | 'change' | 'step' | 'task' | 'prepared'>,
 ): Promise<string | undefined> {
   try {
     const raw = await readFile(join(workspace, reviewRecordPathOf(input)), 'utf8')
@@ -899,24 +965,43 @@ function baseRecord(
   const spec = input.step.review
   if (spec === undefined) throw new Error(`step "${input.step.id}" declares no review`)
   const identity = reviewIdentityOf(input.definition, input.step)
+  const section = input.prepared.section
+  const artifactDigest = input.prepared.artifactDigest ?? input.prepared.specDigest
   return {
     definition: reviewStoreOf(input.definition, input.step),
     rule: identity,
     change: input.change,
     phase: reviewPhase(spec.scope, spec.phase),
     scope: spec.scope,
-    ...(input.task === undefined ? {} : { taskId: input.task.id }),
-    digest: reviewDigest({
-      scope: spec.scope,
-      specDigest: input.prepared.specDigest,
-      ...(input.prepared.tree === undefined ? {} : { tree: input.prepared.tree }),
-      ...(input.prepared.artifactDigest === undefined
+    ...(section === undefined
+      ? input.task === undefined
         ? {}
-        : { artifactDigest: input.prepared.artifactDigest }),
-    }),
+        : { taskId: input.task.id }
+      : {
+          taskId: section.recordId,
+          section: section.key,
+          sectionTitle: section.title,
+          taskIds: section.covered.map((task) => task.id),
+        }),
+    digest:
+      section === undefined
+        ? reviewDigest({
+            scope: spec.scope,
+            specDigest: input.prepared.specDigest,
+            ...(input.prepared.tree === undefined ? {} : { tree: input.prepared.tree }),
+            ...(input.prepared.artifactDigest === undefined
+              ? {}
+              : { artifactDigest: input.prepared.artifactDigest }),
+          })
+        : sectionReviewDigest(section, artifactDigest, input.prepared.tree),
     ...(input.prepared.tree === undefined
       ? {}
-      : { worktreeDigest: hashParts(['task-review-snapshot-v1', input.prepared.tree]) }),
+      : {
+          worktreeDigest: hashParts([
+            section === undefined ? 'task-review-snapshot-v1' : 'section-review-snapshot-v1',
+            input.prepared.tree,
+          ]),
+        }),
     target: targetIdentity(input.reviewer),
     reviewer: input.reviewer.id,
     session: input.session,
@@ -1124,12 +1209,12 @@ function prepareAttempt(
       ),
     }
   }
-  if (spec.scope === 'task' && input.task === undefined) {
+  if (spec.scope === 'task' && input.task === undefined && input.prepared.section === undefined) {
     return {
       kind: 'failed',
       outcome: failureOutcome(
         undefined,
-        'a task review needs the run context task id',
+        'a task review needs the run context task id or a section coverage',
         'config',
         false,
       ),
@@ -1149,6 +1234,7 @@ function prepareAttempt(
     scope: spec.scope,
     ...(spec.phase === undefined ? {} : { phase: spec.phase }),
     ...(input.task === undefined ? {} : { task: input.task }),
+    ...(input.prepared.section === undefined ? {} : { section: input.prepared.section }),
     digest: record.digest,
     snapshot: input.prepared.reviewCwd !== undefined,
     ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
@@ -1316,6 +1402,38 @@ export function beginReviewAttempt(input: ReviewRunInput): ReviewAttemptHandle {
 }
 
 /**
+ * Whether a covered task's current portable PASS already satisfies the
+ * publication checks; a matching record stays byte-identical.
+ */
+async function approvalSatisfies(
+  workspace: string,
+  record: ReviewRecord,
+  taskId: string,
+): Promise<boolean> {
+  try {
+    const raw = JSON.parse(
+      await readFile(join(workspace, portableApprovalPath(record.change, taskId)), 'utf8'),
+    ) as unknown
+    if (!isRecord(raw)) return false
+    const target = raw.target
+    if (!isRecord(target)) return false
+    return (
+      raw.rule === record.rule &&
+      raw.change === record.change &&
+      raw.taskId === taskId &&
+      raw.verdict === 'PASS' &&
+      Array.isArray(raw.findings) &&
+      raw.findings.length === 0 &&
+      target.provider === record.target.provider &&
+      target.model === record.target.model &&
+      target.reasoningEffort === record.target.reasoningEffort
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
  * Publish one settled attempt: write the ERROR record or the verdict record
  * (and the committed approval first for a task PASS), then settle the step from
  * its own evidence. Only the scheduler's settled attempt reaches this.
@@ -1358,15 +1476,37 @@ export async function publishReviewOutcome(
       input.writePortable ??
       ((workspace: string, record: ReviewRecord) =>
         writePortableApproval(workspace, record, input.cancelled))
-    const approval = await writePortable(input.context.workspace, published)
-    if (!approval.ok) {
+    // A section PASS approves every covered checked task: one per-task commit
+    // each, then the single section verdict record below.
+    const approved =
+      published.section === undefined ? [published.taskId] : (published.taskIds ?? [])
+    if (approved.length === 0 || approved.some((taskId) => taskId === undefined)) {
       return await writeErrorRecord(
         input,
         record,
-        `the committed approval at ${portableApprovalPath(published.change, published.taskId ?? '')} could not be written: ${approval.error}`,
+        'a PASS review has no covered task to approve',
         'unknown',
         now,
       )
+    }
+    for (const taskId of approved as string[]) {
+      // An already valid approval for a covered task stays byte-identical.
+      if (
+        published.section !== undefined &&
+        (await approvalSatisfies(input.context.workspace, published, taskId))
+      ) {
+        continue
+      }
+      const approval = await writePortable(input.context.workspace, { ...published, taskId })
+      if (!approval.ok) {
+        return await writeErrorRecord(
+          input,
+          record,
+          `the committed approval at ${portableApprovalPath(published.change, taskId)} could not be written: ${approval.error}`,
+          'unknown',
+          now,
+        )
+      }
     }
   }
   const writeLocal =
