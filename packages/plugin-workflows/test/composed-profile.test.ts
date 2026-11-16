@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { apply as applyDelegation } from '../../plugin-delegation-rules/src/host/index.ts'
+import { currentSpecDigest } from '../src/host/evidence.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
 import { writeInvolvement } from '../src/host/involvement.ts'
@@ -43,7 +44,18 @@ interface FakeHost {
   readonly watch: Array<() => void>
   readonly activations: Activation[]
   readonly steers: Steer[]
+  readonly tools: Map<string, ToolLike>
   emit(name: string, ...args: unknown[]): Promise<unknown>
+  /** Run one model tool through the real pre-execute middleware chain. */
+  callTool(name: string, args: unknown): Promise<unknown>
+}
+
+interface ToolLike {
+  readonly name: string
+  execute(
+    args: unknown,
+    exec: { agent: unknown; callId: string; signal: AbortSignal },
+  ): Promise<unknown>
 }
 
 const KEY = 'c'.repeat(64)
@@ -104,7 +116,7 @@ async function readJson(path: string): Promise<Record<string, unknown> | undefin
 }
 
 /** A git workspace whose change starts with the unchecked task. */
-async function gitWorkspace(): Promise<string> {
+async function gitWorkspace(plan = UNCHECKED_TASKS): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'workflows-composed-'))
   TEMP_DIRECTORIES.push(directory)
   await writeFile(join(directory, '.gitignore'), '.dsh/\n', 'utf8')
@@ -113,7 +125,7 @@ async function gitWorkspace(): Promise<string> {
   await writeFile(join(change, 'proposal.md'), '# Proposal\n\nWhy.\n', 'utf8')
   await writeFile(join(change, 'design.md'), '# Design\n\nThe decision.\n', 'utf8')
   await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n\nA requirement.\n', 'utf8')
-  await writeFile(join(change, 'tasks.md'), UNCHECKED_TASKS, 'utf8')
+  await writeFile(join(change, 'tasks.md'), plan, 'utf8')
   const git = (...args: string[]): void => {
     execFileSync('git', args, { cwd: directory, stdio: 'ignore' })
   }
@@ -135,9 +147,9 @@ function fakeHost(workspace: string): FakeHost {
   const watch: Array<() => void> = []
   const activations: Activation[] = []
   const steers: Steer[] = []
-  const tools = new Map<string, { name: string }>()
+  const tools = new Map<string, ToolLike>()
   const toolsService = {
-    register(definition: { name: string }) {
+    register(definition: ToolLike) {
       tools.set(definition.name, definition)
       return () => undefined
     },
@@ -230,7 +242,27 @@ function fakeHost(workspace: string): FakeHost {
     for (const listener of [...(listeners.get(name) ?? [])]) result = await listener(...args)
     return result
   }
-  return { ctx, agent, watch, activations, steers, emit }
+  let toolCalls = 0
+  const callTool = async (name: string, args: unknown): Promise<unknown> => {
+    const tool = tools.get(name)
+    if (tool === undefined) throw new Error(`no tool "${name}" is registered`)
+    const chain = [...(listeners.get('tools/pre-execute') ?? [])]
+    const callId = `composed-call-${String(++toolCalls)}`
+    const exec = { agent, callId, name, arguments: args }
+    const step = async (index: number): Promise<unknown> => {
+      const listener = chain[index]
+      if (listener === undefined) {
+        return await tool.execute(args, {
+          agent,
+          callId,
+          signal: new AbortController().signal,
+        })
+      }
+      return await listener(exec, () => step(index + 1))
+    }
+    return await step(0)
+  }
+  return { ctx, agent, watch, activations, steers, tools, emit, callTool }
 }
 
 function closeTurn(host: FakeHost, turn: number): Promise<unknown> {
@@ -368,5 +400,279 @@ describe('composed Release A profile', () => {
     expect(host.steers.filter((steer) => steer.kind === 'delegation-rules')).toEqual([])
     // The approval the task review published is the portable one.
     expect((await readJson(join(change, 'reviews', `${TASK_ID}.json`)))?.verdict).toBe('PASS')
+  })
+})
+
+const MIXED_TASKS = `${UNCHECKED_TASKS.replace('- [ ] 1.1', '- [x] 1.1')}- [ ] 1.2 Follow-up task
+`
+
+function toolText(value: unknown): string {
+  return typeof value === 'object' && value !== null && 'text' in value
+    ? String((value as { text: unknown }).text)
+    : JSON.stringify(value)
+}
+
+describe('deprecated aliases route by effective owner', () => {
+  it('routes delegate and task_progress to the workflows runtime while the signals are owned', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(workspace)
+    applyDelegation(host.ctx as never, delegation as never)
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+
+    // `delegate` starts the matching definition run instead of the legacy queue.
+    const started = toolText(
+      await host.callTool('delegate', { rule: 'task-review', change: CHANGE, task: TASK_ID }),
+    )
+    expect(started).toMatch(/review started/u)
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const runs = (await listAuthenticatedRuns(workspace, auth)).filter(
+      (run) => run.definition.id === 'task-review',
+    )
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.context).toMatchObject({ name: CHANGE, taskId: TASK_ID })
+    expect(host.activations).toHaveLength(0)
+
+    // `task_progress` calls the workflows note action and writes its path.
+    const progress = toolText(
+      await host.callTool('task_progress', {
+        task: '1.2 Follow-up task',
+        status: 'in-progress',
+        reason: 'spans turns',
+      }),
+    )
+    expect(progress).toContain('progress note written')
+    expect(progress).toContain('lane:')
+    expect(
+      await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeDefined()
+    expect(
+      await readJson(join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
+    ).toBeUndefined()
+
+    // `delegation_status` returns the workflows status summary with the one
+    // deprecation line printed once.
+    const status = toolText(await host.callTool('delegation_status', {}))
+    expect(status).toContain('Workflows status')
+    expect(status.match(/delegation_status is deprecated; use the workflows tool/gu)).toHaveLength(
+      1,
+    )
+  })
+
+  it('keeps the legacy runtime and the legacy note path while the switches are enabled', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(workspace)
+    applyDelegation(
+      host.ctx as never,
+      {
+        ...delegation,
+        gates: {
+          ...(delegation.gates as Record<string, boolean>),
+          workflowOwned: true,
+          taskProgress: true,
+        },
+      } as never,
+    )
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+
+    const progress = toolText(
+      await host.callTool('task_progress', {
+        task: '1.2 Follow-up task',
+        status: 'in-progress',
+        reason: 'legacy note',
+      }),
+    )
+    expect(progress).toContain('progress note written')
+    expect(
+      await readJson(join(workspace, '.dsh', 'delegation', 'task-progress', `${CHANGE}.json`)),
+    ).toBeDefined()
+    expect(
+      await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`)),
+    ).toBeUndefined()
+
+    const before = host.activations.length
+    const started = toolText(
+      await host.callTool('delegate', { rule: 'task-review', change: CHANGE, task: TASK_ID }),
+    )
+    expect(started).toMatch(/review started|already pending|run:/u)
+    await waitFor(() => host.activations.length > before)
+    expect(host.activations.at(-1)?.prompt.includes(NATIVE_HEADER)).toBe(false)
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    expect(
+      (await listAuthenticatedRuns(workspace, auth)).filter(
+        (run) => run.definition.id === 'task-review',
+      ),
+    ).toHaveLength(0)
+  })
+
+  it('returns the lane the legacy lane gate needs when progress is owned and the lane signal is legacy', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace(MIXED_TASKS)
+    const delegation = await composedConfig('dsh-setup-delegation-rules')
+    const workflows = await composedConfig('dsh-setup-workflows')
+    const host = fakeHost(workspace)
+    applyDelegation(
+      host.ctx as never,
+      {
+        ...delegation,
+        gates: { ...(delegation.gates as Record<string, boolean>), laneFanout: true },
+      } as never,
+    )
+    apply(host.ctx as never, workflows as never)
+    await waitFor(() => host.watch.length > 0)
+    const output = toolText(
+      await host.callTool('task_progress', {
+        task: '1.2 Follow-up task',
+        status: 'in-progress',
+        reason: 'serial lane',
+      }),
+    )
+    expect(output).toContain('progress note written')
+    const note = await readJson(join(workspace, '.dsh', 'workflows', 'notes', `${CHANGE}.json`))
+    expect(note?.lane).toBe('1. Compose the profile (lane 1, owns `packages/plugin-workflows/**`)')
+    expect(toolText(await host.callTool('delegation_status', {}))).toContain('Workflows status')
+  })
+})
+
+const LANE_PLAN = `# Tasks
+
+## 1. Engine (lane 1, owns \`packages/engine/**\`)
+
+- [ ] 1.1 Engine task
+
+## 2. Docs (lane 2, owns \`docs/**\`)
+
+- [ ] 2.1 Doc task
+`
+
+async function openComposed(workspace: string, gates: Record<string, boolean>): Promise<FakeHost> {
+  process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+  const delegation = await composedConfig('dsh-setup-delegation-rules')
+  const workflows = await composedConfig('dsh-setup-workflows')
+  const host = fakeHost(workspace)
+  // A worker-start tool must be visible for the legacy lane gate to act.
+  ;(host.ctx.tools as { register(definition: unknown): unknown }).register({
+    name: 'subagent',
+    execute: async () => ({ text: 'started' }),
+  })
+  applyDelegation(host.ctx as never, { ...delegation, gates } as never)
+  apply(host.ctx as never, workflows as never)
+  await waitFor(() => host.watch.length > 0)
+  // Both runtimes need the session attributed to the change.
+  const legacyName = createHash('sha256').update(SESSION).digest('hex').slice(0, 16)
+  await mkdir(join(workspace, '.dsh', 'delegation', 'sessions'), { recursive: true })
+  await writeFile(
+    join(workspace, '.dsh', 'delegation', 'sessions', `${legacyName}.json`),
+    JSON.stringify({
+      session: SESSION,
+      changes: { [CHANGE]: { created: true, specChanged: true, tasks: [], completed: false } },
+    }),
+    'utf8',
+  )
+  await writeInvolvement(workspace, SESSION, [CHANGE])
+  // A current whole-spec PASS settles the owned spec-review run on this close
+  // so only the two gates under test decide.
+  const specDigest = await currentSpecDigest(workspace, CHANGE)
+  if (specDigest !== undefined) {
+    const records = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', CHANGE)
+    await mkdir(records, { recursive: true })
+    await writeFile(
+      join(records, 'spec.json'),
+      JSON.stringify({
+        definition: 'spec-review',
+        rule: 'spec-review',
+        change: CHANGE,
+        phase: 'spec',
+        scope: 'whole',
+        digest: specDigest,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T10:00:00.000Z',
+      }),
+      'utf8',
+    )
+  }
+  await host.emit(
+    'agent/pre-step',
+    {
+      agent: host.agent,
+      turn: 1,
+      step: 1,
+      messages: [],
+      signal: new AbortController().signal,
+      modelSelection: { provider: 'p', model: 'm' },
+    },
+    async () => ({ kind: 'continue' }),
+  )
+  return host
+}
+
+/** One implementation write observed by both runtimes. */
+async function implementationWrite(host: FakeHost, workspace: string): Promise<void> {
+  await mkdir(join(workspace, 'src'), { recursive: true })
+  await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+  await host.emit(
+    'tools/result',
+    {
+      agent: host.agent,
+      callId: 'impl-write',
+      name: 'write',
+      arguments: { file_path: 'src/app.ts' },
+    },
+    { isError: false, content: [{ type: 'text', text: 'ok' }] },
+  )
+}
+
+describe('composed rollback of each engine gate', () => {
+  it('restores the legacy progress steer while the owned lane gate keeps steering', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: true,
+      laneFanout: false,
+    })
+    await implementationWrite(host, workspace)
+    await closeTurn(host, 1)
+    const kinds = host.steers.map((steer) => steer.kind)
+    expect(kinds).toContain('delegation-rules')
+    expect(kinds).toContain('workflows-gate')
+    expect(host.steers.find((steer) => steer.kind === 'delegation-rules')?.text).toContain(
+      'changed implementation files',
+    )
+    expect(host.steers.find((steer) => steer.kind === 'workflows-gate')?.text).toContain(
+      'lane assignment is missing',
+    )
+  })
+
+  it('restores the legacy lane steer while the owned progress gate keeps steering', async () => {
+    const workspace = await gitWorkspace(LANE_PLAN)
+    const host = await openComposed(workspace, {
+      workflowOwned: false,
+      specReview: false,
+      integrationReview: false,
+      taskProgress: false,
+      laneFanout: true,
+    })
+    await implementationWrite(host, workspace)
+    await closeTurn(host, 1)
+    const kinds = host.steers.map((steer) => steer.kind)
+    expect(kinds).toContain('delegation-rules')
+    expect(kinds).toContain('workflows-gate')
+    expect(host.steers.find((steer) => steer.kind === 'delegation-rules')?.text).toContain(
+      'lane assignment is missing',
+    )
+    expect(host.steers.find((steer) => steer.kind === 'workflows-gate')?.text).toContain(
+      'changed implementation files',
+    )
   })
 })

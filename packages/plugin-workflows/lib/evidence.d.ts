@@ -37,6 +37,10 @@ export interface ToolCallObservation {
     readonly detail?: string;
     /** The observation order, for remedy/call ordering. */
     readonly seq?: number;
+    /** A write/edit result's canonical prior content; null means the file was new. */
+    readonly before?: string | null;
+    /** A write/edit result's canonical written content. */
+    readonly after?: string;
 }
 /** One completed foreground shell result the verifier may match against. */
 export interface ShellResultObservation {

@@ -228,4 +228,12 @@ export interface LaneParityInput {
     readonly assigned: readonly string[];
     readonly implementationChanged: boolean;
 }
-export declare function evaluateLaneParity(input: LaneParityInput): ParityGateDecision;
+/** One lane the lane gate reports, with its owned paths and plan position. */
+export interface LaneParityLane {
+    readonly n: number;
+    readonly title: string;
+    readonly owned: readonly string[];
+}
+export declare function evaluateLaneParity(input: LaneParityInput): ParityGateDecision & {
+    readonly lanes?: readonly LaneParityLane[];
+};

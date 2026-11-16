@@ -1,13 +1,14 @@
 import { adoptChange } from './adoption.js';
 import { CHANGE_NAME } from './command-parse.js';
 import { collectEvidencePaths, verifyEvidence } from './evidence.js';
+import { PROGRESS_STATUSES } from './notes.js';
 import { openRunCount } from './runs.js';
 /**
  * The model-facing `workflows` tool. It is a bounded control surface: list,
  * start an allowed definition, resume, status, host-verified evidence, cancel,
- * and a user-confirmed adoption of an existing change. It never accepts a
- * script, a definition body, an install, a receipt write outside the adoption
- * path, or a text claim.
+ * a progress note, and a user-confirmed adoption of an existing change. It never
+ * accepts a script, a definition body, an install, a receipt write outside the
+ * adoption path, or a text claim.
  */
 export const WORKFLOWS_TOOL_ACTIONS = [
     'list',
@@ -17,6 +18,7 @@ export const WORKFLOWS_TOOL_ACTIONS = [
     'evidence',
     'cancel',
     'adopt',
+    'note',
 ];
 function fail(message) {
     throw new Error(`workflows: ${message}`);
@@ -30,7 +32,17 @@ function objectArgs(value) {
 /** Parse and validate the tool arguments; an unknown field is refused. */
 export function parseWorkflowsToolArgs(value) {
     const args = objectArgs(value);
-    const allowed = new Set(['action', 'definitionId', 'runId', 'stepId', 'change', 'evidence']);
+    const allowed = new Set([
+        'action',
+        'definitionId',
+        'runId',
+        'stepId',
+        'change',
+        'evidence',
+        'task',
+        'status',
+        'reason',
+    ]);
     for (const key of Object.keys(args)) {
         if (!allowed.has(key)) {
             fail(`unknown field "${key}"; the tool has no raw script or definition input`);
@@ -63,10 +75,20 @@ export function parseWorkflowsToolArgs(value) {
         }
         evidence = { kind: raw.kind, ref: raw.ref };
     }
+    let status;
+    if (args.status !== undefined) {
+        if (typeof args.status !== 'string' ||
+            !PROGRESS_STATUSES.includes(args.status)) {
+            fail(`status must be one of: ${PROGRESS_STATUSES.join(', ')}`);
+        }
+        status = args.status;
+    }
     const definitionId = text('definitionId');
     const runId = text('runId');
     const stepId = text('stepId');
     const change = text('change');
+    const task = text('task');
+    const reason = text('reason');
     return {
         action: action,
         ...(definitionId === undefined ? {} : { definitionId }),
@@ -74,6 +96,9 @@ export function parseWorkflowsToolArgs(value) {
         ...(stepId === undefined ? {} : { stepId }),
         ...(change === undefined ? {} : { change }),
         ...(evidence === undefined ? {} : { evidence }),
+        ...(task === undefined ? {} : { task }),
+        ...(status === undefined ? {} : { status }),
+        ...(reason === undefined ? {} : { reason }),
     };
 }
 async function verifiedReferences(evidence, context) {
@@ -247,6 +272,24 @@ export async function executeWorkflowsTool(value, host) {
             if (!adopted.ok)
                 fail(adopted.reason);
             return `change "${request.change}" adopted`;
+        }
+        case 'note': {
+            if (request.change === undefined ||
+                request.task === undefined ||
+                request.status === undefined) {
+                fail('note needs a change, a task (text or stable id), and a status');
+            }
+            if (!CHANGE_NAME.test(request.change)) {
+                fail('change must be a plain change name, not a script or path');
+            }
+            if (host.note === undefined)
+                fail('this host cannot record a progress note');
+            return host.note({
+                change: request.change,
+                task: request.task,
+                status: request.status,
+                ...(request.reason === undefined ? {} : { reason: request.reason }),
+            });
         }
         case 'cancel': {
             if (request.runId === undefined)

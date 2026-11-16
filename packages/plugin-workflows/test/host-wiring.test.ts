@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -142,6 +144,11 @@ function fakeHost(
     readonly automation?: boolean
     /** Default true: the retained whole-spec signal; false restores the owned step. */
     readonly specReview?: boolean
+    /** Default true: the retained progress/lane signals; false restores the engine gates. */
+    readonly taskProgress?: boolean
+    readonly laneFanout?: boolean
+    /** Default false: the task-review rule is owned by the engine. */
+    readonly workflowOwned?: boolean
     readonly delegateBarrier?: Promise<void>
   } = {},
 ): {
@@ -297,7 +304,12 @@ function fakeHost(
       // The migrated profile: the workflow-owned legacy gates are off while the
       // spec-review, progress, and lane signals follow their switches.
       if (name === 'delegationRulesStatus') {
-        return { workflowOwned: false, specReview: options.specReview ?? true }
+        return {
+          workflowOwned: options.workflowOwned ?? false,
+          specReview: options.specReview ?? true,
+          taskProgress: options.taskProgress ?? true,
+          laneFanout: options.laneFanout ?? true,
+        }
       }
       if (name === 'goalContinuityStatus') return { automation: options.automation ?? false }
       if (name === 'verificationGateStatus') return { steering: false }
@@ -6049,7 +6061,7 @@ describe('session disposal', () => {
 })
 
 describe('workflows tool live wiring', () => {
-  it('registers the seven actions and verifies observed evidence through the real tool', async () => {
+  it('registers the eight actions and verifies observed evidence through the real tool', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const host = fakeHost(workspace)
@@ -6070,6 +6082,7 @@ describe('workflows tool live wiring', () => {
       'evidence',
       'cancel',
       'adopt',
+      'note',
     ])
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
@@ -7085,5 +7098,244 @@ describe('turn-close condition wiring', () => {
     } finally {
       dispose?.()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// engine-owned gates: note evidence, lane assignment, and the goal guard
+// ---------------------------------------------------------------------------
+
+const GATE_PLAN = `# Tasks
+
+## 1. Engine (lane 1, owns \`src/engine/**\`)
+
+- [ ] 1.1 Engine task
+
+## 2. Docs (lane 2, owns \`docs/**\`)
+
+- [ ] 2.1 Doc task
+`
+
+function steered(host: ReturnType<typeof fakeHost>): string {
+  return host.steers
+    .map((message) => {
+      const entry = message as { content?: Array<{ text?: string }> }
+      return (entry.content ?? []).map((block) => block.text ?? '').join('')
+    })
+    .join('\n')
+}
+
+async function gitGateWorkspace(plan = GATE_PLAN): Promise<string> {
+  const directory = await tempWorkspace()
+  const change = join(directory, 'openspec', 'changes', 'auth')
+  await mkdir(change, { recursive: true })
+  await writeFile(join(change, 'proposal.md'), '# Proposal\n\nWhy.\n', 'utf8')
+  await writeFile(join(change, 'tasks.md'), plan, 'utf8')
+  await writeFile(join(directory, '.gitignore'), 'node_modules/\n', 'utf8')
+  const git = (...args: string[]): void => {
+    execFileSync('git', args, { cwd: directory, stdio: 'ignore' })
+  }
+  git('init')
+  git('config', 'user.name', 'engine-gates')
+  git('config', 'user.email', 'engine-gates@example.test')
+  git('add', '-A')
+  git('commit', '-m', 'init')
+  return directory
+}
+
+async function engineGateHost(
+  workspace: string,
+  options: Parameters<typeof fakeHost>[1] = {},
+): Promise<ReturnType<typeof fakeHost>> {
+  process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+  const host = fakeHost(workspace, options)
+  apply(host.ctx as never)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  await host.emit(
+    'agent/pre-step',
+    {
+      agent: host.agent,
+      turn: 1,
+      step: 1,
+      messages: [],
+      signal: new AbortController().signal,
+      modelSelection: { provider: 'p', model: 'm' },
+    },
+    async () => ({ kind: 'continue' }),
+  )
+  return host
+}
+
+async function gateWrite(
+  host: ReturnType<typeof fakeHost>,
+  path: string,
+  name = 'write',
+): Promise<void> {
+  await host.emit(
+    'tools/result',
+    { agent: host.agent, callId: `call-${path}`, name, arguments: { file_path: path } },
+    { isError: false, content: [{ type: 'text', text: 'ok' }] },
+  )
+}
+
+describe('engine-owned gates', () => {
+  it('reports an unassigned non-serial lane with the exact worker call', async () => {
+    const workspace = await gitGateWorkspace()
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+    const host = await engineGateHost(workspace, {
+      taskProgress: true,
+      laneFanout: false,
+      workflowOwned: false,
+    })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await gateWrite(host, 'src/app.ts')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('lane assignment is missing in change "auth"')
+    expect(text).toContain('lane-tag: auth#1')
+    expect(text).toContain('workflows { action: "note"')
+  })
+
+  it('accepts a tagged worker start for the reported lane', async () => {
+    const workspace = await gitGateWorkspace()
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+    const host = await engineGateHost(workspace, { taskProgress: true, laneFanout: false })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await gateWrite(host, 'src/app.ts')
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'worker-1',
+        name: 'subagent',
+        arguments: { prompt: 'lane-tag: auth#1. Implement lane 1.' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'started' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('lane "2. Docs')
+    expect(text).not.toContain('lane "1. Engine')
+  })
+
+  it('lets the note action decide one lane serial for the workflow gate', async () => {
+    const workspace = await gitGateWorkspace()
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await gateWrite(host, 'src/app.ts')
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | { execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }> }
+      | undefined
+    expect(tool).toBeDefined()
+    const output = await tool?.execute(
+      {
+        action: 'note',
+        change: 'auth',
+        task: '2.1 Doc task',
+        status: 'in-progress',
+        reason: 'docs stay serial',
+      },
+      { agent: host.agent },
+    )
+    expect(output?.text).toContain('progress note written')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('lane "1. Engine')
+    expect(text).not.toContain('lane "2. Docs')
+    const note = JSON.parse(
+      await readFile(join(workspace, '.dsh', 'workflows', 'notes', 'auth.json'), 'utf8'),
+    ) as { lane?: string; worktreeDigest?: string }
+    expect(note.lane).toBe('2. Docs (lane 2, owns `docs/**`)')
+    expect(note.worktreeDigest).toMatch(/^[0-9a-f]{64}$/u)
+  })
+
+  it('refuses a stale note and accepts a fresh one', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks\n\n- [ ] 1.1 First task\n`)
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: true })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await gateWrite(host, 'src/app.ts')
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | { execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }> }
+      | undefined
+    const note = {
+      action: 'note',
+      change: 'auth',
+      task: '1.1 First task',
+      status: 'in-progress',
+      reason: 'still open',
+    }
+    await tool?.execute(note, { agent: host.agent })
+    // The worktree moves after the note: the recorded digest is now stale.
+    await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 2\n', 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const refused = steered(host)
+    expect(refused).toContain('changed implementation files in change "auth"')
+    expect(refused).toContain('stale')
+    const refusals = host.steers.length
+    await tool?.execute(note, { agent: host.agent })
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBe(refusals)
+  })
+
+  it('refuses goal completion without a portable PASS and allows it with one', async () => {
+    const workspace = await tempWorkspace()
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(change, { recursive: true })
+    await writeFile(join(change, 'tasks.md'), '# Tasks\n\n- [x] 1.1 First task\n', 'utf8')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const complete = async (): Promise<{
+      decision?: { kind?: string; reason?: string }
+      nextCalled: boolean
+    }> => {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: 'goal-1',
+          name: 'update_goal',
+          arguments: { action: 'complete' },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string; reason?: string } | undefined
+      return { ...(decision === undefined ? {} : { decision }), nextCalled }
+    }
+    const refused = await complete()
+    expect(refused.nextCalled).toBe(false)
+    expect(refused.decision?.kind).toBe('deny')
+    expect(refused.decision?.reason).toContain('goal completion refused')
+    expect(refused.decision?.reason).toContain('no portable task-review PASS')
+    const taskId = createHash('sha256').update('First task').digest('hex').slice(0, 16)
+    await mkdir(join(change, 'reviews'), { recursive: true })
+    await writeFile(
+      join(change, 'reviews', `${taskId}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T10:00:00.000Z',
+      }),
+      'utf8',
+    )
+    const allowed = await complete()
+    expect(allowed.nextCalled).toBe(true)
+    expect(allowed.decision?.kind).toBe('continue')
   })
 })

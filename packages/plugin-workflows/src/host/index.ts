@@ -1,6 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -35,6 +36,13 @@ import {
   readEditorDefinitionDocument,
   registerEditorRoutes,
 } from './editor-api.js'
+import {
+  codeChangedThisTurn,
+  evaluateOwnedLaneGate,
+  evaluateOwnedProgressGate,
+  goalCompletionRefusal,
+  taskReviewEvidence,
+} from './engine-gates.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
   commandMatches,
@@ -75,6 +83,7 @@ import {
   toolResultText,
   workflowsDirectory,
 } from './journal.js'
+import { type NoteInput, writeProgressNote } from './notes.js'
 import {
   type CheckpointObservation,
   checkpointGateIssue,
@@ -133,7 +142,7 @@ import {
   writeRunSync,
 } from './runs.js'
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js'
-import { checkedTaskIds, findTaskOf, isTaskChecked, taskOf } from './tasks.js'
+import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, taskOf } from './tasks.js'
 import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
 import {
   checkpointRequired,
@@ -685,6 +694,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
     return authorizeUserArchive(workspace, change, auth)
   }
+  /**
+   * The session and workspace of an in-flight delegation tool call. The
+   * `workflowsReviewCompat` service is provided once per host, so it recovers
+   * the calling session from the pre-execute scope that wraps the tool call.
+   */
+  const delegationCall = new AsyncLocalStorage<{
+    readonly session: string
+    readonly workspace: string
+  }>()
   const journal = new Journal()
   /** Latest turn per session, so a tool result belongs to a turn. */
   const turns = new Map<string, number>()
@@ -1969,6 +1987,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const shellOutcome = shellOutcomeOf(result)
         const isShellTool = exec.name === 'pwsh' || exec.name === 'bash'
         const observed = sessionToolCalls.get(sessionId) ?? []
+        const writeResult =
+          typeof result.value === 'object' && result.value !== null
+            ? (result.value as { before?: unknown; after?: unknown })
+            : undefined
         observed.push({
           callId: String(exec.callId),
           name: exec.name,
@@ -1977,6 +1999,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           at: journal.time(),
           detail: text.slice(0, 500),
           seq: pendingCallSeq.get(String(exec.callId)) ?? nextObservationSeq(sessionId),
+          ...(typeof writeResult?.after === 'string' ? { after: writeResult.after } : {}),
+          ...(writeResult?.before === null || typeof writeResult?.before === 'string'
+            ? { before: writeResult.before as string | null }
+            : {}),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
@@ -3711,6 +3737,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
           }
         }
+        // The goal-complete guard moved here from the delegation listener: a
+        // goal must not complete while a checked task has no portable PASS.
+        const goalRefusal = await goalCompletionRefusal({
+          workspace,
+          definitions,
+          exec: {
+            name: exec.name,
+            ...(exec.arguments === undefined ? {} : { arguments: exec.arguments }),
+          },
+        })
+        if (goalRefusal !== undefined) return { kind: 'deny', reason: goalRefusal }
         const writeDecision = authorizationWriteDecision({
           workspace,
           exec: { name: exec.name, arguments: exec.arguments },
@@ -3718,6 +3755,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           callId: String(exec.callId),
         })
         if (writeDecision?.kind === 'deny') return { kind: 'deny', reason: writeDecision.reason }
+        // The delegation tools run inside this call; their compatibility
+        // service resolves the calling session from this async scope.
+        if (
+          exec.name === 'delegate' ||
+          exec.name === 'task_progress' ||
+          exec.name === 'delegation_status'
+        ) {
+          return await delegationCall.run({ session: sessionId, workspace }, () => next())
+        }
         return await next()
       } catch (error) {
         return {
@@ -3727,6 +3773,71 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       }
     }),
   )
+
+  /**
+   * The engine-owned gate refusals for one turn close. Every gate resolves its
+   * ownership from the legacy switch: it acts only while its signal is off, so
+   * re-enabling one legacy signal makes its workflow counterpart yield.
+   */
+  const ownedGateRefusal = async (
+    workspace: string,
+    session: string,
+    turn: number,
+  ): Promise<string | undefined> => {
+    const legacy = legacySignalState()
+    const progressOwned = !legacy.enabled.has('delegation-rules/task-progress')
+    const laneOwned = !legacy.enabled.has('delegation-rules/lane-assignment')
+    if (!progressOwned && !laneOwned) return undefined
+    const calls = sessionToolCalls.get(session) ?? []
+    const metrics = turnMetrics.get(session)
+    const changes = new Set<string>(involvedChangesBySession.get(`${workspace}\0${session}`) ?? [])
+    for (const change of await readInvolvement(workspace, session)) changes.add(change)
+    for (const change of attributedChangeNames(workspace, calls, turn)) changes.add(change)
+    if (changes.size === 0) return undefined
+    const codeChanged =
+      codeChangedThisTurn(calls, workspace, turn) ||
+      (metrics?.turn === turn && metrics.lastWriteAt !== undefined)
+    // The task-review evidence and the note both follow their signal's owner.
+    const reviewOwner = legacy.enabled.has('delegation-rules/task-review') ? 'legacy' : 'workflows'
+    const noteOwner = progressOwned ? 'workflows' : 'legacy'
+    const texts: string[] = []
+    for (const change of [...changes].sort()) {
+      try {
+        if (progressOwned) {
+          const decision = await evaluateOwnedProgressGate({
+            workspace,
+            change,
+            calls,
+            turn,
+            codeChanged,
+            noteOwner,
+            reviewOwner,
+          })
+          if (decision.decision === 'refuse' && decision.steer !== undefined) {
+            texts.push(decision.steer)
+          }
+        }
+        if (laneOwned) {
+          const decision = await evaluateOwnedLaneGate({
+            workspace,
+            change,
+            calls,
+            turn,
+            codeChanged,
+            noteOwner,
+          })
+          if (decision.decision === 'refuse' && decision.steer !== undefined) {
+            texts.push(decision.steer)
+          }
+        }
+      } catch (error) {
+        // A gate that cannot evaluate its evidence fails open like the legacy
+        // gate: the failure is visible, and the turn is not trapped.
+        publishListenerError(workspace, error)
+      }
+    }
+    return texts.length === 0 ? undefined : texts.join('\n')
+  }
 
   // Turn close: steer the first owned open blockTurnClose step, bounded.
   listenEngine(() =>
@@ -4158,6 +4269,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             }
           }
         }
+        // The engine-owned work-progress and lane gates share this listener. A
+        // close a run step already refused is held; the next close evaluates
+        // them once that obligation settles.
+        if (!refusedThisClose) {
+          const ownedText = await ownedGateRefusal(workspace, sessionId, payload.turn)
+          if (ownedText !== undefined) {
+            payload.agent.steer({
+              id: randomUUID(),
+              role: 'user',
+              content: [{ type: 'text', text: ownedText }],
+              source: { kind: 'workflows-gate' },
+            } as never)
+            refusedThisClose = true
+          }
+        }
         await refreshPromptRuns(workspace)
       } catch (error) {
         publishListenerError(workspaceFor(services, payload.agent.session), error)
@@ -4272,6 +4398,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         void refreshPromptRuns(workspace)
         return committed
       },
+      note: async (input: NoteInput) => {
+        const written = await writeProgressNote(workspace, input, { now: journal.time() })
+        return written.text
+      },
     }
   }
 
@@ -4284,13 +4414,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         toolsService.register({
           name: 'workflows',
           description:
-            'List, start, resume, inspect, evidence-check, cancel a stored workflow run, or request adoption of an existing change after a direct user confirmation. It never accepts a script or definition, never installs a definition, never starts an adoption without the host asking the user, and never writes an approval.',
+            'List, start, resume, inspect, evidence-check, cancel a stored workflow run, record a progress note, or request adoption of an existing change after a direct user confirmation. It never accepts a script or definition, never installs a definition, never starts an adoption without the host asking the user, and never writes an approval.',
           parameters: {
             type: 'object',
             properties: {
               action: {
                 type: 'string',
-                enum: ['list', 'start', 'resume', 'status', 'evidence', 'cancel', 'adopt'],
+                enum: ['list', 'start', 'resume', 'status', 'evidence', 'cancel', 'adopt', 'note'],
                 description: 'The bounded action to run.',
               },
               definitionId: { type: 'string', description: 'A stored definition id.' },
@@ -4298,7 +4428,23 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               stepId: { type: 'string', description: 'A step id of the run.' },
               change: {
                 type: 'string',
-                description: 'An existing OpenSpec change name to adopt after the user confirms.',
+                description:
+                  'An existing OpenSpec change name to adopt after the user confirms, or the change a note belongs to.',
+              },
+              task: {
+                type: 'string',
+                description:
+                  'The note action only: the unchecked task text from tasks.md or its 16-character task id.',
+              },
+              status: {
+                type: 'string',
+                enum: ['in-progress', 'blocked'],
+                description: 'The note action only: the explicit state of the unchecked task.',
+              },
+              reason: {
+                type: 'string',
+                description:
+                  'The note action only: why the task spans turns or is blocked, recorded with the worktree digest.',
               },
               evidence: {
                 type: 'object',
@@ -4345,6 +4491,157 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             }
           },
         }) as never,
+    )
+  }
+
+  /**
+   * The one-release compatibility service the delegation tools read as
+   * `workflowsReviewCompat`. Each method resolves the calling session from the
+   * pre-execute scope: while a signal is owned, `delegate` starts the matching
+   * definition run and `task_progress` calls `note`; `delegation_status` reads
+   * the workflows status summary.
+   */
+  const compatCallContext = (): { readonly session: string; readonly workspace: string } => {
+    const store = delegationCall.getStore()
+    if (store !== undefined) return store
+    throw new Error(
+      'the workflows compatibility service is available only during a live delegate, task_progress, or delegation_status call',
+    )
+  }
+  const normalizedTaskText = (text: string): string => text.replace(/\s+/gu, ' ').trim()
+  const compatDefinition = async (workspace: string, rule: string): Promise<Definition> => {
+    const definition = (await definitionsFor(workspace)).find((entry) => entry.id === rule)
+    if (definition === undefined) {
+      throw new Error(`no workflow definition "${rule}" is installed; run /workflows status`)
+    }
+    return definition
+  }
+  const compatReviewTask = async (
+    workspace: string,
+    change: string,
+    definition: Definition,
+    wanted: string | undefined,
+  ): Promise<
+    { readonly id: string; readonly number: string; readonly text: string } | undefined
+  > => {
+    const step = definition.steps.find((entry) => entry.executor === 'review')
+    if (step?.review?.scope !== 'task') return undefined
+    let plan: string
+    try {
+      plan = await readFile(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8')
+    } catch {
+      throw new Error(
+        `the change "${change}" has no readable tasks.md; fix openspec/changes/${change}/tasks.md and retry`,
+      )
+    }
+    const tasks = numberedTasks(plan)
+    const checked = tasks.filter((task) => task.checked)
+    if (checked.length === 0) {
+      throw new Error(
+        `change "${change}" has no checked task; tick the completed task in tasks.md, then run its review`,
+      )
+    }
+    if (wanted === undefined) {
+      for (const task of checked) {
+        if (!(await taskReviewEvidence(workspace, change, task.id, 'workflows'))) return task
+      }
+      return checked[checked.length - 1]
+    }
+    const needle = normalizedTaskText(wanted)
+    const task = tasks.find(
+      (entry) =>
+        entry.id === wanted ||
+        normalizedTaskText(entry.text) === needle ||
+        normalizedTaskText(`${entry.number} ${entry.text}`) === needle,
+    )
+    if (task === undefined) {
+      throw new Error(
+        `task "${wanted}" was not found in change "${change}"; allowed checked tasks: ${checked.map((entry) => `${entry.number} ${entry.text}`).join('; ')}`,
+      )
+    }
+    if (!task.checked) {
+      throw new Error(
+        `task "${task.number} ${task.text}" is not checked in change "${change}"; only checked tasks can be reviewed`,
+      )
+    }
+    return task
+  }
+  const compatDelegate = async (input: {
+    readonly rule: string
+    readonly change: string
+    readonly task?: string
+    readonly section?: string
+  }): Promise<string> => {
+    const call = compatCallContext()
+    if (input.section !== undefined) {
+      throw new Error(
+        `the native review executor has no section scope; review one checked task at a time with delegate(rule: "${input.rule}", change: "${input.change}", task: "<taskId>")`,
+      )
+    }
+    const definition = await compatDefinition(call.workspace, input.rule)
+    const task = await compatReviewTask(call.workspace, input.change, definition, input.task)
+    const auth = storedAuth ?? (await ensureAuth())
+    if (auth === undefined) {
+      throw new Error('the workflows host key is unavailable; no review run was created')
+    }
+    await recoverIfNeeded(call.workspace)
+    const runs = await listAuthenticatedRuns(call.workspace, auth)
+    const pending = runs.find(
+      (run) =>
+        run.definition.id === definition.id &&
+        run.context.name === input.change &&
+        (task === undefined || run.context.taskId === task.id) &&
+        isOpenRun(run) &&
+        services.agents.get(run.session) !== undefined,
+    )
+    if (pending !== undefined) {
+      return `rule "${input.rule}" review already pending\nrun: ${pending.id}`
+    }
+    const run = await startRunFor(call.workspace, call.session, auth, definition, {
+      name: input.change,
+      ...(task === undefined ? {} : { taskId: task.id }),
+    })
+    void refreshPromptRuns(call.workspace)
+    return `rule "${input.rule}" review started\nrun: ${run.id}`
+  }
+  const compatNote = async (input: {
+    readonly change: string
+    readonly task: string
+    readonly status: 'in-progress' | 'blocked'
+    readonly reason?: string
+  }): Promise<{ readonly text: string; readonly lane?: string }> => {
+    const call = compatCallContext()
+    const written = await writeProgressNote(call.workspace, input, { now: journal.time() })
+    return {
+      text: written.text,
+      ...(written.lane === undefined ? {} : { lane: written.lane }),
+    }
+  }
+  const compatStatus = async (): Promise<string> => {
+    const call = compatCallContext()
+    const state = legacySignalState()
+    const owner = (plugin: string, signal: string): string =>
+      state.enabled.has(`${plugin}/${signal}`) ? 'legacy' : 'workflows'
+    const auth = storedAuth
+    const definitions = await definitionsFor(call.workspace)
+    const runs = auth === undefined ? [] : await listAuthenticatedRuns(call.workspace, auth)
+    const receipts = auth === undefined ? [] : await listReceipts(call.workspace, auth)
+    return [
+      'Workflows status',
+      `review: ${owner('delegation-rules', 'task-review')} (task-review), ${owner('delegation-rules', 'spec-review')} (spec-review), ${owner('delegation-rules', 'integration-review')} (integration-review)`,
+      `gates: ${owner('delegation-rules', 'task-progress')} (work progress), ${owner('delegation-rules', 'lane-assignment')} (lane assignment)`,
+      `definitions: ${String(definitions.length)}; open runs: ${String(openRunCount(runs))}; receipts: ${String(receipts.length)}`,
+    ].join('\n')
+  }
+  try {
+    ctx.provide('workflowsReviewCompat', {
+      delegate: compatDelegate,
+      note: compatNote,
+      status: compatStatus,
+    })
+  } catch (error) {
+    console.error(
+      `workflows: the review compatibility service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
     )
   }
 
