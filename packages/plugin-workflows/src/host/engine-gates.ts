@@ -291,7 +291,8 @@ export type LaneDecision = 'assigned' | 'serial'
 
 /**
  * Forget decisions for lanes that disappeared, lost their tasks, or completed.
- * A completed lane also drops its own session's persisted serial note, so
+ * A completed or removed lane also drops its own session's persisted serial
+ * note, even when the decision map is empty as it is after a host reload, so
  * reopening the lane needs fresh evidence instead of the old note. A renamed
  * lane is a new title and therefore a new, unassigned lane. An unreadable plan
  * keeps the decisions: the gate already fails open there.
@@ -302,29 +303,22 @@ export async function pruneLaneDecisions(
   decisions: Map<string, LaneDecision>,
   note: { readonly owner: NoteOwner; readonly session: string },
 ): Promise<void> {
-  if (decisions.size === 0) return
   const plan = await readPlan(workspace, change)
   if (plan === undefined) return
   const lanes = taskLanes(plan)
-  const pruned: string[] = []
-  for (const title of [...decisions.keys()]) {
+  // A heading with no tasks yet is not stale: the parity table skips it too.
+  const stale = (title: string): boolean => {
     const lane = lanes.find((entry) => entry.title === title)
-    const tasks = lane === undefined ? 0 : lane.checked.length + lane.unchecked.length
-    if (lane === undefined || (tasks > 0 && lane.unchecked.length === 0)) {
-      decisions.delete(title)
-      pruned.push(title)
-    }
+    return (
+      lane === undefined ||
+      (lane.checked.length + lane.unchecked.length > 0 && lane.unchecked.length === 0)
+    )
   }
-  if (pruned.length === 0) return
+  for (const title of [...decisions.keys()]) if (stale(title)) decisions.delete(title)
   // Another session's note is that session's evidence and stays untouched.
   const saved = await readProgressNote(workspace, change, note.owner)
-  if (
-    saved?.lane !== undefined &&
-    saved.session === note.session &&
-    pruned.includes(saved.lane)
-  ) {
-    await unlink(join(workspace, notePathFor(note.owner, change))).catch(() => undefined)
-  }
+  if (saved?.lane === undefined || saved.session !== note.session || !stale(saved.lane)) return
+  await unlink(join(workspace, notePathFor(note.owner, change))).catch(() => undefined)
 }
 
 export interface LaneGateInput extends GateEvidence {

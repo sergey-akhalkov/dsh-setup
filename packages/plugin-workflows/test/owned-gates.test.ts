@@ -613,6 +613,81 @@ describe('the kept lane decisions', () => {
     expect((await gate()).decision).toBe('allow')
   })
 
+  it('invalidates its own serial note after a reload but keeps another session note', async () => {
+    const root = await workspace()
+    const runGit = fakeGit(() => IMPLEMENTATION_STATUS, root)
+    const tasks = join(root, 'openspec', 'changes', 'change-a', 'tasks.md')
+    const laneOne = '1. Engine (lane 1, owns `packages/engine/**`)'
+    const noteInput = {
+      change: 'change-a',
+      task: '2.1 Doc task',
+      status: 'in-progress',
+      reason: 'serial',
+    } as const
+    const completed = PLAN.replace('- [ ] 2.1', '- [x] 2.1')
+    // Another session's note is that session's evidence: a reloaded session's
+    // prune starts with an empty decision map and must leave the note alone.
+    await writeProgressNote(root, noteInput, { runGit, session: 'session-2' })
+    await writeFile(tasks, completed, 'utf8')
+    await pruneLaneDecisions(root, 'change-a', new Map(), {
+      owner: 'workflows',
+      session: 'session-1',
+    })
+    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeDefined()
+    // The writing session's own completed lane drops its note without a decision.
+    await pruneLaneDecisions(root, 'change-a', new Map(), {
+      owner: 'workflows',
+      session: 'session-2',
+    })
+    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
+    // Reopen, take a fresh serial note, and complete the lane again; the empty
+    // map is what a fresh host holds after a reload.
+    await writeFile(tasks, PLAN, 'utf8')
+    await writeProgressNote(root, noteInput, { runGit, session: 'session-1' })
+    await writeFile(tasks, completed, 'utf8')
+    await pruneLaneDecisions(root, 'change-a', new Map(), {
+      owner: 'workflows',
+      session: 'session-1',
+    })
+    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
+    // Reopening the lane does not resurrect the completed lane's stale note.
+    await writeFile(tasks, PLAN, 'utf8')
+    const calls = [
+      {
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'packages/engine/src/engine.ts' },
+        ok: true,
+        turn: 1,
+      },
+    ]
+    const reopened = await evaluateOwnedLaneGate({
+      workspace: root,
+      change: 'change-a',
+      calls,
+      turn: 1,
+      codeChanged: true,
+      noteOwner: 'workflows',
+      session: 'session-1',
+      decisions: new Map([[laneOne, 'assigned']]),
+      runGit,
+    })
+    expect(reopened.decision).toBe('refuse')
+    expect(reopened.lanes?.map((lane) => lane.n)).toEqual([2])
+    // A removed lane's persisted note is stale evidence too.
+    await writeProgressNote(root, noteInput, { runGit, session: 'session-1' })
+    await writeFile(
+      tasks,
+      '# Tasks\n\n## 1. Engine (lane 1, owns `packages/engine/**`)\n\n- [ ] 1.1 Engine task\n',
+      'utf8',
+    )
+    await pruneLaneDecisions(root, 'change-a', new Map(), {
+      owner: 'workflows',
+      session: 'session-1',
+    })
+    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
+  })
+
   it('satisfies a lane from a kept decision after the tool buffer lost the tag', async () => {
     const root = await workspace()
     const decision = await evaluateOwnedLaneGate({

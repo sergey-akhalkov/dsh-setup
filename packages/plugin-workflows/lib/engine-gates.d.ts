@@ -75,7 +75,8 @@ export declare function workerLaneTag(name: string, ok: boolean, argumentsValue:
 export type LaneDecision = 'assigned' | 'serial';
 /**
  * Forget decisions for lanes that disappeared, lost their tasks, or completed.
- * A completed lane also drops its own session's persisted serial note, so
+ * A completed or removed lane also drops its own session's persisted serial
+ * note, even when the decision map is empty as it is after a host reload, so
  * reopening the lane needs fresh evidence instead of the old note. A renamed
  * lane is a new title and therefore a new, unassigned lane. An unreadable plan
  * keeps the decisions: the gate already fails open there.
