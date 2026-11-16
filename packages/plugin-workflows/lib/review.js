@@ -1326,10 +1326,31 @@ async function approvalSatisfies(workspace, record, taskId) {
             return false;
         // The portable schema: a matching approval stays byte-identical, but a
         // malformed one is replaced rather than preserved into the archive audit.
-        if (typeof raw.digest !== 'string' ||
+        const portableKeys = new Set([
+            'rule',
+            'change',
+            'scope',
+            'taskId',
+            'digest',
+            'worktreeDigest',
+            'verdict',
+            'findings',
+            'target',
+            'time',
+        ]);
+        const targetKeys = new Set(['provider', 'model', 'reasoningEffort']);
+        if (Object.keys(raw).some((key) => !portableKeys.has(key)) ||
+            Object.keys(target).some((key) => !targetKeys.has(key)) ||
+            typeof raw.rule !== 'string' ||
+            typeof raw.change !== 'string' ||
+            typeof raw.taskId !== 'string' ||
+            typeof raw.digest !== 'string' ||
             !/^[0-9a-f]{64}$/u.test(raw.digest) ||
             raw.scope !== 'task' ||
             typeof raw.time !== 'string' ||
+            raw.time === '' ||
+            typeof target.provider !== 'string' ||
+            target.provider === '' ||
             (raw.worktreeDigest !== undefined &&
                 (typeof raw.worktreeDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(raw.worktreeDigest)))) {
             return false;

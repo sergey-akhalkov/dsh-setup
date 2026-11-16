@@ -3862,7 +3862,11 @@ export function apply(ctx, config = {}) {
                 // asking for a new start.
                 // Pending reviews come from every live session's runs, not only this
                 // session's, and only while their review step is still unsettled.
-                const reviewOpenRuns = pendingReviewRuns(runs, definitions);
+                // The advanced states from this close's first pass decide whether a
+                // review is still pending; the pre-advance list would present a just
+                // settled ERROR as pending.
+                const currentRuns = runs.map((entry) => advanced.get(entry.id) ?? entry);
+                const reviewOpenRuns = pendingReviewRuns(currentRuns, definitions);
                 const completion = definition.id === 'task-review' && typeof current.context.name === 'string'
                     ? taskReviewCompletion(workspace, current.context.name, { openRuns: reviewOpenRuns })
                     : undefined;
