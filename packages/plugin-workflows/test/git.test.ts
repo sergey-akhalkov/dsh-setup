@@ -61,4 +61,36 @@ describe('implementationFingerprint', () => {
     await writeFile(join(root, 'openspec', 'changes', 'auth', 'tasks.md'), '- [x] 1.1 x\n', 'utf8')
     expect(await implementationFingerprint(root, defaultGit)).toBe(after)
   })
+
+  it('sees a committed implementation change and ignores a committed documentation change', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workflows-fingerprint-'))
+    roots.push(root)
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.email', 'test@example.com')
+    git('config', 'user.name', 'Test')
+    await writeFile(join(root, 'app.ts'), 'one\n', 'utf8')
+    await writeFile(join(root, 'README.md'), '# Readme\n', 'utf8')
+    git('add', '.')
+    git('commit', '-m', 'one')
+    const before = await implementationFingerprint(root, defaultGit)
+    // A documentation-only commit leaves the implementation state unchanged.
+    await writeFile(join(root, 'README.md'), '# Changed\n', 'utf8')
+    await mkdir(join(root, 'openspec', 'changes', 'auth'), { recursive: true })
+    await writeFile(join(root, 'openspec', 'changes', 'auth', 'tasks.md'), '- [x] 1.1 x\n', 'utf8')
+    git('add', '.')
+    git('commit', '-m', 'docs')
+    expect(await implementationFingerprint(root, defaultGit)).toBe(before)
+    // A shell edit that is already committed cleans the status; the committed
+    // state must still move the fingerprint.
+    await writeFile(join(root, 'app.ts'), 'two\n', 'utf8')
+    git('add', '.')
+    git('commit', '-m', 'code')
+    const after = await implementationFingerprint(root, defaultGit)
+    expect(before).toBeDefined()
+    expect(after).toBeDefined()
+    expect(after).not.toBe(before)
+  })
 })

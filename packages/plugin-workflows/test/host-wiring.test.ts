@@ -7301,6 +7301,50 @@ describe('engine-owned gates', () => {
     expect(text).toContain('lane assignment is missing in change "auth"')
   })
 
+  it('counts a shell edit that is committed before the close', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: true })
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    // The edit and its commit both come from the shell: no write/edit
+    // observation is recorded and the status is clean at the close.
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'engine.ts'), 'export const engine = 1\n', 'utf8')
+    execFileSync('git', ['add', 'src/engine.ts'], { cwd: workspace, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'shell edit'], { cwd: workspace, stdio: 'ignore' })
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'shell-edit',
+        name: 'pwsh',
+        arguments: {
+          command:
+            'Set-Content -Path src/engine.ts -Value 1; git add src/engine.ts; git commit -m edit',
+        },
+      },
+      gateShellResult(workspace),
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(steered(host)).toContain('changed implementation files in change "auth"')
+    // The committed change still needs a current note like any other code change.
+    const refusals = host.steers.length
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | { execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }> }
+      | undefined
+    await tool?.execute(
+      {
+        action: 'note',
+        change: 'auth',
+        task: '1.1 Engine task',
+        status: 'in-progress',
+        reason: 'engine gate regression',
+      },
+      { agent: host.agent },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBe(refusals)
+  })
+
   it('keeps earlier serial-lane decisions after a later serial note', async () => {
     const workspace = await gitGateWorkspace()
     await mkdir(join(workspace, 'src'), { recursive: true })

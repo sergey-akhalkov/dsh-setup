@@ -328,9 +328,8 @@ describe('the owned lane-assignment gate', () => {
     expect(decision.steer).toContain('git worktree add ../wt-change-a-1 -b lane-change-a-1')
     expect(decision.steer).toContain('Do not tick tasks.md')
     expect(decision.steer).toContain('Work only inside packages/engine/**')
-    expect(decision.steer.indexOf('lane checkpoint before fan-out')).toBeLessThan(
-      decision.steer.indexOf('subagent('),
-    )
+    const steer = decision.steer ?? ''
+    expect(steer.indexOf('lane checkpoint before fan-out')).toBeLessThan(steer.indexOf('subagent('))
   })
 
   it('accepts the lane identity captured at the worker start', async () => {

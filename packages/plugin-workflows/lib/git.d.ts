@@ -20,9 +20,11 @@ export declare function ignoredForDigest(path: string): boolean;
 export declare function repositoryRoot(cwd: string, runGit: GitRunner, signal?: AbortSignal): Promise<string>;
 /**
  * The implementation-state fingerprint: every dirty implementation file's
- * status code and content. Unlike a write observation it sees a shell edit, so
- * a turn-start/close comparison cannot miss one. Undefined when git cannot read
- * the tree; the caller then falls back to the write observations.
+ * status code and content plus HEAD's committed implementation tree. Unlike a
+ * write observation it sees a shell edit, so a turn-start/close comparison
+ * cannot miss one, whether the edit is dirty or already committed. Undefined
+ * when git cannot read the tree; the caller then falls back to the write
+ * observations.
  */
 export declare function implementationFingerprint(cwd: string, runGit: GitRunner, signal?: AbortSignal): Promise<string | undefined>;
 /**

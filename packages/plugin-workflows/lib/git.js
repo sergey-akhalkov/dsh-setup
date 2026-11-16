@@ -97,10 +97,38 @@ function isImplementationPath(path) {
     return !/\.(?:md|mdx)$/iu.test(path);
 }
 /**
+ * The committed implementation state: every tracked implementation file's tree
+ * entry at HEAD. A clean status cannot see an edit that was committed before the
+ * close, while a documentation-only commit leaves this identity unchanged.
+ * Undefined when HEAD has no tree (unborn) or git cannot read it.
+ */
+async function committedImplementationState(root, runGit, signal) {
+    let raw;
+    try {
+        raw = await runGit(['ls-tree', '-r', '-z', '--full-tree', 'HEAD'], root, signal);
+    }
+    catch {
+        return undefined;
+    }
+    const entries = [];
+    for (const record of raw.toString('utf8').split('\0')) {
+        const tab = record.indexOf('\t');
+        if (tab === -1)
+            continue;
+        const path = record.slice(tab + 1);
+        if (isImplementationPath(path))
+            entries.push(record);
+    }
+    entries.sort();
+    return hashParts(entries);
+}
+/**
  * The implementation-state fingerprint: every dirty implementation file's
- * status code and content. Unlike a write observation it sees a shell edit, so
- * a turn-start/close comparison cannot miss one. Undefined when git cannot read
- * the tree; the caller then falls back to the write observations.
+ * status code and content plus HEAD's committed implementation tree. Unlike a
+ * write observation it sees a shell edit, so a turn-start/close comparison
+ * cannot miss one, whether the edit is dirty or already committed. Undefined
+ * when git cannot read the tree; the caller then falls back to the write
+ * observations.
  */
 export async function implementationFingerprint(cwd, runGit, signal) {
     const root = await repositoryRoot(cwd, runGit, signal);
@@ -122,6 +150,9 @@ export async function implementationFingerprint(cwd, runGit, signal) {
             parts.push('[deleted]');
         }
     }
+    // The marker keeps an unborn HEAD distinct from a committed history whose
+    // implementation identity is only discovered at the close.
+    parts.push((await committedImplementationState(root, runGit, signal)) ?? '[no-head]');
     return hashParts(parts);
 }
 /**
