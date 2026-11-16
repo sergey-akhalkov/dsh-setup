@@ -28,6 +28,13 @@ the repository's 20 s test timeout (observed in `plugin-delegation-rules/test/re
 and the git-backed integration suites). Each such suite passed alone, and the full suite passed at
 two and four workers. The cap changes no test and no assertion.
 
+## Post-install verification
+
+0.41.1 was installed from the published index on 2026-11-17. The live profile reports `@dsh-setup/setup`
+and `@dsh-setup/plugin-workflows` at 0.41.1, the workflows host health reports six listeners with a
+writable journal and nine triggers, and the worktree was clean at the release commit before this
+record was added.
+
 ## Review status at recording time
 
 `node scripts/reviews-check.ts --change focused-rereview-and-section-steer` reported portable
