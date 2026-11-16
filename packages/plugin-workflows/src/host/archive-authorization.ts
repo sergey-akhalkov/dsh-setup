@@ -1,6 +1,5 @@
-import { verifyAdoptionEvidence } from './adoption.js'
+import { verifyAdoptionEvidence, verifyWholeSpecRecord } from './adoption.js'
 import type { Definition } from './definitions.js'
-import { type EvidenceCheck, verifyEvidence } from './evidence.js'
 import { type ArchiveGateDecision, evaluateArchiveGate } from './gates.js'
 import type { HostAuth } from './host-auth.js'
 import { taskReviewCoverage } from './parity.js'
@@ -25,18 +24,7 @@ export async function decideArchiveAuthorization(
   change: string,
   deps: ArchiveEvidenceDeps,
 ): Promise<ArchiveGateDecision> {
-  const specRecord: EvidenceCheck = await verifyEvidence(
-    {
-      kind: 'record',
-      rule: 'spec-review',
-      change,
-      phase: 'spec',
-      scope: 'whole',
-      verdict: 'PASS',
-      digest: 'current',
-    },
-    { workspace, values: { name: change } },
-  )
+  const specRecord = await verifyWholeSpecRecord(workspace, change)
   const taskReviewOwned = deps.definitions.some(
     (definition) => definition.id === 'task-review' && definition.settings.gateOwnership === 'own',
   )

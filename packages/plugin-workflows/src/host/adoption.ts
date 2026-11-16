@@ -66,6 +66,48 @@ async function linkedChangePath(workspace: string, change: string): Promise<stri
 }
 
 /**
+ * Verify the current whole-spec `PASS` record. The native review store is the
+ * active owner after Release A, so it is read first; the legacy store stays as
+ * the compatibility fallback. Reading only the legacy path made a change whose
+ * spec review ran natively impossible to adopt or archive.
+ */
+export async function verifyWholeSpecRecord(
+  workspace: string,
+  change: string,
+): Promise<EvidenceCheck> {
+  const context = evidenceContext(workspace, change)
+  const paths = [
+    '.dsh/workflows/records/spec-review/{name}/spec.json',
+    '.dsh/delegation/spec-review/{name}/spec.json',
+  ]
+  const checks: Array<Extract<EvidenceCheck, { ok: false }>> = []
+  for (const path of paths) {
+    const check = await verifyEvidence(
+      {
+        kind: 'record',
+        rule: 'spec-review',
+        change: '{name}',
+        phase: 'spec',
+        scope: 'whole',
+        verdict: 'PASS',
+        digest: 'current',
+        path,
+      },
+      context,
+    )
+    if (check.ok) return check
+    checks.push(check)
+  }
+  // A stale record explains more than an absent one.
+  const stale = checks.find((check) => check.failure.reason !== 'missing-file')
+  const failureRecord = stale ?? checks[0]
+  if (failureRecord === undefined) {
+    throw new Error('the whole-spec record check produced no result')
+  }
+  return failureRecord
+}
+
+/**
  * Verify the four change artifacts and the current whole-spec `PASS` record.
  * Returns the verified spec digest when the change is adoptable.
  */
@@ -104,19 +146,7 @@ export async function verifyAdoptionEvidence(
       reason: `the change cannot be adopted: ${files.failure.reason} at ${files.failure.item ?? 'the change'} (${files.failure.detail})`,
     }
   }
-  const record: EvidenceCheck = await verifyEvidence(
-    {
-      kind: 'record',
-      rule: 'spec-review',
-      change: '{name}',
-      phase: 'spec',
-      scope: 'whole',
-      verdict: 'PASS',
-      digest: 'current',
-      path: '.dsh/delegation/spec-review/{name}/spec.json',
-    },
-    context,
-  )
+  const record: EvidenceCheck = await verifyWholeSpecRecord(workspace, change)
   if (!record.ok) {
     return {
       ok: false,

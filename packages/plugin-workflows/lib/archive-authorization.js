@@ -1,20 +1,11 @@
-import { verifyAdoptionEvidence } from './adoption.js';
-import { verifyEvidence } from './evidence.js';
+import { verifyAdoptionEvidence, verifyWholeSpecRecord } from './adoption.js';
 import { evaluateArchiveGate } from './gates.js';
 import { taskReviewCoverage } from './parity.js';
 import { issueAdoptionReceipt, listReceipts } from './receipts.js';
 import { hasTamperedRuns, listAuthenticatedRuns } from './runs.js';
 /** The archive gate's decision with the evidence already read. */
 export async function decideArchiveAuthorization(workspace, change, deps) {
-    const specRecord = await verifyEvidence({
-        kind: 'record',
-        rule: 'spec-review',
-        change,
-        phase: 'spec',
-        scope: 'whole',
-        verdict: 'PASS',
-        digest: 'current',
-    }, { workspace, values: { name: change } });
+    const specRecord = await verifyWholeSpecRecord(workspace, change);
     const taskReviewOwned = deps.definitions.some((definition) => definition.id === 'task-review' && definition.settings.gateOwnership === 'own');
     const coverage = taskReviewOwned ? taskReviewCoverage(workspace, change) : undefined;
     return evaluateArchiveGate({

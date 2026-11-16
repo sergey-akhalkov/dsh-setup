@@ -1,3 +1,4 @@
+import { type EvidenceCheck } from './evidence.js';
 import type { HumanQuestionService } from './executors.js';
 import type { HostAuth } from './host-auth.js';
 import { type WorkflowReceipt } from './receipts.js';
@@ -24,6 +25,13 @@ export type AdoptionResult = {
     readonly ok: false;
     readonly reason: string;
 };
+/**
+ * Verify the current whole-spec `PASS` record. The native review store is the
+ * active owner after Release A, so it is read first; the legacy store stays as
+ * the compatibility fallback. Reading only the legacy path made a change whose
+ * spec review ran natively impossible to adopt or archive.
+ */
+export declare function verifyWholeSpecRecord(workspace: string, change: string): Promise<EvidenceCheck>;
 /**
  * Verify the four change artifacts and the current whole-spec `PASS` record.
  * Returns the verified spec digest when the change is adoptable.
