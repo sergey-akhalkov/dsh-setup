@@ -37,8 +37,9 @@ worktree-confinement guarantee covers only Codex-sandboxed operations.
 
 ## Review thread reuse
 
-The provider parses a stable `- Review key: review:<change>:task:<id>` line from the prompt
-(whole-scope: `review:<change>:whole:<phase>`) as the thread key; an optional
+The provider parses a stable `- Review key:` line from the prompt — `review:<change>:section:<key>`
+for a lane, `review:<change>:task:<id>` for a per-task unit, or `review:<change>:whole:<phase>` for a
+whole-scope review — as the thread key; an optional
 `agentOptions.reviewKey` overrides it only for hosts/tests and must match the prompt line when both
 exist. The provider starts a persistent Codex thread on the first review of that key and persists
 `{threadId, cwd, sandbox}` in `.dsh/delegation/codex-review-threads.json`; later reviews of the same

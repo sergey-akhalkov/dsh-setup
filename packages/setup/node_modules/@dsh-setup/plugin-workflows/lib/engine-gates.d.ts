@@ -2,8 +2,8 @@ import type { Definition } from './definitions.js';
 import { type ToolCallObservation } from './evidence.js';
 import { type LaneParityLane } from './gates.js';
 import { type GitRunner } from './git.js';
-import { type ReviewUnit, type ReviewUnitTextOptions, reviewUnitText } from './parity.js';
-export { type ReviewUnit, reviewUnitText };
+import { type ReviewUnit, type ReviewUnitTextOptions } from './parity.js';
+export type { ReviewUnit };
 /**
  * The engine-owned gates: work progress, lane assignment, and goal completion.
  * Their decisions are the parity tables (`evaluateProgressParity`,
@@ -44,20 +44,27 @@ export declare function taskTicksOf(workspace: string, call: ToolCallObservation
 export declare function newlyCheckedTaskIds(calls: readonly ToolCallObservation[], workspace: string, change: string, turn: number | undefined): string[];
 /**
  * Whether one task has a matching task-review PASS/ERROR record in the
- * workflow store. The native record is a superset of the legacy one, so one
- * predicate covers both; a record that changed its reviewed inputs or failed
- * internally never approves. A section record approves every checked task it
- * covers, the same way its publication writes one approval each.
+ * workflow store. The review step's own evidence accepts either verdict; only
+ * the review units below require a PASS.
  */
 export declare function taskReviewEvidence(workspace: string, change: string, taskId: string): Promise<boolean>;
 /**
- * The section-first review units of one change: checked tasks without a matching
- * PASS/ERROR record in one level-2 section are one unit covering every checked
- * task of that section when two or more are missing; a single missing task, a
- * task outside any section, and a section that cannot resolve keep the per-task
- * unit. Undefined when the plan is unreadable.
+ * The lane-first review units of one change: every checked task in a resolvable
+ * level-2 section without a current PASS is one unit covering every checked task
+ * of that section. A task outside any section, or in a section the start path
+ * cannot resolve, keeps its per-task unit. Only `PASS` is coverage, so a
+ * `FINDINGS` or `ERROR` record keeps the unit due. Undefined when the plan is
+ * unreadable.
  */
 export declare function reviewUnits(workspace: string, change: string): Promise<ReviewUnit[] | undefined>;
+/**
+ * The one-line lane unit: the section key with its covered and missing task
+ * numbers (or the single task), the live runs that already cover it, and the
+ * start action that covers the rest. Lane-first: only a PASS clears a unit, so
+ * the text names a PASS where the review step's own evidence accepts ERROR too.
+ * The completion coverage keeps its portable-approval formatter in parity.ts.
+ */
+export declare function reviewUnitText(change: string, unit: ReviewUnit, options?: ReviewUnitTextOptions): string;
 /**
  * The selected unit of one task-review run, rendered for an intermediate close:
  * a run whose review step is still open names its section and missing tasks

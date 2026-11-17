@@ -222,6 +222,23 @@ export interface ReviewPromptInput {
     /** The prior findings and bounded diff when this unit's last record is a moved FINDINGS. */
     readonly focused?: FocusedReviewContext;
 }
+/**
+ * The stable review key: `review:<change>:section:<key>` for a section unit,
+ * `:task:<id>` for a per-task unit, or `:whole:<phase>` for a whole-scope
+ * review. The prompt line is the Codex provider's thread key, so the same unit
+ * resumes the same reviewer conversation and a different unit never does.
+ */
+export declare function reviewUnitKey(input: {
+    readonly change: string;
+    readonly scope: 'whole' | 'task';
+    readonly phase?: string;
+    readonly task?: {
+        readonly id: string;
+    };
+    readonly section?: {
+        readonly key: string;
+    };
+}): string;
 /** Render the bundled instruction with the review's digest-bound context. */
 export declare function renderReviewPrompt(input: ReviewPromptInput): string;
 /** The per-scope digest lives with the evidence verifier; kept importable here. */

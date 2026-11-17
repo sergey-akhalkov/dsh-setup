@@ -5,10 +5,9 @@ import { lastCodeWriteAt } from './evidence.js';
 import { evaluateLaneParity, evaluateProgressParity } from './gates.js';
 import { defaultGit, worktreeDigest } from './git.js';
 import { notePathFor, readProgressNote } from './notes.js';
-import { reviewerBinding, reviewUnitText, taskReviewCoverage, } from './parity.js';
+import { reviewerBinding, taskReviewCoverage, } from './parity.js';
 import { checkedTaskIds, numberedTasks, sectionSelectable, taskLanes, taskSections, } from './tasks.js';
 import { normalizedWorkspacePath } from './write-attribution.js';
-export { reviewUnitText };
 const WORKER_LANE_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
 const LANE_TAG = /(?<![A-Za-z0-9_-])lane-tag:\s*([a-z0-9][a-z0-9-]*)#([1-9][0-9]*)(?![0-9A-Za-z_])/gu;
 /** The plan markdown of one change, or undefined when it is unreadable. */
@@ -76,14 +75,18 @@ export function newlyCheckedTaskIds(calls, workspace, change, turn) {
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-/** Whether one parsed record satisfies the task-review contract for a task. */
-function recordApprovesTask(value, change) {
+/**
+ * Whether one parsed record satisfies the task-review contract for a task. A
+ * record with the wrong reviewed inputs or an internal failure never counts.
+ */
+function recordApprovesTask(value, change, verdicts) {
     if (!isRecord(value))
         return false;
     if (value.rule !== 'task-review' ||
         value.change !== change ||
         value.scope !== 'task' ||
         (value.verdict !== 'PASS' && value.verdict !== 'ERROR') ||
+        !verdicts.includes(value.verdict) ||
         (value.verdict === 'ERROR' &&
             (value.failureClass === 'reviewed-inputs-changed' ||
                 value.failureClass === 'queue-internal-error')) ||
@@ -110,13 +113,12 @@ function recordNamesTask(value, taskId) {
     return Array.isArray(value.taskIds) && value.taskIds.includes(taskId);
 }
 /**
- * Whether one task has a matching task-review PASS/ERROR record in the
- * workflow store. The native record is a superset of the legacy one, so one
- * predicate covers both; a record that changed its reviewed inputs or failed
- * internally never approves. A section record approves every checked task it
- * covers, the same way its publication writes one approval each.
+ * Whether one task has a matching task-review record with one of the requested
+ * verdicts in the workflow store. The native record is a superset of the legacy
+ * one, so one predicate covers both. A section record covers every checked task
+ * it names, the same way its publication writes one approval each.
  */
-export async function taskReviewEvidence(workspace, change, taskId) {
+async function taskReviewRecord(workspace, change, taskId, verdicts) {
     const directory = `.dsh/workflows/records/task-review/${change}/tasks`;
     let entries;
     try {
@@ -142,7 +144,7 @@ export async function taskReviewEvidence(workspace, change, taskId) {
         }
         if (!recordNamesTask(value, taskId))
             continue;
-        if (!recordApprovesTask(value, change))
+        if (!recordApprovesTask(value, change, verdicts))
             continue;
         const target = value.target;
         if (binding?.provider !== undefined && target.provider !== binding.provider)
@@ -154,11 +156,24 @@ export async function taskReviewEvidence(workspace, change, taskId) {
     return false;
 }
 /**
- * The section-first review units of one change: checked tasks without a matching
- * PASS/ERROR record in one level-2 section are one unit covering every checked
- * task of that section when two or more are missing; a single missing task, a
- * task outside any section, and a section that cannot resolve keep the per-task
- * unit. Undefined when the plan is unreadable.
+ * Whether one task has a matching task-review PASS/ERROR record in the
+ * workflow store. The review step's own evidence accepts either verdict; only
+ * the review units below require a PASS.
+ */
+export async function taskReviewEvidence(workspace, change, taskId) {
+    return taskReviewRecord(workspace, change, taskId, ['PASS', 'ERROR']);
+}
+/** Whether one task has a current PASS: a FINDINGS or ERROR record keeps it due. */
+async function taskReviewPass(workspace, change, taskId) {
+    return taskReviewRecord(workspace, change, taskId, ['PASS']);
+}
+/**
+ * The lane-first review units of one change: every checked task in a resolvable
+ * level-2 section without a current PASS is one unit covering every checked task
+ * of that section. A task outside any section, or in a section the start path
+ * cannot resolve, keeps its per-task unit. Only `PASS` is coverage, so a
+ * `FINDINGS` or `ERROR` record keeps the unit due. Undefined when the plan is
+ * unreadable.
  */
 export async function reviewUnits(workspace, change) {
     const plan = await readPlan(workspace, change);
@@ -167,7 +182,7 @@ export async function reviewUnits(workspace, change) {
     const checked = numberedTasks(plan).filter((task) => task.checked);
     const missing = new Set();
     for (const task of checked) {
-        if (!(await taskReviewEvidence(workspace, change, task.id)))
+        if (!(await taskReviewPass(workspace, change, task.id)))
             missing.add(task.id);
     }
     const units = [];
@@ -188,10 +203,6 @@ export async function reviewUnits(workspace, change) {
         const absent = section.covered.filter((task) => missing.has(task.id));
         if (absent.length === 0)
             continue;
-        if (absent.length === 1) {
-            units.push({ covered: absent, missing: absent });
-            continue;
-        }
         units.push({
             section: { key: section.key, title: section.title },
             covered: section.covered,
@@ -204,6 +215,75 @@ export async function reviewUnits(workspace, change) {
         units.push({ covered: [task], missing: [task] });
     }
     return units;
+}
+/** The most task numbers one unit line names before it summarizes the rest. */
+const MAX_UNIT_NUMBERS = 20;
+/** The unit-text bound: the steer note and the status both deliver it. */
+const MAX_UNIT_TEXT = 470;
+function boundedNumbers(tasks) {
+    const shown = tasks
+        .slice(0, MAX_UNIT_NUMBERS)
+        .map((task) => task.number)
+        .join(', ');
+    return tasks.length <= MAX_UNIT_NUMBERS
+        ? shown
+        : `${shown}, and ${String(tasks.length - MAX_UNIT_NUMBERS)} more`;
+}
+/** Bound a free-text field (a section key or title) without losing its start. */
+function clipped(text, maximum) {
+    return text.length <= maximum ? text : `${text.slice(0, maximum - 1)}…`;
+}
+/** Keep the action whole: the head may lose its tail, the remedy never does. */
+function clampUnitText(head, action) {
+    const room = MAX_UNIT_TEXT - action.length;
+    return head.length <= room
+        ? `${head}${action}`
+        : `${head.slice(0, Math.max(0, room - 1))}…${action}`;
+}
+/** The task ids one open run's recorded identity covers. */
+function runCoveredIds(run) {
+    const context = run.context;
+    const covered = Array.isArray(context.taskIds)
+        ? context.taskIds.filter((entry) => typeof entry === 'string')
+        : [];
+    if (typeof context.taskId === 'string' && !covered.includes(context.taskId)) {
+        covered.push(context.taskId);
+    }
+    return covered;
+}
+/**
+ * The one-line lane unit: the section key with its covered and missing task
+ * numbers (or the single task), the live runs that already cover it, and the
+ * start action that covers the rest. Lane-first: only a PASS clears a unit, so
+ * the text names a PASS where the review step's own evidence accepts ERROR too.
+ * The completion coverage keeps its portable-approval formatter in parity.ts.
+ */
+export function reviewUnitText(change, unit, options = {}) {
+    const rule = options.rule ?? 'task-review';
+    const pending = (options.openRuns ?? []).filter((run) => run.change === change && unit.missing.some((task) => runCoveredIds(run).includes(task.id)));
+    const uncovered = unit.missing.filter((task) => !pending.some((run) => runCoveredIds(run).includes(task.id)));
+    const names = pending.map((run) => `"${run.id}"`).join(', ');
+    const action = (selector) => {
+        if (pending.length === 0) {
+            return `; start it with workflows(action: "start", definitionId: "${rule}", change: "${change}", ${selector})`;
+        }
+        const reference = pending.length === 1
+            ? `the live review run ${names} covers ${uncovered.length === 0 ? 'it' : 'part of it'}`
+            : `the live review runs ${names} cover ${uncovered.length === 0 ? 'it' : 'part of it'}`;
+        return uncovered.length === 0
+            ? `; ${reference}, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`
+            : `; ${reference}, so start only the uncovered tasks with workflows(action: "start", definitionId: "${rule}", change: "${change}", task: "<task id>")`;
+    };
+    const section = unit.section;
+    if (section === undefined) {
+        const task = unit.missing[0];
+        if (task === undefined)
+            return `change "${change}" has no outstanding review unit`;
+        const head = `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS`;
+        return clampUnitText(head, action(`task: "${task.id}"`));
+    }
+    const head = `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) is one lane unit; covered checked tasks ${boundedNumbers(unit.covered)}; missing a ${rule} PASS: ${boundedNumbers(unit.missing)}`;
+    return clampUnitText(head, action(`section: "${section.key}"`));
 }
 /**
  * The selected unit of one task-review run, rendered for an intermediate close:

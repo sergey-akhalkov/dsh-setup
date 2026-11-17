@@ -7,8 +7,11 @@ import type { SteerTarget } from './steer.js';
  * The turn-close gate. It refuses a root turn close while the run has an open
  * `blockTurnClose` step that this engine owns; a deferred step never steers.
  * The refusal is bounded by `maxBlocks`; after the cap the close is allowed
- * exactly once and recorded as a visible VIOLATION, not a pass. An internal
- * error fails open so a plugin fault can never trap a turn.
+ * exactly once and recorded as a visible VIOLATION, not a pass. A run that
+ * reached its owned review step has no refusal budget: while a due review unit
+ * has no live review the close is refused, and while every due unit has a live
+ * review the close is the waiting close (no VIOLATION). An internal error fails
+ * open so a plugin fault can never trap a turn.
  */
 export type TurnCloseOutcome = {
     readonly kind: 'allow';
@@ -24,9 +27,19 @@ export type TurnCloseOutcome = {
     readonly run: WorkflowRun;
     readonly detail: string;
 };
+/** The due review units a review run owes, as the host resolved them after dispatch. */
+export interface ReviewCloseInput {
+    /** Due units without a live review; each entry is a ready steer with its start action. */
+    readonly uncovered: readonly string[];
+    /** The live review run ids that cover a due unit. */
+    readonly live: readonly string[];
+    /** A failed dispatch the refusal must name, when the host attempted one. */
+    readonly failure?: string;
+}
 /**
- * The label a `nonCritical` step records when its turn-close budget is
- * exhausted: the run closes without its evidence and never counts as a pass.
+ * The label a non-review `nonCritical` step records when its turn-close budget
+ * is exhausted: the run closes without its evidence and never counts as a pass.
+ * A run containing an owned review step never reaches this settlement.
  */
 export declare const SOFT_SETTLEMENT = "completed-soft";
 /** Whether a run was released by the soft settlement: terminal without a pass. */
@@ -61,9 +74,12 @@ export interface TurnCloseInput {
     /**
      * The failed review steps whose current record is a contract-matching ERROR,
      * as verified by the host before the close. Absent means no failure is
-     * provisional, so a recordless failure keeps the close blocked.
+     * provisional, so a recordless failure keeps the close blocked. Unused for a
+     * run with an owned review step: that run takes the uncapped review path.
      */
     readonly provisionalReviews?: ReadonlySet<string>;
+    /** The owned review obligation of a review run, resolved by the host. */
+    readonly review?: ReviewCloseInput;
     readonly now?: number;
     readonly onError?: (error: unknown) => void;
 }
@@ -189,6 +205,15 @@ export interface ArchiveGateInput {
     readonly specRecord: EvidenceCheck;
     /** The owned per-task portable PASS coverage, computed from the workspace. */
     readonly taskReview?: {
+        readonly ok: boolean;
+        readonly text?: string;
+    };
+    /**
+     * The required integration review once the task list is complete: its current
+     * PASS is missing or stale. Absent when the list is incomplete or the review
+     * is deferred to a legacy source; the user-clicked archive never reaches here.
+     */
+    readonly integrationReview?: {
         readonly ok: boolean;
         readonly text?: string;
     };

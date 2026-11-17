@@ -266,7 +266,7 @@ export class ReviewScheduler {
                 if (info?.quarantined !== true) {
                     this.forgetLive(entry.run.id);
                     this.admitted.delete(entry.run.id);
-                    void this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
+                    void this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined);
                 }
                 this.host.onSettled?.({
                     runId: entry.run.id,
@@ -348,7 +348,7 @@ export class ReviewScheduler {
         const outcome = await entry.reprepare(entry.reprepared);
         if (this.disposed || !this.queue.owns(entry.file.id)) {
             // A replacement snapshot may have been built after disposal; release it.
-            await this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
+            await this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined);
             return;
         }
         if (outcome.kind === 'unchanged')
@@ -565,7 +565,7 @@ export class ReviewScheduler {
             await this.waitForTeardown(entry);
             this.forgetLive(entry.run.id);
             this.admitted.delete(entry.run.id);
-            await this.host.discardSnapshot(entry.workspace, entry.run.id);
+            await this.host.discardSnapshot(entry.workspace, entry.snapshotKey);
         }, outcome);
     }
     /** Whether the reviewer child is confirmed gone; false on failure or timeout. */
@@ -634,7 +634,7 @@ export class ReviewScheduler {
         for (const entry of admitted) {
             if (!entry.started) {
                 // No child ever read this checkout: release it and its lease now.
-                void this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
+                void this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined);
                 continue;
             }
             // A live reviewer may still be reading its checkout; keep the lease
@@ -659,12 +659,14 @@ export class ReviewScheduler {
                 });
             }
         }
-        await this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined);
+        await this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined);
     }
     async enqueue(input) {
         if (this.disposed) {
             // Snapshot preparation can outlive disposal; never admit it.
-            void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
+            void this.host
+                .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
+                .catch(() => undefined);
             return { kind: 'accepted', phase: 'settled' };
         }
         const reviewer = input.request.reviewer.id;
@@ -680,7 +682,9 @@ export class ReviewScheduler {
         const existing = this.liveRuns.get(key);
         if (existing !== undefined) {
             if (existing.id !== input.run.id) {
-                void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
+                void this.host
+                    .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
+                    .catch(() => undefined);
             }
             return { kind: 'duplicate', runId: existing.id };
         }
@@ -691,6 +695,7 @@ export class ReviewScheduler {
             rule: input.rule,
             change: input.change,
             ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+            snapshotKey: input.snapshotKey ?? input.run.id,
             request: {
                 ...input.request,
                 cancelled: () => this.disposed || this.fenced.has(input.run.id),
@@ -709,7 +714,9 @@ export class ReviewScheduler {
         const overlapping = this.coveringEntry(entry);
         if (overlapping !== undefined) {
             this.admitted.delete(entry.run.id);
-            void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
+            void this.host
+                .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
+                .catch(() => undefined);
             return { kind: 'duplicate', runId: overlapping.run.id };
         }
         let admission;
@@ -732,7 +739,9 @@ export class ReviewScheduler {
             case 'duplicate':
                 this.admitted.delete(entry.run.id);
                 if (admission.run.run.id !== input.run.id) {
-                    void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
+                    void this.host
+                        .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
+                        .catch(() => undefined);
                 }
                 return { kind: 'duplicate', runId: admission.run.run.id };
             case 'settled':

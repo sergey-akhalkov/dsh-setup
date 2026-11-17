@@ -65,7 +65,10 @@ describe('setup release composition', () => {
     const workflows = await configFor('dsh-setup-workflows')
     expect((workflows.verify as Record<string, unknown>).commands).toEqual([])
     expect((workflows.timeouts as Record<string, unknown>).review).toBe(1_800_000)
-    expect((workflows.reviewQueue as Record<string, unknown>).waitTimeoutMs).toBe(2_400_000)
+    expect(workflows.reviewQueue).toMatchObject({ enabled: true, maxAttempts: 3 })
+    expect((workflows.reviewQueue as Record<string, unknown>).waitTimeoutMs).toBeUndefined()
+    expect((workflows.reviewQueue as Record<string, unknown>).concurrency).toBeUndefined()
+    expect((workflows.reviewQueue as Record<string, unknown>).maxQueued).toBeUndefined()
     const parsed = parse(await loadPatch()) as Array<{ insert?: PatchRow[] }> | PatchRow[]
     const rows = parsed.flatMap((entry) => ('insert' in entry ? (entry.insert ?? []) : []))
     expect(rows.find((row) => row.id === 'dsh-setup-verification-gate')?.disabled).toBe(true)

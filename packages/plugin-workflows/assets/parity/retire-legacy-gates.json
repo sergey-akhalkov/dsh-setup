@@ -1,13 +1,13 @@
 {
   "v": 1,
   "change": "retire-legacy-gates",
-  "at": "2026-11-17T11:13:46.927Z",
+  "at": "2026-11-17T11:46:17.757Z",
   "baseline": "ea55db08fce6b32255a8be7a52f68c7b558b8008138804035cb400dbc4fe7b8e",
   "templates": {
     "retro": "sha256-e4df72e46947fb54cad338495b65489155da181bb77130158360ae549e1a8566",
     "spec-review": "sha256-74d2276b44aff9c1b1005e6ac2256094c265edddf352d40105221d2c94491c0d",
     "task-review": "sha256-32bf4b008e896dea05fd9417bb6c78fa23f6e1713988bf4600a007721ac369bc",
-    "integration-review": "sha256-d3ce61e00a59ee2534dfc3a7b8bf5288a4f23634a58bfd56d8781243d1e1f899",
+    "integration-review": "sha256-788b3193841a43a595ea351c9db84d00639a8f45e2824ffd83e79e68655198cb",
     "verify": "sha256-d8a15d05d6721c1aa12046499eaae49a1732160b397ed45d652d16c1eebd9b78"
   },
   "settings": {

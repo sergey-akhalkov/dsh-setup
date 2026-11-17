@@ -18,21 +18,31 @@ export interface ReviewSnapshot {
     /** Change-artifact digest computed from the frozen copy. */
     readonly specDigest: string;
 }
-export declare function startSnapshotLease(cwd: string, runId: string, refreshMs?: number): Promise<void>;
-export declare function stopSnapshotLease(cwd: string, runId: string): Promise<void>;
+/**
+ * The stable snapshot directory name for one review unit key: a readable
+ * prefix plus a short hash, so two units never share a checkout and the name
+ * carries no separator or traversal. An unchanged key keeps the same path
+ * across rounds, which is what lets the provider resume its review thread. A
+ * key that is already one safe path segment (a run id) keeps its old name, so
+ * a snapshot an interrupted upgrade left behind stays discardable.
+ */
+export declare function reviewSnapshotName(key: string): string;
+export declare function startSnapshotLease(cwd: string, key: string, refreshMs?: number): Promise<void>;
+export declare function stopSnapshotLease(cwd: string, key: string): Promise<void>;
 /** Remove snapshots no live run owns; ownership is the lease, never age. */
 export declare function sweepReviewSnapshots(cwd: string, runGit: GitRunner, now?: number): Promise<void>;
-/** Remove one snapshot checkout, its lease, and its scratch index; best effort. */
-export declare function discardReviewSnapshot(cwd: string, runId: string, runGit: GitRunner, remove?: (path: string) => Promise<void>): Promise<void>;
+/** Remove one unit's snapshot checkout, its lease, and its scratch index; best effort. */
+export declare function discardReviewSnapshot(cwd: string, key: string, runGit: GitRunner, remove?: (path: string) => Promise<void>): Promise<void>;
 /**
- * Build the disposable task-review snapshot from the exact review input set.
- * Returns undefined when it cannot be built safely; the caller reviews the live
- * worktree with the mutation guard instead and gets the cause through
- * `onUnavailable`.
+ * Build the disposable review snapshot from the exact review input set. The
+ * checkout lives at the stable path of `key` (the unit key; a run id also
+ * works) and replaces any leftover checkout at that path. Returns undefined
+ * when it cannot be built safely; the caller reviews the live worktree with the
+ * mutation guard instead and gets the cause through `onUnavailable`.
  */
 export declare function createReviewSnapshot(cwd: string, change: {
     readonly dir: string;
-}, runId: string, runGit: GitRunner, signal: AbortSignal, afterCopy?: () => Promise<void> | void, onUnavailable?: (reason: string) => void): Promise<ReviewSnapshot | undefined>;
+}, key: string, runGit: GitRunner, signal: AbortSignal, afterCopy?: () => Promise<void> | void, onUnavailable?: (reason: string) => void): Promise<ReviewSnapshot | undefined>;
 /**
  * The reviewed input set of a review: every file the reviewer can read, with a
  * stat signature that survives an edit-read-restore (content digests do not).

@@ -10,7 +10,9 @@ Read the change's `proposal.md`, `design.md`, every delta spec under `specs/`, a
 from the directory named in the task. Review the artifacts as a set: the proposal's stated
 change, the design's decisions, the delta spec's requirements and scenarios, and whether the
 tasks can implement them. The digest in the task identifies this exact revision; report only
-this revision.
+this revision. The prompt names a frozen snapshot of the worktree and the change artifacts: a write
+during the run belongs to the next round, not this verdict. A re-review on a new snapshot is a full
+review in the same reviewer conversation; this instruction has no focused mode.
 
 ## Blocking rubric (P0/P1)
 

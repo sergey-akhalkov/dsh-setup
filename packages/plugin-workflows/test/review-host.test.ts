@@ -412,7 +412,7 @@ describe('native review host admission', () => {
   })
 
   it.each(['FINDINGS', 'PASS'] as const)(
-    'fences a delayed %s reviewer after the completed-soft settlement',
+    'keeps a nonCritical review required past the old soft budget and publishes the late %s verdict',
     async (verdict) => {
       process.env.DSH_WORKFLOWS_HOST_KEY = KEY
       const workspace = await gitWorkspace()
@@ -479,35 +479,42 @@ describe('native review host admission', () => {
         // The first close refuses once and starts the delayed reviewer.
         await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
         await waitFor(() => host.digests.length === 1)
-        // The second close exhausts maxBlocks: the optional step settles
-        // completed-soft with one violation and no open required step.
+        // The second close is the waiting close: the old soft settlement is
+        // gone, so the run stays open and records no violation.
         await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-        const settled = await readAuthenticatedRun(workspace, run.id, auth)
-        expect(settled?.status).toBe('completed')
-        expect(settled?.reason).toBe(SOFT_SETTLEMENT)
-        expect(settled?.steps[0]?.state).toBe('cancelled')
-        expect(settled?.violations).toHaveLength(1)
-        expect(
-          settled?.steps.some((step) => step.state === 'open' || step.state === 'blocked'),
-        ).toBe(false)
-        // The late verdict is fenced: it publishes no record and never restores
-        // the settled run or its blocking step.
+        const waiting = await readAuthenticatedRun(workspace, run.id, auth)
+        expect(['running', 'blocked']).toContain(waiting?.status)
+        expect(waiting?.reason).not.toBe(SOFT_SETTLEMENT)
+        expect(waiting?.violations).toHaveLength(0)
+        expect(waiting?.steps[0]?.state).not.toBe('cancelled')
+        // The delayed verdict publishes and settles the step.
         host.releases[0]?.()
         await host.disposed
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        const after = await readAuthenticatedRun(workspace, run.id, auth)
-        expect(after).toEqual(settled)
-        expect(after?.violations).toHaveLength(1)
-        expect(after?.steps[0]?.state).toBe('cancelled')
-        expect(
-          await readFile(
-            join(
-              workspace,
-              '.dsh/workflows/records/native-integration-review/auth/integration.json',
-            ),
-            'utf8',
-          ).catch(() => undefined),
-        ).toBeUndefined()
+        const recordPath = join(
+          workspace,
+          '.dsh/workflows/records/native-integration-review/auth/integration.json',
+        )
+        await waitFor(
+          async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
+        )
+        const record = JSON.parse(await readFile(recordPath, 'utf8')) as { verdict: string }
+        expect(record.verdict).toBe(verdict)
+        await waitFor(async () => {
+          const current = await readAuthenticatedRun(workspace, run.id, auth)
+          return current?.steps[0]?.state === (verdict === 'PASS' ? 'done' : 'blocked')
+        })
+        if (verdict === 'PASS') {
+          // The next close advances the settled run to completion.
+          await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+          const completed = await readAuthenticatedRun(workspace, run.id, auth)
+          expect(completed?.status).toBe('completed')
+          expect(completed?.violations).toHaveLength(0)
+        } else {
+          const after = await readAuthenticatedRun(workspace, run.id, auth)
+          expect(after?.status).not.toBe('completed')
+          expect(after?.steps[0]?.state).toBe('blocked')
+          expect(after?.violations).toHaveLength(0)
+        }
       } finally {
         unregister()
       }

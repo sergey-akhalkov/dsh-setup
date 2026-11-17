@@ -4400,7 +4400,7 @@ describe('main-step ownership across turns', () => {
 })
 
 describe('owned review at runtime', () => {
-  it('allows the close on a provisional review ERROR and never completes it', async () => {
+  it('keeps a review ERROR due and refuses the close until a round passes', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     // The spec-review signal is off, so the intake owns its step.
@@ -4457,13 +4457,21 @@ describe('owned review at runtime', () => {
       'auth',
       'spec.json',
     )
+    const steerText = (): string =>
+      host.steers
+        .map((message) =>
+          ((message as { content?: Array<{ text?: string }> }).content ?? [])
+            .map((block) => block.text ?? '')
+            .join(''),
+        )
+        .join('\n')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const stored = await runs.readAuthenticatedRun(workspace, 'run-owned-review', auth)
     const review = stored?.steps.find((step) => step.id === 'spec-review')
     // The unconfigured reviewer writes the engine's own ERROR record; the
     // legacy PASS is ignored, and the ERROR never completes the PASS-only step.
-    // The step stays failed with the record visible, which the gate allows as an
-    // intermediate close: no steer, no approval, no completion.
+    // The unit stays due: the close is refused and the steer names the next
+    // round, with no approval and no completion.
     expect(review?.state).toBe('failed')
     expect(review?.reason).toContain('ERROR')
     expect(review?.reason).toContain('retries the review')
@@ -4481,18 +4489,19 @@ describe('owned review at runtime', () => {
     // Approval and completion stay unavailable.
     expect(stored?.steps.find((step) => step.id === 'approval')?.state).not.toBe('done')
     expect(stored?.status).not.toBe('completed')
-    expect(host.steers).toHaveLength(0)
+    expect(host.steers).toHaveLength(1)
+    expect(steerText()).toContain('spec-review')
     expect(stored?.steps.find((step) => step.id === 'spec-review')?.at).toBeDefined()
     const firstAt = review?.at ?? 0
 
-    // The next close retries the review exactly once, still with no steer.
+    // The next close starts the next round and refuses again.
     await new Promise((resolve) => setTimeout(resolve, 20))
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     const retried = await runs.readAuthenticatedRun(workspace, 'run-owned-review', auth)
     const retriedReview = retried?.steps.find((step) => step.id === 'spec-review')
     expect(retriedReview?.state).toBe('failed')
     expect(retriedReview?.at ?? 0).toBeGreaterThan(firstAt)
-    expect(host.steers).toHaveLength(0)
+    expect(host.steers).toHaveLength(2)
   })
 
   it('blocks the close when a failed review leaves no record to read', async () => {

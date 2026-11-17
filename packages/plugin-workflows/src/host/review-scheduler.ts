@@ -54,6 +54,8 @@ export interface ScheduledReview {
   readonly taskId?: string
   /** The whole-scope record phase (`spec`, `integration`, ...). */
   readonly phase?: string
+  /** The stable snapshot path key; defaults to the run id. */
+  readonly snapshotKey?: string
   readonly digest: string
   /** The digest known before the snapshot exists, for the live-admission key. */
   readonly liveDigest?: string
@@ -72,6 +74,8 @@ interface ScheduledEntry extends QueueRun {
   readonly change: string
   readonly taskId?: string
   readonly phase?: string
+  /** The snapshot path this entry owns; the stable unit key. */
+  readonly snapshotKey: string
   request: ReviewRunInput
   /** The live-admission key, kept through quarantine until teardown confirms. */
   liveKey?: string
@@ -91,7 +95,7 @@ interface ScheduledEntry extends QueueRun {
 /** The host-owned operations the scheduler cannot perform alone. */
 export interface ReviewSchedulerHost {
   persistRun: (workspace: string, run: WorkflowRun) => Promise<WorkflowRun>
-  discardSnapshot: (workspace: string, runId: string) => Promise<void>
+  discardSnapshot: (workspace: string, key: string) => Promise<void>
   onSettled?: (status: {
     readonly runId: string
     readonly state: SettledRunState
@@ -396,7 +400,7 @@ export class ReviewScheduler {
         if (info?.quarantined !== true) {
           this.forgetLive(entry.run.id)
           this.admitted.delete(entry.run.id)
-          void this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined)
+          void this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined)
         }
         this.host.onSettled?.({
           runId: entry.run.id,
@@ -477,7 +481,7 @@ export class ReviewScheduler {
     const outcome = await entry.reprepare(entry.reprepared)
     if (this.disposed || !this.queue.owns(entry.file.id)) {
       // A replacement snapshot may have been built after disposal; release it.
-      await this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined)
+      await this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined)
       return
     }
     if (outcome.kind === 'unchanged') return
@@ -718,7 +722,7 @@ export class ReviewScheduler {
         await this.waitForTeardown(entry)
         this.forgetLive(entry.run.id)
         this.admitted.delete(entry.run.id)
-        await this.host.discardSnapshot(entry.workspace, entry.run.id)
+        await this.host.discardSnapshot(entry.workspace, entry.snapshotKey)
       },
       outcome,
     )
@@ -795,7 +799,7 @@ export class ReviewScheduler {
     for (const entry of admitted) {
       if (!entry.started) {
         // No child ever read this checkout: release it and its lease now.
-        void this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined)
+        void this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined)
         continue
       }
       // A live reviewer may still be reading its checkout; keep the lease
@@ -820,13 +824,15 @@ export class ReviewScheduler {
         })
       }
     }
-    await this.host.discardSnapshot(entry.workspace, entry.run.id).catch(() => undefined)
+    await this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined)
   }
 
   async enqueue(input: ScheduledReview): Promise<ReviewAdmission> {
     if (this.disposed) {
       // Snapshot preparation can outlive disposal; never admit it.
-      void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined)
+      void this.host
+        .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
+        .catch(() => undefined)
       return { kind: 'accepted', phase: 'settled' }
     }
     const reviewer = input.request.reviewer.id
@@ -842,7 +848,9 @@ export class ReviewScheduler {
     const existing = this.liveRuns.get(key)
     if (existing !== undefined) {
       if (existing.id !== input.run.id) {
-        void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined)
+        void this.host
+          .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
+          .catch(() => undefined)
       }
       return { kind: 'duplicate', runId: existing.id }
     }
@@ -853,6 +861,7 @@ export class ReviewScheduler {
       rule: input.rule,
       change: input.change,
       ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+      snapshotKey: input.snapshotKey ?? input.run.id,
       request: {
         ...input.request,
         cancelled: () => this.disposed || this.fenced.has(input.run.id),
@@ -871,7 +880,9 @@ export class ReviewScheduler {
     const overlapping = this.coveringEntry(entry)
     if (overlapping !== undefined) {
       this.admitted.delete(entry.run.id)
-      void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined)
+      void this.host
+        .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
+        .catch(() => undefined)
       return { kind: 'duplicate', runId: overlapping.run.id }
     }
     let admission: Awaited<ReturnType<ReviewQueue<ScheduledEntry>['submit']>>
@@ -895,7 +906,9 @@ export class ReviewScheduler {
       case 'duplicate':
         this.admitted.delete(entry.run.id)
         if (admission.run.run.id !== input.run.id) {
-          void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined)
+          void this.host
+            .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
+            .catch(() => undefined)
         }
         return { kind: 'duplicate', runId: admission.run.run.id }
       case 'settled':

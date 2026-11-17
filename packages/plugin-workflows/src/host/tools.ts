@@ -273,7 +273,7 @@ export async function executeWorkflowsTool(
       }
       const runs = await host.listRuns()
       const maxRuns = host.maxRuns ?? 20
-      if (openRunCount(runs) >= maxRuns) {
+      if (definition.settings.gate !== 'review' && openRunCount(runs) >= maxRuns) {
         fail(`the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`)
       }
       if (definition.settings.risk === 'high' && !(await confirmHighRisk(host, definition.name))) {

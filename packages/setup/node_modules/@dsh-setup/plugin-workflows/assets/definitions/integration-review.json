@@ -2,7 +2,7 @@
   "v": 1,
   "id": "integration-review",
   "name": "Integration review",
-  "description": "Suggest the whole-worktree integration review once the change's task list is complete; the soft rule refuses one close, then releases the run without a pass.",
+  "description": "Run the whole-worktree integration review once the change's task list is complete; a required review that iterates until a current PASS.",
   "version": 1,
   "trigger": {
     "kind": "turn.stopping",
@@ -17,7 +17,6 @@
     "allowModelStart": true,
     "risk": "low",
     "gateOwnership": "own",
-    "maxBlocks": 1,
     "allowIntent": false,
     "gate": "review",
     "gateIdentity": "integration-review"
@@ -44,8 +43,7 @@
         "path": ".dsh/workflows/records/integration-review/{name}/integration.json"
       },
       "next": "end",
-      "blockTurnClose": true,
-      "nonCritical": true
+      "blockTurnClose": true
     }
   ]
 }

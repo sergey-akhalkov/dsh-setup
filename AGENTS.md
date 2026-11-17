@@ -86,16 +86,17 @@ tasks) -> **sync** deltas into main specs -> **archive**. Use the packaged OpenS
 available, otherwise follow the same flow manually. A behavior change that touches a documented
 requirement updates its delta spec and design rationale in the same change.
 
-When task review is owned, a related group is one unit: a `tasks.md` level-2 section with two or
-more checked tasks lacking a `PASS`/`ERROR` record is one section run covering every checked task;
-the gate names the review unit. A lone or risky task keeps its per-task review: mark it `[x]` only
-when complete and start its task-scoped review immediately. Keep implementing an
-independent task while the run uses a frozen snapshot. A `FINDINGS` re-review confirms each prior
-finding (`closed`/`open`) against a bounded diff from the prior tree. When the run reports the
-live worktree, a write can discard its verdict: restore snapshot support and re-run, or defer writes
-until the run settles. No blocking sleep. Stop mid-task with the `workflows` `note` action instead of
-ticking. The gate refuses a code-changing turn without the record; see
-[docs/workflows.md](docs/workflows.md).
+When task review is owned, the unit is the lane: a `tasks.md` level-2 section with any checked task
+lacking a current `PASS` is one run covering every checked task; a task outside a section stays
+per-task. Every due lane starts in one pass, in parallel. One thread owns a unit: the prompt's
+`- Review key:` and the stable snapshot path resume the same Codex thread every round, with the
+prior findings and diff. There is no round cap:
+`FINDINGS`/`ERROR` leave the unit due, a live review makes the close a waiting close with no
+`VIOLATION`, and only a current `PASS` ends it. A spec review binds the plan artifacts, not the
+worktree, so parallel work cannot invalidate it; `integration-review` is required. When the run
+reports the live worktree, restore snapshot support or defer writes; no blocking sleep. Stop mid-task
+with the `workflows` `note` action instead of ticking. The gate refuses a code-changing turn without
+the record; see [docs/workflows.md](docs/workflows.md).
 
 **Review and gate ownership.** `workflows` is the only review and gate owner: its definitions own the
 checkpoint (`retro`), task-review, and verification closes, while `goal-continuity` and

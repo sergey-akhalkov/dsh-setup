@@ -123,6 +123,7 @@ import {
   resolveReviewTimeout,
   reviewDigest,
   reviewPhase,
+  reviewUnitKey,
   type SectionReview,
   sectionReviewDigest,
   TASK_ID_PATTERN,
@@ -3023,8 +3024,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         forgetSettledTriggerKey(seen, settledRun)
         return persisted
       },
-      discardSnapshot: (targetWorkspace, runId) =>
-        discardReviewSnapshot(targetWorkspace, runId, defaultGit),
+      discardSnapshot: (targetWorkspace, key) =>
+        discardReviewSnapshot(targetWorkspace, key, defaultGit),
     },
   )
   ctx.effect(() => () => {
@@ -3185,6 +3186,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             })
           }
         }
+        const unitKey = reviewUnitKey({
+          change,
+          scope: spec.scope,
+          ...(spec.phase === undefined ? {} : { phase: spec.phase }),
+          ...(task === undefined ? {} : { task: { id: task.id } }),
+          ...(sectionValue === undefined && section === undefined
+            ? {}
+            : { section: sectionValue ?? section }),
+        })
         const failurePrepared = async (): Promise<ReviewRunInput['prepared']> => {
           const liveTree =
             spec.scope === 'task' || bindsWorktree
@@ -3335,22 +3345,58 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             spec.scope === 'task' &&
             (section !== undefined || (typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)))
           if (!taskScope) {
-            const tree = bindsWorktree
+            const liveTree = bindsWorktree
               ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
               : undefined
-            const digest = reviewDigest({
+            const liveDigest = reviewDigest({
               scope: spec.scope,
               specDigest,
-              ...(tree === undefined ? {} : { tree }),
+              ...(liveTree === undefined ? {} : { tree: liveTree }),
             })
+            const snapshot = await createReviewSnapshot(
+              workspace,
+              { dir: changeDir },
+              unitKey,
+              defaultGit,
+              AbortSignal.timeout(reviewTimeoutMs),
+            ).catch(() => undefined)
+            if (snapshot !== undefined) {
+              // The record binds the frozen plan digest; an integration review
+              // also binds the worktree digest captured when the snapshot was
+              // taken. A later write stales the record instead of discarding it.
+              const digest = reviewDigest({
+                scope: spec.scope,
+                specDigest: snapshot.specDigest,
+                ...(liveTree === undefined ? {} : { tree: liveTree }),
+              })
+              return {
+                prepared: {
+                  specDigest: snapshot.specDigest,
+                  ...(liveTree === undefined ? {} : { tree: liveTree }),
+                  reviewCwd: snapshot.worktree,
+                },
+                digest,
+                liveDigest,
+              }
+            }
+            // A snapshot that cannot be built falls back to the live inputs.
+            // A spec review only guards the plan artifacts; the worktree is not
+            // its reviewed scope.
+            const liveGuard = bindsWorktree
+              ? guardFor(signature, liveTree)
+              : async (): Promise<string | undefined> => {
+                  const current = await currentSpecDigest(workspace, change)
+                  if (current === undefined) return 'the change artifacts could not be re-read'
+                  return current === specDigest ? undefined : 'the change digest changed'
+                }
             return {
               prepared: {
                 specDigest,
-                ...(tree === undefined ? {} : { tree }),
-                liveGuard: guardFor(signature, tree),
+                ...(liveTree === undefined ? {} : { tree: liveTree }),
+                liveGuard,
               },
-              digest,
-              liveDigest: digest,
+              digest: liveDigest,
+              liveDigest,
             }
           }
           // The snapshot freezes the reviewed tree; when it cannot be built,
@@ -3358,7 +3404,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const snapshot = await createReviewSnapshot(
             workspace,
             { dir: changeDir },
-            reviewRun.id,
+            unitKey,
             defaultGit,
             AbortSignal.timeout(reviewTimeoutMs),
           ).catch(() => undefined)
@@ -3390,7 +3436,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               const frozen = resolveSectionReview(frozenPlan, section, change, true)
               return {
                 prepared: {
-                  specDigest,
+                  specDigest: snapshot.specDigest,
                   artifactDigest: snapshot.specDigest,
                   tree: snapshot.tree,
                   reviewCwd: snapshot.worktree,
@@ -3427,7 +3473,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             }
             return {
               prepared: {
-                specDigest,
+                specDigest: snapshot.specDigest,
                 artifactDigest: snapshot.specDigest,
                 tree: snapshot.tree,
                 reviewCwd: snapshot.worktree,
@@ -3489,7 +3535,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           current = await prepareInputs(captured)
         } catch (error) {
           // A snapshot rejected before admission must not keep renewing its lease.
-          await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined)
+          await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
           return settleStep(reviewRun, step.id, 'failed', {
             at: journal.time(),
             reason: error instanceof Error ? error.message : String(error),
@@ -3518,7 +3564,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             )
           }
           if (current.prepared.reviewCwd !== undefined) {
-            await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined)
+            await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
           }
           captured = next
           capturedHash = nextHash
@@ -3565,7 +3611,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             failureClass: 'config',
           }).catch(() => undefined)
           if (current.prepared.reviewCwd !== undefined) {
-            await discardReviewSnapshot(workspace, reviewRun.id, defaultGit).catch(() => undefined)
+            await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
           }
           return failure?.run ?? reviewRun
         }
@@ -3579,6 +3625,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           phase: reviewPhase(spec.scope, spec.phase),
           liveDigest: current.liveDigest,
           digest: current.digest,
+          snapshotKey: unitKey,
           reprepare,
         })
         // The review is admitted (or a duplicate is already live): the step
@@ -3777,8 +3824,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     } catch {
       return undefined
     }
-    // The requirement begins when the plan is fully checked (design D7).
-    if (numberedTasks(markdown).some((task) => !task.checked)) return undefined
+    // The requirement begins when a non-empty plan is fully checked (design D7).
+    const tasks = numberedTasks(markdown)
+    if (tasks.length === 0 || tasks.some((task) => !task.checked)) return undefined
     const { verdict: _verdict, verdicts: _verdicts, ...rest } = step.evidence
     const check = await verifyEvidence(
       { ...rest, verdict: 'PASS' },

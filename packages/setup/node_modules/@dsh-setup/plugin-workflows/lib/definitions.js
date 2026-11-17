@@ -294,7 +294,10 @@ function settings(raw, definition) {
     const gateOwnership = raw.gateOwnership === undefined
         ? 'own'
         : isOneOf(raw.gateOwnership, GATE_OWNERSHIP, definition, 'settings.gateOwnership');
-    const maxBlocks = positiveInteger(raw.maxBlocks, definition, 'settings.maxBlocks');
+    // Omitted defaults to 3; a review run ignores its declared value entirely.
+    const maxBlocks = raw.maxBlocks === undefined
+        ? 3
+        : positiveInteger(raw.maxBlocks, definition, 'settings.maxBlocks');
     if (typeof raw.allowIntent !== 'boolean') {
         fail(definition, 'settings.allowIntent', 'must be a boolean');
     }

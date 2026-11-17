@@ -29,6 +29,8 @@ export interface ScheduledReview {
     readonly taskId?: string;
     /** The whole-scope record phase (`spec`, `integration`, ...). */
     readonly phase?: string;
+    /** The stable snapshot path key; defaults to the run id. */
+    readonly snapshotKey?: string;
     readonly digest: string;
     /** The digest known before the snapshot exists, for the live-admission key. */
     readonly liveDigest?: string;
@@ -42,7 +44,7 @@ export interface ScheduledReview {
 /** The host-owned operations the scheduler cannot perform alone. */
 export interface ReviewSchedulerHost {
     persistRun: (workspace: string, run: WorkflowRun) => Promise<WorkflowRun>;
-    discardSnapshot: (workspace: string, runId: string) => Promise<void>;
+    discardSnapshot: (workspace: string, key: string) => Promise<void>;
     onSettled?: (status: {
         readonly runId: string;
         readonly state: SettledRunState;

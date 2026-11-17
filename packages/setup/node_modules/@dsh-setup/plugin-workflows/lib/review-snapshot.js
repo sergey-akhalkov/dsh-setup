@@ -28,11 +28,33 @@ async function writeJsonAtomic(path, value) {
 }
 const snapshotLeases = new Map();
 const snapshotSweeps = new Map();
-function snapshotKey(cwd, runId) {
-    return `${resolve(cwd, SNAPSHOT_DIR)}\u0000${runId}`;
+/**
+ * The stable snapshot directory name for one review unit key: a readable
+ * prefix plus a short hash, so two units never share a checkout and the name
+ * carries no separator or traversal. An unchanged key keeps the same path
+ * across rounds, which is what lets the provider resume its review thread. A
+ * key that is already one safe path segment (a run id) keeps its old name, so
+ * a snapshot an interrupted upgrade left behind stays discardable.
+ */
+export function reviewSnapshotName(key) {
+    if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(key))
+        return key;
+    const readable = key
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gu, '-')
+        .slice(0, 40)
+        .replace(/^-+|-+$/gu, '');
+    const hash = createHash('sha256')
+        .update(`workflows-review-snapshot-v1\u0000${key}`)
+        .digest('hex')
+        .slice(0, 12);
+    return `review-${readable === '' ? 'unit' : readable}-${hash}`;
 }
-function snapshotLeasePath(cwd, runId) {
-    return `${resolve(cwd, SNAPSHOT_DIR, runId)}.lease`;
+function snapshotKey(cwd, name) {
+    return `${resolve(cwd, SNAPSHOT_DIR)}\u0000${name}`;
+}
+function snapshotLeasePath(cwd, name) {
+    return `${resolve(cwd, SNAPSHOT_DIR, name)}.lease`;
 }
 async function readSnapshotLease(path) {
     try {
@@ -43,33 +65,39 @@ async function readSnapshotLease(path) {
         return undefined;
     }
 }
-async function writeSnapshotLease(cwd, runId) {
-    await writeJsonAtomic(snapshotLeasePath(cwd, runId), {
-        runId,
+async function writeSnapshotLease(cwd, name) {
+    await writeJsonAtomic(snapshotLeasePath(cwd, name), {
+        runId: name,
         expiresAt: Date.now() + SNAPSHOT_LEASE_MS,
     });
 }
-export async function startSnapshotLease(cwd, runId, refreshMs = SNAPSHOT_REFRESH_MS) {
-    const state = { stopped: false, writes: writeSnapshotLease(cwd, runId) };
+export async function startSnapshotLease(cwd, key, refreshMs = SNAPSHOT_REFRESH_MS) {
+    await startSnapshotLeaseByName(cwd, reviewSnapshotName(key), refreshMs);
+}
+async function startSnapshotLeaseByName(cwd, name, refreshMs = SNAPSHOT_REFRESH_MS) {
+    const state = { stopped: false, writes: writeSnapshotLease(cwd, name) };
     const timer = setInterval(() => {
         if (state.stopped)
             return;
-        state.writes = state.writes.then(() => writeSnapshotLease(cwd, runId)).catch(() => undefined);
+        state.writes = state.writes.then(() => writeSnapshotLease(cwd, name)).catch(() => undefined);
     }, refreshMs);
     timer.unref();
     state.timer = timer;
-    snapshotLeases.set(snapshotKey(cwd, runId), state);
+    snapshotLeases.set(snapshotKey(cwd, name), state);
     await state.writes;
 }
-export async function stopSnapshotLease(cwd, runId) {
-    const key = snapshotKey(cwd, runId);
-    const state = snapshotLeases.get(key);
+export async function stopSnapshotLease(cwd, key) {
+    await stopSnapshotLeaseByName(cwd, reviewSnapshotName(key));
+}
+async function stopSnapshotLeaseByName(cwd, name) {
+    const keyOf = snapshotKey(cwd, name);
+    const state = snapshotLeases.get(keyOf);
     if (state === undefined)
         return;
     state.stopped = true;
     if (state.timer !== undefined)
         clearInterval(state.timer);
-    snapshotLeases.delete(key);
+    snapshotLeases.delete(keyOf);
     await state.writes.catch(() => undefined);
 }
 /** Remove snapshots no live run owns; ownership is the lease, never age. */
@@ -88,8 +116,8 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
     for (const entry of entries) {
         const path = resolve(dir, entry.name);
         if (entry.isDirectory()) {
-            const runId = entry.name;
-            const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, runId));
+            const name = entry.name;
+            const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, name));
             if (expiresAt !== undefined && expiresAt > now)
                 continue;
             if (expiresAt === undefined) {
@@ -101,12 +129,12 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
                     continue;
                 }
             }
-            await discardReviewSnapshot(cwd, runId, runGit);
+            await discardSnapshotByName(cwd, name, runGit);
             continue;
         }
         if (entry.name.endsWith('.tmp') && entry.name.includes('.lease.')) {
-            const runId = entry.name.slice(0, entry.name.indexOf('.lease.'));
-            const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, runId));
+            const name = entry.name.slice(0, entry.name.indexOf('.lease.'));
+            const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, name));
             if (expiresAt !== undefined && expiresAt > now)
                 continue;
             try {
@@ -120,8 +148,8 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
             continue;
         }
         if (entry.name.endsWith('.lease')) {
-            const runId = entry.name.slice(0, -'.lease'.length);
-            if (existsSync(resolve(dir, runId)))
+            const name = entry.name.slice(0, -'.lease'.length);
+            if (existsSync(resolve(dir, name)))
                 continue;
             const expiresAt = await readSnapshotLease(path);
             if (expiresAt !== undefined && expiresAt > now)
@@ -139,8 +167,8 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
     for (const entry of scratchEntries) {
         if (!entry.isFile() || !entry.name.endsWith('.index'))
             continue;
-        const runId = entry.name.slice(0, -'.index'.length);
-        const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, runId));
+        const name = entry.name.slice(0, -'.index'.length);
+        const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, name));
         if (expiresAt !== undefined && expiresAt > now)
             continue;
         const path = resolve(cwd, SCRATCH_DIR, entry.name);
@@ -160,28 +188,33 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
         // Pruning is best effort.
     }
 }
-/** Remove one snapshot checkout, its lease, and its scratch index; best effort. */
-export async function discardReviewSnapshot(cwd, runId, runGit, remove = (path) => rm(path, { recursive: true, force: true })) {
-    await stopSnapshotLease(cwd, runId);
-    const worktree = resolve(cwd, SNAPSHOT_DIR, runId);
+/** Remove one unit's snapshot checkout, its lease, and its scratch index; best effort. */
+export async function discardReviewSnapshot(cwd, key, runGit, remove) {
+    await discardSnapshotByName(cwd, reviewSnapshotName(key), runGit, remove);
+}
+async function discardSnapshotByName(cwd, name, runGit, remove = (path) => rm(path, { recursive: true, force: true })) {
+    await stopSnapshotLeaseByName(cwd, name);
+    const worktree = resolve(cwd, SNAPSHOT_DIR, name);
     try {
         await runGit(['worktree', 'remove', '--force', worktree], cwd);
     }
     catch {
         // Not a registered worktree, already gone, or not a Git checkout.
     }
-    for (const path of [worktree, resolve(cwd, SCRATCH_DIR, `${runId}.index`), `${worktree}.lease`]) {
+    for (const path of [worktree, resolve(cwd, SCRATCH_DIR, `${name}.index`), `${worktree}.lease`]) {
         await remove(path).catch(() => undefined);
     }
 }
 /**
- * Build the disposable task-review snapshot from the exact review input set.
- * Returns undefined when it cannot be built safely; the caller reviews the live
- * worktree with the mutation guard instead and gets the cause through
- * `onUnavailable`.
+ * Build the disposable review snapshot from the exact review input set. The
+ * checkout lives at the stable path of `key` (the unit key; a run id also
+ * works) and replaces any leftover checkout at that path. Returns undefined
+ * when it cannot be built safely; the caller reviews the live worktree with the
+ * mutation guard instead and gets the cause through `onUnavailable`.
  */
-export async function createReviewSnapshot(cwd, change, runId, runGit, signal, afterCopy, onUnavailable) {
+export async function createReviewSnapshot(cwd, change, key, runGit, signal, afterCopy, onUnavailable) {
     await sweepReviewSnapshots(cwd, runGit);
+    const name = reviewSnapshotName(key);
     const root = await repositoryRoot(cwd, runGit, signal);
     let relChange;
     try {
@@ -219,8 +252,17 @@ export async function createReviewSnapshot(cwd, change, runId, runGit, signal, a
         onUnavailable?.('the repository index could not be read for unmerged entries');
         return undefined;
     }
-    const worktree = resolve(cwd, SNAPSHOT_DIR, runId);
-    const scratch = resolve(cwd, SCRATCH_DIR, `${runId}.index`);
+    // A key reused across rounds keeps its path: discard the previous round's
+    // leftover (and its lease) so the checkout can be rebuilt in place.
+    await discardSnapshotByName(cwd, name, runGit);
+    try {
+        await runGit(['worktree', 'prune'], cwd);
+    }
+    catch {
+        // Pruning is best effort.
+    }
+    const worktree = resolve(cwd, SNAPSHOT_DIR, name);
+    const scratch = resolve(cwd, SCRATCH_DIR, `${name}.index`);
     const env = { GIT_INDEX_FILE: scratch };
     try {
         const listed = (await runGit(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], root, signal)).toString('utf8');
@@ -267,7 +309,7 @@ export async function createReviewSnapshot(cwd, change, runId, runGit, signal, a
         ], root, signal))
             .toString('utf8')
             .trim();
-        await startSnapshotLease(cwd, runId);
+        await startSnapshotLeaseByName(cwd, name);
         await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal);
         const frozenChange = resolve(worktree, relChange);
         await mkdir(dirname(frozenChange), { recursive: true });
@@ -278,7 +320,7 @@ export async function createReviewSnapshot(cwd, change, runId, runGit, signal, a
         return { tree, commit, worktree, changeDir: frozenChange, specDigest: frozenSpec };
     }
     catch {
-        await discardReviewSnapshot(cwd, runId, runGit);
+        await discardSnapshotByName(cwd, name, runGit);
         onUnavailable?.('the snapshot worktree could not be built (git error during snapshot creation)');
         return undefined;
     }
