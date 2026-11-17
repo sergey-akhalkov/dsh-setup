@@ -913,3 +913,17 @@ trigger fires, the spec review, `/workflows adopt` and the archive move complete
 follow-up: the composed review-host and delegation queue tests still show real-timer flakes on the
 4-core Windows runner (a release rerun was needed for 0.41.2), so a stable retry or harness bound is
 worth a follow-up.
+
+The first native whole-scope reviews of this change returned three findings, all fixed in the same
+change before the re-review:
+
+- A section re-review focused only the diff from the prior tree even when the section's covered task
+  set had grown. A newly checked task can predate that tree, so its defects would be approved unread.
+  A focused section review now requires the same checked-task set; an expanded section is a full
+  review (delta spec scenario, design D1, `review.ts` guard, regression test).
+- The asynchronous review preparation could outlive scheduler disposal: the reviewer started after
+  the checkout was released. Preparation now observes the fence and the scheduler's disposal, and the
+  scheduler drops a disposed attempt before publishing (regression test).
+- The integration-review run reported `reviewed inputs changed during the run` while the fixes were
+  being written; it and the spec-review record were removed and both reviews re-run on the committed
+  artifacts.
