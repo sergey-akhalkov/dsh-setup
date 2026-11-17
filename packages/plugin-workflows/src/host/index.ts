@@ -4905,8 +4905,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               covers(candidate.context),
           )
           run =
-            existing ??
-            (await startRunForUnlocked(workspace, sessionId, auth, definition, context))
+            existing ?? (await startRunForUnlocked(workspace, sessionId, auth, definition, context))
         } finally {
           release()
         }

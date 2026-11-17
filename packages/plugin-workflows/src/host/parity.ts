@@ -967,7 +967,10 @@ export function taskReviewCoverage(
           covered: section.covered,
           missing: absent,
         },
-        { rule: effectiveRule, ...(options.openRuns === undefined ? {} : { openRuns: options.openRuns }) },
+        {
+          rule: effectiveRule,
+          ...(options.openRuns === undefined ? {} : { openRuns: options.openRuns }),
+        },
       ),
     )
     for (const task of absent) grouped.add(task.id)
