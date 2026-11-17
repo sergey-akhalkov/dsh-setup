@@ -165,6 +165,21 @@ describe('workflow definition schema', () => {
     expect(definition.steps[0]?.next).toBe('end')
   })
 
+  it('defaults an omitted settings.maxBlocks to 3 and keeps a declared value', () => {
+    const omitted = valid()
+    delete (omitted.settings as Record<string, unknown>).maxBlocks
+    expect(validateDefinition(omitted).settings.maxBlocks).toBe(3)
+    // An old definition that still declares the field keeps its value.
+    const declared = valid()
+    ;(declared.settings as Record<string, unknown>).maxBlocks = 1
+    expect(validateDefinition(declared).settings.maxBlocks).toBe(1)
+    const invalid = valid()
+    ;(invalid.settings as Record<string, unknown>).maxBlocks = 0
+    expect(() => validateDefinition(invalid)).toThrow(
+      /definition "auth-draft" field "settings\.maxBlocks"/u,
+    )
+  })
+
   it('accepts an optional bounded description and keeps it out when absent', () => {
     const withText = valid()
     withText.description = 'Intake a new OpenSpec change.'

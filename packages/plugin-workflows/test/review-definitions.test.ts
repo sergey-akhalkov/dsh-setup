@@ -12,19 +12,13 @@ import {
   shippedDefinitionsDirectory,
   validateDefinition,
 } from '../src/host/definitions.ts'
-import {
-  evaluateArchiveGate,
-  evaluateTurnClose,
-  isSoftSettled,
-  runReplaceable,
-  SOFT_SETTLEMENT,
-} from '../src/host/gates.ts'
+import { evaluateTurnClose, isSoftSettled, SOFT_SETTLEMENT } from '../src/host/gates.ts'
 import { createRun, type WorkflowRun } from '../src/host/runs.ts'
 
 /**
  * The engine-shipped review definitions: the native review executor contract,
- * the spec-review condition, and the integration soft release that reproduces
- * the legacy once-only refusal.
+ * the spec-review condition, and the required integration review with no
+ * refusal budget and no soft settlement.
  */
 
 const REVIEW_IDS = ['integration-review', 'spec-review', 'task-review'] as const
@@ -70,8 +64,7 @@ function conditionContext(overrides: {
   }
 }
 
-function integrationRun(): WorkflowRun {
-  const definition = shipped('integration-review')
+function integrationRun(definition: Definition = shipped('integration-review')): WorkflowRun {
   return createRun({
     definition: definition.id,
     trigger: definition.trigger.kind,
@@ -87,6 +80,7 @@ function close(
   run: WorkflowRun,
   definition: Definition,
   turn = 1,
+  review?: { readonly uncovered: readonly string[]; readonly live: readonly string[] },
 ): ReturnType<typeof evaluateTurnClose> & { readonly steers: string[] } {
   const steers: string[] = []
   const outcome = evaluateTurnClose({
@@ -98,6 +92,7 @@ function close(
     maxBlocks: definition.settings.maxBlocks,
     installedLegacy: new Set(),
     enabledLegacy: new Set(),
+    ...(review === undefined ? {} : { review }),
   })
   return { ...outcome, steers }
 }
@@ -206,7 +201,7 @@ describe('shipped review definitions', () => {
     expect(definition.trigger.condition).toBeUndefined()
   })
 
-  it('ships the integration review as the once-only soft rule', () => {
+  it('ships the integration review as a required review', () => {
     const definition = shipped('integration-review')
     const step = reviewStep(definition)
     expect(step.review).toEqual({
@@ -226,8 +221,12 @@ describe('shipped review definitions', () => {
       path: '.dsh/workflows/records/integration-review/{name}/integration.json',
     })
     expect(step.blockTurnClose).toBe(true)
-    expect(step.nonCritical).toBe(true)
-    expect(definition.settings.maxBlocks).toBe(1)
+    expect(step.nonCritical).toBeUndefined()
+    // The shipped definition omits the budget; the gate never uses one for a
+    // review run, and the omitted settings field still defaults to 3.
+    const raw = shippedRaw('integration-review')
+    expect((raw.settings as Record<string, unknown>).maxBlocks).toBeUndefined()
+    expect(definition.settings.maxBlocks).toBe(3)
     expect(definition.settings).toMatchObject({
       gate: 'review',
       gateIdentity: 'integration-review',
@@ -245,64 +244,56 @@ describe('shipped review definitions', () => {
   })
 })
 
-describe('integration soft settlement', () => {
-  it('refuses once, then closes the violation with completed-soft and never a pass', () => {
+describe('required integration review', () => {
+  it('refuses every round without a PASS and never settles completed-soft', () => {
     const definition = shipped('integration-review')
-    const first = close(integrationRun(), definition)
-    expect(first.kind).toBe('refuse')
-    expect(first.steers).toHaveLength(1)
-    const afterFirst = first.run
-    expect(afterFirst.status).toBe('running')
-    expect(afterFirst.turnBlocks).toBe(1)
-    expect(afterFirst.steps[0]?.state).toBe('open')
-
-    const second = close(afterFirst, definition)
-    expect(second.kind).toBe('violation')
-    const settled = second.run
-    expect(settled.status).toBe('completed')
-    expect(settled.reason).toBe(SOFT_SETTLEMENT)
-    const step = settled.steps[0]
-    expect(step?.state).toBe('cancelled')
-    expect(step?.reason).toContain(SOFT_SETTLEMENT)
-    expect(step?.evidence).toBeUndefined()
-    expect(
-      settled.steps.every((entry) => entry.state !== 'open' && entry.state !== 'blocked'),
-    ).toBe(true)
-    expect(settled.violations).toHaveLength(1)
-    expect(settled.violations[0]?.reason).toContain('VIOLATION')
-    expect(settled.violations[0]?.reason).toContain(SOFT_SETTLEMENT)
-
-    // The settlement is terminal: a late reviewer's snapshot (the original
-    // running state with its open step and no violation) must never replace it.
-    expect(isSoftSettled(settled)).toBe(true)
-    const late = integrationRun()
-    expect(late.status).toBe('running')
-    expect(late.steps[0]?.state).toBe('open')
-    expect(late.violations).toHaveLength(0)
-    expect(runReplaceable(settled, late)).toBe(false)
-    expect(runReplaceable(settled, settled)).toBe(true)
-
-    // The exhausted soft run is closed without an approval and does not block
-    // an otherwise authorized archive.
-    const receipt = {
-      v: 1 as const,
-      kind: 'intake' as const,
-      change: 'auth',
-      digest: 'a'.repeat(64),
-      issuedAt: 1,
-      workspaceKey: '/workspace',
-      signature: 'test',
+    let run = integrationRun()
+    for (const round of [1, 2, 3, 4]) {
+      const outcome = close(run, definition, round)
+      expect(outcome.kind, `round ${round}`).toBe('refuse')
+      expect(outcome.steers, `round ${round}`).toHaveLength(1)
+      expect(outcome.run, `round ${round}`).toBe(run)
+      run = outcome.run
     }
-    const archive = evaluateArchiveGate({
-      change: 'auth',
-      runs: [settled],
-      receipts: [receipt],
-      specRecord: {
-        ok: true,
-        evidence: { kind: 'record', path: 'spec.json', digest: 'a'.repeat(64) },
-      },
-    })
-    expect(archive.kind).toBe('allow')
+    expect(run.status).toBe('running')
+    expect(run.steps[0]?.state).toBe('open')
+    expect(run.violations).toHaveLength(0)
+    expect(isSoftSettled(run)).toBe(false)
+    expect(run.reason).not.toBe(SOFT_SETTLEMENT)
+  })
+
+  it('allows the waiting close while the review is live and approves nothing', () => {
+    const definition = shipped('integration-review')
+    const run = integrationRun()
+    const outcome = close(run, definition, 1, { uncovered: [], live: ['run-live'] })
+    expect(outcome.kind).toBe('allow')
+    expect(outcome.steers).toHaveLength(1)
+    expect(outcome.steers[0]).toContain('run-live')
+    expect(outcome.steers[0]).toContain('write nothing')
+    expect(outcome.run.violations).toHaveLength(0)
+    expect(run.status).toBe('running')
+    expect(run.steps[0]?.state).toBe('open')
+  })
+
+  it('ignores a declared maxBlocks and a local nonCritical on a review step', () => {
+    const raw = shippedRaw('integration-review')
+    const settings = { ...(raw.settings as Record<string, unknown>), maxBlocks: 1 }
+    const steps = (raw.steps as Array<Record<string, unknown>>).map((step) => ({
+      ...step,
+      nonCritical: true,
+    }))
+    const definition = validateDefinition({ ...raw, settings, steps })
+    expect(definition.settings.maxBlocks).toBe(1)
+    expect(definition.steps[0]?.nonCritical).toBe(true)
+    let run = integrationRun(definition)
+    for (const round of [1, 2, 3]) {
+      const outcome = close(run, definition, round)
+      expect(outcome.kind, `round ${round}`).toBe('refuse')
+      expect(outcome.run.violations).toHaveLength(0)
+      run = outcome.run
+    }
+    expect(run.status).toBe('running')
+    expect(isSoftSettled(run)).toBe(false)
   })
 
   it('refuses a local copy that drops the review step', () => {

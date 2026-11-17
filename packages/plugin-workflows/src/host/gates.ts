@@ -19,8 +19,11 @@ import { taskLanes } from './tasks.js'
  * The turn-close gate. It refuses a root turn close while the run has an open
  * `blockTurnClose` step that this engine owns; a deferred step never steers.
  * The refusal is bounded by `maxBlocks`; after the cap the close is allowed
- * exactly once and recorded as a visible VIOLATION, not a pass. An internal
- * error fails open so a plugin fault can never trap a turn.
+ * exactly once and recorded as a visible VIOLATION, not a pass. A run that
+ * reached its owned review step has no refusal budget: while a due review unit
+ * has no live review the close is refused, and while every due unit has a live
+ * review the close is the waiting close (no VIOLATION). An internal error fails
+ * open so a plugin fault can never trap a turn.
  */
 
 export type TurnCloseOutcome =
@@ -33,9 +36,20 @@ export type TurnCloseOutcome =
     }
   | { readonly kind: 'violation'; readonly run: WorkflowRun; readonly detail: string }
 
+/** The due review units a review run owes, as the host resolved them after dispatch. */
+export interface ReviewCloseInput {
+  /** Due units without a live review; each entry is a ready steer with its start action. */
+  readonly uncovered: readonly string[]
+  /** The live review run ids that cover a due unit. */
+  readonly live: readonly string[]
+  /** A failed dispatch the refusal must name, when the host attempted one. */
+  readonly failure?: string
+}
+
 /**
- * The label a `nonCritical` step records when its turn-close budget is
- * exhausted: the run closes without its evidence and never counts as a pass.
+ * The label a non-review `nonCritical` step records when its turn-close budget
+ * is exhausted: the run closes without its evidence and never counts as a pass.
+ * A run containing an owned review step never reaches this settlement.
  */
 export const SOFT_SETTLEMENT = 'completed-soft'
 
@@ -83,9 +97,12 @@ export interface TurnCloseInput {
   /**
    * The failed review steps whose current record is a contract-matching ERROR,
    * as verified by the host before the close. Absent means no failure is
-   * provisional, so a recordless failure keeps the close blocked.
+   * provisional, so a recordless failure keeps the close blocked. Unused for a
+   * run with an owned review step: that run takes the uncapped review path.
    */
   readonly provisionalReviews?: ReadonlySet<string>
+  /** The owned review obligation of a review run, resolved by the host. */
+  readonly review?: ReviewCloseInput
   readonly now?: number
   readonly onError?: (error: unknown) => void
 }
@@ -124,6 +141,80 @@ export function selectBlockingStep(
   return undefined
 }
 
+/** Whether the definition carries an owned review step: the uncapped review path. */
+function hasOwnedReviewStep(
+  definition: Definition,
+  installedLegacy: ReadonlySet<string>,
+  enabledLegacy?: ReadonlySet<string>,
+): boolean {
+  if (!definition.steps.some((step) => step.executor === 'review')) return false
+  const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy)
+  const owned = new Set(
+    resolved.steps.filter((step) => step.ownership === 'own').map((step) => step.id),
+  )
+  return definition.steps.some((step) => step.executor === 'review' && owned.has(step.id))
+}
+
+/**
+ * Whether the run reached its review step and still owes it: every earlier
+ * pipeline step settled and the review step is not done. A pipeline's ordinary
+ * main steps keep their refusal budget until the review obligation begins.
+ */
+function reviewObligationReached(run: WorkflowRun, definition: Definition): boolean {
+  const review = definition.steps.find((step) => step.executor === 'review')
+  if (review === undefined) return false
+  const index = definition.steps.indexOf(review)
+  for (const earlier of definition.steps.slice(0, index)) {
+    const state = run.steps.find((entry) => entry.id === earlier.id)?.state
+    if (state !== 'done' && state !== 'cancelled') return false
+  }
+  const state = run.steps.find((entry) => entry.id === review.id)?.state
+  return state !== 'done' && state !== 'cancelled'
+}
+
+/**
+ * The review run's turn-close decision: no refusal budget exists, so the close
+ * is refused while any due unit has no live review and allowed as the waiting
+ * close while every due unit has one. Only a current PASS ends the obligation;
+ * a failed dispatch, a FINDINGS, and an ERROR all leave the unit due.
+ */
+function evaluateReviewClose(
+  input: TurnCloseInput,
+  review: ReviewCloseInput,
+  ownedText: string | undefined,
+): TurnCloseOutcome {
+  if (review.uncovered.length > 0) {
+    const failure = review.failure === undefined ? '' : ` ${review.failure}`
+    const owned = ownedText === undefined ? '' : ` ${ownedText}`
+    const shown = review.uncovered.slice(0, 3).join('; ')
+    const more =
+      review.uncovered.length > 3
+        ? `; and ${String(review.uncovered.length - 3)} more due unit(s)`
+        : ''
+    const text = `the close is refused: ${String(review.uncovered.length)} due review unit(s) have no live review and the review gate has no refusal budget; only a current PASS ends the review.${failure}${owned} ${shown}${more}`
+    input.agent.steer(text)
+    return { kind: 'refuse', run: input.run, stepId: 'review', text }
+  }
+  if (review.live.length === 0) {
+    if (ownedText !== undefined) {
+      // A host-owned completion gap with no due unit to point at is still
+      // refused, never released by a budget.
+      input.agent.steer(ownedText)
+      return {
+        kind: 'refuse',
+        run: input.run,
+        stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
+        text: ownedText,
+      }
+    }
+    return { kind: 'allow', run: input.run, reason: 'no due review unit is outstanding' }
+  }
+  const names = review.live.map((id) => `"${id}"`).join(', ')
+  const text = `waiting for the live review run${review.live.length === 1 ? '' : 's'} ${names}: write nothing in the reviewed scope while the verdict is pending; this is a waiting close with no VIOLATION and no approval is granted until a current PASS. The verdict delivery starts the next turn`
+  input.agent.steer(text)
+  return { kind: 'allow', run: input.run, reason: text }
+}
+
 /** Evaluate one root turn stop. */
 export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
   const at = input.now ?? Date.now()
@@ -143,7 +234,28 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       ...run,
       turnBlocksTurn: input.turn,
     })
-    if (input.definition.id === 'task-review' && input.run.status !== 'failed') {
+    // A host-computed owned decision (completion coverage or the checkpoint
+    // remedy/age rule) refuses before the generic step walk.
+    const ownedText =
+      input.checkpointIssue?.text ??
+      (input.completion?.ok === false
+        ? (input.completion.text ?? 'the completion coverage is incomplete')
+        : undefined)
+    // A run that reached an owned review step never takes the refusal budget:
+    // the host resolves its due units after dispatching them, and only a
+    // current PASS on every due unit ends the obligation (design D3/D9).
+    const ownedReview = hasOwnedReviewStep(
+      input.definition,
+      input.installedLegacy,
+      input.enabledLegacy,
+    )
+    if (ownedReview && input.review !== undefined) {
+      return evaluateReviewClose(input, input.review, ownedText)
+    }
+    // Once the run reached its review obligation the refusal budget no longer
+    // exists; a pipeline's earlier main steps keep it until then.
+    const releaseBlocked = ownedReview && reviewObligationReached(input.run, input.definition)
+    if (!releaseBlocked && input.definition.id === 'task-review' && input.run.status !== 'failed') {
       const failed = input.definition.steps.find(
         (step) =>
           step.blockTurnClose === true &&
@@ -178,16 +290,9 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       input.enabledLegacy,
       input.provisionalReviews,
     )
-    // A host-computed owned decision (completion coverage or the checkpoint
-    // remedy/age rule) refuses before the generic step walk.
-    const ownedText =
-      input.checkpointIssue?.text ??
-      (input.completion?.ok === false
-        ? (input.completion.text ?? 'the completion coverage is incomplete')
-        : undefined)
     const ownedRefusal = (text: string): TurnCloseOutcome => {
       const blocks = blocksForTurn(input.run)
-      if (blocks >= input.maxBlocks) {
+      if (!releaseBlocked && blocks >= input.maxBlocks) {
         const detail = `turn close was refused ${String(blocks)} time(s) by an owned workflow rule; the close is allowed once as a VIOLATION, never as a pass`
         const run = markTurn(addViolation(input.run, detail, { at }))
         return { kind: 'violation', run, detail }
@@ -228,8 +333,24 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         reason: 'no open blockTurnClose step is owned by this engine',
       }
     }
+    // A review step is never steered as a main step: without a resolved due-unit
+    // status the safe answer is a refusal, not a budget release.
+    if (releaseBlocked && step.executor === 'review') {
+      const failed = input.run.steps.find((entry) => entry.id === step.id)
+      const cause = failed?.reason === undefined ? '' : `: ${failed.reason.slice(0, 300)}`
+      if (failed?.state === 'failed' && failed.evidence === undefined) {
+        // A failed dispatch (no verdict record) stays the documented resume
+        // attempt; the next close also retries it.
+        const text = `step "${step.id}" has a failed dispatch${cause}; retry it with workflows resume before the close`
+        input.agent.steer(text)
+        return { kind: 'refuse', run: input.run, stepId: step.id, text }
+      }
+      const text = `the review step "${step.id}" is ${failed?.state ?? 'open'}${failed?.state === 'failed' ? cause : ''}; the review gate has no refusal budget, so fix the findings if any and retry`
+      input.agent.steer(text)
+      return { kind: 'refuse', run: input.run, stepId: step.id, text }
+    }
     const blocks = blocksForTurn(input.run)
-    if (blocks >= input.maxBlocks) {
+    if (!releaseBlocked && blocks >= input.maxBlocks) {
       const soft = step.nonCritical === true
       const detail = `turn close was refused ${String(blocks)} time(s) with step "${step.id}" open; the close is allowed once as a VIOLATION, never as a pass${soft ? `; the optional step settles ${SOFT_SETTLEMENT} and the run keeps no open required step` : ''}`
       let run = markTurn(
@@ -273,6 +394,18 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     const run = markTurn(incrementTurnBlocks(steered.run, at))
     if (!steered.steered) {
       if (steered.reason.includes('request bound')) {
+        if (releaseBlocked) {
+          // The review run has no refusal budget: name the bound and keep the
+          // obligation open instead of releasing the close.
+          const text = `step "${step.id}" reached its request bound; the run contains an owned review step, so the close is not released by a refusal budget. Continue the step and let the next round start the review`
+          input.agent.steer(text)
+          return {
+            kind: 'refuse',
+            run: markTurn(incrementTurnBlocks(steered.run, at)),
+            stepId: step.id,
+            text,
+          }
+        }
         const soft = step.nonCritical === true
         const detail = `step "${step.id}" reached its request bound; the close is allowed once as a VIOLATION, never as a pass${soft ? `; the optional step settles ${SOFT_SETTLEMENT}` : ''}`
         const recorded = addViolation(input.run, detail, { step: step.id, at })
@@ -284,7 +417,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       // never let the close pass silently on the failed step.
       if (steered.reason.includes('already failed')) {
         const blocks = blocksForTurn(input.run)
-        if (blocks >= input.maxBlocks) {
+        if (!releaseBlocked && blocks >= input.maxBlocks) {
           const soft = step.nonCritical === true
           const detail = `step "${step.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass${soft ? `; the optional step settles ${SOFT_SETTLEMENT}` : ''}`
           let released = markTurn(addViolation(input.run, detail, { step: step.id, at }))
@@ -734,6 +867,12 @@ export interface ArchiveGateInput {
   readonly specRecord: EvidenceCheck
   /** The owned per-task portable PASS coverage, computed from the workspace. */
   readonly taskReview?: { readonly ok: boolean; readonly text?: string }
+  /**
+   * The required integration review once the task list is complete: its current
+   * PASS is missing or stale. Absent when the list is incomplete or the review
+   * is deferred to a legacy source; the user-clicked archive never reaches here.
+   */
+  readonly integrationReview?: { readonly ok: boolean; readonly text?: string }
 }
 
 export type ArchiveGateDecision =
@@ -797,6 +936,13 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
     return {
       kind: 'deny',
       reason: `the archive of "${input.change}" is refused: ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}${relatedRun === undefined ? '' : ` (related review run "${relatedRun.id}")`}`,
+    }
+  }
+  if (input.integrationReview !== undefined && !input.integrationReview.ok) {
+    const relatedRun = related.find((run) => run.definition.id === 'integration-review')
+    return {
+      kind: 'deny',
+      reason: `the archive of "${input.change}" is refused: ${input.integrationReview.text ?? 'the task list is complete and the current integration-review PASS is missing or stale'}${relatedRun === undefined ? '' : ` (related review run "${relatedRun.id}")`}`,
     }
   }
   return {
