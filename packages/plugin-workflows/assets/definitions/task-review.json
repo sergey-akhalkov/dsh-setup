@@ -14,7 +14,6 @@
     "allowModelStart": true,
     "risk": "low",
     "gateOwnership": "own",
-    "maxBlocks": 3,
     "allowIntent": false,
     "gate": "review",
     "gateIdentity": "task-review"

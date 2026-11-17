@@ -298,6 +298,183 @@ describe('turn-close gate', () => {
 
 const TEMP_DIRECTORIES: string[] = []
 
+/** A task-scope review definition with no declared budget (defaults to 3). */
+function reviewDefinition(): Definition {
+  return validateDefinition({
+    v: 1,
+    id: 'task-review',
+    name: 'Task review',
+    version: 1,
+    trigger: {
+      kind: 'fs.change',
+      match: { path: 'openspec/changes/{name}/tasks.md' },
+      mode: 'active',
+      dedupe: 'path+content-hash',
+    },
+    settings: {
+      allowModelStart: true,
+      risk: 'low',
+      gateOwnership: 'own',
+      allowIntent: false,
+      gate: 'review',
+      gateIdentity: 'task-review',
+    },
+    steps: [
+      {
+        id: 'review',
+        title: 'Review the checked task',
+        executor: 'review',
+        review: { target: 'codex', instruction: 'review-task', scope: 'task' },
+        evidence: {
+          kind: 'record',
+          rule: 'task-review',
+          change: '{name}',
+          scope: 'task',
+          task: '{taskId}',
+          verdicts: ['PASS', 'ERROR'],
+          path: '.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json',
+        },
+        next: 'end',
+        blockTurnClose: true,
+      },
+    ],
+  })
+}
+
+function reviewRun(): WorkflowRun {
+  const definition = reviewDefinition()
+  return createRun({
+    definition: definition.id,
+    trigger: 'fs.change',
+    session: 'session-1',
+    workspace: '/workspace',
+    context: { name: 'auth', taskId: '0123456789abcdef' },
+    steps: definition.steps.map((step) => step.id),
+    now: 1_000,
+  })
+}
+
+describe('uncapped review turn close', () => {
+  function gate(
+    run: WorkflowRun,
+    agent: FakeAgent,
+    turn: number,
+    review: { uncovered: readonly string[]; live: readonly string[]; failure?: string },
+  ): ReturnType<typeof evaluateTurnClose> {
+    return evaluateTurnClose({
+      run,
+      definition: reviewDefinition(),
+      agent,
+      evidenceContext,
+      turn,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      review,
+    })
+  }
+
+  it('allows the waiting close naming the runs and asking for no writes', () => {
+    const agent = new FakeAgent()
+    const run = reviewRun()
+    const outcome = gate(run, agent, 1, { uncovered: [], live: ['run-live'] })
+    expect(outcome).toMatchObject({ kind: 'allow' })
+    expect(outcome.run).toBe(run)
+    expect(outcome.run.violations).toHaveLength(0)
+    expect(agent.messages).toHaveLength(1)
+    expect(agent.messages[0]).toContain('run-live')
+    expect(agent.messages[0]).toContain('write nothing')
+    expect(agent.messages[0]).toContain('waiting close')
+  })
+
+  it('refuses without a budget release while a due unit has no live review', () => {
+    const agent = new FakeAgent()
+    const run = reviewRun()
+    let current = run
+    for (let round = 1; round <= 6; round += 1) {
+      const outcome = gate(current, agent, 1, {
+        uncovered: ['section "1" (Plan) is due; start it with workflows(...)'],
+        live: [],
+      })
+      expect(outcome.kind, `round ${round}`).toBe('refuse')
+      // The review gate records no refusal budget and never a VIOLATION.
+      expect(outcome.run.violations).toHaveLength(0)
+      expect(outcome.run.turnBlocks).toBeUndefined()
+      current = outcome.run
+    }
+    expect(agent.messages).toHaveLength(6)
+    expect(agent.messages[0]).toContain('no live review')
+    expect(agent.messages[0]).toContain('no refusal budget')
+    expect(current.steps[0]?.state).toBe('open')
+  })
+
+  it('names a failed start in the refusal', () => {
+    const agent = new FakeAgent()
+    const outcome = gate(reviewRun(), agent, 1, {
+      uncovered: ['task "1.1 Build" (0123456789abcdef) has no PASS'],
+      live: [],
+      failure: 'the review start failed: provider unavailable',
+    })
+    expect(outcome.kind).toBe('refuse')
+    expect(agent.messages[0]).toContain('provider unavailable')
+  })
+
+  it('does not treat a provisional ERROR as turn-close evidence', () => {
+    const agent = new FakeAgent()
+    const definition = reviewDefinition()
+    const run = settleStep(reviewRun(), 'review', 'failed', {
+      at: 2_000,
+      reason: 'the review returned FINDINGS',
+    })
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent,
+      evidenceContext,
+      turn: 1,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      provisionalReviews: new Set(['review']),
+      review: { uncovered: ['the unit has no current PASS'], live: [] },
+    })
+    expect(outcome.kind).toBe('refuse')
+    expect(outcome.run.violations).toHaveLength(0)
+    expect(agent.messages[0]).toContain('no current PASS')
+  })
+
+  it('keeps the budget for a non-review run even when a review status is passed', () => {
+    const definition = blockingDefinition()
+    const agent = new FakeAgent()
+    let run = runFor(definition)
+    for (const attempt of [1, 2]) {
+      const outcome = evaluateTurnClose({
+        run,
+        definition,
+        agent,
+        evidenceContext,
+        turn: 1,
+        maxBlocks: 2,
+        installedLegacy: installed,
+        review: { uncovered: ['ignored'], live: [] },
+        now: 2_000 + attempt,
+      })
+      expect(outcome.kind).toBe('refuse')
+      run = outcome.run
+    }
+    const capped = evaluateTurnClose({
+      run,
+      definition,
+      agent,
+      evidenceContext,
+      turn: 1,
+      maxBlocks: 2,
+      installedLegacy: installed,
+      now: 3_000,
+    })
+    expect(capped.kind).toBe('violation')
+    expect(capped.run.violations).toHaveLength(1)
+  })
+})
+
 async function tempWorkspace(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'workflows-gates-'))
   TEMP_DIRECTORIES.push(directory)

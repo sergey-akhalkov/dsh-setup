@@ -28,6 +28,7 @@ import {
   KNOWN_LEGACY_SOURCES,
   resolveOwnership,
   reviewIdentityOf,
+  type Step,
   workspaceDefinitionsDirectory,
 } from './definitions.js'
 import {
@@ -43,6 +44,7 @@ import {
   goalCompletionRefusal,
   type LaneDecision,
   pruneLaneDecisions,
+  type ReviewUnit,
   reviewRunSteer,
   reviewUnits,
   reviewUnitText,
@@ -74,6 +76,7 @@ import {
   evaluateIntakeGate,
   evaluateTurnClose,
   isSoftSettled,
+  type ReviewCloseInput,
   runReplaceable,
 } from './gates.js'
 import { defaultGit, implementationFingerprint, worktreeDigest } from './git.js'
@@ -94,6 +97,7 @@ import {
   type CheckpointObservation,
   checkpointGateIssue,
   parityLoadIssues,
+  type ReviewUnitRun,
   readParityReport,
   readPortableApproval,
   resolveVerifySettings,
@@ -661,6 +665,95 @@ function pendingReviewRuns(
     pending.push({ id: run.id, change: String(run.context.name), context: run.context })
   }
   return pending
+}
+
+/** The task ids one open review run's recorded identity covers. */
+function coveredTaskIds(context: Readonly<Record<string, unknown>>): string[] {
+  const covered = Array.isArray(context.taskIds)
+    ? context.taskIds.filter((entry): entry is string => typeof entry === 'string')
+    : []
+  if (typeof context.taskId === 'string' && !covered.includes(context.taskId)) {
+    covered.push(context.taskId)
+  }
+  return covered
+}
+
+/** The live task-review runs that cover at least one missing task of a unit. */
+function liveUnitRuns(
+  change: string,
+  unit: ReviewUnit,
+  openRuns: readonly ReviewUnitRun[],
+): ReviewUnitRun[] {
+  return openRuns.filter(
+    (run) =>
+      run.change === change &&
+      unit.missing.some((task) => coveredTaskIds(run.context).includes(task.id)),
+  )
+}
+
+/**
+ * The owned review obligation of one review run at the turn close: every due
+ * unit with the live review covering it, and a ready start steer for a unit
+ * that has none. A whole-scope review is its own unit.
+ */
+async function reviewCloseStatus(
+  workspace: string,
+  change: string,
+  definition: Definition,
+  step: Step,
+  run: WorkflowRun,
+  openRuns: readonly ReviewUnitRun[],
+  liveReview: boolean,
+): Promise<ReviewCloseInput | undefined> {
+  // The review gate applies once the pipeline reached its review step. An
+  // earlier open step keeps the ordinary steering path (still uncapped).
+  const index = definition.steps.indexOf(step)
+  if (index > 0) {
+    for (const earlier of definition.steps.slice(0, index)) {
+      const state = run.steps.find((entry) => entry.id === earlier.id)?.state
+      if (state !== 'done' && state !== 'cancelled') return undefined
+    }
+  }
+  if (step.review?.scope !== 'task') {
+    const state = run.steps.find((entry) => entry.id === step.id)?.state
+    const reason = run.steps.find((entry) => entry.id === step.id)?.reason
+    if (state === 'failed') {
+      return {
+        uncovered: [
+          `the ${definition.id} review step "${step.id}" failed${reason === undefined ? '' : `: ${reason.slice(0, 200)}`}; the next close starts the next round`,
+        ],
+        live: [],
+      }
+    }
+    // Only a live review makes the waiting close; a settled step is handled by
+    // the ordinary path and a never-started one is not a live review.
+    return state !== 'done' && state !== 'cancelled' && liveReview
+      ? { uncovered: [], live: [run.id] }
+      : undefined
+  }
+  const units = await reviewUnits(workspace, change)
+  if (units === undefined) return undefined
+  const rule = reviewerBinding(workspace)?.taskRule
+  const live: string[] = []
+  const uncovered: string[] = []
+  for (const unit of units) {
+    const covering = liveUnitRuns(change, unit, openRuns)
+    if (covering.length > 0) {
+      for (const entry of covering) if (!live.includes(entry.id)) live.push(entry.id)
+      continue
+    }
+    uncovered.push(
+      reviewUnitText(change, unit, { ...(rule === undefined ? {} : { rule }), openRuns }),
+    )
+  }
+  // A failed attempt leaves the unit due; its class and attempt count stay
+  // visible in the refusal instead of being replaced by a fresh start.
+  const failed = run.steps.find((entry) => entry.id === step.id)
+  const failure =
+    failed?.state === 'failed' && failed.reason !== undefined
+      ? `The last review attempt on run "${run.id}" failed: ${failed.reason.slice(0, 300)}`
+      : undefined
+  return { uncovered, live, ...(failure === undefined ? {} : { failure }) }
 }
 
 /** Read one change's tasks.md; a review cannot resolve its tasks without it. */
@@ -3682,6 +3775,42 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     return promise
   }
 
+  /**
+   * The required integration review on the agent archive path: once the task
+   * list is complete, the archive needs its current PASS. The user-clicked
+   * archive path never calls this, so the click stays the explicit override.
+   */
+  const integrationArchiveRefusal = async (
+    workspace: string,
+    change: string,
+    definitions: readonly Definition[],
+  ): Promise<string | undefined> => {
+    const definition = definitions.find((entry) => entry.id === 'integration-review')
+    if (definition === undefined) return undefined
+    const legacy = legacySignalState()
+    if (resolveOwnership(definition, legacy.installed, legacy.enabled).ownership !== 'own') {
+      return undefined
+    }
+    const step = definition.steps.find((entry) => entry.executor === 'review')
+    if (step?.evidence === undefined || step.evidence.kind !== 'record') return undefined
+    let markdown: string
+    try {
+      markdown = await readTasksPlan(workspace, change)
+    } catch {
+      return undefined
+    }
+    // The requirement begins when the plan is fully checked (design D7).
+    if (numberedTasks(markdown).some((task) => !task.checked)) return undefined
+    const { verdict: _verdict, verdicts: _verdicts, ...rest } = step.evidence
+    const check = await verifyEvidence(
+      { ...rest, verdict: 'PASS' },
+      { workspace, values: { name: change } },
+    )
+    if (check.ok) return undefined
+    const state = check.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid'
+    return `the archive of "${change}" is refused: the task list is complete and the current integration-review PASS is ${state} (${check.failure.detail.slice(0, 200)}); run workflows(action: "start", definitionId: "integration-review", change: "${change}") and wait for its PASS, or use the archive button as the explicit override`
+  }
+
   // Tools pre-execute: intake, archive, and the authorization write guard.
   listenEngine(() =>
     ctx.on('tools/pre-execute', async (exec, next) => {
@@ -4100,6 +4229,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               definitions,
             })
             if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
+            const integrationRefusal = await integrationArchiveRefusal(
+              workspace,
+              archive.change,
+              definitions,
+            )
+            if (integrationRefusal !== undefined) {
+              return { kind: 'deny', reason: integrationRefusal }
+            }
           }
         }
         // The goal must not complete while a checked task has no portable PASS.
@@ -4594,6 +4731,27 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // settled ERROR as pending.
           const currentRuns = runs.map((entry) => advanced.get(entry.id) ?? entry)
           const reviewOpenRuns = pendingReviewRuns(currentRuns, definitions)
+          // A run containing an owned review step is gated by its due units:
+          // while every due unit has a live review the close waits instead of
+          // refusing, and no refusal budget ever releases it (design D3/D9).
+          const reviewStep = definition.steps.find((step) => step.executor === 'review')
+          const reviewOwned =
+            reviewStep !== undefined &&
+            resolveOwnership(definition, legacy.installed, legacy.enabled).steps.some(
+              (entry) => entry.id === reviewStep.id && entry.ownership === 'own',
+            )
+          const review =
+            reviewOwned && reviewStep !== undefined && typeof current.context.name === 'string'
+              ? await reviewCloseStatus(
+                  workspace,
+                  current.context.name,
+                  definition,
+                  reviewStep,
+                  current,
+                  reviewOpenRuns,
+                  reviewScheduler?.liveRunById(current.id) !== undefined,
+                )
+              : undefined
           const completion =
             definition.id === 'task-review' && typeof current.context.name === 'string'
               ? taskReviewCompletion(workspace, current.context.name, { openRuns: reviewOpenRuns })
@@ -4661,6 +4819,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             installedLegacy: legacy.installed,
             enabledLegacy: legacy.enabled,
             provisionalReviews: await provisionalReviewSteps(current, definition, closeContext),
+            ...(review === undefined ? {} : { review }),
             ...(completion === undefined && unitIssue === undefined
               ? {}
               : { completion: completion ?? unitIssue }),
