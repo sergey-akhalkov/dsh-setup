@@ -26,10 +26,10 @@ import {
 import { settleStep, type WorkflowRun } from './runs.js'
 
 /**
- * The engine-side review scheduler: it admits one prepared review through the
- * bounded queue, runs the review executor in the background, persists the
- * settled workflow run, and releases the frozen snapshot. A review step stays
- * open while its run is admitted, so the turn-close gate still refuses a
+ * The engine-side review scheduler: it admits one prepared review immediately
+ * (only a shared unit key waits), runs the review executor in the background,
+ * persists the settled workflow run, and releases the frozen snapshot. A review
+ * step stays open while its run is live, so the turn-close gate still refuses a
  * PASS-dependent close until the record exists.
  */
 
@@ -103,7 +103,6 @@ export interface ReviewSchedulerHost {
 export type ReviewAdmission =
   | { readonly kind: 'accepted'; readonly phase: string }
   | { readonly kind: 'duplicate'; readonly runId: string }
-  | { readonly kind: 'full'; readonly depth: number; readonly maxQueued: number }
 
 function liveIdentity(input: {
   workspace: string
@@ -388,22 +387,6 @@ export class ReviewScheduler {
           ...(failure.record?.verdict === undefined ? {} : { verdict: failure.record.verdict }),
         })
       },
-      timeout: async (entry, info) => {
-        if (this.disposed) return
-        const position = info.position === undefined ? '' : ` at position ${String(info.position)}`
-        const failure = await recordReviewFailure({
-          ...entry.request,
-          error: `review queue wait timed out after ${String(info.waitMs)} ms${position}; no target started. Shorten the running reviews or start this review again after the queue drains`,
-          failureClass: 'queue-timeout',
-        }).catch(() => undefined)
-        if (failure === undefined) return
-        await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined)
-        this.lastSettled.set(entry.run.id, {
-          state: 'failed',
-          ...(failure.recordPath === undefined ? {} : { recordPath: failure.recordPath }),
-          ...(failure.record?.verdict === undefined ? {} : { verdict: failure.record.verdict }),
-        })
-      },
       settled: (entry, state, info) => {
         this.fenced.delete(entry.run.id)
         const settled = this.lastSettled.get(entry.run.id)
@@ -549,7 +532,7 @@ export class ReviewScheduler {
       this.queue.attemptsOf(entry.file.id) < this.maxAttempts
     ) {
       if (!(await this.teardownConfirmed(entry))) {
-        // A possibly-still-running child owns the slot, key, and snapshot.
+        // A possibly-still-running child owns the key and snapshot.
         // Disposal during that await must not publish or restore the live key.
         if (this.disposed || !this.queue.owns(entry.file.id)) return
         await this.publishAndQuarantine(entry, withUnconfirmedTeardown(outcome), attempt.now)
@@ -562,13 +545,13 @@ export class ReviewScheduler {
         ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
       }
       entry.waited = true
-      await this.queue.scheduleRetry(entry, failure, new Error(result.error))
+      await this.queue.scheduleRetry(entry, failure)
       return
     }
     await this.publishAndSettle(entry, outcome, attempt.now)
   }
 
-  /** Publish the settled attempt, then release or quarantine the slot. */
+  /** Publish the settled attempt, then release or quarantine the key. */
   private async publishAndSettle(
     entry: ScheduledEntry,
     outcome: ReviewAttemptOutcome,
@@ -796,7 +779,7 @@ export class ReviewScheduler {
     this.liveKeys.delete(runId)
   }
 
-  summary(): { enabled: boolean; concurrency: number; active: number; queued: number } {
+  summary(): { enabled: boolean; active: number; attempts: number } {
     return this.queue.summary()
   }
 
@@ -844,7 +827,7 @@ export class ReviewScheduler {
     if (this.disposed) {
       // Snapshot preparation can outlive disposal; never admit it.
       void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined)
-      return { kind: 'full', depth: 0, maxQueued: 0 }
+      return { kind: 'accepted', phase: 'settled' }
     }
     const reviewer = input.request.reviewer.id
     const key = liveIdentity({
@@ -915,9 +898,6 @@ export class ReviewScheduler {
           void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined)
         }
         return { kind: 'duplicate', runId: admission.run.run.id }
-      case 'full':
-        this.admitted.delete(entry.run.id)
-        return { kind: 'full', depth: admission.depth, maxQueued: admission.maxQueued }
       case 'settled':
         this.admitted.delete(entry.run.id)
         return { kind: 'accepted', phase: 'settled' }

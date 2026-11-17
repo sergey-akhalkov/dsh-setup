@@ -248,12 +248,9 @@
         reasoningEffort: xhigh
     reviewQueue:
       enabled: true
-      concurrency: 10
-      maxQueued: 16
       maxAttempts: 3
       baseDelayMs: 5000
       maxDelayMs: 60000
-      waitTimeoutMs: 2400000
     timeouts:
       review: 1800000
 - id: dsh-setup-verification-gate

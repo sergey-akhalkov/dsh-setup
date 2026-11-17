@@ -756,6 +756,11 @@ async function reviewCloseStatus(
   return { uncovered, live, ...(failure === undefined ? {} : { failure }) }
 }
 
+/** Whether a definition is a review gate; those starts are exempt from `maxRuns`. */
+function isReviewDefinition(definition: Definition): boolean {
+  return definition.settings.gate === 'review'
+}
+
 /** Read one change's tasks.md; a review cannot resolve its tasks without it. */
 async function readTasksPlan(workspace: string, change: string): Promise<string> {
   try {
@@ -838,15 +843,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const reviewers: ReviewerMap = resolveReviewers(config.reviewers, providerOptionsSupport)
   const reviewTimeoutMs = resolveReviewTimeout(config.timeouts)
   // Resolve the queue now so an invalid range fails the load; admission is
-  // wired after the guarded run writer exists.
+  // wired after the guarded run writer exists. The retired concurrency,
+  // maxQueued, and waitTimeoutMs values are accepted and ignored.
   const reviewQueue = resolveReviewQueue(config.reviewQueue)
-  if (reviewQueue.waitTimeoutMs < reviewTimeoutMs) {
-    // A waiting review behind the concurrency limit must outlast one full
-    // review; otherwise the queue kills a review that would have started.
-    throw new Error(
-      `workflows reviewQueue.waitTimeoutMs (${String(reviewQueue.waitTimeoutMs)}) must be at least timeouts.review (${String(reviewTimeoutMs)})`,
-    )
-  }
   // A malformed shipped trigger or definition refuses the plugin load, naming
   // the field. The registry then holds one merged installed catalog.
   definitionsRegistry.seedShipped()
@@ -1161,7 +1160,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         reason: 'the host key is not ready yet; no unsigned run is created',
       }
     }
-    if (blocked) {
+    // The number of due review units is bounded by the plan, not by the run
+    // history, so a review start is exempt from the generic open-run limit.
+    if (blocked && !isReviewDefinition(definition)) {
       return {
         ok: false,
         reason: `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
@@ -2984,12 +2985,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const reviewScheduler = new ReviewScheduler(
     {
       enabled: reviewQueue.enabled,
-      concurrency: reviewQueue.concurrency,
-      maxQueued: reviewQueue.maxQueued,
       maxAttempts: reviewQueue.maxAttempts,
       baseDelayMs: reviewQueue.baseDelayMs,
       maxDelayMs: reviewQueue.maxDelayMs,
-      waitTimeoutMs: reviewQueue.waitTimeoutMs,
     },
     {
       persistRun: async (targetWorkspace, settledRun) => {
@@ -3571,7 +3569,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           }
           return failure?.run ?? reviewRun
         }
-        const admission = await reviewScheduler.enqueue({
+        await reviewScheduler.enqueue({
           workspace,
           run: reviewRun,
           request,
@@ -3583,26 +3581,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           digest: current.digest,
           reprepare,
         })
-        if (admission.kind === 'full') {
-          if (current.prepared.reviewCwd !== undefined) {
-            await discardReviewSnapshot(workspace, reviewRun.id, defaultGit)
-          }
-          const failure = await recordReviewFailure({
-            run: reviewRun,
-            definition: reviewDefinition,
-            step,
-            reviewer: resolved.reviewer,
-            context,
-            change,
-            ...(task === undefined ? {} : { task }),
-            prepared: current.prepared,
-            session: sessionId,
-            error: `review queue full (${String(admission.depth)} queued, ${String(admission.maxQueued)} maximum); wait for a settled record, then start the review again`,
-            failureClass: 'queue-full',
-            now: journal.time(),
-          })
-          return failure.run
-        }
         // The review is admitted (or a duplicate is already live): the step
         // stays open and the background settlement writes the record.
         return undefined
@@ -3665,7 +3643,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   ): Promise<WorkflowRun> => {
     const entryGeneration = sessionGeneration(sessionId)
     const runs = await listAuthenticatedRuns(workspace, auth)
-    if (atRunLimit(workspace, runs)) {
+    if (atRunLimit(workspace, runs) && !isReviewDefinition(definition)) {
       throw new Error(
         `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
       )
