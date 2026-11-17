@@ -25,6 +25,7 @@
 - [x] 4.3 Run `pnpm gen` for the vendored review assets and commit the regenerated setup tree. Verify `pnpm gen:check` exits 0.
 - [x] 4.4 Run `pnpm build && git diff --exit-code`, `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer`, `node scripts/workflows-parity.ts --check`, and `openspec validate focused-rereview-and-section-steer --strict`. Verify every command exits 0.
 - [x] 4.5 Close the first whole-scope review findings: a section re-review focuses only the same checked-task set so an expanded section is a full review (delta scenario, design D1, `review.ts` guard, regression test), and asynchronous review preparation observes scheduler disposal and a fence so no reviewer starts on a released checkout (regression test). Verify the full suite and `pnpm validate` exit 0 and the rebuilt `lib/**` is committed.
+- [x] 4.6 Cover the disposal fix at the scheduler level: pause the focused diff, then dispose or fence the run, and verify no reviewer starts and no verdict publishes. Verify the disposal test fails when the scheduler's disposal branch is removed.
 
 ## Workflow follow-up
 
