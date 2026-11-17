@@ -158,6 +158,12 @@ interface FakeHost {
   readonly steers: Array<{ content?: Array<{ text?: string }> }>
   readonly removed: string[]
   readonly injected: number[]
+  /** Turns started by claiming a queued gate message. */
+  readonly resumedTurns: number[]
+  /** The gate messages still queued for the agent to claim. */
+  pendingCount(): number
+  /** What the agent loop does next: claim one queued message and start its turn. */
+  claimInbox(): unknown
   emit(name: string, ...args: unknown[]): Promise<unknown>
 }
 
@@ -166,17 +172,32 @@ function fakeHost(workspace: string, reviewer: ScriptedReviewer, withReviewer = 
   const steers: Array<{ content?: Array<{ text?: string }> }> = []
   const removed: string[] = []
   const injected: number[] = []
+  const resumedTurns: number[] = []
+  // A real pending inbox: a steer queues its message id, a claim starts a turn,
+  // and a removal deletes exactly that queued message.
+  const queued = new Map<string, unknown>()
   const agent = {
     id: 'session-1',
     session: { id: 'session-1', header: { origin: 'root' as const } },
     ctx: { on: () => () => {} },
     steer: (message: unknown) => {
       steers.push(message as { content?: Array<{ text?: string }> })
+      const id = (message as { id?: unknown }).id
+      if (typeof id === 'string' && id !== '') queued.set(id, message)
     },
     inbox: {
       remove: (id: unknown) => {
-        removed.push(String(id))
-        return true
+        const key = String(id)
+        removed.push(key)
+        return queued.delete(key)
+      },
+      claim: () => {
+        const next = queued.keys().next()
+        if (next.done === true) return undefined
+        const message = queued.get(next.value)
+        queued.delete(next.value)
+        resumedTurns.push(Date.now())
+        return message
       },
     },
     inject: () => {
@@ -223,6 +244,9 @@ function fakeHost(workspace: string, reviewer: ScriptedReviewer, withReviewer = 
     steers,
     removed,
     injected,
+    resumedTurns,
+    pendingCount: () => queued.size,
+    claimInbox: () => (agent.inbox.claim as () => unknown)(),
     emit: async (name, ...args) => {
       let result: unknown
       for (const listener of listeners.get(name) ?? []) result = await listener(...args)
@@ -484,10 +508,19 @@ describe('local acceptance: the lane review loop', () => {
     await waitFor(() => host.steers.length > 0)
     const submitted = host.steers.length
     expect(submitted).toBeGreaterThan(0)
+    // The refused close queued its gate messages in the pending inbox.
+    expect(host.pendingCount()).toBe(submitted)
+    const queuedIds = host.steers
+      .map((message) => (message as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === 'string')
     controller.abort()
     await closing
-    // Every submitted gate message is revoked from the inbox and no turn starts.
-    expect(host.removed).toHaveLength(submitted)
+    // The abort revokes exactly the queued gate messages, so the pending inbox
+    // is empty and no turn can resume from it.
+    expect(host.pendingCount()).toBe(0)
+    expect(host.removed).toEqual(queuedIds)
+    expect(host.claimInbox()).toBeUndefined()
+    expect(host.resumedTurns).toHaveLength(0)
     expect(host.injected).toHaveLength(0)
     expect(reviewer.activations).toHaveLength(0)
     const runs = await listAuthenticatedRuns(workspace, auth)
@@ -500,6 +533,8 @@ describe('local acceptance: the lane review loop', () => {
       change: CHANGE,
       gateMessages: submitted,
       revoked: host.removed.length,
+      pending: host.pendingCount(),
+      resumedTurns: host.resumedTurns.length,
       injected: host.injected.length,
     })
   }, 120_000)
