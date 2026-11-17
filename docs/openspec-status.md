@@ -264,6 +264,11 @@ audit modes unchanged. A profile that still configures the removed row, its `rul
 definitions; a local `.dsh/delegation/**` record cannot become an approval; rollback is a version
 downgrade to the last Release A build. See [workflows.md](workflows.md#migration-and-rollback).
 
+The Release B spec gate is `openspec validate retire-delegation-rules --strict`. `openspec validate
+--all --strict` still reports 12 pre-existing capabilities whose requirement bodies exceed 500
+characters (the repository baseline, not introduced by Release B), so the 3.3 verify records that
+baseline here instead of rewriting unrelated accepted specs.
+
 The archived parent change (`2026-10-26-add-portable-dsh-setup`) tasks record 32/35. Open owner
 follow-ups: 7.1 first published release/tag verification, 7.4 second release update visibility, 8.1
 clean-machine rehearsal. (7.2 dogfood verification, 7.3 commit-pinned throwaway-profile install, and
