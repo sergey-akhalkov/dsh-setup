@@ -4912,23 +4912,39 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   ? [values.taskId]
                   : []
             const wanted = idsOf(context)
-            const existing = (await listAuthenticatedRuns(workspace, auth)).find((candidate) => {
+            const live = (await listAuthenticatedRuns(workspace, auth)).filter((candidate) => {
               if (
                 candidate.definition.id !== definition.id ||
-                candidate.status !== 'running' ||
                 candidate.context.name !== context.name
               ) {
                 return false
               }
-              if (wanted.length === 0) return true
-              const covered = idsOf(candidate.context)
-              return covered.length === 0 || wanted.some((id) => covered.includes(id))
+              // A review admitted while the queue waits is blocked, not running,
+              // and still holds live coverage.
+              return candidate.status === 'running' || candidate.status === 'blocked'
             })
-            if (existing === undefined) {
+            const covered = (candidate: WorkflowRun): string[] => idsOf(candidate.context)
+            const complete = live.find((candidate) => {
+              if (wanted.length === 0) return true
+              const ids = covered(candidate)
+              return ids.length === 0 || wanted.every((id) => ids.includes(id))
+            })
+            if (complete !== undefined) {
+              run = complete
+            } else {
+              const partial = live.find((candidate) => {
+                const ids = covered(candidate)
+                return (
+                  wanted.length === 0 || ids.length === 0 || wanted.some((id) => ids.includes(id))
+                )
+              })
+              if (partial !== undefined) {
+                throw new Error(
+                  `the live review run "${partial.id}" overlaps the requested ${context.section === undefined ? 'task' : 'section'} but does not cover it completely; wait for it to settle, then start this review again`,
+                )
+              }
               run = await startRunForUnlocked(workspace, sessionId, auth, definition, context)
               created = true
-            } else {
-              run = existing
             }
           }
         } finally {

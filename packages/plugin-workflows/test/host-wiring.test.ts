@@ -8114,4 +8114,79 @@ describe('public review start through the workflows tool', () => {
       unregister()
     }
   })
+  async function sectionWorkspace(tasks: string): Promise<string> {
+    const dir = await tempWorkspace()
+    const change = join(dir, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(change, 'design.md'), '# Design\n', 'utf8')
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+    await writeFile(join(change, 'tasks.md'), `# Tasks\n\n## 1. Engine\n\n${tasks}`, 'utf8')
+    await mkdir(join(dir, 'openspec'), { recursive: true })
+    await writeFile(
+      join(dir, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true }),
+      'utf8',
+    )
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: dir, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    return dir
+  }
+
+  it('reuses a blocked task review for a section that it fully covers', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const dir = await sectionWorkspace('- [x] 1.1 Task\n')
+    const stub = reviewerStub()
+    const host = fakeHost(dir, { subagents: stub.runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    const first = await runStart(host, {
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      task: 'Task',
+    })
+    await waitFor(() => stub.releases.length > 0)
+    const second = await runStart(host, {
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      section: '1',
+    })
+    const firstId = /run (\S+) started/u.exec(first)?.[1] ?? ''
+    expect(second).toContain(firstId)
+    expect(stub.releases.length).toBe(1)
+    stub.releases.shift()?.()
+  })
+
+  it('refuses a section start that only partially overlaps a live task review', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const dir = await sectionWorkspace('- [x] 1.1 Task\n- [x] 1.2 Second\n')
+    const stub = reviewerStub()
+    const host = fakeHost(dir, { subagents: stub.runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await runStart(host, {
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      task: 'Task',
+    })
+    await waitFor(() => stub.releases.length > 0)
+    await expect(
+      runStart(host, {
+        action: 'start',
+        definitionId: 'task-review',
+        change: 'auth',
+        section: '1',
+      }),
+    ).rejects.toThrow(/overlaps|does not cover/u)
+    expect(stub.releases.length).toBe(1)
+    stub.releases.shift()?.()
+  })
 })
