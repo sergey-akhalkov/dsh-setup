@@ -1,8 +1,9 @@
 export type SettledRunState = 'completed' | 'failed' | 'discarded';
 /**
- * Per-profile review admission queue: one bounded FIFO waiting list, a
- * concurrency ceiling, per-key serialization, identity dedupe, and the
- * retry/quarantine bookkeeping the start path needs. The engine owns records,
+ * Per-profile review admission: every distinct identity starts immediately,
+ * dedupe and per-key serialization (one provider thread), retry/backoff, and
+ * the quarantine bookkeeping the start path needs. There is no concurrency
+ * limit, waiting list, or admission timeout. The engine owns records,
  * snapshots, and target starts; this module owns admission and settlement.
  */
 /** How a failed review attempt is classified for retry purposes. */
@@ -20,39 +21,36 @@ export interface QueueRunFile {
     key: string;
     identity: string;
     state: string;
-    queuePosition?: number;
-    queuedAt?: string;
-    waitMs?: number;
     attempts?: number;
     failureClass?: FailureClass;
-    lastRetryAt?: string;
     detail?: string;
 }
 /** The durable run shape this queue tracks; the engine's run embeds it. */
 export interface QueueRun {
     file: QueueRunFile;
 }
-/** The queue limits, structurally equal to the validated `reviewQueue` block. */
+/**
+ * The queue settings: the off switch and the retry budget. The retired
+ * `concurrency`, `maxQueued`, and `waitTimeoutMs` fields are accepted for
+ * profile compatibility and never read.
+ */
 export interface QueueLimits {
     enabled: boolean;
-    concurrency: number;
-    maxQueued: number;
     maxAttempts: number;
     baseDelayMs: number;
     maxDelayMs: number;
-    waitTimeoutMs: number;
+    /** Retired: accepted and ignored, kept so an existing profile still loads. */
+    concurrency?: number;
+    /** Retired: accepted and ignored, kept so an existing profile still loads. */
+    maxQueued?: number;
+    /** Retired: accepted and ignored, kept so an existing profile still loads. */
+    waitTimeoutMs?: number;
 }
 /** One classified failure, with a retry-after hint when the provider gave one. */
 export interface ClassifiedFailure {
     failureClass: FailureClass;
     transient: boolean;
     retryAfterMs?: number;
-}
-/** Facts a wait-timeout settlement reports for the ERROR detail. */
-export interface QueueTimeoutInfo {
-    /** Waiting-list position; absent when the run timed out during retry backoff. */
-    position?: number;
-    waitMs: number;
 }
 /** Facts a settlement observer needs to tell a release from a quarantine. */
 export interface SettlementInfo {
@@ -67,9 +65,7 @@ export interface ReviewQueueHooks<T extends QueueRun> {
     persist(run: T): void | Promise<void>;
     /** Write the final `ERROR` record and mark the run failed. */
     fail(run: T, error: unknown, failureClass: FailureClass): Promise<void>;
-    /** Write the terminal wait-timeout `ERROR` and mark the run failed. */
-    timeout(run: T, info: QueueTimeoutInfo): Promise<void>;
-    /** Fire the settlement observer exactly once; a quarantine retains its slot. */
+    /** Fire the settlement observer exactly once; a quarantine retains its key. */
     settled(run: T, state: SettledRunState, info?: SettlementInfo): void;
     /** Record bounded evidence when an unexpected fault is survived. */
     internalFault?(run: T, message: string): void | Promise<void>;
@@ -79,10 +75,6 @@ export interface ReviewQueueHooks<T extends QueueRun> {
 export type Admission<T extends QueueRun> = {
     kind: 'duplicate';
     run: T;
-} | {
-    kind: 'full';
-    depth: number;
-    maxQueued: number;
 } | {
     kind: 'settled';
 } | {
@@ -109,16 +101,16 @@ export declare class ReviewQueue<T extends QueueRun> {
     private sequence;
     private disposed;
     constructor(limits: QueueLimits, hooks: ReviewQueueHooks<T>);
-    /** Stop every pending timer; the engine calls this when the plugin unloads. */
+    /** Stop every pending retry timer; the engine calls this when the plugin unloads. */
     dispose(): void;
     owns(runId: string): boolean;
     /** Whether this queued run still holds the current identity mapping. */
     ownsIdentity(runId: string, identity: string): boolean;
+    /** The active review runs and the attempts they have used; no queue position. */
     summary(): {
         enabled: boolean;
-        concurrency: number;
         active: number;
-        queued: number;
+        attempts: number;
     };
     /** Admission for one already prepared run; unexpected faults become internal. */
     submit(run: T): Promise<Admission<T>>;
@@ -126,7 +118,7 @@ export declare class ReviewQueue<T extends QueueRun> {
     private rollback;
     /**
      * Reserve a direct-start fallback's identity and conversation key. The run
-     * occupies a capacity slot and keeps dedupe/key ordering until it settles.
+     * keeps dedupe/key ordering until it settles.
      */
     reserve(run: T): Promise<{
         kind: 'duplicate';
@@ -159,28 +151,26 @@ export declare class ReviewQueue<T extends QueueRun> {
      * its child teardown is confirmed. The settlement observer fires once here;
      * `teardown` is retried with backoff and releases the slot on success.
      */
+    /**
+     * Hold a timed-out run's conversation key and snapshot until its child
+     * teardown is confirmed. The settlement observer fires once here;
+     * `teardown` is retried with backoff and releases the key on success.
+     */
     quarantine(run: T, teardown: () => Promise<void>, outcome?: SettledRunState): void;
     private confirmTeardown;
     /**
      * Re-enter a transiently failed run after its backoff. The caller has already
-     * persisted `retry-wait`; this releases the slot and arms the retry timer.
+     * persisted `retry-wait`; this releases its admission and arms the retry timer.
      */
-    scheduleRetry(run: T, failure: ClassifiedFailure, error?: unknown): Promise<void>;
-    /** Re-enter the waiting list, or settle visibly when capacity or time is gone. */
+    scheduleRetry(run: T, failure: ClassifiedFailure): Promise<void>;
+    /** Re-enter the waiting order after backoff; the head of a key starts. */
     private retryDue;
     /** Attempts this run has already used, for the retry budget decision. */
     attemptsOf(runId: string): number;
     /** Promote the next follower of a key after its head settles. */
     private detachKey;
     private forgetIdentity;
-    private armWaitTimer;
-    private waitTimedOut;
-    /** Settle an unadmitted run whose acceptance-based wait deadline expired. */
-    private settleWaitTimeout;
-    private positionOf;
     private removeWaiting;
-    /** Apply every position before any persistence so a stale sweep cannot win. */
-    private syncPositions;
     private persistEntry;
     private persistNow;
     /**
@@ -191,8 +181,8 @@ export declare class ReviewQueue<T extends QueueRun> {
     private enqueuePersist;
     private startEligible;
     /**
-     * Claim every available slot synchronously and launch each start on its own.
-     * A slow target start must never delay an unrelated admission or handle.
+     * Claim every start-eligible run synchronously and launch each start on its
+     * own. There is no capacity limit: only a key's followers wait.
      */
     private pump;
     private claim;

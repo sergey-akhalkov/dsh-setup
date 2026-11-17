@@ -7,6 +7,7 @@ import {
   resolveReviewQueue,
   resolveReviewTimeout,
 } from '../src/host/review.ts'
+import { type QueueRunFile, ReviewQueue } from '../src/host/review-queue.ts'
 
 describe('reviewers config', () => {
   it('defaults to an empty map and keeps a valid reviewer', () => {
@@ -116,6 +117,52 @@ describe('review queue config', () => {
     ]) {
       expect(() => resolveReviewQueue(bad)).toThrow()
     }
+  })
+})
+
+describe('retired review queue limits', () => {
+  it('accepts a legacy profile and ignores its retired limits at admission', async () => {
+    // A profile written before the retirement still sets all three fields; it
+    // must load, and admission must not enforce them.
+    const legacy = resolveReviewQueue({
+      enabled: true,
+      concurrency: 1,
+      maxQueued: 1,
+      waitTimeoutMs: 1_000,
+      maxAttempts: 3,
+    })
+    expect(legacy).toMatchObject({ concurrency: 1, maxQueued: 1, waitTimeoutMs: 1_000 })
+    const started: string[] = []
+    const queue = new ReviewQueue<{ file: QueueRunFile }>(
+      {
+        enabled: legacy.enabled,
+        maxAttempts: legacy.maxAttempts,
+        baseDelayMs: legacy.baseDelayMs,
+        maxDelayMs: legacy.maxDelayMs,
+        concurrency: legacy.concurrency,
+        maxQueued: legacy.maxQueued,
+        waitTimeoutMs: legacy.waitTimeoutMs,
+      },
+      {
+        start: async (entry) => {
+          started.push(entry.file.id)
+        },
+        persist: () => undefined,
+        fail: async () => undefined,
+        settled: () => undefined,
+        now: () => new Date(),
+      },
+    )
+    for (const id of ['a', 'b', 'c']) {
+      const admission = await queue.submit({
+        file: { id, key: id, identity: id, state: 'queued' },
+      })
+      expect(admission).toEqual({ kind: 'accepted', phase: 'running' })
+    }
+    // concurrency 1 and maxQueued 1 are not enforced: all three started.
+    expect(started).toEqual(['a', 'b', 'c'])
+    expect(queue.summary()).toEqual({ enabled: true, active: 3, attempts: 3 })
+    queue.dispose()
   })
 })
 

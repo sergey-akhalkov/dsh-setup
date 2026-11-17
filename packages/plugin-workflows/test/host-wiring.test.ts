@@ -3473,20 +3473,16 @@ describe('intent engine opt-in', () => {
     expect(runs.filter((name) => name.endsWith('.json'))).toHaveLength(0)
   })
 
-  it('refuses a queue wait shorter than one review timeout', async () => {
-    // A review waiting behind the concurrency limit must outlast a full review,
-    // or the queue settles it as queue-timeout before a slot can free.
-    const allowed = fakeHost(await tempWorkspace())
+  it('accepts a retired review queue wait without enforcing it', async () => {
+    // waitTimeoutMs, concurrency, and maxQueued are accepted and ignored: a
+    // legacy value no longer fails the load.
+    const host = fakeHost(await tempWorkspace())
     expect(() =>
-      apply(allowed.ctx as never, {
-        reviewQueue: { waitTimeoutMs: 600_000 },
+      apply(host.ctx as never, {
+        reviewQueue: { waitTimeoutMs: 1_000, concurrency: 1, maxQueued: 1 },
         timeouts: { review: 600_000 },
       }),
     ).not.toThrow()
-    const refused = fakeHost(await tempWorkspace())
-    expect(() => apply(refused.ctx as never, { reviewQueue: { waitTimeoutMs: 1_000 } })).toThrow(
-      /reviewQueue\.waitTimeoutMs \(1000\) must be at least timeouts\.review \(600000\)/u,
-    )
   })
 
   it('refuses a non-boolean engine allowIntent', async () => {
@@ -3890,6 +3886,72 @@ describe('configured maxRuns', () => {
     expect(() => apply(host.ctx as never, { maxRuns: 0 })).toThrow(
       /maxRuns must be a positive integer/u,
     )
+  })
+
+  it('starts a review at the run limit and still suppresses a non-review run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    await installWatch(workspace, 'review-capacity-watch')
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // Fill the generic run limit before either start is attempted.
+    for (let index = 0; index < 20; index += 1) {
+      await runs.writeRun(
+        workspace,
+        runs.createRun({
+          definition: 'change-intake',
+          trigger: 'tool.pre-execute',
+          session: 'session-1',
+          workspace,
+          steps: ['requirements'],
+          id: `run-full-${String(index)}`,
+        }),
+        auth,
+      )
+    }
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // The plan change reaches the review trigger at capacity.
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    await waitFor(async () =>
+      (await runs.listAuthenticatedRuns(workspace, auth)).some(
+        (run) => run.definition.id === 'task-review',
+      ),
+    )
+    // A non-review trigger at the same capacity is still refused.
+    await host.emit(
+      'tools/pre-execute',
+      { agent: host.agent, callId: 'review-capacity-call', name: 'read', arguments: {} },
+      async () => ({ kind: 'continue' }),
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () => {
+      const rows = (await readFile(file, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      return rows.some(
+        (entry) =>
+          Array.isArray(entry.triggers) &&
+          (entry.triggers as Array<Record<string, unknown>>).some(
+            (row) =>
+              row.id === 'definition:review-capacity-watch' &&
+              row.reason === 'run-suppressed' &&
+              String(row.detail).includes('run limit'),
+          ),
+      )
+    })
+    const reviewRuns = (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+      (run) => run.definition.id === 'task-review',
+    )
+    expect(reviewRuns).toHaveLength(1)
   })
 })
 

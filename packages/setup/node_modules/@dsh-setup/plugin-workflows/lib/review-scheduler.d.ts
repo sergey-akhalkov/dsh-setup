@@ -2,10 +2,10 @@ import { type ReviewRunInput } from './review.js';
 import { type QueueLimits, type SettledRunState } from './review-queue.js';
 import { type WorkflowRun } from './runs.js';
 /**
- * The engine-side review scheduler: it admits one prepared review through the
- * bounded queue, runs the review executor in the background, persists the
- * settled workflow run, and releases the frozen snapshot. A review step stays
- * open while its run is admitted, so the turn-close gate still refuses a
+ * The engine-side review scheduler: it admits one prepared review immediately
+ * (only a shared unit key waits), runs the review executor in the background,
+ * persists the settled workflow run, and releases the frozen snapshot. A review
+ * step stays open while its run is live, so the turn-close gate still refuses a
  * PASS-dependent close until the record exists.
  */
 /** The re-prepared inputs of a queued review whose source set moved. */
@@ -56,10 +56,6 @@ export type ReviewAdmission = {
 } | {
     readonly kind: 'duplicate';
     readonly runId: string;
-} | {
-    readonly kind: 'full';
-    readonly depth: number;
-    readonly maxQueued: number;
 };
 export declare class ReviewScheduler {
     private readonly host;
@@ -122,7 +118,7 @@ export declare class ReviewScheduler {
     private reprepareIfChanged;
     /** Settle a finished attempt: retry (publishing nothing) or publish once. */
     private finish;
-    /** Publish the settled attempt, then release or quarantine the slot. */
+    /** Publish the settled attempt, then release or quarantine the key. */
     private publishAndSettle;
     /** The request's live-input guard, treated as a failure when it throws. */
     private recheckGuard;
@@ -143,9 +139,8 @@ export declare class ReviewScheduler {
     private forgetLive;
     summary(): {
         enabled: boolean;
-        concurrency: number;
         active: number;
-        queued: number;
+        attempts: number;
     };
     dispose(): void;
     /** Wait out a disposed reviewer child, then release its snapshot and lease. */

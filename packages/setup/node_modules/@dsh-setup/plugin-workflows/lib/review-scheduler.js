@@ -257,24 +257,6 @@ export class ReviewScheduler {
                     ...(failure.record?.verdict === undefined ? {} : { verdict: failure.record.verdict }),
                 });
             },
-            timeout: async (entry, info) => {
-                if (this.disposed)
-                    return;
-                const position = info.position === undefined ? '' : ` at position ${String(info.position)}`;
-                const failure = await recordReviewFailure({
-                    ...entry.request,
-                    error: `review queue wait timed out after ${String(info.waitMs)} ms${position}; no target started. Shorten the running reviews or start this review again after the queue drains`,
-                    failureClass: 'queue-timeout',
-                }).catch(() => undefined);
-                if (failure === undefined)
-                    return;
-                await this.host.persistRun(entry.workspace, failure.run).catch(() => undefined);
-                this.lastSettled.set(entry.run.id, {
-                    state: 'failed',
-                    ...(failure.recordPath === undefined ? {} : { recordPath: failure.recordPath }),
-                    ...(failure.record?.verdict === undefined ? {} : { verdict: failure.record.verdict }),
-                });
-            },
             settled: (entry, state, info) => {
                 this.fenced.delete(entry.run.id);
                 const settled = this.lastSettled.get(entry.run.id);
@@ -421,7 +403,7 @@ export class ReviewScheduler {
             result.transient &&
             this.queue.attemptsOf(entry.file.id) < this.maxAttempts) {
             if (!(await this.teardownConfirmed(entry))) {
-                // A possibly-still-running child owns the slot, key, and snapshot.
+                // A possibly-still-running child owns the key and snapshot.
                 // Disposal during that await must not publish or restore the live key.
                 if (this.disposed || !this.queue.owns(entry.file.id))
                     return;
@@ -436,12 +418,12 @@ export class ReviewScheduler {
                 ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
             };
             entry.waited = true;
-            await this.queue.scheduleRetry(entry, failure, new Error(result.error));
+            await this.queue.scheduleRetry(entry, failure);
             return;
         }
         await this.publishAndSettle(entry, outcome, attempt.now);
     }
-    /** Publish the settled attempt, then release or quarantine the slot. */
+    /** Publish the settled attempt, then release or quarantine the key. */
     async publishAndSettle(entry, outcome, now) {
         const teardownConfirmed = await this.teardownConfirmed(entry);
         // Disposal or a superseded admission during the awaited teardown must not
@@ -683,7 +665,7 @@ export class ReviewScheduler {
         if (this.disposed) {
             // Snapshot preparation can outlive disposal; never admit it.
             void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
-            return { kind: 'full', depth: 0, maxQueued: 0 };
+            return { kind: 'accepted', phase: 'settled' };
         }
         const reviewer = input.request.reviewer.id;
         const key = liveIdentity({
@@ -753,9 +735,6 @@ export class ReviewScheduler {
                     void this.host.discardSnapshot(input.workspace, input.run.id).catch(() => undefined);
                 }
                 return { kind: 'duplicate', runId: admission.run.run.id };
-            case 'full':
-                this.admitted.delete(entry.run.id);
-                return { kind: 'full', depth: admission.depth, maxQueued: admission.maxQueued };
             case 'settled':
                 this.admitted.delete(entry.run.id);
                 return { kind: 'accepted', phase: 'settled' };

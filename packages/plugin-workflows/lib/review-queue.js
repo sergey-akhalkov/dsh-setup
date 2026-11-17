@@ -152,12 +152,10 @@ export class ReviewQueue {
         this.limits = limits;
         this.hooks = hooks;
     }
-    /** Stop every pending timer; the engine calls this when the plugin unloads. */
+    /** Stop every pending retry timer; the engine calls this when the plugin unloads. */
     dispose() {
         this.disposed = true;
         for (const entry of this.entries.values()) {
-            if (entry.waitTimer !== undefined)
-                clearTimeout(entry.waitTimer);
             if (entry.retryTimer !== undefined)
                 clearTimeout(entry.retryTimer);
         }
@@ -175,13 +173,12 @@ export class ReviewQueue {
         const entry = this.entries.get(runId);
         return entry !== undefined && !entry.finished && this.identities.get(identity) === entry;
     }
+    /** The active review runs and the attempts they have used; no queue position. */
     summary() {
-        return {
-            enabled: this.limits.enabled,
-            concurrency: this.limits.concurrency,
-            active: this.active.size,
-            queued: this.waiting.length,
-        };
+        let attempts = 0;
+        for (const entry of this.active)
+            attempts += entry.attempts;
+        return { enabled: this.limits.enabled, active: this.active.size, attempts };
     }
     /** Admission for one already prepared run; unexpected faults become internal. */
     async submit(run) {
@@ -233,15 +230,13 @@ export class ReviewQueue {
         this.active.delete(entry);
         this.forgetIdentity(entry);
         this.detachKey(entry);
-        if (entry.waitTimer !== undefined)
-            clearTimeout(entry.waitTimer);
         if (entry.retryTimer !== undefined)
             clearTimeout(entry.retryTimer);
         this.entries.delete(runId);
     }
     /**
      * Reserve a direct-start fallback's identity and conversation key. The run
-     * occupies a capacity slot and keeps dedupe/key ordering until it settles.
+     * keeps dedupe/key ordering until it settles.
      */
     async reserve(run) {
         const existing = this.identities.get(run.file.identity);
@@ -258,13 +253,9 @@ export class ReviewQueue {
             run,
             phase: 'running',
             seq: ++this.sequence,
-            queuedAtMs: this.hooks.now().getTime(),
             attempts: 0,
-            waitDeadlineMs: 0,
             head: true,
             finished: false,
-            settling: false,
-            admitted: true,
             retryToken: 0,
         };
         this.entries.set(run.file.id, entry);
@@ -280,24 +271,13 @@ export class ReviewQueue {
         if (existing !== undefined && !existing.finished) {
             return { kind: 'duplicate', run: existing.run };
         }
-        // The waiting cap applies only when this run must actually wait; a run
-        // behind an existing key occupies a waiting position too.
-        const mustWait = this.keys.has(run.file.key) ||
-            (this.limits.enabled && this.active.size >= this.limits.concurrency);
-        if (this.limits.enabled && mustWait && this.waiting.length >= this.limits.maxQueued) {
-            return { kind: 'full', depth: this.waiting.length, maxQueued: this.limits.maxQueued };
-        }
         const entry = {
             run,
             phase: 'queued',
             seq: ++this.sequence,
-            queuedAtMs: this.hooks.now().getTime(),
             attempts: 0,
-            waitDeadlineMs: 0,
             head: false,
             finished: false,
-            settling: false,
-            admitted: false,
             retryToken: 0,
         };
         this.entries.set(run.file.id, entry);
@@ -311,15 +291,10 @@ export class ReviewQueue {
             key.followers.push(entry);
         }
         run.file.state = 'queued';
-        run.file.queuedAt = this.hooks.now().toISOString();
         if (run.file.attempts === undefined)
             run.file.attempts = 0;
-        delete run.file.queuePosition;
         this.waiting.push(entry);
         this.waiting.sort((left, right) => left.seq - right.seq);
-        if (this.limits.enabled)
-            this.armWaitTimer(entry);
-        this.syncPositions();
         this.pump();
         if (entry.phase === 'starting' && entry.startOutcome !== undefined) {
             await entry.startOutcome;
@@ -384,6 +359,11 @@ export class ReviewQueue {
      * its child teardown is confirmed. The settlement observer fires once here;
      * `teardown` is retried with backoff and releases the slot on success.
      */
+    /**
+     * Hold a timed-out run's conversation key and snapshot until its child
+     * teardown is confirmed. The settlement observer fires once here;
+     * `teardown` is retried with backoff and releases the key on success.
+     */
     quarantine(run, teardown, outcome = 'failed') {
         const entry = this.entries.get(run.file.id);
         if (entry === undefined || entry.finished)
@@ -391,10 +371,6 @@ export class ReviewQueue {
         entry.quarantined = true;
         entry.finished = true;
         entry.phase = 'settled';
-        if (entry.waitTimer !== undefined) {
-            clearTimeout(entry.waitTimer);
-            delete entry.waitTimer;
-        }
         if (entry.retryTimer !== undefined) {
             clearTimeout(entry.retryTimer);
             delete entry.retryTimer;
@@ -439,37 +415,19 @@ export class ReviewQueue {
     }
     /**
      * Re-enter a transiently failed run after its backoff. The caller has already
-     * persisted `retry-wait`; this releases the slot and arms the retry timer.
+     * persisted `retry-wait`; this releases its admission and arms the retry timer.
      */
-    async scheduleRetry(run, failure, error) {
+    async scheduleRetry(run, failure) {
         const entry = this.entries.get(run.file.id);
         if (entry === undefined || entry.finished)
             return;
         entry.failureClass = failure.failureClass;
         entry.retryAfterMs = failure.retryAfterMs;
-        entry.lastError = error;
         entry.phase = 'retry-wait';
         this.active.delete(entry);
         run.file.state = 'retry-wait';
         run.file.failureClass = failure.failureClass;
-        run.file.lastRetryAt = this.hooks.now().toISOString();
-        delete run.file.queuePosition;
         this.persistEntry(run);
-        // A never-started run keeps its acceptance deadline across the backoff.
-        if (this.limits.enabled && !entry.admitted) {
-            if (entry.waitTimer !== undefined) {
-                clearTimeout(entry.waitTimer);
-                delete entry.waitTimer;
-            }
-            const remaining = entry.waitDeadlineMs - this.hooks.now().getTime();
-            if (remaining <= 0) {
-                await this.settleWaitTimeout(entry);
-                return;
-            }
-            entry.waitTimer = setTimeout(() => {
-                void this.waitTimedOut(entry);
-            }, remaining);
-        }
         const token = ++entry.retryToken;
         const delay = retryDelayMs(entry.attempts, this.limits, failure.retryAfterMs);
         entry.retryTimer = setTimeout(() => {
@@ -477,32 +435,16 @@ export class ReviewQueue {
         }, delay);
         this.safePump();
     }
-    /** Re-enter the waiting list, or settle visibly when capacity or time is gone. */
+    /** Re-enter the waiting order after backoff; the head of a key starts. */
     retryDue(entry, token) {
         if (entry.finished || entry.retryToken !== token)
             return;
         delete entry.retryTimer;
-        if (!entry.admitted && this.hooks.now().getTime() >= entry.waitDeadlineMs) {
-            void this.settleWaitTimeout(entry);
-            return;
-        }
-        // A retry that can claim a free slot immediately needs no waiting room.
-        const mustWait = this.limits.enabled && this.active.size >= this.limits.concurrency;
-        if (mustWait && this.waiting.length >= this.limits.maxQueued) {
-            const cause = entry.lastError ?? new Error('the retry could not re-enter the full review queue');
-            void this.failEntry(entry, cause, 'queue-timeout');
-            return;
-        }
         entry.phase = 'queued';
-        const queuedAt = this.hooks.now();
-        entry.queuedAtMs = queuedAt.getTime();
         entry.run.file.state = 'queued';
-        entry.run.file.queuedAt = queuedAt.toISOString();
-        delete entry.run.file.waitMs;
         delete entry.run.file.failureClass;
         this.waiting.push(entry);
         this.waiting.sort((left, right) => left.seq - right.seq);
-        this.syncPositions();
         this.safePump();
     }
     /** Attempts this run has already used, for the retry budget decision. */
@@ -535,70 +477,8 @@ export class ReviewQueue {
             this.identities.delete(entry.run.file.identity);
         }
     }
-    armWaitTimer(entry) {
-        entry.waitDeadlineMs = this.hooks.now().getTime() + this.limits.waitTimeoutMs;
-        entry.waitTimer = setTimeout(() => {
-            void this.waitTimedOut(entry);
-        }, this.limits.waitTimeoutMs);
-    }
-    async waitTimedOut(entry) {
-        if (entry.finished || entry.settling)
-            return;
-        // Only an unadmitted run has a wait clock; a live, in-flight, or already
-        // settled run is unaffected by a late timer dispatch.
-        if (entry.phase !== 'queued' && entry.phase !== 'retry-wait')
-            return;
-        await this.settleWaitTimeout(entry);
-    }
-    /** Settle an unadmitted run whose acceptance-based wait deadline expired. */
-    async settleWaitTimeout(entry) {
-        if (entry.finished || entry.settling || entry.phase === 'settled')
-            return;
-        entry.settling = true;
-        const position = this.positionOf(entry);
-        const waitMs = this.hooks.now().getTime() - entry.queuedAtMs;
-        this.removeWaiting(entry);
-        entry.retryToken += 1;
-        // Clear both timers before awaiting the hook: a late dispatch must observe
-        // the in-progress settlement, never start a second one.
-        if (entry.waitTimer !== undefined) {
-            clearTimeout(entry.waitTimer);
-            delete entry.waitTimer;
-        }
-        if (entry.retryTimer !== undefined) {
-            clearTimeout(entry.retryTimer);
-            delete entry.retryTimer;
-        }
-        entry.phase = 'settled';
-        entry.run.file.waitMs = waitMs;
-        if (entry.run.file.attempts === undefined)
-            entry.run.file.attempts = 0;
-        this.persistEntry(entry.run);
-        try {
-            await this.hooks.timeout(entry.run, {
-                ...(position === 0 ? {} : { position }),
-                waitMs,
-            });
-        }
-        finally {
-            await this.finish(entry, 'failed');
-        }
-    }
-    positionOf(entry) {
-        const index = this.waiting.indexOf(entry);
-        return index < 0 ? 0 : index + 1;
-    }
     removeWaiting(entry) {
         this.waiting = this.waiting.filter((candidate) => candidate !== entry);
-    }
-    /** Apply every position before any persistence so a stale sweep cannot win. */
-    syncPositions() {
-        const queued = this.waiting.filter((entry) => entry.phase === 'queued');
-        for (const [index, entry] of queued.entries()) {
-            entry.run.file.queuePosition = index + 1;
-        }
-        for (const entry of queued)
-            this.persistEntry(entry.run);
     }
     persistEntry(run) {
         void this.enqueuePersist(run);
@@ -632,23 +512,11 @@ export class ReviewQueue {
         return !entry.finished && entry.phase === 'queued' && entry.head;
     }
     /**
-     * Claim every available slot synchronously and launch each start on its own.
-     * A slow target start must never delay an unrelated admission or handle.
+     * Claim every start-eligible run synchronously and launch each start on its
+     * own. There is no capacity limit: only a key's followers wait.
      */
     pump() {
-        const limit = this.limits.enabled ? this.limits.concurrency : Number.POSITIVE_INFINITY;
-        while (this.active.size < limit) {
-            if (this.limits.enabled) {
-                // A late timer dispatch can free a slot after the acceptance deadline:
-                // settle the expired run instead of starting it.
-                const expired = this.waiting.find((candidate) => !candidate.admitted &&
-                    candidate.phase === 'queued' &&
-                    this.hooks.now().getTime() >= candidate.waitDeadlineMs);
-                if (expired !== undefined) {
-                    void this.settleWaitTimeout(expired);
-                    continue;
-                }
-            }
+        for (;;) {
             const entry = this.waiting.find((candidate) => this.startEligible(candidate));
             if (entry === undefined)
                 return;
@@ -656,22 +524,16 @@ export class ReviewQueue {
         }
     }
     claim(entry) {
-        // Read the clock before any state change: a fault here must not leave a
-        // half-claimed entry that never dispatches a start.
-        const waitMs = this.hooks.now().getTime() - entry.queuedAtMs;
         this.removeWaiting(entry);
         entry.phase = 'starting';
         entry.attempts += 1;
         entry.run.file.state = 'starting';
         entry.run.file.attempts = entry.attempts;
-        entry.run.file.waitMs = waitMs;
-        delete entry.run.file.queuePosition;
         if (entry.retryTimer !== undefined) {
             clearTimeout(entry.retryTimer);
             delete entry.retryTimer;
         }
         this.active.add(entry);
-        this.syncPositions();
         this.persistEntry(entry.run);
         entry.startOutcome = this.runStart(entry);
         void entry.startOutcome.catch(() => undefined);
@@ -706,13 +568,7 @@ export class ReviewQueue {
             const failure = classifyFailure(error, 'start');
             entry.failureClass = failure.failureClass;
             if (this.limits.enabled && failure.transient && entry.attempts < this.limits.maxAttempts) {
-                // A slow start can consume the wait timer and then fail after the
-                // acceptance deadline; only a never-admitted run must not retry.
-                if (!entry.admitted && this.hooks.now().getTime() >= entry.waitDeadlineMs) {
-                    await this.settleWaitTimeout(entry);
-                    return;
-                }
-                await this.scheduleRetry(entry.run, failure, error);
+                await this.scheduleRetry(entry.run, failure);
                 return;
             }
             entry.startError = error;
@@ -722,13 +578,7 @@ export class ReviewQueue {
         if (entry.finished)
             return;
         entry.phase = 'running';
-        entry.admitted = true;
         entry.run.file.state = 'running';
-        if (entry.waitTimer !== undefined) {
-            // The target is live: admission is proven and the wait clock stops.
-            clearTimeout(entry.waitTimer);
-            delete entry.waitTimer;
-        }
         this.persistEntry(entry.run);
     }
     async failEntry(entry, error, failureClass) {
@@ -745,10 +595,6 @@ export class ReviewQueue {
             return;
         entry.finished = true;
         entry.phase = 'settled';
-        if (entry.waitTimer !== undefined) {
-            clearTimeout(entry.waitTimer);
-            delete entry.waitTimer;
-        }
         if (entry.retryTimer !== undefined) {
             clearTimeout(entry.retryTimer);
             delete entry.retryTimer;
@@ -758,11 +604,9 @@ export class ReviewQueue {
         this.forgetIdentity(entry);
         this.detachKey(entry);
         entry.run.file.state = state;
-        delete entry.run.file.queuePosition;
         if (detail !== undefined)
             entry.run.file.detail = detail;
         await this.persistNow(entry.run);
-        this.syncPositions();
         try {
             this.hooks.settled(entry.run, state);
         }
