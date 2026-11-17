@@ -1,7 +1,8 @@
 {
   "v": 1,
   "change": "retire-legacy-gates",
-  "at": "2026-11-17T07:41:02.980Z",
+  "at": "2026-11-17T09:40:33.318Z",
+  "baseline": "8d52a53f3d0d6b7620900900aeac99b275df9e63de64108c03680de381f78091",
   "templates": {
     "retro": "sha256-e4df72e46947fb54cad338495b65489155da181bb77130158360ae549e1a8566",
     "spec-review": "sha256-74d2276b44aff9c1b1005e6ac2256094c265edddf352d40105221d2c94491c0d",

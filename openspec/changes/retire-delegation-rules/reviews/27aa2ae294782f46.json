@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "retire-delegation-rules",
+  "scope": "task",
+  "taskId": "27aa2ae294782f46",
+  "digest": "7261aaab2fe76b19e0836e336caffeb1c0551e24efa0d7bfdafe366761b51d00",
+  "worktreeDigest": "fe6f2114355b9b046ac996059f926610e6eb8981a0c4c5d0efe68a731c52e9f8",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-17T09:33:21.380Z"
+}

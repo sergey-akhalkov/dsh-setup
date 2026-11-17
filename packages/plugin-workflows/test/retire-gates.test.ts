@@ -75,6 +75,7 @@ describe('parity load gate and verify settings', () => {
       v: 1 as const,
       change: 'retire-legacy-gates',
       at: '',
+      baseline: 'baseline-hash',
       templates: { retro: 'sha256-wrong' },
       settings: { 'verify.commands': { type: 'list', cases: ['a'] } },
       gates: {},

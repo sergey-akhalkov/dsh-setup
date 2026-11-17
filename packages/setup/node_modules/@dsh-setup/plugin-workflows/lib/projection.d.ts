@@ -1,9 +1,9 @@
 /**
  * Read-only run projection over the process records the setup already writes:
- * work checkpoints, delegation runs, settled local review records, and portable
+ * work checkpoints, native review records, and portable
  * task approvals. No adapter writes, repairs, deletes, or re-runs a record.
  */
-export type RunSource = 'checkpoint' | 'delegation' | 'review' | 'workflow';
+export type RunSource = 'checkpoint' | 'review' | 'workflow';
 export type RunAttribution = 'local' | 'portable' | 'unattributed';
 export type RunStatus = 'running' | 'done' | 'failed' | 'unknown';
 /** The stored lifecycle of a workflow run, before the display status folds it. */
@@ -63,7 +63,7 @@ export interface RunView {
     readonly record?: string;
 }
 export declare const KNOWN_STEP_STATES: Set<string>;
-export declare const DELEGATION_DIR: string;
+export declare const RECORDS_DIR: string;
 export declare const WORKFLOW_EVENTS_DIR: string;
 /** The producer's checkpoint directory name: sha256 of the session id, first 16 hex. */
 export declare function hashSession(sessionId: string): string;
@@ -95,20 +95,8 @@ export declare function localRecordError(record: Record<string, unknown>): strin
 export declare function portableRecordError(record: Record<string, unknown>): string | undefined;
 /** Read every settled local review record; malformed and invalid files are reported. */
 export declare function readLocalReviewRecords(workspace: string): Promise<LocalReviewRead>;
-/**
- * Delegation runs. Session attribution comes from an observed starting/queuing
- * result or a settled record whose `runId` equals the run id; the run's record
- * path is a display hint only.
- */
-export declare function delegationRuns(workspace: string, observedSessions: ReadonlyMap<string, string>, localRecords: readonly LocalReviewRecord[]): Promise<RunView[]>;
 /** Portable task approvals under `openspec/changes/*\/reviews/*.json`. */
 export declare function portableReviewRuns(workspace: string, localRecords: readonly LocalReviewRecord[]): Promise<RunView[]>;
-/**
- * Observed delegation ownership from the journal: the earliest `delegate`
- * result that reported starting or queuing a run. An `already pending` result
- * names the run but must not establish or transfer ownership.
- */
-export declare function delegationObservations(workspace: string): Promise<Map<string, string>>;
 /**
  * Engine obligation runs from `.dsh/workflows/runs/`. They are display-only
  * here; authority reads authenticate them separately. A malformed or unsigned

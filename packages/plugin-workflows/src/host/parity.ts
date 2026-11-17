@@ -41,6 +41,8 @@ export interface ParityReport {
   readonly v: 1
   readonly change: string
   readonly at: string
+  /** Hash of the retained executable baseline the report was built from. */
+  readonly baseline: string
   readonly templates: Readonly<Record<string, string>>
   readonly settings: Readonly<Record<string, ParitySettingsEntry>>
   readonly gates: Readonly<Record<string, ParityGateEntry>>
@@ -238,6 +240,9 @@ export function readParityReport(file: string = shippedParityReportPath()): {
   }
   const retained = retainedEntries(value.retained)
   if (retained === undefined) return { error: 'the parity report retained cases are malformed' }
+  if (typeof value.baseline !== 'string' || value.baseline === '') {
+    return { error: 'the parity report must carry the retained baseline hash' }
+  }
   if (
     !Array.isArray(value.mismatches) ||
     !value.mismatches.every((entry) => typeof entry === 'string')
@@ -249,6 +254,7 @@ export function readParityReport(file: string = shippedParityReportPath()): {
       v: 1,
       change: String(value.change ?? ''),
       at: String(value.at ?? ''),
+      baseline: value.baseline,
       templates: templates as Record<string, string>,
       settings,
       gates,

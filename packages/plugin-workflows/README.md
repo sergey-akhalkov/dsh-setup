@@ -14,7 +14,7 @@ order 30, after Chat, Trajectory, and Observability.
 ## Data
 
 Everything is local and read-only: bounded JSONL under `.dsh/workflows/events`,
-projected records from `.dsh/work-checkpoints` and `.dsh/delegation`, and
+projected records from `.dsh/work-checkpoints` and `.dsh/workflows/records`, and
 OpenSpec review records. Secrets are redacted before a record is stored or
 served, and record links are served only from allowed record directories inside
 the session workspace.

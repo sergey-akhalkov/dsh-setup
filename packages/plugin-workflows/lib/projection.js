@@ -24,7 +24,7 @@ function displayLifecycle(status) {
 }
 export const KNOWN_STEP_STATES = new Set(['open', 'done', 'blocked', 'failed', 'cancelled']);
 const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints');
-export const DELEGATION_DIR = join('.dsh', 'delegation');
+export const RECORDS_DIR = join('.dsh', 'workflows', 'records');
 export const WORKFLOW_EVENTS_DIR = join('.dsh', 'workflows', 'events');
 /** The producer's checkpoint directory name: sha256 of the session id, first 16 hex. */
 export function hashSession(sessionId) {
@@ -397,13 +397,13 @@ export function portableRecordError(record) {
 }
 /** Read every settled local review record; malformed and invalid files are reported. */
 export async function readLocalReviewRecords(workspace) {
-    const delegation = join(workspace, DELEGATION_DIR);
+    const root = join(workspace, RECORDS_DIR);
     const records = [];
     const failures = [];
-    for (const rule of await listFiles(workspace, delegation)) {
+    for (const rule of await listFiles(workspace, root)) {
         if (LOCAL_SKIP.has(rule))
             continue;
-        const ruleDirectory = join(delegation, rule);
+        const ruleDirectory = join(root, rule);
         for (const change of await listFiles(workspace, ruleDirectory)) {
             const changeDirectory = join(ruleDirectory, change);
             for (const name of await listFiles(workspace, changeDirectory)) {
@@ -437,113 +437,6 @@ export async function readLocalReviewRecords(workspace) {
         }
     }
     return { records, failures };
-}
-const RUN_STATES = new Set(['queued', 'running', 'completed', 'failed', 'discarded']);
-function runStatus(state) {
-    if (state === 'queued' || state === 'running')
-        return 'running';
-    if (state === 'completed')
-        return 'done';
-    if (state === 'failed' || state === 'discarded')
-        return 'failed';
-    return 'unknown';
-}
-/**
- * Delegation runs. Session attribution comes from an observed starting/queuing
- * result or a settled record whose `runId` equals the run id; the run's record
- * path is a display hint only.
- */
-export async function delegationRuns(workspace, observedSessions, localRecords) {
-    const directory = join(workspace, DELEGATION_DIR, 'runs');
-    const byRunId = new Map();
-    for (const local of localRecords) {
-        if (typeof local.record.runId === 'string')
-            byRunId.set(local.record.runId, local);
-    }
-    const runs = [];
-    for (const name of await listFiles(workspace, directory)) {
-        if (!name.endsWith('.json'))
-            continue;
-        const file = join(directory, name);
-        const id = name.slice(0, -'.json'.length);
-        const parsed = await readJson(workspace, file);
-        if ('error' in parsed) {
-            runs.push(errorRun(`delegation:${id}`, 'delegation', workspace, file, 'unattributed', undefined, parsed.error));
-            continue;
-        }
-        if (!isRecord(parsed.value)) {
-            runs.push(errorRun(`delegation:${id}`, 'delegation', workspace, file, 'unattributed', undefined, 'the record is not an object'));
-            continue;
-        }
-        const record = parsed.value;
-        const runId = typeof record.id === 'string' ? record.id : id;
-        const invalidField = ['id', 'rule', 'change', 'state', 'record', 'startedAt'].find((field) => typeof record[field] !== 'string' || record[field] === '');
-        if (invalidField !== undefined ||
-            !RUN_STATES.has(record.state) ||
-            typeof record.id !== 'string') {
-            runs.push(errorRun(`delegation:${id}`, 'delegation', workspace, file, 'unattributed', undefined, `missing or invalid field "${invalidField ?? (typeof record.id !== 'string' ? 'id' : 'state')}"`));
-            continue;
-        }
-        const joined = byRunId.get(runId);
-        const session = observedSessions.get(runId) ??
-            (typeof joined?.record.session === 'string' ? joined.record.session : undefined);
-        const rule = record.rule;
-        const change = record.change;
-        const state = record.state;
-        const steps = [
-            { id: 'rule', title: rule, state },
-            {
-                id: 'change',
-                title: typeof record.taskId === 'string' ? record.taskId : change,
-                state: 'review',
-                evidence: change,
-            },
-            { id: 'state', title: 'Run state', state },
-        ];
-        if (joined !== undefined) {
-            const verdict = typeof joined.record.verdict === 'string' ? joined.record.verdict : 'unknown';
-            steps.push({
-                id: 'record',
-                title: 'Review verdict',
-                state: verdict,
-                at: parseTime(joined.record.time),
-                evidence: displayPath(workspace, joined.file),
-            });
-            if (isRecord(joined.record.target)) {
-                const provider = joined.record.target.provider;
-                const model = joined.record.target.model;
-                const parts = [];
-                if (typeof provider === 'string')
-                    parts.push(provider);
-                if (typeof model === 'string')
-                    parts.push(model);
-                steps.push({
-                    id: 'target',
-                    title: 'Review target',
-                    state: 'target',
-                    evidence: safeError(parts.join(' / ')),
-                });
-            }
-        }
-        const status = runStatus(record.state);
-        const lifecycle = displayLifecycle(status);
-        runs.push({
-            id: `delegation:${runId}`,
-            source: 'delegation',
-            ...(session === undefined ? {} : { session }),
-            attribution: session === undefined ? 'unattributed' : 'local',
-            title: `${record.rule} ${record.change}`,
-            startedAt: parseTime(record.startedAt),
-            status,
-            ...(lifecycle === undefined ? {} : { lifecycle }),
-            steps,
-            ...(typeof record.detail === 'string' && (status === 'failed' || status === 'unknown')
-                ? { error: safeError(record.detail) }
-                : {}),
-            record: displayPath(workspace, file),
-        });
-    }
-    return runs;
 }
 /** Portable task approvals under `openspec/changes/*\/reviews/*.json`. */
 export async function portableReviewRuns(workspace, localRecords) {
@@ -610,56 +503,6 @@ export async function portableReviewRuns(workspace, localRecords) {
         }
     }
     return runs;
-}
-/**
- * Observed delegation ownership from the journal: the earliest `delegate`
- * result that reported starting or queuing a run. An `already pending` result
- * names the run but must not establish or transfer ownership.
- */
-export async function delegationObservations(workspace) {
-    const directory = join(workspace, WORKFLOW_EVENTS_DIR);
-    const observed = new Map();
-    for (const name of await listFiles(workspace, directory)) {
-        if (!/\.jsonl(?:\.1)?$/u.test(name))
-            continue;
-        let raw = '';
-        try {
-            const target = await containedFile(workspace, join(directory, name));
-            if (target === undefined)
-                continue;
-            raw = await readFile(target, 'utf8');
-        }
-        catch {
-            continue;
-        }
-        for (const line of raw.split('\n')) {
-            if (line.trim() === '')
-                continue;
-            let value;
-            try {
-                value = JSON.parse(line);
-            }
-            catch {
-                continue;
-            }
-            if (!isRecord(value) || value.kind !== 'tools/result' || value.subject !== 'delegate')
-                continue;
-            if (typeof value.session !== 'string' || typeof value.summary !== 'string')
-                continue;
-            const started = /delegate review (started|queued); run: (run-[a-z0-9]+-[a-f0-9]{8})/u.exec(value.summary);
-            if (started === null || started[2] === undefined)
-                continue;
-            const at = typeof value.at === 'number' ? value.at : 0;
-            const current = observed.get(started[2]);
-            if (current === undefined || at < current.at) {
-                observed.set(started[2], { session: value.session, at });
-            }
-        }
-    }
-    const sessions = new Map();
-    for (const [runId, entry] of observed)
-        sessions.set(runId, entry.session);
-    return sessions;
 }
 /** The checkpoint turn a recorded path names, as the run title shows it. */
 function checkpointSubject(path) {
@@ -870,17 +713,11 @@ function structuredEvidence(evidence) {
 }
 /** Every projected run in one workspace, unattributed runs included. */
 export async function workspaceRuns(workspace) {
-    const [observations, local] = await Promise.all([
-        delegationObservations(workspace),
-        readLocalReviewRecords(workspace),
-    ]);
-    const [delegation, reviews] = await Promise.all([
-        delegationRuns(workspace, observations, local.records),
-        portableReviewRuns(workspace, local.records),
-    ]);
+    const local = await readLocalReviewRecords(workspace);
+    const reviews = await portableReviewRuns(workspace, local.records);
     const failures = local.failures.map((failure) => errorRun(`local-review:${displayPath(workspace, failure.file)}`, 'review', workspace, failure.file, 'unattributed', undefined, failure.error));
     const engine = await engineRuns(workspace);
-    return [...delegation, ...reviews, ...failures, ...engine].sort(compareRuns);
+    return [...reviews, ...failures, ...engine].sort(compareRuns);
 }
 /** The requesting session's timeline: only attributed runs, in time order. */
 export async function sessionRuns(workspace, sessionId) {

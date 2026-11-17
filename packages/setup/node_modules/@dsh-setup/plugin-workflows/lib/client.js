@@ -11525,7 +11525,6 @@ window.__ModuleLoader__.load({
       "runs.status.failed": "failed",
       "runs.status.unknown": "unknown",
       "runs.source.checkpoint": "checkpoint",
-      "runs.source.delegation": "delegation",
       "runs.source.review": "review",
       "runs.source.workflow": "workflow",
       "events.empty": "No process event is recorded in this session yet.",
@@ -13618,7 +13617,7 @@ window.__ModuleLoader__.load({
       if (!response.ok) throw new Error(body.error ?? `the request failed (${String(response.status)})`);
       return body;
     }
-    var PROJECTED_PREFIXES = ["workflow:", "delegation:", "review:", "checkpoint:", "local-review:"];
+    var PROJECTED_PREFIXES = ["workflow:", "review:", "checkpoint:", "local-review:"];
     function projectedRunId(runId) {
       return PROJECTED_PREFIXES.some((prefix) => runId.startsWith(prefix)) ? runId : `workflow:${runId}`;
     }

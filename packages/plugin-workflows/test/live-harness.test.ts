@@ -179,43 +179,51 @@ describe('live-session proxy', () => {
       'utf8',
     )
 
-    // A settled delegation run observed in the live session; the projection
-    // attributes it through its local review record.
-    const runDirectory = join(workspace, '.dsh', 'delegation', 'runs')
-    await mkdir(runDirectory, { recursive: true })
-    await writeFile(
-      join(runDirectory, 'run-mw6live-1234abcd.json'),
-      JSON.stringify({
-        id: 'run-mw6live-1234abcd',
-        rule: 'task-review',
-        change: 'add-workflow-observability',
-        key: 'k',
-        identity: 'i',
-        state: 'completed',
-        record: '.dsh/delegation/task-review/add-workflow-observability/tasks/x.json',
-        startedAt: '2026-11-07T10:05:00.000Z',
-      }),
-      'utf8',
-    )
-    // A settled local review record joins the run and names its session.
+    // A native review record under the engine's records tree, joined to its
+    // portable approval; the engine projects the approval and attributes it.
     const localRecord = join(
       workspace,
       '.dsh',
-      'delegation',
+      'workflows',
+      'records',
       'task-review',
       'add-workflow-observability',
       'tasks',
     )
     await mkdir(localRecord, { recursive: true })
     await writeFile(
-      join(localRecord, 'x.json'),
+      join(localRecord, '0123456789abcdef.json'),
       JSON.stringify({
         runId: 'run-mw6live-1234abcd',
         session: 'session-live',
         rule: 'task-review',
         change: 'add-workflow-observability',
         phase: 'task',
-        scope: 'whole',
+        scope: 'task',
+        taskId: '0123456789abcdef',
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-07T10:06:00.000Z',
+      }),
+      'utf8',
+    )
+    const approvals = join(
+      workspace,
+      'openspec',
+      'changes',
+      'add-workflow-observability',
+      'reviews',
+    )
+    await mkdir(approvals, { recursive: true })
+    await writeFile(
+      join(approvals, '0123456789abcdef.json'),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'add-workflow-observability',
+        scope: 'task',
+        taskId: '0123456789abcdef',
         digest: 'a'.repeat(64),
         verdict: 'PASS',
         findings: [],
@@ -246,9 +254,10 @@ describe('live-session proxy', () => {
       runs: Array<{ source: string; attribution: string }>
     }
     expect(runs.runs.map((entry) => entry.source)).toEqual(
-      expect.arrayContaining(['checkpoint', 'delegation']),
+      expect.arrayContaining(['checkpoint', 'review']),
     )
-    for (const entry of runs.runs) expect(entry.attribution).toBe('local')
+    expect(runs.runs.find((entry) => entry.source === 'checkpoint')?.attribution).toBe('local')
+    expect(runs.runs.find((entry) => entry.source === 'review')?.attribution).toBe('portable')
 
     const health = (await read('/api/workflows/health')) as { state: string; listenerCount: number }
     expect(health.listenerCount).toBeGreaterThanOrEqual(5)

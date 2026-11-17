@@ -178,6 +178,9 @@ export function readParityReport(file = shippedParityReportPath()) {
     const retained = retainedEntries(value.retained);
     if (retained === undefined)
         return { error: 'the parity report retained cases are malformed' };
+    if (typeof value.baseline !== 'string' || value.baseline === '') {
+        return { error: 'the parity report must carry the retained baseline hash' };
+    }
     if (!Array.isArray(value.mismatches) ||
         !value.mismatches.every((entry) => typeof entry === 'string')) {
         return { error: 'the parity report mismatches must be a list of strings' };
@@ -187,6 +190,7 @@ export function readParityReport(file = shippedParityReportPath()) {
             v: 1,
             change: String(value.change ?? ''),
             at: String(value.at ?? ''),
+            baseline: value.baseline,
             templates: templates,
             settings,
             gates,

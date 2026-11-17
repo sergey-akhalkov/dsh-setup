@@ -92,7 +92,7 @@ export interface RunViolationView {
 
 export interface RunView {
   readonly id: string
-  readonly source: 'checkpoint' | 'delegation' | 'review' | 'workflow'
+  readonly source: 'checkpoint' | 'review' | 'workflow'
   readonly session?: string
   readonly attribution: 'local' | 'portable' | 'unattributed'
   readonly title: string
@@ -334,7 +334,7 @@ export async function requestJson<T>(url: string): Promise<T> {
 
 /** View copy, registered into the Client locale registry. */
 /** A recorded journal run id in projected form; engine records are bare. */
-const PROJECTED_PREFIXES = ['workflow:', 'delegation:', 'review:', 'checkpoint:', 'local-review:']
+const PROJECTED_PREFIXES = ['workflow:', 'review:', 'checkpoint:', 'local-review:']
 
 export function projectedRunId(runId: string): string {
   return PROJECTED_PREFIXES.some((prefix) => runId.startsWith(prefix)) ? runId : `workflow:${runId}`

@@ -49,7 +49,6 @@ export const EN: Record<string, string> = {
   'runs.status.failed': 'failed',
   'runs.status.unknown': 'unknown',
   'runs.source.checkpoint': 'checkpoint',
-  'runs.source.delegation': 'delegation',
   'runs.source.review': 'review',
   'runs.source.workflow': 'workflow',
   'events.empty': 'No process event is recorded in this session yet.',

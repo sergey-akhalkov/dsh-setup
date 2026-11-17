@@ -496,10 +496,11 @@ both are evaluated by a pure function whose reasons are exactly `would-fire`, `e
 does not mean anything acted.
 
 The view projects existing records without copying them: checkpoints from
-`.dsh/work-checkpoints/<sha256(session) first 16 hex>/<turn>.json`, delegation runs and settled review
-records from `.dsh/delegation/`, and portable `openspec/changes/*/reviews/<taskId>.json` approvals,
-merged into one time-ordered run timeline with explicit session attribution (`unattributed` when no
-session resolves). Those files are read, never modified. Engine runs project a title composed from the
+`.dsh/work-checkpoints/<sha256(session) first 16 hex>/<turn>.json`, native review
+records from `.dsh/workflows/records/`, and portable `openspec/changes/*/reviews/<taskId>.json`
+approvals, merged into one time-ordered run timeline with explicit session attribution
+(`unattributed` when no session resolves). Legacy `.dsh/delegation/**` scratch is not read.
+Those files are read, never modified. Engine runs project a title composed from the
 recorded definition name and the recorded subject (change, checkpoint turn, or task), expose the
 recorded trigger and, once terminal, the latest settlement time of their recorded steps. A run row shows
 the title, trigger (or legacy source), relative start time with the absolute time on hover, status and

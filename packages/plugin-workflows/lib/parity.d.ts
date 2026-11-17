@@ -26,6 +26,8 @@ export interface ParityReport {
     readonly v: 1;
     readonly change: string;
     readonly at: string;
+    /** Hash of the retained executable baseline the report was built from. */
+    readonly baseline: string;
     readonly templates: Readonly<Record<string, string>>;
     readonly settings: Readonly<Record<string, ParitySettingsEntry>>;
     readonly gates: Readonly<Record<string, ParityGateEntry>>;

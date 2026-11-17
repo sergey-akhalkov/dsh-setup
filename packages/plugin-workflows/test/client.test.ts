@@ -639,8 +639,8 @@ describe('Workflows Client half', () => {
     const runs = [
       runView({ id: 'workflow:run-2', startedAt: NOW - 120_000, endedAt: NOW - 60_000 }),
       runView({
-        id: 'delegation:run-1',
-        source: 'delegation',
+        id: 'review:run-1',
+        source: 'review',
         title: 'task-review redesign-workflows-ui',
         trigger: undefined,
         endedAt: undefined,
@@ -659,13 +659,13 @@ describe('Workflows Client half', () => {
     expect(text).toContain('OpenSpec change intake · auth')
     expect(text).toContain('runs.trigger: tool.pre-execute')
     expect(text).toContain('runs.status.done')
-    expect(text).toContain('runs.source.delegation')
+    expect(text).toContain('runs.source.review')
     const buttons = elements(list).filter(
       (element) => element.type === 'button' && element.props['data-run'] !== undefined,
     )
     expect(buttons.map((button) => button.props['data-run'])).toEqual([
       'workflow:run-2',
-      'delegation:run-1',
+      'review:run-1',
     ])
     ;(buttons[0]?.props.onClick as (() => void) | undefined)?.()
     expect(opened).toEqual(['workflow:run-2'])
@@ -995,7 +995,7 @@ describe('Workflows Client half', () => {
     for (const status of ['running', 'done', 'failed', 'unknown']) {
       renderTree(module.RunList?.({ runs: [runView({ status })], t: strict, now: NOW }))
     }
-    for (const source of ['checkpoint', 'delegation', 'review', 'workflow']) {
+    for (const source of ['checkpoint', 'review', 'workflow']) {
       renderTree(
         module.RunList?.({
           runs: [runView({ trigger: undefined, source })],

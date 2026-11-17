@@ -356,32 +356,28 @@ describe('workflows read API', () => {
 
   it('pages runs with the default size and a cursor', async () => {
     const value = await setup()
-    const runDirectory = join(value.workspaceOne, '.dsh', 'delegation', 'runs')
-    await mkdir(runDirectory, { recursive: true })
+    const checkpointDirectory = join(
+      value.workspaceOne,
+      '.dsh',
+      'work-checkpoints',
+      hashSession('s1'),
+    )
+    await mkdir(checkpointDirectory, { recursive: true })
     for (let index = 0; index < 60; index += 1) {
-      const id = `run-mw6abcde-${index.toString(16).padStart(8, '0')}`
+      const turn = index + 1
       await writeFile(
-        join(runDirectory, `${id}.json`),
+        join(checkpointDirectory, `${turn}.json`),
         JSON.stringify({
-          id,
-          rule: 'task-review',
-          change: 'add-x',
-          key: 'k',
-          identity: 'i',
-          state: 'running',
-          record: `.dsh/delegation/task-review/add-x/tasks/${id}.json`,
-          startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+          version: 1,
+          turn,
+          session: 's1',
+          time: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+          outcome: 'done',
+          lanes: [],
+          next: 'done',
         }),
         'utf8',
       )
-      const { record } = value.journal.record(
-        input({
-          at: index,
-          subject: 'delegate',
-          summary: `delegate review started; run: ${id}`,
-        }),
-      )
-      await value.journal.append(value.workspaceOne, record)
     }
     const first = await request(value, RUNS_ROUTE, { session: 's1' })
     expect(first.status).toBe(200)
@@ -600,22 +596,23 @@ describe('workflows read API', () => {
         }),
       )
       await value.journal.append(value.workspaceOne, record.record)
-      const runId = `run-mw6abcde-${session === 's1' ? '11111111' : '22222222'}`
-      const runRecord = value.journal.record(
-        input({ session, subject: 'delegate', summary: `delegate review started; run: ${runId}` }),
+      const checkpointDirectory = join(
+        value.workspaceOne,
+        '.dsh',
+        'work-checkpoints',
+        hashSession(session),
       )
-      await value.journal.append(value.workspaceOne, runRecord.record)
+      await mkdir(checkpointDirectory, { recursive: true })
       await writeFile(
-        join(value.workspaceOne, '.dsh', 'delegation', 'runs', `${runId}.json`),
+        join(checkpointDirectory, '1.json'),
         JSON.stringify({
-          id: runId,
-          rule: 'task-review',
-          change: 'add-x',
-          key: 'k',
-          identity: 'i',
-          state: 'running',
-          record: `.dsh/delegation/task-review/add-x/tasks/${runId}.json`,
-          startedAt: '2026-11-07T10:00:00.000Z',
+          version: 1,
+          turn: 1,
+          session,
+          time: '2026-11-07T10:00:00.000Z',
+          outcome: 'done',
+          lanes: [],
+          next: 'done',
         }),
         'utf8',
       )
@@ -631,10 +628,10 @@ describe('workflows read API', () => {
     const runsOne = await request(value, RUNS_ROUTE, { session: 's1' })
     const runsTwo = await request(value, RUNS_ROUTE, { session: 's2' })
     expect((runsOne.body as { runs: Array<{ id: string }> }).runs.map((run) => run.id)).toEqual([
-      'delegation:run-mw6abcde-11111111',
+      'checkpoint:1',
     ])
     expect((runsTwo.body as { runs: Array<{ id: string }> }).runs.map((run) => run.id)).toEqual([
-      'delegation:run-mw6abcde-22222222',
+      'checkpoint:1',
     ])
     value.health.markEvent(1_111)
     value.services.healthFor(value.workspaceTwo).markEvent(3_333)
@@ -938,7 +935,7 @@ describe('workflow statistics', () => {
     expect((await request(value, TRIGGERS_ROUTE, { session: 'nope' })).status).toBe(400)
   })
 
-  it('derives the lifecycle for checkpoint and delegation rows', async () => {
+  it('derives the lifecycle for checkpoint rows', async () => {
     const value = await setup()
     const checkpointDirectory = join(
       value.workspaceOne,
@@ -960,35 +957,10 @@ describe('workflow statistics', () => {
       }),
       'utf8',
     )
-    const delegationDirectory = join(value.workspaceOne, '.dsh', 'delegation', 'runs')
-    await mkdir(delegationDirectory, { recursive: true })
-    await writeFile(
-      join(delegationDirectory, 'run-mw6abcde-12345678.json'),
-      JSON.stringify({
-        id: 'run-mw6abcde-12345678',
-        rule: 'task-review',
-        change: 'add-x',
-        state: 'completed',
-        identity: 'i',
-        key: 'k',
-        record: '.dsh/delegation/task-review/add-x/tasks/12345678.json',
-        startedAt: new Date(1_762_500_000_000).toISOString(),
-      }),
-      'utf8',
-    )
-    const { record } = value.journal.record(
-      input({
-        at: 3000,
-        subject: 'delegate',
-        summary: 'delegate review started; run: run-mw6abcde-12345678',
-      }),
-    )
-    await value.journal.append(value.workspaceOne, record)
     const paged = await request(value, RUNS_ROUTE, { session: 's1' })
     const runs = (
       paged.body as { runs: Array<{ source: string; status: string; lifecycle?: string }> }
     ).runs
     expect(runs.find((run) => run.source === 'checkpoint')?.lifecycle).toBe('completed')
-    expect(runs.find((run) => run.source === 'delegation')?.lifecycle).toBe('completed')
   })
 })

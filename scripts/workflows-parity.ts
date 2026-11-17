@@ -8,6 +8,7 @@
  * tracked report is missing, stale, or mismatched. `at` is informational.
  */
 
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -55,12 +56,23 @@ export interface BuiltReport {
   v: 1
   change: string
   at: string
+  baseline: string
   templates: Record<string, string>
   settings: Record<string, { type: string; cases: unknown[] }>
   gates: Record<string, GateSummary>
   retained: Record<string, RetainedSummary>
   differences: Record<string, DeclaredDifference>
   mismatches: string[]
+}
+
+/** The retained executable baseline the report must fingerprint. */
+const BASELINE_FILE = fileURLToPath(
+  new URL('../packages/plugin-workflows/test/parity-baseline.ts', import.meta.url),
+)
+
+/** A deterministic hash of the baseline; a no-op edit still invalidates the report. */
+export function baselineDigest(): string {
+  return createHash('sha256').update(readFileSync(BASELINE_FILE)).digest('hex')
 }
 
 const TEMPLATE_IDS = [
@@ -195,6 +207,7 @@ export async function buildParityReport(
     v: 1,
     change: PARITY_CHANGE,
     at: now.toISOString(),
+    baseline: baselineDigest(),
     templates,
     settings: settingsMatrix(),
     gates,

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -51,6 +51,26 @@ describe('retirement parity report', () => {
     } finally {
       if (previous === undefined) delete process.env.DSH_WORKFLOWS_PARITY_REPORT
       else process.env.DSH_WORKFLOWS_PARITY_REPORT = previous
+    }
+  })
+
+  it('fails --check when the baseline changes without changing a decision', async () => {
+    const baseline = join(
+      import.meta.dirname,
+      '..',
+      '..',
+      'packages',
+      'plugin-workflows',
+      'test',
+      'parity-baseline.ts',
+    )
+    const original = readFileSync(baseline, 'utf8')
+    try {
+      writeFileSync(baseline, `${original}\n// probe: no decision changed\n`, 'utf8')
+      const result = await checkParityReport()
+      expect(result.ok).toBe(false)
+    } finally {
+      writeFileSync(baseline, original, 'utf8')
     }
   })
 
