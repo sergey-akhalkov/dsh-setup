@@ -163,10 +163,10 @@ with the text and keep the single-lane work-constraint rule and the size/no-CR c
 
 ## Risks / Trade-offs
 
-- **A foreign profile still configures `rules`, `targets`, or `delegation.gates`** -> plugin load fails
-  with the removed row named; release notes carry the migration to `reviewers` and definitions. This is
-  the declared breaking change and is acceptable because the shipped profile never relied on a local
-  delegation rule.
+- **A foreign profile still configures `rules`, `targets`, or `delegation.gates`** -> the removed row
+  is not mounted and an orphaned patch entry is ignored; release notes carry the migration to
+  `reviewers` and definitions. This is the declared breaking change and is acceptable because the
+  shipped profile never relied on a local delegation rule.
 - **An unlisted importer of the package internals** -> the approval format and the parity fixtures are
   the known outside consumers; the move, the retained baseline in D11, and the grep in task 1.4 catch a
   stale import, and the full gate blocks a merge if one remains.

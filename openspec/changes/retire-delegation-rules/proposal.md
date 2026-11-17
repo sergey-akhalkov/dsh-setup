@@ -80,8 +80,9 @@ and applies only after that change is archived and its live profile confirmation
   contributed intake; the `retro` (`goal-continuity`) and `verify` (`verification-gate`) bindings, their
   ownership validation, and their surviving spec clauses stay.
 - Remove the legacy `.dsh/delegation/**` fallbacks from the engine and the `legacy` blocks from the
-  shipped definitions and the contributed `change-intake`; a profile that still sets the deleted row,
-  its `rules`/`targets`, or `delegation.gates` fails at load with the removal named.
+  shipped definitions and the contributed `change-intake`; a profile that still carries the deleted
+  row's patch entry loads with that entry ignored and no such row mounted, migrating its intent to the
+  workflow `reviewers` map and the shipped definitions.
 - Delete `docs/delegation-rules.md` and the `delegation-rules` skill; update `AGENTS.md`, `README.md`,
   `docs/*` (workflows, plugins, contributing, openspec-status, review-approval, codex-subagent) to name
   `workflows` as the only owner, drop the delegation apply-loop paragraph, and remove every

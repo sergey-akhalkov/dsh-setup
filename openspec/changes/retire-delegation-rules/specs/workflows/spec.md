@@ -323,7 +323,7 @@ fail open on an unreadable `tasks.md`, a plan without level-2 headings, and a la
 
 **Reason**: The delegation row and its per-signal switches are deleted with the plugin, so no delegation signal remains to enable or disable; the gates that replaced them are owned. The surviving checkpoint and verification legacy sources keep their per-signal ownership check, which is not delegation configuration.
 
-**Migration**: Remove `delegation.gates` from every profile; the engine's `Configuration and off switch` keeps the `enabled` switch. A profile that still sets the deleted row or its gates fails at load with the removed row named.
+**Migration**: Remove `delegation.gates` from every profile; the engine's `Configuration and off switch` keeps the `enabled` switch. A profile that still carries the deleted row's patch entry loads with that entry ignored and no such row mounted; migrate its intent to the workflows `reviewers` map and the shipped definitions.
 
 ### Requirement: Per-signal legacy ownership
 

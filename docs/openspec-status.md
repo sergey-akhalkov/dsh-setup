@@ -259,10 +259,11 @@ Release B (`retire-delegation-rules`) completes the two-release review-runtime m
 `workflows` is the only review and gate owner. It deletes the delegation plugin, its row, its docs
 page, skill, observability row, legacy prompt copies, and local-store approval fallback, folds the
 plugin's requirements into `workflows` and `review-approval`, and keeps the committed approvals and
-audit modes unchanged. A profile that still configures the removed row, its `rules`/`targets`, or
-`delegation.gates` fails at load and migrates to the workflow `reviewers` map and the shipped
-definitions; a local `.dsh/delegation/**` record cannot become an approval; rollback is a version
-downgrade to the last Release A build. See [workflows.md](workflows.md#migration-and-rollback).
+audit modes unchanged. A profile that still carries an orphaned patch entry for the removed row loads
+with that entry ignored and mounts no such row, and migrates its intent to the workflow `reviewers` map
+and the shipped definitions; a local `.dsh/delegation/**` record cannot become an approval; rollback is
+a version downgrade to the last Release A build. See
+[workflows.md](workflows.md#migration-and-rollback).
 
 The Release B spec gate is `openspec validate retire-delegation-rules --strict`. `openspec validate
 --all --strict` still reports 12 pre-existing capabilities whose requirement bodies exceed 500
