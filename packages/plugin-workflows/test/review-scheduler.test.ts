@@ -289,7 +289,7 @@ describe('review scheduler', () => {
 
   it('reports a live section run as covering each of its recorded tasks', async () => {
     const { root, digest } = await reviewWorkspace()
-    const def = taskDefinition()
+    const def = focusedTaskDefinition()
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -378,7 +378,7 @@ describe('review scheduler', () => {
 
   it('refuses a task review covered by an already-admitted section review', async () => {
     const { root, digest } = await reviewWorkspace()
-    const def = taskDefinition()
+    const def = focusedTaskDefinition()
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -1430,7 +1430,7 @@ describe('review scheduler queued re-preparation', () => {
 const TASK_ID = '0123456789abcdef'
 
 /** A task-scope definition, so a PASS also writes the portable approval. */
-function taskDefinition(): Definition {
+function focusedTaskDefinition(): Definition {
   return validateDefinition({
     v: 1,
     id: 'task-review',
@@ -1474,7 +1474,7 @@ function taskRequestFor(
   specDigest: string,
   overrides: Partial<ReviewRunInput> = {},
 ): ReviewRunInput {
-  const def = taskDefinition()
+  const def = focusedTaskDefinition()
   const digest = reviewDigest({ scope: 'task', specDigest })
   const base: ReviewRunInput = {
     run: runFor(def),
@@ -1770,6 +1770,155 @@ describe('review scheduler queued identity collision', () => {
     expect(record.verdict).toBe('PASS')
     releaseIncumbent?.()
     await waitFor(async () => persisted.some((run) => run.id === incumbent.run.id))
+    scheduler.dispose()
+  })
+})
+
+/** Write a prior FINDINGS record so the next attempt takes the focused path. */
+async function priorTaskFindings(root: string, digest: string): Promise<string> {
+  const path = taskRecordPath(root)
+  await mkdir(join(path, '..'), { recursive: true })
+  await writeFile(
+    path,
+    `${JSON.stringify(
+      {
+        definition: 'task-review',
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId: TASK_ID,
+        digest,
+        verdict: 'FINDINGS',
+        findings: [{ severity: 'P1', class: 'missing-test', title: 't', evidence: 'e', fix: 'f' }],
+        reviewedTree: 'a'.repeat(40),
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-14T00:00:00.000Z',
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  )
+  return path
+}
+
+/** A gated git seam: preparation reaches it and waits until released. */
+function gatedGit(): {
+  entered: Promise<void>
+  release: () => void
+  runGit: (args: readonly string[]) => Promise<Buffer>
+} {
+  let enter!: () => void
+  let release!: () => void
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return {
+    entered,
+    release: () => release(),
+    runGit: async (args) => {
+      if (args[0] === 'diff') {
+        enter()
+        await gate
+      }
+      return Buffer.from('')
+    },
+  }
+}
+
+describe('review scheduler disposal during preparation', () => {
+  it('starts no reviewer and discards the snapshot when disposal lands in preparation', async () => {
+    const root = await workspace()
+    const specDigest = 'a'.repeat(64)
+    const priorDigest = reviewDigest({ scope: 'task', specDigest, tree: 'c'.repeat(40) })
+    const recordPath = await priorTaskFindings(root, priorDigest)
+    const git = gatedGit()
+    let runnerCalls = 0
+    const discarded: string[] = []
+    const scheduler = new ReviewScheduler(limitsFor({ maxAttempts: 1, waitTimeoutMs: 10_000 }), {
+      persistRun: async (_workspace, run) => run,
+      discardSnapshot: async (_workspace, runId) => {
+        discarded.push(runId)
+      },
+    })
+    const runner: SubagentRunner = {
+      run: async () => {
+        runnerCalls += 1
+        return { childId: 'child-1', completed: true, text: fencedPASS(priorDigest) }
+      },
+      waitForTeardown: async () => undefined,
+    }
+    const request = taskRequestFor(root, specDigest, {
+      prepared: { specDigest, tree: 'b'.repeat(40) },
+      runGit: git.runGit,
+      runner,
+    })
+    const run = request.run
+    const pending = scheduler.enqueue({
+      workspace: root,
+      run,
+      request,
+      rule: 'task-review',
+      change: 'auth',
+      taskId: TASK_ID,
+      digest: priorDigest,
+    })
+    await git.entered
+    scheduler.dispose()
+    git.release()
+    const admission = await pending
+    expect(admission.kind).toBe('accepted')
+    await waitFor(async () => discarded.includes(run.id))
+    expect(runnerCalls).toBe(0)
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as ReviewRecord
+    expect(record.verdict).toBe('FINDINGS')
+  })
+
+  it('starts no reviewer when the run is fenced during preparation', async () => {
+    const root = await workspace()
+    const specDigest = 'a'.repeat(64)
+    const priorDigest = reviewDigest({ scope: 'task', specDigest, tree: 'c'.repeat(40) })
+    const recordPath = await priorTaskFindings(root, priorDigest)
+    const git = gatedGit()
+    let runnerCalls = 0
+    const scheduler = new ReviewScheduler(limitsFor({ maxAttempts: 1, waitTimeoutMs: 10_000 }), {
+      persistRun: async (_workspace, run) => run,
+      discardSnapshot: async () => undefined,
+    })
+    const runner: SubagentRunner = {
+      run: async () => {
+        runnerCalls += 1
+        return { childId: 'child-1', completed: true, text: fencedPASS(priorDigest) }
+      },
+    }
+    const request = taskRequestFor(root, specDigest, {
+      prepared: { specDigest, tree: 'b'.repeat(40) },
+      runGit: git.runGit,
+      runner,
+    })
+    const run = request.run
+    const pending = scheduler.enqueue({
+      workspace: root,
+      run,
+      request,
+      rule: 'task-review',
+      change: 'auth',
+      taskId: TASK_ID,
+      digest: priorDigest,
+    })
+    await git.entered
+    scheduler.fence(run.id)
+    git.release()
+    const admission = await pending
+    expect(admission.kind).toBe('accepted')
+    await waitFor(async () => scheduler.liveRunById(run.id) === undefined, 5_000)
+    expect(runnerCalls).toBe(0)
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as ReviewRecord
+    expect(record.verdict).toBe('FINDINGS')
     scheduler.dispose()
   })
 })
