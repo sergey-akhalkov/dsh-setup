@@ -893,6 +893,20 @@ export class ReviewScheduler {
     await this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined)
   }
 
+  /**
+   * A duplicate admission prepared the unit's stable path, which the incumbent
+   * reviewer is already reading: never delete a checkout another live run owns.
+   */
+  private discardDuplicateSnapshot(
+    workspace: string,
+    snapshotKey: string,
+    incumbentRunId: string,
+  ): void {
+    const incumbent = this.admitted.get(incumbentRunId)
+    if (incumbent !== undefined && incumbent.snapshotKey === snapshotKey) return
+    void this.host.discardSnapshot(workspace, snapshotKey).catch(() => undefined)
+  }
+
   async enqueue(input: ScheduledReview): Promise<ReviewAdmission> {
     if (this.disposed) {
       // Snapshot preparation can outlive disposal; never admit it.
@@ -914,9 +928,11 @@ export class ReviewScheduler {
     const existing = this.liveRuns.get(key)
     if (existing !== undefined) {
       if (existing.id !== input.run.id) {
-        void this.host
-          .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
-          .catch(() => undefined)
+        this.discardDuplicateSnapshot(
+          input.workspace,
+          input.snapshotKey ?? input.run.id,
+          existing.id,
+        )
       }
       return { kind: 'duplicate', runId: existing.id }
     }
@@ -946,9 +962,11 @@ export class ReviewScheduler {
     const overlapping = this.coveringEntry(entry)
     if (overlapping !== undefined) {
       this.admitted.delete(entry.run.id)
-      void this.host
-        .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
-        .catch(() => undefined)
+      this.discardDuplicateSnapshot(
+        input.workspace,
+        input.snapshotKey ?? input.run.id,
+        overlapping.run.id,
+      )
       return { kind: 'duplicate', runId: overlapping.run.id }
     }
     let admission: Awaited<ReturnType<ReviewQueue<ScheduledEntry>['submit']>>
@@ -972,9 +990,11 @@ export class ReviewScheduler {
       case 'duplicate':
         this.admitted.delete(entry.run.id)
         if (admission.run.run.id !== input.run.id) {
-          void this.host
-            .discardSnapshot(input.workspace, input.snapshotKey ?? input.run.id)
-            .catch(() => undefined)
+          this.discardDuplicateSnapshot(
+            input.workspace,
+            input.snapshotKey ?? input.run.id,
+            admission.run.run.id,
+          )
         }
         return { kind: 'duplicate', runId: admission.run.run.id }
       case 'settled':

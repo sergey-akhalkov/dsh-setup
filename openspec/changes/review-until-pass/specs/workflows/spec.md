@@ -768,3 +768,30 @@ while a review is live.
 
 - **WHEN** the apply, propose, or update skill loads the shipped task-lane guidance
 - **THEN** the guidance carries the lane-parallel review-at-tick and snapshot/fallback paragraphs and names the `workflows` `note` action for a serial decision, not the removed `task_progress` tool
+
+## MODIFIED Requirements
+
+### Requirement: Owned completion coverage
+
+When the session's tick completes the change's task list, the owned task-review gate SHALL require a portable PASS for every checked task in the change, including tasks this session did not attribute. A missing or `ERROR` record MUST refuse the turn close, except that when every checked task still missing a portable `PASS` has a live review, the close SHALL be allowed as the silent waiting close with no steer and no `VIOLATION`, while completion and the archive remain blocked. Only an intermediate turn that does not complete the list MAY close on `ERROR`.
+
+#### Scenario: Final tick with an unapproved foreign task is refused
+
+- **WHEN** the session's tick completes the task list, an earlier checked task from another session has no portable `PASS`, and that task's review is not live
+- **THEN** the turn close is refused and the steer names that task and its review call
+
+#### Scenario: Final tick with an ERROR foreign task is refused
+
+- **WHEN** the session's tick completes the task list and an earlier checked foreign task has only an `ERROR` record with no live review
+- **THEN** the turn close is refused because `ERROR` is not a portable `PASS`
+
+#### Scenario: Final tick waits on a live review
+
+- **WHEN** the session's tick completes the task list and every checked task still missing a portable `PASS` has a live review
+- **THEN** the turn close is allowed as the silent waiting close with no steer and no `VIOLATION`, completion and the archive stay blocked, and the next round's `PASS` releases completion
+
+#### Scenario: Completed list with PASS coverage closes
+
+- **WHEN** the session's tick completes the task list and every checked task has a portable `PASS`
+- **THEN** the turn close is allowed and the archive is ready
+

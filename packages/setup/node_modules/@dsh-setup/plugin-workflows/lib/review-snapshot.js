@@ -150,21 +150,34 @@ async function readSnapshotLease(path) {
         return undefined;
     }
 }
-async function writeSnapshotLease(cwd, name) {
+async function writeSnapshotLease(cwd, name, key) {
     await writeJsonAtomic(snapshotLeasePath(cwd, name), {
         runId: name,
+        ...(key === undefined ? {} : { key }),
         expiresAt: Date.now() + SNAPSHOT_LEASE_MS,
     });
 }
-export async function startSnapshotLease(cwd, key, refreshMs = SNAPSHOT_REFRESH_MS) {
-    await startSnapshotLeaseByName(cwd, reviewSnapshotName(key), refreshMs);
+/** The unit key a lease belongs to; a lease without one owns no thread entry. */
+async function readSnapshotLeaseKey(path) {
+    try {
+        const value = JSON.parse(await readFile(path, 'utf8'));
+        return typeof value.key === 'string' ? value.key : undefined;
+    }
+    catch {
+        return undefined;
+    }
 }
-async function startSnapshotLeaseByName(cwd, name, refreshMs = SNAPSHOT_REFRESH_MS) {
-    const state = { stopped: false, writes: writeSnapshotLease(cwd, name) };
+export async function startSnapshotLease(cwd, key, refreshMs = SNAPSHOT_REFRESH_MS) {
+    await startSnapshotLeaseByName(cwd, reviewSnapshotName(key), key, refreshMs);
+}
+async function startSnapshotLeaseByName(cwd, name, key, refreshMs = SNAPSHOT_REFRESH_MS) {
+    const state = { stopped: false, writes: writeSnapshotLease(cwd, name, key) };
     const timer = setInterval(() => {
         if (state.stopped)
             return;
-        state.writes = state.writes.then(() => writeSnapshotLease(cwd, name)).catch(() => undefined);
+        state.writes = state.writes
+            .then(() => writeSnapshotLease(cwd, name, key))
+            .catch(() => undefined);
     }, refreshMs);
     timer.unref();
     state.timer = timer;
@@ -214,7 +227,7 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
                     continue;
                 }
             }
-            await discardSnapshotByName(cwd, name, undefined, runGit);
+            await discardSnapshotByName(cwd, name, await readSnapshotLeaseKey(snapshotLeasePath(cwd, name)), runGit);
             continue;
         }
         if (entry.name.endsWith('.tmp') && entry.name.includes('.lease.')) {
@@ -426,7 +439,7 @@ export async function createReviewSnapshot(cwd, change, key, runGit, signal, aft
         ], root, signal))
             .toString('utf8')
             .trim();
-        await startSnapshotLeaseByName(cwd, name);
+        await startSnapshotLeaseByName(cwd, name, key);
         await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal);
         await restoreReviewThreads(cwd, worktree);
         const frozenChange = resolve(worktree, relChange);

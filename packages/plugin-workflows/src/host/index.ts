@@ -700,26 +700,29 @@ function coveredTaskIds(context: Readonly<Record<string, unknown>>): string[] {
 }
 
 /**
- * The live task-review runs whose union covers every checked task of a unit as
+ * The live task-review runs whose union covers every missing task of a unit as
  * it is now: one section run, or the per-task fallback runs an oversized section
- * identity starts. Partial coverage is not coverage.
+ * identity starts. Already-approved tasks need no live run, and duplicate task
+ * rows share one id.
  */
 function liveUnitRuns(
   change: string,
   unit: ReviewUnit,
   openRuns: readonly ReviewUnitRun[],
 ): ReviewUnitRun[] {
+  const required = new Set(unit.missing.map((task) => task.id))
+  if (required.size === 0) return []
   const covering: ReviewUnitRun[] = []
   const seen = new Set<string>()
   for (const run of openRuns) {
     if (run.change !== change) continue
     const ids = coveredTaskIds(run.context)
-    const fresh = unit.covered.filter((task) => ids.includes(task.id) && !seen.has(task.id))
+    const fresh = [...required].filter((id) => ids.includes(id) && !seen.has(id))
     if (fresh.length === 0) continue
-    for (const task of fresh) seen.add(task.id)
+    for (const id of fresh) seen.add(id)
     covering.push(run)
   }
-  return seen.size === unit.covered.length ? covering : []
+  return [...required].every((id) => seen.has(id)) ? covering : []
 }
 
 /**
@@ -756,6 +759,9 @@ async function reviewCloseStatus(
           `the ${definition.id} review step "${step.id}" failed${reason === undefined ? '' : `: ${reason.slice(0, 200)}`}; the next close starts the next round`,
         ],
         live: [],
+        // A lane start that failed earlier in this close is named here too: the
+        // whole-scope refusal must not hide the dispatch diagnostic.
+        ...(dispatchFailure === undefined ? {} : { failure: dispatchFailure }),
       }
     }
     // Only a live review makes the waiting close; a settled step is handled by
@@ -3013,20 +3019,28 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // The stored state is newer; the stale advance must not be written.
         return current
       }
-      // An advance built before the review admission must not erase the retry
+      // An advance built before the review admission must not lose the retry
       // attempt facts a concurrent admission already stamped on the stored
-      // step: keep them when the incoming step carries none.
+      // step. Take the higher count and keep the stored failure class only
+      // while it is still the newer fact; a successful settlement clears it.
       const withAttempts = (): WorkflowRun => {
         const storedSteps = new Map(current.steps.map((step) => [step.id, step]))
         let changed = false
         const steps = run.steps.map((step) => {
           const stored = storedSteps.get(step.id)
-          if (stored?.attempts === undefined || step.attempts !== undefined) return step
+          if (stored?.attempts === undefined) return step
+          const incoming = step.attempts ?? 0
+          const attempts = Math.max(incoming, stored.attempts)
+          const keepClass =
+            stored.failureClass !== undefined &&
+            incoming < stored.attempts &&
+            step.failureClass === undefined
+          if (attempts === step.attempts && !keepClass) return step
           changed = true
           return {
             ...step,
-            attempts: stored.attempts,
-            ...(stored.failureClass === undefined ? {} : { failureClass: stored.failureClass }),
+            attempts,
+            ...(keepClass ? { failureClass: stored.failureClass } : {}),
           }
         })
         return changed ? { ...run, steps } : run
@@ -3140,6 +3154,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
    * for that unit.
    */
   const reviewIsLive = (runId: string): boolean => reviewScheduler.liveRunById(runId) !== undefined
+  /** A unit checkout being prepared, keyed by workspace and unit key, until admission. */
+  const preparedUnits = new Map<string, string>()
   /** A run whose review step is still open: its reviewer start may be in flight. */
   const reviewStepOpen = (run: WorkflowRun, definition: Definition | undefined): boolean => {
     const stepId = definition?.steps.find((step) => step.executor === 'review')?.id
@@ -3333,6 +3349,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // A missing reviewer target is a review failure too: it writes an
           // ERROR record with the target diagnostic instead of failing silently.
           if (aborted()) return undefined
+          const prepared = await failurePrepared()
+          if (aborted()) return undefined
           const failure = await recordReviewFailure({
             run: reviewRun,
             definition: reviewDefinition,
@@ -3341,7 +3359,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             context,
             change,
             ...(task === undefined ? {} : { task }),
-            prepared: await failurePrepared(),
+            prepared,
             session: sessionId,
             error: resolved.error,
             failureClass: 'config',
@@ -3353,6 +3371,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // The unavailable service is a review failure, not a silent wait: it
           // writes an ERROR record and settles the step from that evidence.
           if (aborted()) return undefined
+          const prepared = await failurePrepared()
+          if (aborted()) return undefined
           const failure = await recordReviewFailure({
             run: reviewRun,
             definition: reviewDefinition,
@@ -3361,7 +3381,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             context,
             change,
             ...(task === undefined ? {} : { task }),
-            prepared: await failurePrepared(),
+            prepared,
             session: sessionId,
             error: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
             failureClass: 'provider-not-started',
@@ -3434,62 +3454,138 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const covering = reviewScheduler?.liveCovering(workspace, change, coveredIds)
           if (covering !== undefined && covering.id !== reviewRun.id) return undefined
         }
-        // Capture the complete reviewed input set before preparing it: a stat
-        // signature survives an edit-read-restore that a content digest hides.
-        let captured: InputSignature
+        // Reserve the unit before preparing it: the scheduler's live-unit check
+        // cannot cover the interval until admission, and two concurrent starts
+        // under different rules must not both rebuild the same checkout.
+        const reservation = `${workspace}\u0000${unitKey}`
+        const holder = preparedUnits.get(reservation)
+        if (holder !== undefined && holder !== reviewRun.id) return undefined
+        preparedUnits.set(reservation, reviewRun.id)
         try {
-          captured = await reviewedInputs(workspace, changeDir, defaultGit)
-        } catch (error) {
-          if (aborted()) return undefined
-          return settleStep(reviewRun, step.id, 'failed', {
-            at: journal.time(),
-            reason: `the reviewed inputs could not be read (${error instanceof Error ? error.message : String(error)}); fix the workspace and re-run the review`,
-          })
-        }
-        if (aborted()) return undefined
-        let capturedHash = signatureHash(captured)
-        const guardFor =
-          (signature: InputSignature, tree?: string) => async (): Promise<string | undefined> => {
-            if ((mutationEpochs.get(workspace) ?? 0) !== startEpoch) {
-              return 'a watched change-tree mutation was observed during the run'
-            }
-            let current: InputSignature
-            try {
-              current = await reviewedInputs(workspace, changeDir, defaultGit)
-            } catch (error) {
-              return `the reviewed inputs could not be re-read (${error instanceof Error ? error.message : String(error)})`
-            }
-            const changed = changedInputPaths(signature, current)
-            if (changed.length > 0) {
-              const sample = changed.slice(0, 5).join(', ')
-              return `${String(changed.length)} changed: ${sample}${changed.length > 5 ? ', …' : ''}`
-            }
-            if ((await currentSpecDigest(workspace, change)) !== specDigest) {
-              return 'the change digest changed'
-            }
-            // The captured reviewed-input signature already excludes approvals
-            // and catches edit-read-restore; a worktree digest would flag them.
-            void tree
-            return undefined
-          }
-        interface PreparedReview {
-          readonly prepared: ReviewRunInput['prepared']
-          readonly digest: string
-          readonly liveDigest: string
-        }
-        const prepareInputs = async (signature: InputSignature): Promise<PreparedReview> => {
-          const taskScope =
-            spec.scope === 'task' &&
-            (section !== undefined || (typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)))
-          if (!taskScope) {
-            const liveTree = bindsWorktree
-              ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
-              : undefined
-            const liveDigest = reviewDigest({
-              scope: spec.scope,
-              specDigest,
-              ...(liveTree === undefined ? {} : { tree: liveTree }),
+          // Capture the complete reviewed input set before preparing it: a stat
+          // signature survives an edit-read-restore that a content digest hides.
+          let captured: InputSignature
+          try {
+            captured = await reviewedInputs(workspace, changeDir, defaultGit)
+          } catch (error) {
+            if (aborted()) return undefined
+            return settleStep(reviewRun, step.id, 'failed', {
+              at: journal.time(),
+              reason: `the reviewed inputs could not be read (${error instanceof Error ? error.message : String(error)}); fix the workspace and re-run the review`,
             })
+          }
+          if (aborted()) return undefined
+          let capturedHash = signatureHash(captured)
+          const guardFor =
+            (signature: InputSignature, tree?: string) => async (): Promise<string | undefined> => {
+              if ((mutationEpochs.get(workspace) ?? 0) !== startEpoch) {
+                return 'a watched change-tree mutation was observed during the run'
+              }
+              let current: InputSignature
+              try {
+                current = await reviewedInputs(workspace, changeDir, defaultGit)
+              } catch (error) {
+                return `the reviewed inputs could not be re-read (${error instanceof Error ? error.message : String(error)})`
+              }
+              const changed = changedInputPaths(signature, current)
+              if (changed.length > 0) {
+                const sample = changed.slice(0, 5).join(', ')
+                return `${String(changed.length)} changed: ${sample}${changed.length > 5 ? ', …' : ''}`
+              }
+              if ((await currentSpecDigest(workspace, change)) !== specDigest) {
+                return 'the change digest changed'
+              }
+              // The captured reviewed-input signature already excludes approvals
+              // and catches edit-read-restore; a worktree digest would flag them.
+              void tree
+              return undefined
+            }
+          interface PreparedReview {
+            readonly prepared: ReviewRunInput['prepared']
+            readonly digest: string
+            readonly liveDigest: string
+          }
+          const prepareInputs = async (signature: InputSignature): Promise<PreparedReview> => {
+            const taskScope =
+              spec.scope === 'task' &&
+              (section !== undefined ||
+                (typeof taskId === 'string' && TASK_ID_PATTERN.test(taskId)))
+            if (!taskScope) {
+              const liveTree = bindsWorktree
+                ? await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+                : undefined
+              const liveDigest = reviewDigest({
+                scope: spec.scope,
+                specDigest,
+                ...(liveTree === undefined ? {} : { tree: liveTree }),
+              })
+              const snapshot = await createReviewSnapshot(
+                workspace,
+                { dir: changeDir },
+                unitKey,
+                defaultGit,
+                AbortSignal.timeout(reviewTimeoutMs),
+              ).catch(() => undefined)
+              if (snapshot !== undefined) {
+                // The record binds the frozen content tree, so a write between the
+                // live hash and the snapshot cannot leave a PASS for code the
+                // reviewer never read.
+                const tree = bindsWorktree ? snapshot.tree : undefined
+                return {
+                  prepared: {
+                    specDigest: snapshot.specDigest,
+                    ...(tree === undefined ? {} : { tree }),
+                    reviewCwd: snapshot.worktree,
+                  },
+                  digest: reviewDigest({
+                    scope: spec.scope,
+                    specDigest: snapshot.specDigest,
+                    ...(tree === undefined ? {} : { tree }),
+                  }),
+                  liveDigest,
+                }
+              }
+              // A snapshot that cannot be built falls back to the live inputs.
+              // A spec review only guards the plan artifacts; the worktree is not
+              // its reviewed scope. The integration fallback guards the union and
+              // binds the current content tree, which the evidence check recomputes.
+              const specCaptured = bindsWorktree
+                ? undefined
+                : await specInputs(changeDir).catch(() => undefined)
+              const liveGuard = bindsWorktree
+                ? guardFor(signature, liveTree)
+                : async (): Promise<string | undefined> => {
+                    if (specCaptured === undefined) return 'the change artifacts could not be read'
+                    const next = await specInputs(changeDir).catch(() => undefined)
+                    if (next === undefined) return 'the change artifacts could not be re-read'
+                    const changed = changedInputPaths(specCaptured, next)
+                    if (changed.length === 0) return undefined
+                    return `${String(changed.length)} change artifact(s) changed: ${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ', …' : ''}`
+                  }
+              const fallbackTree = bindsWorktree
+                ? await reviewInputTree(
+                    workspace,
+                    { dir: changeDir },
+                    defaultGit,
+                    AbortSignal.timeout(reviewTimeoutMs),
+                  ).catch(() => undefined)
+                : undefined
+              return {
+                prepared: {
+                  specDigest,
+                  ...(fallbackTree === undefined ? {} : { tree: fallbackTree }),
+                  liveGuard,
+                },
+                digest: reviewDigest({
+                  scope: spec.scope,
+                  specDigest,
+                  ...(fallbackTree === undefined ? {} : { tree: fallbackTree }),
+                }),
+                liveDigest,
+              }
+            }
+            // The snapshot freezes the reviewed tree; when it cannot be built,
+            // the live worktree is reviewed under the mutation guard.
             const snapshot = await createReviewSnapshot(
               workspace,
               { dir: changeDir },
@@ -3497,148 +3593,126 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               defaultGit,
               AbortSignal.timeout(reviewTimeoutMs),
             ).catch(() => undefined)
+            const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+            // Re-resolve the section from the live plan: the submitted covered set
+            // never widens, and a changed checkbox needs a fresh review.
+            const liveSection =
+              section === undefined
+                ? undefined
+                : resolveSectionReview(
+                    await readTasksPlan(workspace, change),
+                    section,
+                    change,
+                    false,
+                  )
             if (snapshot !== undefined) {
-              // The record binds the frozen content tree, so a write between the
-              // live hash and the snapshot cannot leave a PASS for code the
-              // reviewer never read.
-              const tree = bindsWorktree ? snapshot.tree : undefined
-              return {
-                prepared: {
-                  specDigest: snapshot.specDigest,
-                  ...(tree === undefined ? {} : { tree }),
-                  reviewCwd: snapshot.worktree,
-                },
-                digest: reviewDigest({
-                  scope: spec.scope,
-                  specDigest: snapshot.specDigest,
-                  ...(tree === undefined ? {} : { tree }),
-                }),
-                liveDigest,
-              }
-            }
-            // A snapshot that cannot be built falls back to the live inputs.
-            // A spec review only guards the plan artifacts; the worktree is not
-            // its reviewed scope. The integration fallback guards the union and
-            // binds the current content tree, which the evidence check recomputes.
-            const specCaptured = bindsWorktree
-              ? undefined
-              : await specInputs(changeDir).catch(() => undefined)
-            const liveGuard = bindsWorktree
-              ? guardFor(signature, liveTree)
-              : async (): Promise<string | undefined> => {
-                  if (specCaptured === undefined) return 'the change artifacts could not be read'
-                  const next = await specInputs(changeDir).catch(() => undefined)
-                  if (next === undefined) return 'the change artifacts could not be re-read'
-                  const changed = changedInputPaths(specCaptured, next)
-                  if (changed.length === 0) return undefined
-                  return `${String(changed.length)} change artifact(s) changed: ${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ', …' : ''}`
+              if (section !== undefined && liveSection !== undefined) {
+                // The frozen checkout is authoritative: the submitted coverage
+                // must still be checked in its copied tasks.md.
+                let frozenPlan: string | undefined
+                try {
+                  frozenPlan = readFileSync(
+                    join(snapshot.worktree, 'openspec', 'changes', change, 'tasks.md'),
+                    'utf8',
+                  )
+                } catch {
+                  frozenPlan = undefined
                 }
-            const fallbackTree = bindsWorktree
-              ? await reviewInputTree(
-                  workspace,
-                  { dir: changeDir },
-                  defaultGit,
-                  AbortSignal.timeout(reviewTimeoutMs),
-                ).catch(() => undefined)
-              : undefined
-            return {
-              prepared: {
-                specDigest,
-                ...(fallbackTree === undefined ? {} : { tree: fallbackTree }),
-                liveGuard,
-              },
-              digest: reviewDigest({
-                scope: spec.scope,
-                specDigest,
-                ...(fallbackTree === undefined ? {} : { tree: fallbackTree }),
-              }),
-              liveDigest,
-            }
-          }
-          // The snapshot freezes the reviewed tree; when it cannot be built,
-          // the live worktree is reviewed under the mutation guard.
-          const snapshot = await createReviewSnapshot(
-            workspace,
-            { dir: changeDir },
-            unitKey,
-            defaultGit,
-            AbortSignal.timeout(reviewTimeoutMs),
-          ).catch(() => undefined)
-          const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
-          // Re-resolve the section from the live plan: the submitted covered set
-          // never widens, and a changed checkbox needs a fresh review.
-          const liveSection =
-            section === undefined
-              ? undefined
-              : resolveSectionReview(await readTasksPlan(workspace, change), section, change, false)
-          if (snapshot !== undefined) {
-            if (section !== undefined && liveSection !== undefined) {
-              // The frozen checkout is authoritative: the submitted coverage
-              // must still be checked in its copied tasks.md.
-              let frozenPlan: string | undefined
-              try {
-                frozenPlan = readFileSync(
-                  join(snapshot.worktree, 'openspec', 'changes', change, 'tasks.md'),
-                  'utf8',
-                )
-              } catch {
-                frozenPlan = undefined
+                if (frozenPlan === undefined) {
+                  throw new InputMutationError(
+                    `the frozen tasks.md for change "${change}" is unreadable; re-run the review`,
+                  )
+                }
+                const frozen = resolveSectionReview(frozenPlan, section, change, true)
+                return {
+                  prepared: {
+                    specDigest: snapshot.specDigest,
+                    artifactDigest: snapshot.specDigest,
+                    tree: snapshot.tree,
+                    reviewCwd: snapshot.worktree,
+                    section: frozen,
+                  },
+                  digest: sectionReviewDigest(frozen, snapshot.specDigest, snapshot.tree),
+                  liveDigest:
+                    liveTree === undefined
+                      ? sectionReviewDigest(liveSection, specDigest)
+                      : sectionReviewDigest(liveSection, specDigest, liveTree),
+                }
               }
-              if (frozenPlan === undefined) {
-                throw new InputMutationError(
-                  `the frozen tasks.md for change "${change}" is unreadable; re-run the review`,
-                )
+              if (task !== undefined) {
+                // The frozen checkout is authoritative: the selected task must
+                // still exist and be checked in its copied tasks.md.
+                let frozen: string | undefined
+                try {
+                  frozen = readFileSync(
+                    join(snapshot.worktree, 'openspec', 'changes', change, 'tasks.md'),
+                    'utf8',
+                  )
+                } catch {
+                  frozen = undefined
+                }
+                if (
+                  frozen === undefined ||
+                  findTaskOf(frozen, task.id) === undefined ||
+                  !checkedTaskIds(frozen).includes(task.id)
+                ) {
+                  throw new InputMutationError(
+                    `task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" changed or became unchecked while the review snapshot was prepared in change "${change}"; re-run the review`,
+                  )
+                }
               }
-              const frozen = resolveSectionReview(frozenPlan, section, change, true)
               return {
                 prepared: {
                   specDigest: snapshot.specDigest,
                   artifactDigest: snapshot.specDigest,
                   tree: snapshot.tree,
                   reviewCwd: snapshot.worktree,
-                  section: frozen,
                 },
-                digest: sectionReviewDigest(frozen, snapshot.specDigest, snapshot.tree),
+                digest: reviewDigest({
+                  scope: 'task',
+                  specDigest,
+                  tree: snapshot.tree,
+                  artifactDigest: snapshot.specDigest,
+                }),
+                liveDigest:
+                  liveTree === undefined
+                    ? reviewDigest({ scope: 'task', specDigest })
+                    : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
+              }
+            }
+            if (section !== undefined && liveSection !== undefined) {
+              return {
+                prepared: {
+                  specDigest,
+                  artifactDigest: specDigest,
+                  ...(liveTree === undefined ? {} : { tree: liveTree }),
+                  liveGuard: guardFor(signature, liveTree),
+                  section: liveSection,
+                },
+                digest: sectionReviewDigest(liveSection, specDigest, liveTree),
                 liveDigest:
                   liveTree === undefined
                     ? sectionReviewDigest(liveSection, specDigest)
                     : sectionReviewDigest(liveSection, specDigest, liveTree),
               }
             }
-            if (task !== undefined) {
-              // The frozen checkout is authoritative: the selected task must
-              // still exist and be checked in its copied tasks.md.
-              let frozen: string | undefined
-              try {
-                frozen = readFileSync(
-                  join(snapshot.worktree, 'openspec', 'changes', change, 'tasks.md'),
-                  'utf8',
-                )
-              } catch {
-                frozen = undefined
-              }
-              if (
-                frozen === undefined ||
-                findTaskOf(frozen, task.id) === undefined ||
-                !checkedTaskIds(frozen).includes(task.id)
-              ) {
-                throw new InputMutationError(
-                  `task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" changed or became unchecked while the review snapshot was prepared in change "${change}"; re-run the review`,
-                )
-              }
+            if (task !== undefined && !isTaskChecked(workspace, change, task.id)) {
+              throw new InputMutationError(
+                `task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" is no longer checked in change "${change}"; a live-fallback review never starts for an unchecked task`,
+              )
             }
             return {
               prepared: {
-                specDigest: snapshot.specDigest,
-                artifactDigest: snapshot.specDigest,
-                tree: snapshot.tree,
-                reviewCwd: snapshot.worktree,
+                specDigest,
+                artifactDigest: specDigest,
+                ...(liveTree === undefined ? {} : { tree: liveTree }),
+                liveGuard: guardFor(signature, liveTree),
               },
               digest: reviewDigest({
                 scope: 'task',
                 specDigest,
-                tree: snapshot.tree,
-                artifactDigest: snapshot.specDigest,
+                ...(liveTree === undefined ? {} : { tree: liveTree }),
+                artifactDigest: specDigest,
               }),
               liveDigest:
                 liveTree === undefined
@@ -3646,151 +3720,122 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
             }
           }
-          if (section !== undefined && liveSection !== undefined) {
+          let current: PreparedReview
+          try {
+            current = await prepareInputs(captured)
+          } catch (error) {
+            // A snapshot rejected before admission must not keep renewing its lease.
+            await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
+            if (aborted()) return undefined
+            return settleStep(reviewRun, step.id, 'failed', {
+              at: journal.time(),
+              reason: error instanceof Error ? error.message : String(error),
+            })
+          }
+          if (aborted()) {
+            // A prepared checkout has not been admitted: release it and stop its
+            // renewing lease instead of leaking it to the stale sweep.
+            await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
+            return undefined
+          }
+          // A queued entry re-checks the live source set when a slot frees; one
+          // re-preparation replaces the identity atomically before the start.
+          const reprepare = async (alreadyReprepared: boolean): Promise<ReviewReprepareOutcome> => {
+            const next = await reviewedInputs(workspace, changeDir, defaultGit)
+            const nextHash = signatureHash(next)
+            if (nextHash === capturedHash) return { kind: 'unchanged' }
+            if (alreadyReprepared) {
+              throw new InputMutationError(
+                'reviewed inputs changed again while the review waited in the queue; a review re-prepares only once — finish the writes and start a fresh review',
+              )
+            }
+            const nextTask = task === undefined ? undefined : taskOf(workspace, change, task.id)
+            if (task !== undefined && nextTask === undefined) {
+              throw new InputMutationError(
+                `task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" changed while the review was queued in change "${change}"; finish the writes and start a fresh review`,
+              )
+            }
+            if (nextTask !== undefined && !isTaskChecked(workspace, change, nextTask.id)) {
+              throw new InputMutationError(
+                `task "${nextTask.number === undefined ? nextTask.id : `${nextTask.number} ${nextTask.text}`}" is no longer checked in change "${change}"; a queued review never starts for an unchecked task`,
+              )
+            }
+            if (current.prepared.reviewCwd !== undefined) {
+              await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
+            }
+            captured = next
+            capturedHash = nextHash
+            const refreshed = await currentSpecDigest(workspace, change)
+            if (refreshed === undefined) {
+              throw new Error(
+                `the change artifacts for "${change}" became unreadable while the review waited`,
+              )
+            }
+            specDigest = refreshed
+            startEpoch = mutationEpochs.get(workspace) ?? 0
+            captured = next
+            capturedHash = nextHash
+            current = await prepareInputs(next)
             return {
-              prepared: {
-                specDigest,
-                artifactDigest: specDigest,
-                ...(liveTree === undefined ? {} : { tree: liveTree }),
-                liveGuard: guardFor(signature, liveTree),
-                section: liveSection,
-              },
-              digest: sectionReviewDigest(liveSection, specDigest, liveTree),
-              liveDigest:
-                liveTree === undefined
-                  ? sectionReviewDigest(liveSection, specDigest)
-                  : sectionReviewDigest(liveSection, specDigest, liveTree),
+              kind: 'replaced',
+              prepared: current.prepared,
+              digest: current.digest,
+              liveDigest: current.liveDigest,
+              ...(nextTask === undefined ? {} : { task: nextTask }),
             }
           }
-          if (task !== undefined && !isTaskChecked(workspace, change, task.id)) {
-            throw new InputMutationError(
-              `task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" is no longer checked in change "${change}"; a live-fallback review never starts for an unchecked task`,
-            )
-          }
-          return {
-            prepared: {
-              specDigest,
-              artifactDigest: specDigest,
-              ...(liveTree === undefined ? {} : { tree: liveTree }),
-              liveGuard: guardFor(signature, liveTree),
-            },
-            digest: reviewDigest({
-              scope: 'task',
-              specDigest,
-              ...(liveTree === undefined ? {} : { tree: liveTree }),
-              artifactDigest: specDigest,
-            }),
-            liveDigest:
-              liveTree === undefined
-                ? reviewDigest({ scope: 'task', specDigest })
-                : reviewDigest({ scope: 'task', specDigest, tree: liveTree }),
-          }
-        }
-        let current: PreparedReview
-        try {
-          current = await prepareInputs(captured)
-        } catch (error) {
-          // A snapshot rejected before admission must not keep renewing its lease.
-          await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
-          if (aborted()) return undefined
-          return settleStep(reviewRun, step.id, 'failed', {
-            at: journal.time(),
-            reason: error instanceof Error ? error.message : String(error),
-          })
-        }
-        if (aborted()) return undefined
-        // A queued entry re-checks the live source set when a slot frees; one
-        // re-preparation replaces the identity atomically before the start.
-        const reprepare = async (alreadyReprepared: boolean): Promise<ReviewReprepareOutcome> => {
-          const next = await reviewedInputs(workspace, changeDir, defaultGit)
-          const nextHash = signatureHash(next)
-          if (nextHash === capturedHash) return { kind: 'unchanged' }
-          if (alreadyReprepared) {
-            throw new InputMutationError(
-              'reviewed inputs changed again while the review waited in the queue; a review re-prepares only once — finish the writes and start a fresh review',
-            )
-          }
-          const nextTask = task === undefined ? undefined : taskOf(workspace, change, task.id)
-          if (task !== undefined && nextTask === undefined) {
-            throw new InputMutationError(
-              `task "${task.number === undefined ? task.id : `${task.number} ${task.text}`}" changed while the review was queued in change "${change}"; finish the writes and start a fresh review`,
-            )
-          }
-          if (nextTask !== undefined && !isTaskChecked(workspace, change, nextTask.id)) {
-            throw new InputMutationError(
-              `task "${nextTask.number === undefined ? nextTask.id : `${nextTask.number} ${nextTask.text}`}" is no longer checked in change "${change}"; a queued review never starts for an unchecked task`,
-            )
-          }
-          if (current.prepared.reviewCwd !== undefined) {
-            await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
-          }
-          captured = next
-          capturedHash = nextHash
-          const refreshed = await currentSpecDigest(workspace, change)
-          if (refreshed === undefined) {
-            throw new Error(
-              `the change artifacts for "${change}" became unreadable while the review waited`,
-            )
-          }
-          specDigest = refreshed
-          startEpoch = mutationEpochs.get(workspace) ?? 0
-          captured = next
-          capturedHash = nextHash
-          current = await prepareInputs(next)
-          return {
-            kind: 'replaced',
+          const request: ReviewRunInput = {
+            run: reviewRun,
+            definition: reviewDefinition,
+            step,
+            reviewer: resolved.reviewer,
+            runner: reviewRunner,
+            context,
+            change,
+            ...(task === undefined ? {} : { task }),
             prepared: current.prepared,
-            digest: current.digest,
-            liveDigest: current.liveDigest,
-            ...(nextTask === undefined ? {} : { task: nextTask }),
+            timeoutMs: reviewTimeoutMs,
+            session: sessionId,
+            now: journal.time(),
           }
-        }
-        const request: ReviewRunInput = {
-          run: reviewRun,
-          definition: reviewDefinition,
-          step,
-          reviewer: resolved.reviewer,
-          runner: reviewRunner,
-          context,
-          change,
-          ...(task === undefined ? {} : { task }),
-          prepared: current.prepared,
-          timeoutMs: reviewTimeoutMs,
-          session: sessionId,
-          now: journal.time(),
-        }
-        if (!reviewQueue.enabled) {
-          // Release A runs native reviews only through the engine queue; a
-          // disabled queue fails loud instead of starting an unmanaged child.
-          if (aborted()) return undefined
-          const failure = await recordReviewFailure({
-            ...request,
-            error:
-              'the native review queue is disabled; Release A runs reviews only through reviewQueue — enable it in the workflows row config and re-run',
-            failureClass: 'config',
-          }).catch(() => undefined)
-          if (current.prepared.reviewCwd !== undefined) {
+          if (!reviewQueue.enabled) {
+            // Release A runs native reviews only through the engine queue; a
+            // disabled queue fails loud instead of starting an unmanaged child.
+            if (aborted()) return undefined
+            const failure = await recordReviewFailure({
+              ...request,
+              error:
+                'the native review queue is disabled; Release A runs reviews only through reviewQueue — enable it in the workflows row config and re-run',
+              failureClass: 'config',
+            }).catch(() => undefined)
+            if (current.prepared.reviewCwd !== undefined) {
+              await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
+            }
+            return failure?.run ?? reviewRun
+          }
+          if (aborted()) {
             await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
+            return undefined
           }
-          return failure?.run ?? reviewRun
+          await reviewScheduler.enqueue({
+            workspace,
+            run: reviewRun,
+            request,
+            rule: reviewRule,
+            change,
+            ...(recordId === undefined ? {} : { taskId: recordId }),
+            phase: reviewPhase(spec.scope, spec.phase),
+            liveDigest: current.liveDigest,
+            digest: current.digest,
+            snapshotKey: unitKey,
+            reprepare,
+          })
+          // The review is admitted (or a duplicate is already live): the step
+          // stays open and the background settlement writes the record.
+          return undefined
+        } finally {
+          if (preparedUnits.get(reservation) === reviewRun.id) preparedUnits.delete(reservation)
         }
-        if (aborted()) return undefined
-        await reviewScheduler.enqueue({
-          workspace,
-          run: reviewRun,
-          request,
-          rule: reviewRule,
-          change,
-          ...(recordId === undefined ? {} : { taskId: recordId }),
-          phase: reviewPhase(spec.scope, spec.phase),
-          liveDigest: current.liveDigest,
-          digest: current.digest,
-          snapshotKey: unitKey,
-          reprepare,
-        })
-        // The review is admitted (or a duplicate is already live): the step
-        // stays open and the background settlement writes the record.
-        return undefined
       },
       readRecord: (step) =>
         verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
@@ -3816,6 +3861,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           run.updatedAt,
         )
         if (persisted.status !== 'completed') return { run: persisted }
+        // The stop can land during the completion write: issue no receipt then.
+        if (aborted()) return { run: persisted }
         try {
           await issueCompletionReceipt(workspace, persisted.id, digest, auth, journal.time())
           return { run: persisted }
@@ -4808,10 +4855,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             for (const unit of units) {
               if (stopped()) return
               if (unit.covered.some((task) => startedCovered.has(task.id))) continue
-              // Coverage is the union of the live runs' covered ids: one full
-              // section run, or the per-task runs an oversized section starts.
+              // Coverage is the union of the live runs' ids over the unit's
+              // missing tasks: one full section run, or the per-task runs an
+              // oversized section starts. Approved tasks need no live run.
               const liveIds = new Set(liveRuns(change).flatMap((run) => taskIdsOf(run.context)))
-              const covered = unit.covered.every((task) => liveIds.has(task.id))
+              const covered = unit.missing.every((task) => liveIds.has(task.id))
               if (covered) continue
               const section = unit.section
               const contexts: Readonly<Record<string, unknown>>[] = []

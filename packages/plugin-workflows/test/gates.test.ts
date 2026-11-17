@@ -470,6 +470,49 @@ describe('uncapped review turn close', () => {
     expect(agent.messages[0]).toContain('retry it with workflows resume')
   })
 
+  it('allows the final tick as a silent waiting close while its approval review is live', () => {
+    const agent = new FakeAgent()
+    const outcome = evaluateTurnClose({
+      run: reviewRun(),
+      definition: reviewDefinition(),
+      agent,
+      evidenceContext,
+      turn: 1,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      completion: {
+        ok: false,
+        text: 'the completion coverage is incomplete: task 1.1 has no portable PASS',
+      },
+      review: { uncovered: [], live: ['run-live'] },
+    })
+    // The completion gap stays an obligation, but a live review makes the close
+    // the silent waiting close rather than a refusal (design D3).
+    expect(outcome.kind).toBe('allow')
+    expect(agent.messages).toHaveLength(0)
+    expect(outcome.run.violations).toHaveLength(0)
+  })
+
+  it('refuses a completion gap with no due unit to point at', () => {
+    const agent = new FakeAgent()
+    const outcome = evaluateTurnClose({
+      run: reviewRun(),
+      definition: reviewDefinition(),
+      agent,
+      evidenceContext,
+      turn: 1,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      completion: {
+        ok: false,
+        text: 'the completion coverage is incomplete: task 1.1 has no portable PASS',
+      },
+      review: { uncovered: [], live: [] },
+    })
+    expect(outcome.kind).toBe('refuse')
+    expect(agent.messages[0]).toContain('completion coverage')
+  })
+
   it('keeps the budget for a non-review run even when a review status is passed', () => {
     const definition = blockingDefinition()
     const agent = new FakeAgent()

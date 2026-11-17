@@ -165,5 +165,10 @@ export declare class ReviewScheduler {
     dispose(): void;
     /** Wait out a disposed reviewer child, then release its snapshot and lease. */
     private discardAfterTeardown;
+    /**
+     * A duplicate admission prepared the unit's stable path, which the incumbent
+     * reviewer is already reading: never delete a checkout another live run owns.
+     */
+    private discardDuplicateSnapshot;
     enqueue(input: ScheduledReview): Promise<ReviewAdmission>;
 }
