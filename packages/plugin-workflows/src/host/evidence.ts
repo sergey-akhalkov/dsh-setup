@@ -721,6 +721,15 @@ async function recordCheck(
       )
     }
   }
+  // An explicit review start reopens an earlier ERROR so a retry can dispatch a
+  // new reviewer; an automatic close may still reuse the ERROR as evidence.
+  if (record.verdict === 'ERROR' && context.values.explicitReview === true) {
+    return mismatch(
+      'an explicit review start reopens this ERROR; dispatch a new review instead of reusing the record',
+      path.text,
+      item,
+    )
+  }
   // Legacy ERROR exclusions: a queue fault or a discarded-input verdict is not
   // a usable review; finish the writes and re-run.
   if (evidence.rule === 'task-review' && record.verdict === 'ERROR') {
