@@ -927,3 +927,9 @@ change before the re-review:
 - The integration-review run reported `reviewed inputs changed during the run` while the fixes were
   being written; it and the spec-review record were removed and both reviews re-run on the committed
   artifacts.
+
+Section 4 answered the scheduler finding with its own review: the section record passed at digest
+`1706e56f63e234ad5394f167c48853d8041fc331bafe8768f133c8b71401a9c0`, and
+`pnpm reviews:check --change focused-rereview-and-section-steer` now reports 15 of 15 checked tasks
+approved with no missing record. The remaining archive prerequisites are the native whole-spec PASS and
+the adoption receipt.
