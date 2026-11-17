@@ -984,4 +984,5 @@ the change archive-ready.
 The owner installed 0.44.0 on 2026-11-17; the new engine recovered the review store and marked the
 previous runs `interrupted`, so no old review is live and the next turn close dispatches fresh
 rounds. Everything before this point is committed, and the remaining work is the three tail tasks
-plus those review rounds; continue from the change's apply workflow rather than from this session.
+plus those review rounds; continue from the change's apply workflow rather than from this session:
+run `/openspec-apply-change review-until-pass` in a new session.
