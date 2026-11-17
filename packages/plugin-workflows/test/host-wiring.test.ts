@@ -6664,23 +6664,21 @@ describe('workflows start action selectors', () => {
       task: 'First task',
     })
     expect(started.text).toContain('started')
-    const taskRunId = /run (\S+) started/u.exec(started.text)?.[1]
     let stored = await runs.listAuthenticatedRuns(workspace, auth)
     expect(stored.find((run) => run.definition.id === 'task-review')?.context).toMatchObject({
       name: 'auth',
       taskId: taskIdOf('First task'),
     })
-    const sectionStart = await start({
+    await start({
       action: 'start',
       definitionId: 'task-review',
       change: 'auth',
       section: '1',
     })
-    // The live task review fully covers the section's only checked task, so the
-    // section start reuses it instead of creating a second run.
-    expect(sectionStart.text).toContain(taskRunId ?? '')
     stored = await runs.listAuthenticatedRuns(workspace, auth)
-    expect(stored.filter((run) => run.definition.id === 'task-review')).toHaveLength(1)
+    const sectionRun = stored.filter((run) => run.definition.id === 'task-review').at(-1)
+    expect(sectionRun?.context).toMatchObject({ name: 'auth', section: '1' })
+    expect(sectionRun?.context.taskIds).toContain(taskIdOf('First task'))
     await expect(
       start({ action: 'start', definitionId: 'task-review', change: 'auth', task: 'Missing' }),
     ).rejects.toThrow(/was not found/u)
