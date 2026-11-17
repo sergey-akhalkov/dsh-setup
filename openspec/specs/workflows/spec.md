@@ -1225,22 +1225,22 @@ legacy switch is available to re-enable.
 #### Scenario: Fresh installation
 
 - **WHEN** a fresh installation loads the shipped report and `own` definitions
-- **THEN** the parity report is present and every bound definition loads
+- **THEN** the shipped parity report, the settings matrix, and the matching `own` definitions are present, their template hashes match, and all load successfully
 
 #### Scenario: Parity fails
 
-- **WHEN** a retained scenario produces a different allow/refuse decision in shadow
-- **THEN** `pnpm workflows:parity --check` fails with the scenario and the owned definition is refused
+- **WHEN** a retained scenario differs, the report is missing, a template hash changed, or a gate status is not `pass`
+- **THEN** `pnpm workflows:parity --check` fails with the scenario or the expected and actual hash and the owned definition is refused
 
 #### Scenario: Report is release-bound
 
-- **WHEN** the release changes the tracked report without the matching template hashes
-- **THEN** `--check` fails and the release is blocked
+- **WHEN** a definition template changes after the report was generated
+- **THEN** `--check` fails with the definition id and the expected and actual template hash, and the release is blocked
 
 #### Scenario: Missing report at runtime
 
-- **WHEN** a definition is `own` and the report is missing
-- **THEN** the definition is refused and the remedy names `pnpm workflows:parity`
+- **WHEN** an installed profile has no readable or matching report
+- **THEN** the loader refuses the `own` definition with the report path, the expected and actual hash, and the `pnpm workflows:parity` remedy
 
 #### Scenario: Baseline outlives the runtime
 
