@@ -931,5 +931,23 @@ change before the re-review:
 Section 4 answered the scheduler finding with its own review: the section record passed at digest
 `1706e56f63e234ad5394f167c48853d8041fc331bafe8768f133c8b71401a9c0`, and
 `pnpm reviews:check --change focused-rereview-and-section-steer` now reports 15 of 15 checked tasks
-approved with no missing record. The remaining archive prerequisites are the native whole-spec PASS and
+approved with no missing record. The remaining archive prerequisites were the native whole-spec PASS and
 the adoption receipt.
+
+The whole-spec review passed (digest `03148a7908008277ec12f6dacc13f4344e3471a9e1dcb592b049ac8f5b053450`),
+the change was adopted, and it was archived as
+`2026-11-17-focused-rereview-and-section-steer`. Later whole-worktree reviews raised three more findings
+that are fixed on `main` and recorded here as owner follow-ups:
+
+- A focused tree diff silently omitted the active change's artifacts, which the digest also binds;
+  the prompt now names that gap and requires reading the artifacts in the current snapshot (`9fa3315`).
+- Section selection could name a key that `resolveTaskSection` later rejects as ambiguous (a bare title
+  collides case-insensitively with a numbered heading). `reviewUnits` and the parity gap lines now use
+  that resolver and fall back to per-task units (`b9bb994`, regression in `owned-gates.test.ts`).
+- Open: a checked task with a matching `ERROR` record is omitted from `reviewUnits`, so re-checking it
+  as the final task of a new session creates no task-review run and the completion gate can close
+  without a portable `PASS`. Fix by keeping a per-task bookkeeping run for that task and settling it
+  from the record, or by enforcing final portable coverage independently of run creation, with a
+  regression for re-checking the final task over a stored `ERROR`.
+- Also open from the same change: the native `spec-review` trigger's `dedupe: turn` key was released
+  only by the 0.41.4 fix; a cancelled or failed run no longer holds it (`7da60ce`).
