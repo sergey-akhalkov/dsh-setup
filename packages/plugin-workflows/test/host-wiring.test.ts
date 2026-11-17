@@ -6664,21 +6664,23 @@ describe('workflows start action selectors', () => {
       task: 'First task',
     })
     expect(started.text).toContain('started')
+    const taskRunId = /run (\S+) started/u.exec(started.text)?.[1]
     let stored = await runs.listAuthenticatedRuns(workspace, auth)
     expect(stored.find((run) => run.definition.id === 'task-review')?.context).toMatchObject({
       name: 'auth',
       taskId: taskIdOf('First task'),
     })
-    await start({
+    const sectionStart = await start({
       action: 'start',
       definitionId: 'task-review',
       change: 'auth',
       section: '1',
     })
+    // The live task review fully covers the section's only checked task, so the
+    // section start reuses it instead of creating a second run.
+    expect(sectionStart.text).toContain(taskRunId ?? '')
     stored = await runs.listAuthenticatedRuns(workspace, auth)
-    const sectionRun = stored.filter((run) => run.definition.id === 'task-review').at(-1)
-    expect(sectionRun?.context).toMatchObject({ name: 'auth', section: '1' })
-    expect(sectionRun?.context.taskIds).toContain(taskIdOf('First task'))
+    expect(stored.filter((run) => run.definition.id === 'task-review')).toHaveLength(1)
     await expect(
       start({ action: 'start', definitionId: 'task-review', change: 'auth', task: 'Missing' }),
     ).rejects.toThrow(/was not found/u)
@@ -7977,11 +7979,19 @@ describe('public review start through the workflows tool', () => {
     return { dir, taskId: taskIdOf(TASK) }
   }
 
-  function reviewerStub(): { runtime: unknown; releases: Array<() => void> } {
+  function reviewerStub(failFirst = false): {
+    runtime: unknown
+    releases: Array<() => void>
+    state: { fail: boolean }
+  } {
     const releases: Array<() => void> = []
+    const state = { fail: failFirst }
     const runtime = {
       getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
       startActivation: async (spec: { prompt: { text: string }[] }) => {
+        if (state.fail) {
+          throw Object.assign(new Error('the review config is invalid'), { name: 'ConfigError' })
+        }
         const instruction = spec.prompt.map((block) => block.text).join('\n')
         const digest = /- Digest: ([a-f0-9]{64})/u.exec(instruction)?.[1] ?? ''
         const pending = new Promise<void>((resolve) => {
@@ -8002,7 +8012,7 @@ describe('public review start through the workflows tool', () => {
         }
       },
     }
-    return { runtime, releases }
+    return { runtime, releases, state }
   }
 
   async function runStart(

@@ -77,10 +77,10 @@ function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 /** Whether one parsed record satisfies the task-review contract for a task. */
-function recordApprovesTask(value, change) {
+function recordApprovesTask(value, change, rule) {
     if (!isRecord(value))
         return false;
-    if (value.rule !== 'task-review' ||
+    if (value.rule !== rule ||
         value.change !== change ||
         value.scope !== 'task' ||
         (value.verdict !== 'PASS' && value.verdict !== 'ERROR') ||
@@ -117,7 +117,11 @@ function recordNamesTask(value, taskId) {
  * covers, the same way its publication writes one approval each.
  */
 export async function taskReviewEvidence(workspace, change, taskId) {
-    const directory = `.dsh/workflows/records/task-review/${change}/tasks`;
+    const binding = reviewerBinding(workspace);
+    if (binding?.invalid !== undefined)
+        return false;
+    const rule = binding?.taskRule ?? 'task-review';
+    const directory = `.dsh/workflows/records/${rule}/${change}/tasks`;
     let entries;
     try {
         entries = await readdir(join(workspace, directory));
@@ -129,9 +133,6 @@ export async function taskReviewEvidence(workspace, change, taskId) {
         ...(entries.includes(`${taskId}.json`) ? [`${taskId}.json`] : []),
         ...entries.filter((name) => name !== `${taskId}.json` && name.endsWith('.json')),
     ];
-    const binding = reviewerBinding(workspace);
-    if (binding?.invalid !== undefined)
-        return false;
     for (const name of names) {
         let value;
         try {
@@ -142,7 +143,7 @@ export async function taskReviewEvidence(workspace, change, taskId) {
         }
         if (!recordNamesTask(value, taskId))
             continue;
-        if (!recordApprovesTask(value, change))
+        if (!recordApprovesTask(value, change, rule))
             continue;
         const target = value.target;
         if (binding?.provider !== undefined && target.provider !== binding.provider)

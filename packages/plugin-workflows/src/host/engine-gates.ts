@@ -133,10 +133,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Whether one parsed record satisfies the task-review contract for a task. */
-function recordApprovesTask(value: unknown, change: string): boolean {
+function recordApprovesTask(value: unknown, change: string, rule: string): boolean {
   if (!isRecord(value)) return false
   if (
-    value.rule !== 'task-review' ||
+    value.rule !== rule ||
     value.change !== change ||
     value.scope !== 'task' ||
     (value.verdict !== 'PASS' && value.verdict !== 'ERROR') ||
@@ -176,7 +176,10 @@ export async function taskReviewEvidence(
   change: string,
   taskId: string,
 ): Promise<boolean> {
-  const directory = `.dsh/workflows/records/task-review/${change}/tasks`
+  const binding = reviewerBinding(workspace)
+  if (binding?.invalid !== undefined) return false
+  const rule = binding?.taskRule ?? 'task-review'
+  const directory = `.dsh/workflows/records/${rule}/${change}/tasks`
   let entries: string[]
   try {
     entries = await readdir(join(workspace, directory))
@@ -187,8 +190,6 @@ export async function taskReviewEvidence(
     ...(entries.includes(`${taskId}.json`) ? [`${taskId}.json`] : []),
     ...entries.filter((name) => name !== `${taskId}.json` && name.endsWith('.json')),
   ]
-  const binding = reviewerBinding(workspace)
-  if (binding?.invalid !== undefined) return false
   for (const name of names) {
     let value: unknown
     try {
@@ -197,7 +198,7 @@ export async function taskReviewEvidence(
       continue
     }
     if (!recordNamesTask(value, taskId)) continue
-    if (!recordApprovesTask(value, change)) continue
+    if (!recordApprovesTask(value, change, rule)) continue
     const target = (value as { target: { provider: string; model?: string } }).target
     if (binding?.provider !== undefined && target.provider !== binding.provider) continue
     if (binding?.model !== undefined && target.model !== binding.model) continue

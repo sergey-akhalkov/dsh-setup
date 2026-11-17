@@ -226,6 +226,43 @@ describe('the owned work-progress gate', () => {
     expect(stale.steer).toContain('workflows { action: "note"')
   })
 
+  it('matches the marker-bound taskRule in the record store', async () => {
+    const root = await workspace(FIRST_PLAN)
+    const taskId = taskIdOf('First task')
+    const directory = join(
+      root,
+      '.dsh',
+      'workflows',
+      'records',
+      'focused-rereview',
+      'change-a',
+      'tasks',
+    )
+    await mkdir(directory, { recursive: true })
+    await writeFile(
+      join(directory, `${taskId}.json`),
+      JSON.stringify({
+        rule: 'focused-rereview',
+        change: 'change-a',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-08T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    await writeFile(
+      join(root, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'focused-rereview' }),
+      'utf8',
+    )
+    expect(await taskReviewEvidence(root, 'change-a', taskId)).toBe(true)
+  })
+
   it('reads a native PASS for a newly checked task from the workflows store', async () => {
     const root = await workspace(FIRST_PLAN)
     const taskId = taskIdOf('First task')

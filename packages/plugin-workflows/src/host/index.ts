@@ -4886,7 +4886,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               `definition "${definition.id}" is a review and needs the change it reviews; pass change and optionally task or section`,
             )
           }
-          context = await reviewStartContext(workspace, definition, selection)
+          context = {
+            ...(await reviewStartContext(workspace, definition, selection)),
+            explicitReview: true,
+          }
         }
         if (typeof context.name === 'string') {
           await rememberInvolvement(workspace, sessionId, context.name)
