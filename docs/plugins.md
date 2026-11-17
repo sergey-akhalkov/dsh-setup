@@ -574,8 +574,8 @@ lines, and no section when none). The engine is inert without its host services.
 includes `checkpointApplicability` (`minToolCalls` default 4, `requireWrite` default true) for the
 `retro` definition — the operator must mirror the installed `goal-continuity` checkpoint settings
 because one plugin row cannot read another's config — plus `reviewers` (the shipped `codex`
-model/effort), `reviewQueue`, and `timeouts.review` (default 600000 ms). The setup default row is
-`- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates, and
+model/effort), `reviewQueue`, and `timeouts.review` (plugin default 600000 ms; the setup default row
+raises it to 1800000 ms). The setup default row is `- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates, and
 intake/adoption flow are documented in [workflows](workflows.md).
 
 ### Editor and Workflow design page

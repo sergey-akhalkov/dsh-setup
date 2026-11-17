@@ -253,9 +253,9 @@
       maxAttempts: 3
       baseDelayMs: 5000
       maxDelayMs: 60000
-      waitTimeoutMs: 1200000
+      waitTimeoutMs: 2400000
     timeouts:
-      review: 600000
+      review: 1800000
 - id: dsh-setup-verification-gate
   disabled: true
 
