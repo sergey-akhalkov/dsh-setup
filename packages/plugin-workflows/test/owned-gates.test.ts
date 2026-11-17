@@ -155,15 +155,15 @@ describe('the note action', () => {
     })
   })
 
-  it('refuses a checked task and an unknown change', async () => {
+  it('accepts a checked task in a serial note and refuses an unknown change', async () => {
     const root = await workspace(PLAN.replace('- [ ] 2.1', '- [x] 2.1'))
-    await expect(
-      writeProgressNote(
-        root,
-        { change: 'change-a', task: '2.1 Doc task', status: 'blocked' },
-        { runGit: fakeGit(() => IMPLEMENTATION_STATUS, root) },
-      ),
-    ).rejects.toThrow(/is checked/u)
+    // A fully checked plan still needs the serial-lane note: the checked state
+    // itself is not a refusal, only its missing task-review PASS is.
+    await writeProgressNote(
+      root,
+      { change: 'change-a', task: '2.1 Doc task', status: 'blocked' },
+      { runGit: fakeGit(() => IMPLEMENTATION_STATUS, root) },
+    )
     await expect(
       writeProgressNote(
         root,

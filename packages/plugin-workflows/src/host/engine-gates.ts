@@ -445,7 +445,7 @@ export async function evaluateOwnedProgressGate(input: ProgressGateInput): Promi
     const saved = await readProgressNote(input.workspace, input.change)
     if (saved !== undefined) {
       const current = tasks.find((task) => task.id === saved.taskId)
-      if (current !== undefined && !current.checked) {
+      if (current !== undefined) {
         const digest = await noteDigest(input)
         note = { digest: saved.worktreeDigest, currentDigest: digest }
         if (digest !== undefined && digest !== saved.worktreeDigest) {
