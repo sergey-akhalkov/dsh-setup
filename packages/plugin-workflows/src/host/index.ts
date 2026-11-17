@@ -653,9 +653,20 @@ function sectionReviewOf(
 function pendingReviewRuns(
   runs: readonly WorkflowRun[],
   definitions: readonly Definition[],
-): Array<{ id: string; change: string; context: Readonly<Record<string, unknown>> }> {
-  const pending: Array<{ id: string; change: string; context: Readonly<Record<string, unknown>> }> =
-    []
+): Array<{
+  id: string
+  session: string
+  state: 'open' | 'blocked'
+  change: string
+  context: Readonly<Record<string, unknown>>
+}> {
+  const pending: Array<{
+    id: string
+    session: string
+    state: 'open' | 'blocked'
+    change: string
+    context: Readonly<Record<string, unknown>>
+  }> = []
   for (const run of runs) {
     if (run.definition.id !== 'task-review' || !isOpenRun(run)) continue
     if (typeof run.context.name !== 'string') continue
@@ -666,7 +677,13 @@ function pendingReviewRuns(
         ? undefined
         : run.steps.find((step) => step.id === reviewStep.id)?.state
     if (state === 'done' || state === 'failed' || state === 'cancelled') continue
-    pending.push({ id: run.id, change: String(run.context.name), context: run.context })
+    pending.push({
+      id: run.id,
+      session: run.session,
+      state: state === 'blocked' ? 'blocked' : 'open',
+      change: String(run.context.name),
+      context: run.context,
+    })
   }
   return pending
 }
@@ -1760,14 +1777,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   }
                   let first: StartRunOutcome | undefined
                   let suppressed: StartRunOutcome | undefined
-                  // A live run for the same change still owns its obligation; a
-                  // dead-session run must not block the new one.
+                  // A live review for the same change still owns its obligation;
+                  // a settled or idle-session run must not block the new one.
                   const liveRuns = knownRuns.filter(
                     (run) =>
                       run.definition.id === 'task-review' &&
                       run.context.name === capture &&
                       isOpenRun(run) &&
-                      services.agents.get(run.session) !== undefined,
+                      (reviewIsLive(run.id) || reviewStepOpen(run, definition)),
                   )
                   const attempted = new Set<string>()
                   // Task ids a review started by this event already covers: two
@@ -3116,6 +3133,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   ctx.effect(() => () => {
     reviewScheduler.dispose()
   })
+  /**
+   * Whether a review run's reviewer is genuinely live in this host, in any
+   * session. A run whose session is merely still open but idle is not coverage:
+   * a settled FINDINGS run or a dead-session run must never block the next round
+   * for that unit.
+   */
+  const reviewIsLive = (runId: string): boolean => reviewScheduler.liveRunById(runId) !== undefined
+  /** A run whose review step is still open: its reviewer start may be in flight. */
+  const reviewStepOpen = (run: WorkflowRun, definition: Definition | undefined): boolean => {
+    const stepId = definition?.steps.find((step) => step.executor === 'review')?.id
+    return stepId !== undefined && run.steps.find((step) => step.id === stepId)?.state === 'open'
+  }
   const advanceRun = async (
     workspace: string,
     run: WorkflowRun,
@@ -4753,7 +4782,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 run.definition.id === 'task-review' &&
                 run.context.name === change &&
                 (run.status === 'running' || run.status === 'blocked') &&
-                services.agents.get(run.session) !== undefined,
+                // This session's pending run will be advanced by this close; a
+                // foreign run covers the unit only while its reviewer is live or
+                // its start is still in flight.
+                (run.session === sessionId ||
+                  reviewIsLive(run.id) ||
+                  reviewStepOpen(run, taskReview)),
             )
           const dispatched: WorkflowRun[] = []
           const event: DefinitionEvent = {
@@ -4953,7 +4987,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // review is still pending; the pre-advance list would present a just
           // settled ERROR as pending.
           const currentRuns = runs.map((entry) => advanced.get(entry.id) ?? entry)
-          const reviewOpenRuns = pendingReviewRuns(currentRuns, definitions)
+          // A settled step or a foreign session's idle run is not a live review:
+          // only this session's pending runs and genuinely live reviewers cover
+          // a unit, so an abandoned session can never stall the loop.
+          const reviewOpenRuns = pendingReviewRuns(currentRuns, definitions).filter(
+            (entry) =>
+              entry.session === sessionId || entry.state === 'open' || reviewIsLive(entry.id),
+          )
           // A run containing an owned review step is gated by its due units:
           // while every due unit has a live review the close waits instead of
           // refusing, and no refusal budget ever releases it (design D3/D9).
@@ -5623,8 +5663,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     workspace: string,
     runs: readonly WorkflowRun[],
     definitions: readonly Definition[],
+    session: string,
   ): Promise<string[]> => {
-    const openRuns = pendingReviewRuns(runs, definitions)
+    const openRuns = pendingReviewRuns(runs, definitions).filter(
+      (entry) => entry.session === session || entry.state === 'open' || reviewIsLive(entry.id),
+    )
     const changes = [
       ...new Set([...(await activeChangeNames(workspace)), ...openRuns.map((run) => run.change)]),
     ].sort()
@@ -5825,7 +5868,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   const open = runs.filter(
                     (run) => run.status === 'running' || run.status === 'blocked',
                   )
-                  const units = await reviewUnitLines(workspace, runs, definitions)
+                  const units = await reviewUnitLines(
+                    workspace,
+                    runs,
+                    definitions,
+                    String(invocation.agent.session.id),
+                  )
                   return [
                     `definitions: ${String(definitions.length)}; open runs: ${String(open.length)}; receipts: ${String((await listReceipts(workspace, auth)).length)}`,
                     ...(units.length === 0 ? [] : ['review units:', ...units]),

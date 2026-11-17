@@ -2587,6 +2587,55 @@ describe('turn-close lane dispatch', () => {
     expect(created[0]?.status).toBe('running')
   })
 
+  it('starts the next round for a unit whose settled run belongs to an idle session', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // A previous session settled FINDINGS on section 1 and is now idle: its
+    // blocked step carries no live review, so it must not cover the lane for
+    // this session's close.
+    const settled = runs.settleStep(
+      runs.createRun({
+        definition: 'task-review',
+        trigger: 'fs.change',
+        session: 'session-2',
+        workspace,
+        context: {
+          name: 'auth',
+          taskId: sectionRecordId('1'),
+          section: '1',
+          sectionTitle: '1. Engine (lane 1, owns `src/**`)',
+          taskIds: [taskIdOf('First engine task'), taskIdOf('Second engine task')],
+        },
+        steps: ['review', 'complete-review'],
+        now: 1_000,
+      }),
+      'review',
+      'blocked',
+      { at: 1_001, reason: 'the review returned FINDINGS' },
+    )
+    await runs.writeRun(workspace, runs.setRunStatus(settled, 'blocked', 1_002), auth)
+    await establishInvolvement(host)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(
+      async () =>
+        (await taskRuns(workspace)).some(
+          (run) => run.id !== settled.id && run.context.section === '1',
+        ),
+      5_000,
+    )
+    const started = (await taskRuns(workspace)).find(
+      (run) => run.id !== settled.id && run.context.section === '1',
+    )
+    expect(started?.status).toBe('running')
+  })
+
   it('abandons an aborted close without a steer or a review start', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await laneWorkspace()
