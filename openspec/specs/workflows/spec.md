@@ -566,8 +566,8 @@ The plugin SHALL register `/workflows` (names the Workflows tab as the session e
 
 #### Scenario: Deferred step is not steered
 
-- **WHEN** the user runs `/workflows resume <runId>` for an interrupted intake whose pending step is the deferred spec-review
-- **THEN** the command does not steer, the step awaits the legacy record, and only the legacy spec-review gate steers
+- **WHEN** the user runs `/workflows resume <runId>` for an interrupted run whose pending step is deferred to the legacy checkpoint gate
+- **THEN** the command does not steer, the step awaits the legacy record, and only the legacy checkpoint gate steers
 
 #### Scenario: Install command is user-started
 
@@ -654,8 +654,8 @@ While an installed legacy plugin owns a behavior, a step that covers it SHALL de
 
 #### Scenario: Step-level defer
 
-- **WHEN** a definition is `own` but its `spec-review` step is `defer` to the legacy spec-review gate
-- **THEN** the workflow reads that gate's record and the legacy gate is the only steer for the review
+- **WHEN** a definition is `own` but its `verify` step is `defer` to the legacy verification gate
+- **THEN** the workflow reads that gate's record and the legacy gate is the only steer for the verification
 
 #### Scenario: Shipped intake composes with the strict review rule
 
