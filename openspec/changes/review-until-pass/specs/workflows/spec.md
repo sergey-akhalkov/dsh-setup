@@ -821,4 +821,9 @@ The work-progress gate SHALL be owned by the engine: a code-changing turn SHALL 
 - **WHEN** a code-changing turn carries a note whose worktree digest matches the current worktree
 - **THEN** the gate allows the close and a stale note keeps refusing it
 
+#### Scenario: Stale note is rejected
+
+- **WHEN** the worktree digest changes after the note
+- **THEN** the gate refuses the close and requires a fresh note or a reviewed tick
+
 
