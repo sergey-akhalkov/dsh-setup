@@ -198,6 +198,58 @@ describe('live provider acceptance (manual)', () => {
     await run.dispose()
   }, 180_000)
 
+  it('resumes the same review thread across two rounds of one unit key', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'codex-live-review-thread-'))
+    const plugin = await loadPlugin()
+    try {
+      const { ctx, providers } = createContext()
+      plugin.apply(ctx)
+      const provider = providers.get('codex-subagent')
+      if (provider === undefined) throw new Error('provider missing')
+      const prompt = [
+        '- Digest: '.concat('a'.repeat(64)),
+        '- Review key: review:live-check:section:1',
+        '',
+        'Reply with exactly the token REVIEW-THREAD and nothing else.',
+      ].join('\n')
+      const first = (await provider.start(
+        startRequest(root, prompt, new AbortController().signal),
+      )) as {
+        result: Promise<{
+          output: unknown[]
+          stopReason: string
+          threadId?: string
+          threadReuse?: string
+        }>
+        dispose: () => Promise<void>
+      }
+      const firstResult = await first.result
+      console.log('THREAD-ROUND-1', JSON.stringify(firstResult, null, 2))
+      expect(firstResult.stopReason).toBe('completed')
+      expect(firstResult.threadReuse).toBe('created')
+      await first.dispose()
+      const second = (await provider.start(
+        startRequest(root, prompt, new AbortController().signal),
+      )) as {
+        result: Promise<{
+          output: unknown[]
+          stopReason: string
+          threadId?: string
+          threadReuse?: string
+        }>
+        dispose: () => Promise<void>
+      }
+      const secondResult = await second.result
+      console.log('THREAD-ROUND-2', JSON.stringify(secondResult, null, 2))
+      expect(secondResult.stopReason).toBe('completed')
+      expect(secondResult.threadReuse).toBe('resumed')
+      expect(secondResult.threadId).toBe(firstResult.threadId)
+      await second.dispose()
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  }, 300_000)
+
   it('reports the login next action for an isolated signed-out home', async () => {
     const root = mkdtempSync(join(tmpdir(), 'codex-live-signed-out-'))
     const home = join(root, 'home')

@@ -71,7 +71,9 @@ export async function runWorkflowCommand(
     return { kind: 'view', text: host.openView() }
   }
   if (action === 'status') {
-    return { kind: 'result', text: bounded(await host.status()) }
+    // The review status names every due lane and its live run; a delivery bound
+    // here would silently drop the last lanes, so the status is delivered whole.
+    return { kind: 'result', text: await host.status() }
   }
   if (action === 'run') {
     const id = rest[0]

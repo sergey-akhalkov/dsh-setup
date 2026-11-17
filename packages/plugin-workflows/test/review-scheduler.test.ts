@@ -1860,3 +1860,47 @@ describe('review scheduler disposal during preparation', () => {
     scheduler.dispose()
   })
 })
+
+describe('review scheduler unit ownership', () => {
+  it('owns a unit across review rules because they share its snapshot path', async () => {
+    const { root, digest } = await reviewWorkspace()
+    const scheduler = new ReviewScheduler(limitsFor({ maxAttempts: 1 }), {
+      persistRun: async (_workspace, run) => run,
+      discardSnapshot: async () => undefined,
+    })
+    const pending = (): Promise<{ childId: string; completed: boolean }> =>
+      new Promise(() => undefined)
+    const first = requestFor(root, digest, { runner: { run: pending } })
+    await scheduler.enqueue({
+      workspace: root,
+      run: first.run,
+      request: first,
+      rule: 'task-review',
+      change: 'auth',
+      taskId: 'a'.repeat(16),
+      phase: 'task',
+      digest,
+    })
+    // A second rule names the same change, task, and phase, so it shares the
+    // unit's snapshot path and must see the live checkout as owned.
+    expect(
+      scheduler.liveUnit({
+        workspace: root,
+        rule: 'focused-rereview',
+        change: 'auth',
+        taskId: 'a'.repeat(16),
+        phase: 'task',
+      })?.id,
+    ).toBe(first.run.id)
+    expect(
+      scheduler.liveUnit({
+        workspace: root,
+        rule: 'focused-rereview',
+        change: 'auth',
+        taskId: 'b'.repeat(16),
+        phase: 'task',
+      }),
+    ).toBeUndefined()
+    scheduler.dispose()
+  })
+})

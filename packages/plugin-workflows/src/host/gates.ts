@@ -283,11 +283,12 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     }
     // The maxBlocks budget is per turn: a new turn starts a fresh budget, so a
     // capped run never suppresses the obligation on a later turn.
-    // A provisional review ERROR is not coverage for a review definition's own
-    // close: only the host review resolution (a PASS or a live review) ends it.
-    // Other definitions (the change intake) keep their spec'd intermediate close.
-    const provisionalReviews =
-      input.definition.settings.gate === 'review' ? undefined : input.provisionalReviews
+    // A provisional review ERROR is not coverage once the run reaches its owned
+    // review obligation: only the host review resolution (a PASS or a live
+    // review) ends it. That decision comes from ownership, never from a local
+    // `settings.gate` a definition may omit. Earlier steps and other definitions
+    // (the change intake) keep their spec'd intermediate close.
+    const provisionalReviews = releaseBlocked ? undefined : input.provisionalReviews
     const step = selectBlockingStep(
       input.run,
       input.definition,

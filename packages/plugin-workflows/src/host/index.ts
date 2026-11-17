@@ -682,17 +682,27 @@ function coveredTaskIds(context: Readonly<Record<string, unknown>>): string[] {
   return covered
 }
 
-/** The live task-review runs that cover every checked task of a unit as it is now. */
+/**
+ * The live task-review runs whose union covers every checked task of a unit as
+ * it is now: one section run, or the per-task fallback runs an oversized section
+ * identity starts. Partial coverage is not coverage.
+ */
 function liveUnitRuns(
   change: string,
   unit: ReviewUnit,
   openRuns: readonly ReviewUnitRun[],
 ): ReviewUnitRun[] {
-  return openRuns.filter((run) => {
-    if (run.change !== change) return false
+  const covering: ReviewUnitRun[] = []
+  const seen = new Set<string>()
+  for (const run of openRuns) {
+    if (run.change !== change) continue
     const ids = coveredTaskIds(run.context)
-    return unit.covered.every((task) => ids.includes(task.id))
-  })
+    const fresh = unit.covered.filter((task) => ids.includes(task.id) && !seen.has(task.id))
+    if (fresh.length === 0) continue
+    for (const task of fresh) seen.add(task.id)
+    covering.push(run)
+  }
+  return seen.size === unit.covered.length ? covering : []
 }
 
 /**
@@ -708,6 +718,8 @@ async function reviewCloseStatus(
   run: WorkflowRun,
   openRuns: readonly ReviewUnitRun[],
   liveReview: boolean,
+  dispatchFailure?: string,
+  siblingLiveRunId?: string,
 ): Promise<ReviewCloseInput | undefined> {
   // The review gate applies once the pipeline reached its review step. An
   // earlier open step keeps the ordinary steering path (still uncapped).
@@ -730,10 +742,13 @@ async function reviewCloseStatus(
       }
     }
     // Only a live review makes the waiting close; a settled step is handled by
-    // the ordinary path and a never-started one is not a live review.
-    return state !== 'done' && state !== 'cancelled' && liveReview
-      ? { uncovered: [], live: [run.id] }
-      : undefined
+    // the ordinary path and a never-started one is not a live review. A
+    // successor run the trigger started for the same whole-scope unit is live
+    // coverage too: this run waits on that shared review instead of steering.
+    if (state === 'done' || state === 'cancelled') return undefined
+    if (liveReview) return { uncovered: [], live: [run.id] }
+    if (siblingLiveRunId !== undefined) return { uncovered: [], live: [siblingLiveRunId] }
+    return undefined
   }
   const units = await reviewUnits(workspace, change)
   if (units === undefined) return undefined
@@ -751,13 +766,15 @@ async function reviewCloseStatus(
     )
   }
   // A failed attempt leaves the unit due; its class and attempt count stay
-  // visible in the refusal instead of being replaced by a fresh start.
+  // visible in the refusal instead of being replaced by a fresh start. A due
+  // unit whose start failed is named too, even when another run already refuses.
   const failed = run.steps.find((entry) => entry.id === step.id)
   const failure =
     failed?.state === 'failed' && failed.reason !== undefined
       ? `The last review attempt on run "${run.id}" failed: ${failed.reason.slice(0, 300)}`
       : undefined
-  return { uncovered, live, ...(failure === undefined ? {} : { failure }) }
+  const causes = [failure, dispatchFailure].filter((text): text is string => text !== undefined)
+  return { uncovered, live, ...(causes.length === 0 ? {} : { failure: causes.join(' ') }) }
 }
 
 /** Whether a definition is a review gate; those starts are exempt from `maxRuns`. */
@@ -2979,16 +2996,35 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // The stored state is newer; the stale advance must not be written.
         return current
       }
-      if (run !== current) await writeCommit(workspace, run, auth)
+      // An advance built before the review admission must not erase the retry
+      // attempt facts a concurrent admission already stamped on the stored
+      // step: keep them when the incoming step carries none.
+      const withAttempts = (): WorkflowRun => {
+        const storedSteps = new Map(current.steps.map((step) => [step.id, step]))
+        let changed = false
+        const steps = run.steps.map((step) => {
+          const stored = storedSteps.get(step.id)
+          if (stored?.attempts === undefined || step.attempts !== undefined) return step
+          changed = true
+          return {
+            ...step,
+            attempts: stored.attempts,
+            ...(stored.failureClass === undefined ? {} : { failureClass: stored.failureClass }),
+          }
+        })
+        return changed ? { ...run, steps } : run
+      }
+      const merged = withAttempts()
+      if (merged !== current) await writeCommit(workspace, merged, auth)
       // A disposal can fence the session during the write; the lock serializes
       // the writers, but the fence and the session generation are set
       // synchronously, so re-check both after the write.
       if (ended() || sessionStale()) {
         const replacement = interruptedFrom()
-        if (replacement !== run) await writeCommit(workspace, replacement, auth)
+        if (replacement !== merged) await writeCommit(workspace, replacement, auth)
         return replacement
       }
-      return run
+      return merged
     })
   /** Advance one run through its verified evidence; a deferred step never steers. */
   const reviewScheduler = new ReviewScheduler(
@@ -3091,7 +3127,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     turn: number,
     capturedGeneration?: number,
     capturedSessionGeneration?: number,
+    stop?: AbortSignal,
   ): Promise<WorkflowRun> => {
+    // A user stop wins over this advance: an abort that lands during any await
+    // below keeps the run as it is and dispatches/persists nothing.
+    const aborted = (): boolean => stop?.aborted === true
+    if (aborted()) return run
     if (capturedGeneration !== undefined && capturedGeneration !== runGeneration(run.id)) {
       // The snapshot was read before a resume replaced its lifecycle; never
       // dispatch or persist from it.
@@ -3201,6 +3242,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (typeof change !== 'string' || !CHANGE_NAME.test(change)) return undefined
         // A review started on a later turn keeps its identity in the run context.
         const initialSpecDigest = await currentSpecDigest(workspace, change)
+        if (aborted()) return undefined
         if (initialSpecDigest === undefined) {
           return settleStep(reviewRun, step.id, 'failed', {
             at: journal.time(),
@@ -3230,6 +3272,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               false,
             )
           } catch (error) {
+            if (aborted()) return undefined
             return settleStep(reviewRun, step.id, 'failed', {
               at: journal.time(),
               reason: error instanceof Error ? error.message : String(error),
@@ -3260,6 +3303,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (!resolved.ok) {
           // A missing reviewer target is a review failure too: it writes an
           // ERROR record with the target diagnostic instead of failing silently.
+          if (aborted()) return undefined
           const failure = await recordReviewFailure({
             run: reviewRun,
             definition: reviewDefinition,
@@ -3279,6 +3323,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (reviewRunner === undefined) {
           // The unavailable service is a review failure, not a silent wait: it
           // writes an ERROR record and settles the step from that evidence.
+          if (aborted()) return undefined
           const failure = await recordReviewFailure({
             run: reviewRun,
             definition: reviewDefinition,
@@ -3366,11 +3411,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         try {
           captured = await reviewedInputs(workspace, changeDir, defaultGit)
         } catch (error) {
+          if (aborted()) return undefined
           return settleStep(reviewRun, step.id, 'failed', {
             at: journal.time(),
             reason: `the reviewed inputs could not be read (${error instanceof Error ? error.message : String(error)}); fix the workspace and re-run the review`,
           })
         }
+        if (aborted()) return undefined
         let capturedHash = signatureHash(captured)
         const guardFor =
           (signature: InputSignature, tree?: string) => async (): Promise<string | undefined> => {
@@ -3616,11 +3663,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         } catch (error) {
           // A snapshot rejected before admission must not keep renewing its lease.
           await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
+          if (aborted()) return undefined
           return settleStep(reviewRun, step.id, 'failed', {
             at: journal.time(),
             reason: error instanceof Error ? error.message : String(error),
           })
         }
+        if (aborted()) return undefined
         // A queued entry re-checks the live source set when a slot frees; one
         // re-preparation replaces the identity atomically before the start.
         const reprepare = async (alreadyReprepared: boolean): Promise<ReviewReprepareOutcome> => {
@@ -3684,6 +3733,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (!reviewQueue.enabled) {
           // Release A runs native reviews only through the engine queue; a
           // disabled queue fails loud instead of starting an unmanaged child.
+          if (aborted()) return undefined
           const failure = await recordReviewFailure({
             ...request,
             error:
@@ -3695,6 +3745,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           }
           return failure?.run ?? reviewRun
         }
+        if (aborted()) return undefined
         await reviewScheduler.enqueue({
           workspace,
           run: reviewRun,
@@ -3724,6 +3775,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // guard as every other advance: a run interrupted by a disposal before
       // this write must not be revived as completed or receipted.
       completeRun: async (completedRun, digest) => {
+        // A stop that landed during the advance must not commit completion or
+        // its receipt; the run stays open for the next close.
+        if (aborted()) return { run }
         const persisted = await persistRun(
           workspace,
           completedRun,
@@ -3746,7 +3800,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       },
       now: journal.time(),
     })
-    if (result.run !== run) {
+    if (result.run !== run && !aborted()) {
       return await persistRun(
         workspace,
         result.run,
@@ -4720,10 +4774,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             for (const unit of units) {
               if (stopped()) return
               if (unit.covered.some((task) => startedCovered.has(task.id))) continue
-              const covered = liveRuns(change).some((run) => {
-                const ids = taskIdsOf(run.context)
-                return unit.covered.every((task) => ids.includes(task.id))
-              })
+              // Coverage is the union of the live runs' covered ids: one full
+              // section run, or the per-task runs an oversized section starts.
+              const liveIds = new Set(liveRuns(change).flatMap((run) => taskIdsOf(run.context)))
+              const covered = unit.covered.every((task) => liveIds.has(task.id))
               if (covered) continue
               const section = unit.section
               const contexts: Readonly<Record<string, unknown>>[] = []
@@ -4832,6 +4886,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             payload.turn,
             generation,
             sessionGenerationAtRead,
+            stopSignal,
           )
           advanced.set(run.id, current)
           advancedGenerations.set(run.id, generation)
@@ -4918,6 +4973,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   current,
                   reviewOpenRuns,
                   reviewScheduler?.liveRunById(current.id) !== undefined,
+                  dispatchFailure,
+                  reviewStep.review?.scope === 'task'
+                    ? undefined
+                    : reviewScheduler?.liveUnit({
+                        workspace,
+                        rule: reviewIdentityOf(definition, reviewStep),
+                        change: current.context.name,
+                        phase: reviewPhase(
+                          reviewStep.review?.scope ?? 'whole',
+                          reviewStep.review?.phase,
+                        ),
+                      })?.id,
                 )
               : undefined
           const completion =

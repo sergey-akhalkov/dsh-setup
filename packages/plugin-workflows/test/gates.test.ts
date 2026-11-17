@@ -299,7 +299,7 @@ describe('turn-close gate', () => {
 const TEMP_DIRECTORIES: string[] = []
 
 /** A task-scope review definition with no declared budget (defaults to 3). */
-function reviewDefinition(): Definition {
+function reviewDefinition(withGateMetadata = true): Definition {
   return validateDefinition({
     v: 1,
     id: 'task-review',
@@ -316,8 +316,7 @@ function reviewDefinition(): Definition {
       risk: 'low',
       gateOwnership: 'own',
       allowIntent: false,
-      gate: 'review',
-      gateIdentity: 'task-review',
+      ...(withGateMetadata ? { gate: 'review', gateIdentity: 'task-review' } : {}),
     },
     steps: [
       {
@@ -341,8 +340,7 @@ function reviewDefinition(): Definition {
   })
 }
 
-function reviewRun(): WorkflowRun {
-  const definition = reviewDefinition()
+function reviewRunFor(definition = reviewDefinition()): WorkflowRun {
   return createRun({
     definition: definition.id,
     trigger: 'fs.change',
@@ -352,6 +350,10 @@ function reviewRun(): WorkflowRun {
     steps: definition.steps.map((step) => step.id),
     now: 1_000,
   })
+}
+
+function reviewRun(): WorkflowRun {
+  return reviewRunFor()
 }
 
 describe('uncapped review turn close', () => {
@@ -440,6 +442,32 @@ describe('uncapped review turn close', () => {
     expect(outcome.kind).toBe('refuse')
     expect(outcome.run.violations).toHaveLength(0)
     expect(agent.messages[0]).toContain('no current PASS')
+  })
+
+  it('refuses that provisional ERROR from ownership alone, without gate metadata or review status', () => {
+    const agent = new FakeAgent()
+    // A valid owned review definition that omits the optional gate metadata:
+    // the suppression must come from the reached owned review step, not from
+    // settings.gate, so the fallback still refuses without a live review.
+    const definition = reviewDefinition(false)
+    const run = settleStep(reviewRunFor(definition), 'review', 'failed', {
+      at: 2_000,
+      reason: 'the review returned FINDINGS',
+    })
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent,
+      evidenceContext,
+      turn: 1,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      provisionalReviews: new Set(['review']),
+    })
+    expect(outcome.kind).toBe('refuse')
+    expect(outcome.run.violations).toHaveLength(0)
+    expect(agent.messages).toHaveLength(1)
+    expect(agent.messages[0]).toContain('retry it with workflows resume')
   })
 
   it('keeps the budget for a non-review run even when a review status is passed', () => {

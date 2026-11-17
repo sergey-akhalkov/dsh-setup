@@ -69,6 +69,9 @@ const runStoreFaults = vi.hoisted(() => ({
   recordWriteFile: undefined as string | undefined,
   pauseNextWrite: undefined as Promise<void> | undefined,
   pauseFor: undefined as ((path: string) => boolean) | undefined,
+  pauseNextRead: undefined as Promise<void> | undefined,
+  pauseReadFor: undefined as ((path: string) => boolean) | undefined,
+  onReadPaused: undefined as (() => void) | undefined,
 }))
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -89,6 +92,19 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     ...actual,
     readdir: fault(actual.readdir, () => runStoreFaults.readdir),
     stat: fault(actual.stat, () => runStoreFaults.stat),
+    readFile: (async (...args: Parameters<typeof actual.readFile>) => {
+      const target = String(args[0]).replaceAll('\\', '/')
+      if (
+        runStoreFaults.pauseNextRead !== undefined &&
+        (runStoreFaults.pauseReadFor === undefined || runStoreFaults.pauseReadFor(target))
+      ) {
+        const wait = runStoreFaults.pauseNextRead
+        runStoreFaults.pauseNextRead = undefined
+        runStoreFaults.onReadPaused?.()
+        await wait
+      }
+      return actual.readFile(...args)
+    }) as typeof actual.readFile,
     writeFile: (async (...args: Parameters<typeof actual.writeFile>) => {
       const target = String(args[0]).replaceAll('\\', '/')
       if (runStoreFaults.recordWriteFile !== undefined && target.includes('/workflows/records/')) {
@@ -130,6 +146,9 @@ afterEach(async () => {
   runStoreFaults.recordWriteFile = undefined
   runStoreFaults.pauseNextWrite = undefined
   runStoreFaults.pauseFor = undefined
+  runStoreFaults.pauseNextRead = undefined
+  runStoreFaults.pauseReadFor = undefined
+  runStoreFaults.onReadPaused = undefined
   await Promise.all(
     TEMP_DIRECTORIES.splice(0).map(async (directory) => {
       await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
@@ -1655,17 +1674,24 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(created[0]?.context.taskIds).toHaveLength(2)
   })
 
-  it('names every due lane unit of a change in the native status summary', async () => {
+  it('delivers every due lane unit with its covered tasks and live run', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
     await mkdir(changeDir, { recursive: true })
-    // Six due lanes: the delivered status is bounded, so a per-lane steer text
-    // would drop the last lanes instead of naming every one.
-    const sections = [1, 2, 3, 4, 5, 6].map(
-      (n) =>
-        `## ${String(n)}. Lane ${String(n)} (lane ${String(n)}, owns \`packages/plugin-workflows/src/host/lane-${String(n)}.ts\`)\n\n- [x] ${String(n)}.1 Work of lane ${String(n)}\n`,
-    )
+    // Six due lanes with ten checked tasks and one live run per lane: the
+    // delivered status must name every lane's covered tasks, missing tasks, and
+    // live run, beyond the old 1200-character delivery bound.
+    const counts = [12, 12, 12, 12, 12, 12]
+    const sections = counts.map((count, index) => {
+      const n = index + 1
+      const tasks = Array.from(
+        { length: count },
+        (_, task) =>
+          `- [x] ${String(n)}.${String(task + 1)} Work of lane ${String(n)} task ${String(task + 1)}`,
+      )
+      return `## ${String(n)}. Lane ${String(n)} (lane ${String(n)}, owns \`packages/plugin-workflows/src/host/lane-${String(n)}.ts\`)\n\n${tasks.join('\n')}\n`
+    })
     await writeFile(join(changeDir, 'tasks.md'), `# Tasks\n\n${sections.join('\n')}`, 'utf8')
     const host = fakeHost(workspace)
     apply(host.ctx as never)
@@ -1684,40 +1710,44 @@ describe('task-review runtime from a tasks.md change', () => {
           signal: new AbortController().signal,
         })
       )?.text ?? ''
-    const text = await status()
-    expect(text.length).toBeLessThanOrEqual(1200)
-    expect(text).toContain('review units:')
-    for (const n of [1, 2, 3, 4, 5, 6]) {
-      expect(text).toContain(
-        `change "auth" section "${String(n)}": covered ${String(n)}.1; missing a task-review PASS: ${String(n)}.1`,
-      )
+    const due = await status()
+    for (let n = 1; n <= 6; n += 1) {
+      expect(due).toContain(`change "auth" section "${String(n)}": covered ${String(n)}.1`)
     }
-    // A live section run is named on its lane instead of the lane looking due.
+    // One live run per lane covers its whole checked task set.
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
-    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const pending = runs.createRun({
-      definition: 'task-review',
-      trigger: 'fs.change',
-      session: 'session-1',
-      workspace,
-      context: {
-        name: 'auth',
-        taskId: sectionRecordId('1'),
-        section: '1',
-        sectionTitle: '1. Lane 1',
-        taskIds: [taskIdOf('Work of lane 1')],
-      },
-      steps: ['review', 'complete-review'],
-      now: 1_000,
-    })
-    await runs.writeRun(workspace, pending, auth)
-    const pendingText = await status()
-    expect(pendingText).toContain(
-      `section "1": covered 1.1; missing a task-review PASS: 1.1; live run "${pending.id}" covers it`,
-    )
-    expect(pendingText).toContain('change "auth" section "6": covered 6.1')
+    const live = new Map<number, string>()
+    for (let n = 1; n <= 6; n += 1) {
+      const count = counts[n - 1] ?? 1
+      const created = runs.createRun({
+        definition: 'task-review',
+        trigger: 'fs.change',
+        session: 'session-1',
+        workspace,
+        context: {
+          name: 'auth',
+          taskId: `section-${String(n)}`,
+          section: String(n),
+          sectionTitle: `${String(n)}. Lane ${String(n)}`,
+          taskIds: Array.from({ length: count }, (_, task) =>
+            taskIdOf(`Work of lane ${String(n)} task ${String(task + 1)}`),
+          ),
+        },
+        steps: ['review', 'complete-review'],
+        now: 1_000,
+      })
+      await runs.writeRun(workspace, created, auth)
+      live.set(n, created.id)
+    }
+    const delivered = await status()
+    expect(delivered.length).toBeGreaterThan(1200)
+    for (let n = 1; n <= 6; n += 1) {
+      expect(delivered).toContain(`section "${String(n)}": covered ${String(n)}.1`)
+      expect(delivered).toContain(`live run "${live.get(n) ?? ''}" covers it`)
+    }
   })
 
   it('starts one section run for two missing tasks and no per-task run', async () => {
@@ -2596,6 +2626,126 @@ describe('turn-close lane dispatch', () => {
     const submitted = host.steers.length
     controller.abort()
     expect(host.removed).toHaveLength(submitted)
+  })
+
+  it('recognizes the per-task fallback runs of an oversized section on the next close', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    // The section identity is over the 4096-byte run-context limit, so the
+    // dispatch falls back to one run per checked task. The next close must see
+    // the union of those live runs as the lane: no duplicate run starts.
+    const title = `1. ${'Lane '.repeat(900)}`
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      `# Tasks\n\n## ${title}\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n`,
+      'utf8',
+    )
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'lane')
+    git('config', 'user.email', 'lane@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const activations: string[] = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async (spec: { prompt: { text: string }[] }) => {
+        activations.push(spec.prompt.map((block) => block.text).join('\n'))
+        return {
+          childId: `child-${String(activations.length)}`,
+          result: new Promise(() => undefined),
+          dispose: async () => undefined,
+        }
+      },
+    }
+    const host = fakeHost(workspace, { subagents: runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await establishInvolvement(host)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    await waitFor(async () => (await taskRuns(workspace)).length === 2)
+    const fallback = await taskRuns(workspace)
+    expect(fallback.every((run) => run.context.section === undefined)).toBe(true)
+    expect(fallback.map((run) => run.context.taskId).sort()).toEqual(
+      [taskIdOf('First task'), taskIdOf('Second task')].sort(),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await waitFor(async () => activations.length >= 2, 10_000)
+    // The second close sees the complete lane through the fallback runs and
+    // waits for them instead of starting another 2 runs.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(await taskRuns(workspace)).toHaveLength(2)
+    expect(activations.filter((text) => text.includes('review:auth:task:')).length).toBe(2)
+  })
+
+  it('dispatches and persists no review when the stop lands during the advance', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'lane')
+    git('config', 'user.email', 'lane@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const activations: string[] = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async (spec: { prompt: { text: string }[] }) => {
+        activations.push(spec.prompt.map((block) => block.text).join('\n'))
+        return {
+          childId: `child-${String(activations.length)}`,
+          result: new Promise(() => undefined),
+          dispose: async () => undefined,
+        }
+      },
+    }
+    const host = fakeHost(workspace, { subagents: runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await establishInvolvement(host)
+    // Hold the advance inside the change-artifact read, abort the turn there,
+    // and let it continue: the round must not record, start, or persist.
+    let releaseRead: () => void = () => undefined
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    let paused = (): void => undefined
+    const pausedGate = new Promise<void>((resolve) => {
+      paused = resolve
+    })
+    runStoreFaults.pauseNextRead = readGate
+    runStoreFaults.onReadPaused = () => paused()
+    runStoreFaults.pauseReadFor = (path) => path.endsWith('openspec/changes/auth/proposal.md')
+    const controller = new AbortController()
+    const closing = host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    await pausedGate
+    controller.abort()
+    releaseRead()
+    await closing
+    expect(activations).toHaveLength(0)
+    expect(host.steers).toHaveLength(0)
+    const { readdir } = await import('node:fs/promises')
+    expect(
+      await readdir(join(workspace, '.dsh', 'workflows', 'records'), { recursive: true }).catch(
+        () => [],
+      ),
+    ).toHaveLength(0)
+    expect(
+      await readdir(join(workspace, '.dsh', 'workflows', 'snapshots')).catch(() => []),
+    ).toHaveLength(0)
   })
 })
 
@@ -8814,6 +8964,57 @@ describe('public review start through the workflows tool', () => {
     await waitFor(() => stub.releases.length >= 8, 10_000)
     // The waiting close is silent: eight live reviews, no steer, no step.
     expect(host.steers.length).toBe(before)
+  })
+
+  it('keeps a retry attempt and its failure class through the lifecycle write and after settlement', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const { dir, taskId } = await reviewWorkspace()
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async () => {
+        throw new Error('the provider active child limit is reached')
+      },
+    }
+    const host = fakeHost(dir, { subagents: runtime })
+    apply(host.ctx as never, {
+      reviewers: { codex: { provider: 'codex-subagent' } },
+      reviewQueue: { enabled: true, maxAttempts: 2, baseDelayMs: 400, maxDelayMs: 400 },
+    })
+    await start(host, 'task-review', taskId)
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const runId = (await runs.listAuthenticatedRuns(dir, auth)).find(
+      (entry) => entry.definition.id === 'task-review',
+    )?.id
+    if (runId === undefined) throw new Error('the review run is missing')
+    // During the retry backoff the persisted review step keeps the attempt and
+    // its failure class instead of the pre-admission lifecycle write erasing it.
+    await waitFor(async () => {
+      const stored = await runs.readAuthenticatedRun(dir, runId, auth)
+      const step = stored?.steps.find((entry) => entry.id === 'review')
+      return step?.attempts === 1 && step?.failureClass === 'child-limit'
+    }, 5_000)
+    // After the second attempt exhausts the transport retries, the facts stay
+    // visible on the settled step and in its record.
+    const recordPath = join(
+      dir,
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      'auth',
+      'tasks',
+      `${taskId}.json`,
+    )
+    await waitFor(async () => (await readFile(recordPath, 'utf8').catch(() => '')) !== '', 10_000)
+    const stored = await runs.readAuthenticatedRun(dir, runId, auth)
+    const step = stored?.steps.find((entry) => entry.id === 'review')
+    expect(step?.attempts).toBe(2)
+    expect(step?.failureClass).toBe('child-limit')
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
+    expect(record.attempts).toBe(2)
+    expect(record.failureClass).toBe('child-limit')
   })
 
   it('fails a review loud and discards its snapshot when the review queue is off', async () => {

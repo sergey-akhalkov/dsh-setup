@@ -511,9 +511,27 @@ describe('change-intake engine', () => {
       enabledLegacy: new Set(),
       provisionalReviews: await provisionalReviewSteps(first.run, definition, closeContext),
     })
-    // The matching ERROR is intermediate turn-close evidence, not a steer.
-    expect(close.kind).toBe('allow')
-    expect(steered).toEqual([])
+    // An ERROR is not coverage: the owned review step refuses the close until
+    // the next round is live, with no refusal budget release and no VIOLATION.
+    expect(close.kind).toBe('refuse')
+    expect(close.run.violations).toHaveLength(0)
+    expect(steered).toHaveLength(1)
+    expect(steered[0]).toContain('spec-review')
+    // While the retried review is live the close is the silent waiting close.
+    const waiting = evaluateTurnClose({
+      run: first.run,
+      definition,
+      agent: { steer: (text: string) => steered.push(text) },
+      evidenceContext: closeContext,
+      turn: 2,
+      maxBlocks: definition.settings.maxBlocks,
+      installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+      enabledLegacy: new Set(),
+      provisionalReviews: new Set(['spec-review']),
+      review: { uncovered: [], live: ['run-live'] },
+    })
+    expect(waiting.kind).toBe('allow')
+    expect(steered).toHaveLength(1)
 
     // A stale ERROR record is not provisional evidence: the step's own current
     // record is the only failure the close may allow through.

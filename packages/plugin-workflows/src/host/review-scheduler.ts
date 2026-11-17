@@ -333,9 +333,11 @@ export class ReviewScheduler {
   }
 
   /**
-   * A live review of the same unit at any input digest. A successor must not
-   * prepare its snapshot while its predecessor is still reading the stable
-   * unit path: preparation waits for the settlement and cleanup instead.
+   * A live review of the same unit at any input digest, under any rule. Two
+   * review rules on one change and unit share the unit's snapshot path (the
+   * unit key omits the rule), so a successor must not prepare over a checkout
+   * its predecessor is still reading: preparation waits for the settlement and
+   * cleanup instead.
    */
   liveUnit(input: {
     workspace: string
@@ -344,8 +346,16 @@ export class ReviewScheduler {
     taskId?: string
     phase?: string
   }): WorkflowRun | undefined {
-    const prefix = `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}\u0000${input.phase ?? ''}\u0000`
-    for (const [key, run] of this.liveRuns) if (key.startsWith(prefix)) return run
+    // The live key is `workspace\0rule\0change\0taskId\0phase\0digest\0reviewer`;
+    // ownership of the unit path deliberately ignores the rule.
+    for (const [key, run] of this.liveRuns) {
+      const parts = key.split('\u0000')
+      if (parts[0] !== input.workspace) continue
+      if (parts[2] !== input.change) continue
+      if (parts[3] !== (input.taskId ?? '')) continue
+      if (parts[4] !== (input.phase ?? '')) continue
+      return run
+    }
     return undefined
   }
 

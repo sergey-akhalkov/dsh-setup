@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { validateDefinition } from '../src/host/definitions.ts'
+import { currentSpecDigest, reviewDigest } from '../src/host/evidence.ts'
 import { SOFT_SETTLEMENT } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
@@ -411,6 +412,220 @@ describe('native review host admission', () => {
     }
   })
 
+  it('publishes the frozen whole-spec verdict while the live artifacts change', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const definition = validateDefinition({
+      v: 1,
+      id: 'native-spec-review',
+      name: 'Native spec review',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: true,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        gate: 'review',
+        gateIdentity: 'native-spec-review',
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Review the whole change spec',
+          executor: 'review',
+          review: { target: 'codex', instruction: 'review-spec', scope: 'whole', phase: 'spec' },
+          evidence: {
+            kind: 'record',
+            rule: 'native-spec-review',
+            change: '{name}',
+            phase: 'spec',
+            scope: 'whole',
+            verdicts: ['PASS', 'ERROR'],
+            digest: 'current',
+            path: '.dsh/workflows/records/native-spec-review/{name}/spec.json',
+          },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    })
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const run = createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, run, auth)
+      const frozenDigest = await currentSpecDigest(workspace, 'auth')
+      if (frozenDigest === undefined) throw new Error('the change digest is missing')
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.releases.length >= 1)
+      // Edit a reviewed plan artifact while the snapshot review runs: the frozen
+      // verdict still publishes, with no input-change ERROR, and its record is
+      // stale against the edited artifacts.
+      await writeFile(
+        join(workspace, 'openspec', 'changes', 'auth', 'design.md'),
+        '# Design\n\nAn edited decision.\n',
+        'utf8',
+      )
+      host.releases[0]?.()
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'native-spec-review',
+        'auth',
+        'spec.json',
+      )
+      await waitFor(async () => (await readFile(recordPath, 'utf8').catch(() => '')) !== '')
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
+      expect(record.verdict).toBe('PASS')
+      expect(record.error).toBeUndefined()
+      expect(record.digest).toBe(reviewDigest({ scope: 'whole', specDigest: frozenDigest }))
+      const liveDigest = await currentSpecDigest(workspace, 'auth')
+      expect(liveDigest).not.toBe(frozenDigest)
+      expect(record.digest).not.toBe(
+        reviewDigest({ scope: 'whole', specDigest: liveDigest as string }),
+      )
+      // The step is not done from a stale record: the unit is due again.
+      const settled = await readAuthenticatedRun(workspace, run.id, auth)
+      expect(settled?.steps[0]?.state).not.toBe('done')
+      // Wait for the settlement cleanup so the next close reads a stable store.
+      await waitFor(
+        async () => (await readdir(join(workspace, SNAPSHOTS)).catch(() => [])).length === 0,
+      )
+      // The next close starts the next round on the same unit key and, while it
+      // is live, is the silent waiting close.
+      const steered = host.steers.length
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      await waitFor(() => host.releases.length >= 2)
+      expect(host.steers).toHaveLength(steered)
+      host.releases[1]?.()
+      await waitFor(async () => {
+        const settledAgain = await readAuthenticatedRun(workspace, run.id, auth)
+        return settledAgain?.steps[0]?.state === 'done'
+      })
+    } finally {
+      unregister()
+    }
+  })
+
+  it('discards a live-fallback whole-spec verdict when a reviewed artifact changes', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    // The snapshot cannot be built without the `.dsh/` ignore rule: the review
+    // falls back to the live artifacts under the mutation guard.
+    await writeFile(join(workspace, '.gitignore'), '', 'utf8')
+    const definition = validateDefinition({
+      v: 1,
+      id: 'fallback-spec-review',
+      name: 'Fallback spec review',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: true,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        gate: 'review',
+        gateIdentity: 'fallback-spec-review',
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Review the whole change spec',
+          executor: 'review',
+          review: { target: 'codex', instruction: 'review-spec', scope: 'whole', phase: 'spec' },
+          evidence: {
+            kind: 'record',
+            rule: 'fallback-spec-review',
+            change: '{name}',
+            phase: 'spec',
+            scope: 'whole',
+            verdicts: ['PASS', 'ERROR'],
+            digest: 'current',
+            path: '.dsh/workflows/records/fallback-spec-review/{name}/spec.json',
+          },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    })
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const run = createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, run, auth)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.releases.length >= 1)
+      await writeFile(
+        join(workspace, 'openspec', 'changes', 'auth', 'proposal.md'),
+        '# Proposal\n\nAn edit-read-restore cannot pass this guard.\n',
+        'utf8',
+      )
+      host.releases[0]?.()
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'fallback-spec-review',
+        'auth',
+        'spec.json',
+      )
+      await waitFor(async () => (await readFile(recordPath, 'utf8').catch(() => '')) !== '')
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
+      expect(record.verdict).toBe('ERROR')
+      expect(record.failureClass).toBe('reviewed-inputs-changed')
+    } finally {
+      unregister()
+    }
+  })
+
+  it('normalizes task ticks and approvals out of the change artifact digest', async () => {
+    const workspace = await gitWorkspace()
+    const before = await currentSpecDigest(workspace, 'auth')
+    if (before === undefined) throw new Error('the change digest is missing')
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(before)
+    // A portable approval is not a reviewed plan artifact.
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'reviews', '0123456789abcdef.json'), '{}\n', 'utf8')
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(before)
+    // A reviewed plan artifact does move the digest.
+    await writeFile(join(changeDir, 'design.md'), '# Design\n\nA new decision.\n', 'utf8')
+    expect(await currentSpecDigest(workspace, 'auth')).not.toBe(before)
+  })
+
   it.each(['FINDINGS', 'PASS'] as const)(
     'keeps a nonCritical review required past the old soft budget and publishes the late %s verdict',
     async (verdict) => {
@@ -602,8 +817,9 @@ describe('shared whole-spec review admission', () => {
       expect(admitted?.definition.id).toBe('change-intake')
       expect(admitted?.steps.map((step) => step.id)).toEqual(intake.steps.map((step) => step.id))
       expect(admitted?.steps.find((step) => step.id === 'spec-review')?.state).toBe('open')
-      expect(host.steers.length).toBeGreaterThan(beforeIntake)
-      expect(host.steers.at(-1)).toContain('spec-review')
+      // A live review of the shared identity covers the intake step too: the
+      // close waits silently instead of steering the same unit.
+      expect(host.steers).toHaveLength(beforeIntake)
       // The shared identity ran one reviewer, not two.
       expect(host.digests).toHaveLength(1)
       // A waiting close submits no steer: session 2's own close ends silently

@@ -449,6 +449,68 @@ describe('snapshot lifecycle', () => {
     expect(reviewSnapshotName('review:change-a:section:2')).not.toBe(name)
   })
 
+  it('keeps both lanes when two unit cleanups settle at once and never overwrites a newer thread', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    await writeFile(join(dir, 'a.txt'), 'a\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    const signal = new AbortController().signal
+    const keyA = 'review:change-a:section:1'
+    const keyB = 'review:change-a:section:2'
+    const first = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      keyA,
+      defaultGit,
+      signal,
+    )
+    const second = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      keyB,
+      defaultGit,
+      signal,
+    )
+    if (first === undefined || second === undefined) throw new Error('expected two snapshots')
+    const threads = (worktree: string, entries: Array<{ key: string; threadId: string }>) => {
+      const delegation = join(worktree, '.dsh', 'delegation')
+      return mkdir(delegation, { recursive: true }).then(() =>
+        writeFile(
+          join(delegation, 'codex-review-threads.json'),
+          JSON.stringify({
+            version: 1,
+            threads: entries.map((entry) => ({ ...entry, cwd: worktree, sandbox: 'read-only' })),
+          }),
+        ),
+      )
+    }
+    // A's checkout still carries B's older entry; B has already been replaced
+    // in the durable map. A's cleanup must not bring the stale B thread back.
+    await threads(first.worktree, [
+      { key: keyA, threadId: 'thread-a-1' },
+      { key: keyB, threadId: 'thread-b-stale' },
+    ])
+    await threads(second.worktree, [{ key: keyB, threadId: 'thread-b-1' }])
+    const durable = join(dir, '.dsh', 'workflows', 'review-threads.json')
+    await mkdir(join(dir, '.dsh', 'workflows'), { recursive: true })
+    await writeFile(
+      durable,
+      JSON.stringify({ version: 1, threads: [{ key: keyB, threadId: 'thread-b-new' }] }),
+    )
+    await Promise.all([
+      discardReviewSnapshot(dir, keyA, defaultGit),
+      discardReviewSnapshot(dir, keyB, defaultGit),
+    ])
+    const map = JSON.parse(await readFile(durable, 'utf8')) as {
+      threads: Array<{ key: string; threadId: string }>
+    }
+    const byKey = new Map(map.threads.map((entry) => [entry.key, entry.threadId]))
+    expect(byKey.get(keyA)).toBe('thread-a-1')
+    expect(byKey.get(keyB)).toBe('thread-b-1')
+  })
+
   it('keeps a valid lease past the review timeout and sweeps it once expired', async () => {
     const { dir, snapshot } = await lifecycleFixture('run-long')
     const base = Date.now()

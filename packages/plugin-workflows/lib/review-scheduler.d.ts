@@ -102,9 +102,11 @@ export declare class ReviewScheduler {
         reviewer?: string;
     }): WorkflowRun | undefined;
     /**
-     * A live review of the same unit at any input digest. A successor must not
-     * prepare its snapshot while its predecessor is still reading the stable
-     * unit path: preparation waits for the settlement and cleanup instead.
+     * A live review of the same unit at any input digest, under any rule. Two
+     * review rules on one change and unit share the unit's snapshot path (the
+     * unit key omits the rule), so a successor must not prepare over a checkout
+     * its predecessor is still reading: preparation waits for the settlement and
+     * cleanup instead.
      */
     liveUnit(input: {
         workspace: string;

@@ -54,39 +54,65 @@ function parseReviewThreads(raw: string): ReviewThreadEntry[] {
 }
 
 /**
- * Save the Codex thread map the provider wrote inside the checkout before the
- * checkout is removed, so the next round at the same stable path resumes the
- * thread instead of starting a fresh one.
+ * Save one unit's Codex thread entry from the checkout before it is removed, so
+ * the next round at the same stable path resumes the thread instead of starting
+ * a fresh one. Concurrent lanes settle at once: the read-modify-write of the
+ * shared map is serialized, and only this unit's key is merged so a snapshot
+ * built before another lane's replacement cannot overwrite its newer thread.
  */
-async function preserveReviewThreads(cwd: string, worktree: string): Promise<void> {
+async function preserveReviewThreads(
+  cwd: string,
+  worktree: string,
+  unitKey?: string,
+): Promise<void> {
   let incoming: ReviewThreadEntry[]
   try {
     incoming = parseReviewThreads(await readFile(join(worktree, CODEX_THREADS_STATE), 'utf8'))
   } catch {
     return
   }
-  if (incoming.length === 0) return
+  const own = unitKey === undefined ? incoming : incoming.filter((entry) => entry.key === unitKey)
+  if (own.length === 0) return
   const path = resolve(cwd, REVIEW_THREADS_STATE)
-  let prior: ReviewThreadEntry[] = []
-  try {
-    prior = parseReviewThreads(await readFile(path, 'utf8'))
-  } catch {
-    prior = []
-  }
-  const merged = new Map<string, ReviewThreadEntry>()
-  for (const entry of [...prior, ...incoming]) merged.set(entry.key, entry)
-  await mkdir(dirname(path), { recursive: true })
-  const temporary = `${path}.${String(process.pid)}.${String(Date.now())}.tmp`
-  try {
-    await writeFile(
-      temporary,
-      `${JSON.stringify({ version: 1, threads: [...merged.values()] }, null, 2)}\n`,
-      'utf8',
-    )
-    await rename(temporary, path)
-  } finally {
-    await unlink(temporary).catch(() => undefined)
-  }
+  await withThreadStateLock(path, async () => {
+    let prior: ReviewThreadEntry[] = []
+    try {
+      prior = parseReviewThreads(await readFile(path, 'utf8'))
+    } catch {
+      prior = []
+    }
+    const merged = new Map<string, ReviewThreadEntry>()
+    for (const entry of prior) merged.set(entry.key, entry)
+    for (const entry of own) merged.set(entry.key, entry)
+    await mkdir(dirname(path), { recursive: true })
+    const temporary = `${path}.${String(process.pid)}.${String(Date.now())}.tmp`
+    try {
+      await writeFile(
+        temporary,
+        `${JSON.stringify({ version: 1, threads: [...merged.values()] }, null, 2)}\n`,
+        'utf8',
+      )
+      await rename(temporary, path)
+    } finally {
+      await unlink(temporary).catch(() => undefined)
+    }
+  })
+}
+
+/** One serialized chain per durable thread map: concurrent settlements never lose an entry. */
+const threadStateChains = new Map<string, Promise<void>>()
+
+function withThreadStateLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+  const prior = threadStateChains.get(path) ?? Promise.resolve()
+  const next = prior.then(work, work)
+  threadStateChains.set(
+    path,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  )
+  return next
 }
 
 /** Put the durable thread map into a freshly built checkout before the reviewer starts. */
@@ -254,7 +280,7 @@ export async function sweepReviewSnapshots(
           continue
         }
       }
-      await discardSnapshotByName(cwd, name, runGit)
+      await discardSnapshotByName(cwd, name, undefined, runGit)
       continue
     }
     if (entry.name.endsWith('.tmp') && entry.name.includes('.lease.')) {
@@ -310,18 +336,19 @@ export async function discardReviewSnapshot(
   runGit: GitRunner,
   remove?: (path: string) => Promise<void>,
 ): Promise<void> {
-  await discardSnapshotByName(cwd, reviewSnapshotName(key), runGit, remove)
+  await discardSnapshotByName(cwd, reviewSnapshotName(key), key, runGit, remove)
 }
 
 async function discardSnapshotByName(
   cwd: string,
   name: string,
+  unitKey: string | undefined,
   runGit: GitRunner,
   remove: (path: string) => Promise<void> = (path) => rm(path, { recursive: true, force: true }),
 ): Promise<void> {
   await stopSnapshotLeaseByName(cwd, name)
   const worktree = resolve(cwd, SNAPSHOT_DIR, name)
-  await preserveReviewThreads(cwd, worktree).catch(() => undefined)
+  await preserveReviewThreads(cwd, worktree, unitKey).catch(() => undefined)
   try {
     await runGit(['worktree', 'remove', '--force', worktree], cwd)
   } catch {
@@ -465,7 +492,7 @@ export async function createReviewSnapshot(
 
   // A key reused across rounds keeps its path: discard the previous round's
   // leftover (and its lease) so the checkout can be rebuilt in place.
-  await discardSnapshotByName(cwd, name, runGit)
+  await discardSnapshotByName(cwd, name, key, runGit)
   try {
     await runGit(['worktree', 'prune'], cwd)
   } catch {
@@ -514,7 +541,7 @@ export async function createReviewSnapshot(
     const frozenSpec = await specDigest(frozenChange)
     return { tree, commit, worktree, changeDir: frozenChange, specDigest: frozenSpec }
   } catch {
-    await discardSnapshotByName(cwd, name, runGit)
+    await discardSnapshotByName(cwd, name, key, runGit)
     onUnavailable?.('the snapshot worktree could not be built (git error during snapshot creation)')
     return undefined
   }

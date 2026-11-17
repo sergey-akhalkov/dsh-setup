@@ -416,21 +416,33 @@ function coveredTaskIds(context) {
     }
     return covered;
 }
-/** The live task-review runs that cover every checked task of a unit as it is now. */
+/**
+ * The live task-review runs whose union covers every checked task of a unit as
+ * it is now: one section run, or the per-task fallback runs an oversized section
+ * identity starts. Partial coverage is not coverage.
+ */
 function liveUnitRuns(change, unit, openRuns) {
-    return openRuns.filter((run) => {
+    const covering = [];
+    const seen = new Set();
+    for (const run of openRuns) {
         if (run.change !== change)
-            return false;
+            continue;
         const ids = coveredTaskIds(run.context);
-        return unit.covered.every((task) => ids.includes(task.id));
-    });
+        const fresh = unit.covered.filter((task) => ids.includes(task.id) && !seen.has(task.id));
+        if (fresh.length === 0)
+            continue;
+        for (const task of fresh)
+            seen.add(task.id);
+        covering.push(run);
+    }
+    return seen.size === unit.covered.length ? covering : [];
 }
 /**
  * The owned review obligation of one review run at the turn close: every due
  * unit with the live review covering it, and a ready start steer for a unit
  * that has none. A whole-scope review is its own unit.
  */
-async function reviewCloseStatus(workspace, change, definition, step, run, openRuns, liveReview) {
+async function reviewCloseStatus(workspace, change, definition, step, run, openRuns, liveReview, dispatchFailure, siblingLiveRunId) {
     // The review gate applies once the pipeline reached its review step. An
     // earlier open step keeps the ordinary steering path (still uncapped).
     const index = definition.steps.indexOf(step);
@@ -453,10 +465,16 @@ async function reviewCloseStatus(workspace, change, definition, step, run, openR
             };
         }
         // Only a live review makes the waiting close; a settled step is handled by
-        // the ordinary path and a never-started one is not a live review.
-        return state !== 'done' && state !== 'cancelled' && liveReview
-            ? { uncovered: [], live: [run.id] }
-            : undefined;
+        // the ordinary path and a never-started one is not a live review. A
+        // successor run the trigger started for the same whole-scope unit is live
+        // coverage too: this run waits on that shared review instead of steering.
+        if (state === 'done' || state === 'cancelled')
+            return undefined;
+        if (liveReview)
+            return { uncovered: [], live: [run.id] };
+        if (siblingLiveRunId !== undefined)
+            return { uncovered: [], live: [siblingLiveRunId] };
+        return undefined;
     }
     const units = await reviewUnits(workspace, change);
     if (units === undefined)
@@ -475,12 +493,14 @@ async function reviewCloseStatus(workspace, change, definition, step, run, openR
         uncovered.push(reviewUnitText(change, unit, { ...(rule === undefined ? {} : { rule }), openRuns }));
     }
     // A failed attempt leaves the unit due; its class and attempt count stay
-    // visible in the refusal instead of being replaced by a fresh start.
+    // visible in the refusal instead of being replaced by a fresh start. A due
+    // unit whose start failed is named too, even when another run already refuses.
     const failed = run.steps.find((entry) => entry.id === step.id);
     const failure = failed?.state === 'failed' && failed.reason !== undefined
         ? `The last review attempt on run "${run.id}" failed: ${failed.reason.slice(0, 300)}`
         : undefined;
-    return { uncovered, live, ...(failure === undefined ? {} : { failure }) };
+    const causes = [failure, dispatchFailure].filter((text) => text !== undefined);
+    return { uncovered, live, ...(causes.length === 0 ? {} : { failure: causes.join(' ') }) };
 }
 /** Whether a definition is a review gate; those starts are exempt from `maxRuns`. */
 function isReviewDefinition(definition) {
@@ -2433,18 +2453,38 @@ export function apply(ctx, config = {}) {
             // The stored state is newer; the stale advance must not be written.
             return current;
         }
-        if (run !== current)
-            await writeCommit(workspace, run, auth);
+        // An advance built before the review admission must not erase the retry
+        // attempt facts a concurrent admission already stamped on the stored
+        // step: keep them when the incoming step carries none.
+        const withAttempts = () => {
+            const storedSteps = new Map(current.steps.map((step) => [step.id, step]));
+            let changed = false;
+            const steps = run.steps.map((step) => {
+                const stored = storedSteps.get(step.id);
+                if (stored?.attempts === undefined || step.attempts !== undefined)
+                    return step;
+                changed = true;
+                return {
+                    ...step,
+                    attempts: stored.attempts,
+                    ...(stored.failureClass === undefined ? {} : { failureClass: stored.failureClass }),
+                };
+            });
+            return changed ? { ...run, steps } : run;
+        };
+        const merged = withAttempts();
+        if (merged !== current)
+            await writeCommit(workspace, merged, auth);
         // A disposal can fence the session during the write; the lock serializes
         // the writers, but the fence and the session generation are set
         // synchronously, so re-check both after the write.
         if (ended() || sessionStale()) {
             const replacement = interruptedFrom();
-            if (replacement !== run)
+            if (replacement !== merged)
                 await writeCommit(workspace, replacement, auth);
             return replacement;
         }
-        return run;
+        return merged;
     });
     /** Advance one run through its verified evidence; a deferred step never steers. */
     const reviewScheduler = new ReviewScheduler({
@@ -2515,7 +2555,12 @@ export function apply(ctx, config = {}) {
     ctx.effect(() => () => {
         reviewScheduler.dispose();
     });
-    const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration, capturedSessionGeneration) => {
+    const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration, capturedSessionGeneration, stop) => {
+        // A user stop wins over this advance: an abort that lands during any await
+        // below keeps the run as it is and dispatches/persists nothing.
+        const aborted = () => stop?.aborted === true;
+        if (aborted())
+            return run;
         if (capturedGeneration !== undefined && capturedGeneration !== runGeneration(run.id)) {
             // The snapshot was read before a resume replaced its lifecycle; never
             // dispatch or persist from it.
@@ -2608,6 +2653,8 @@ export function apply(ctx, config = {}) {
                     return undefined;
                 // A review started on a later turn keeps its identity in the run context.
                 const initialSpecDigest = await currentSpecDigest(workspace, change);
+                if (aborted())
+                    return undefined;
                 if (initialSpecDigest === undefined) {
                     return settleStep(reviewRun, step.id, 'failed', {
                         at: journal.time(),
@@ -2632,6 +2679,8 @@ export function apply(ctx, config = {}) {
                         sectionValue = resolveSectionReview(await readTasksPlan(workspace, change), section, change, false);
                     }
                     catch (error) {
+                        if (aborted())
+                            return undefined;
                         return settleStep(reviewRun, step.id, 'failed', {
                             at: journal.time(),
                             reason: error instanceof Error ? error.message : String(error),
@@ -2661,6 +2710,8 @@ export function apply(ctx, config = {}) {
                 if (!resolved.ok) {
                     // A missing reviewer target is a review failure too: it writes an
                     // ERROR record with the target diagnostic instead of failing silently.
+                    if (aborted())
+                        return undefined;
                     const failure = await recordReviewFailure({
                         run: reviewRun,
                         definition: reviewDefinition,
@@ -2680,6 +2731,8 @@ export function apply(ctx, config = {}) {
                 if (reviewRunner === undefined) {
                     // The unavailable service is a review failure, not a silent wait: it
                     // writes an ERROR record and settles the step from that evidence.
+                    if (aborted())
+                        return undefined;
                     const failure = await recordReviewFailure({
                         run: reviewRun,
                         definition: reviewDefinition,
@@ -2767,11 +2820,15 @@ export function apply(ctx, config = {}) {
                     captured = await reviewedInputs(workspace, changeDir, defaultGit);
                 }
                 catch (error) {
+                    if (aborted())
+                        return undefined;
                     return settleStep(reviewRun, step.id, 'failed', {
                         at: journal.time(),
                         reason: `the reviewed inputs could not be read (${error instanceof Error ? error.message : String(error)}); fix the workspace and re-run the review`,
                     });
                 }
+                if (aborted())
+                    return undefined;
                 let capturedHash = signatureHash(captured);
                 const guardFor = (signature, tree) => async () => {
                     if ((mutationEpochs.get(workspace) ?? 0) !== startEpoch) {
@@ -2981,11 +3038,15 @@ export function apply(ctx, config = {}) {
                 catch (error) {
                     // A snapshot rejected before admission must not keep renewing its lease.
                     await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined);
+                    if (aborted())
+                        return undefined;
                     return settleStep(reviewRun, step.id, 'failed', {
                         at: journal.time(),
                         reason: error instanceof Error ? error.message : String(error),
                     });
                 }
+                if (aborted())
+                    return undefined;
                 // A queued entry re-checks the live source set when a slot frees; one
                 // re-preparation replaces the identity atomically before the start.
                 const reprepare = async (alreadyReprepared) => {
@@ -3042,6 +3103,8 @@ export function apply(ctx, config = {}) {
                 if (!reviewQueue.enabled) {
                     // Release A runs native reviews only through the engine queue; a
                     // disabled queue fails loud instead of starting an unmanaged child.
+                    if (aborted())
+                        return undefined;
                     const failure = await recordReviewFailure({
                         ...request,
                         error: 'the native review queue is disabled; Release A runs reviews only through reviewQueue — enable it in the workflows row config and re-run',
@@ -3052,6 +3115,8 @@ export function apply(ctx, config = {}) {
                     }
                     return failure?.run ?? reviewRun;
                 }
+                if (aborted())
+                    return undefined;
                 await reviewScheduler.enqueue({
                     workspace,
                     run: reviewRun,
@@ -3080,6 +3145,10 @@ export function apply(ctx, config = {}) {
             // guard as every other advance: a run interrupted by a disposal before
             // this write must not be revived as completed or receipted.
             completeRun: async (completedRun, digest) => {
+                // A stop that landed during the advance must not commit completion or
+                // its receipt; the run stays open for the next close.
+                if (aborted())
+                    return { run };
                 const persisted = await persistRun(workspace, completedRun, auth, generation, sessionGenerationAtStart, run.updatedAt);
                 if (persisted.status !== 'completed')
                     return { run: persisted };
@@ -3096,7 +3165,7 @@ export function apply(ctx, config = {}) {
             },
             now: journal.time(),
         });
-        if (result.run !== run) {
+        if (result.run !== run && !aborted()) {
             return await persistRun(workspace, result.run, auth, generation, sessionGenerationAtStart, run.updatedAt);
         }
         return result.run;
@@ -3946,10 +4015,10 @@ export function apply(ctx, config = {}) {
                             return;
                         if (unit.covered.some((task) => startedCovered.has(task.id)))
                             continue;
-                        const covered = liveRuns(change).some((run) => {
-                            const ids = taskIdsOf(run.context);
-                            return unit.covered.every((task) => ids.includes(task.id));
-                        });
+                        // Coverage is the union of the live runs' covered ids: one full
+                        // section run, or the per-task runs an oversized section starts.
+                        const liveIds = new Set(liveRuns(change).flatMap((run) => taskIdsOf(run.context)));
+                        const covered = unit.covered.every((task) => liveIds.has(task.id));
                         if (covered)
                             continue;
                         const section = unit.section;
@@ -4050,7 +4119,7 @@ export function apply(ctx, config = {}) {
                     definitionOf.set(run.id, definition);
                     continue;
                 }
-                const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn, generation, sessionGenerationAtRead);
+                const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn, generation, sessionGenerationAtRead, stopSignal);
                 advanced.set(run.id, current);
                 advancedGenerations.set(run.id, generation);
                 definitionOf.set(run.id, definition);
@@ -4117,7 +4186,14 @@ export function apply(ctx, config = {}) {
                 const reviewOwned = reviewStep !== undefined &&
                     resolveOwnership(definition, legacy.installed, legacy.enabled).steps.some((entry) => entry.id === reviewStep.id && entry.ownership === 'own');
                 const review = reviewOwned && reviewStep !== undefined && typeof current.context.name === 'string'
-                    ? await reviewCloseStatus(workspace, current.context.name, definition, reviewStep, current, reviewOpenRuns, reviewScheduler?.liveRunById(current.id) !== undefined)
+                    ? await reviewCloseStatus(workspace, current.context.name, definition, reviewStep, current, reviewOpenRuns, reviewScheduler?.liveRunById(current.id) !== undefined, dispatchFailure, reviewStep.review?.scope === 'task'
+                        ? undefined
+                        : reviewScheduler?.liveUnit({
+                            workspace,
+                            rule: reviewIdentityOf(definition, reviewStep),
+                            change: current.context.name,
+                            phase: reviewPhase(reviewStep.review?.scope ?? 'whole', reviewStep.review?.phase),
+                        })?.id)
                     : undefined;
                 const completion = definition.id === 'task-review' && typeof current.context.name === 'string'
                     ? taskReviewCompletion(workspace, current.context.name, { openRuns: reviewOpenRuns })

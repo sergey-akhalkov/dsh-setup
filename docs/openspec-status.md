@@ -986,3 +986,19 @@ previous runs `interrupted`, so no old review is live and the next turn close di
 rounds. Everything before this point is committed, and the remaining work is the three tail tasks
 plus those review rounds; continue from the change's apply workflow rather than from this session:
 run `/openspec-apply-change review-until-pass` in a new session.
+
+## review-until-pass: lane-review fixes and the tail verification (2026-11-17)
+
+The five lane reviews the 0.44.0 restart dispatched settled `FINDINGS` on 2026-11-17; the fixes stay on the same lane threads:
+
+- Lane 1 (`1.2`, `1.4`): the close and dispatch coverage is the union of the live runs, so an oversized section's per-task fallback runs suppress duplicates and count as live coverage; the delivered `/workflows status` is no longer cut at 1200 characters and names every due lane with its covered tasks, missing tasks, and live run.
+- Lane 2 (`2.2`): the durable reviewer-thread map is written under one serialized chain per workspace, a cleanup merges only its own unit key, the checkout is owned across review rules so a second rule cannot rebuild or delete an active unit's snapshot, and a whole-scope run whose step is pending waits on a successor run's live review of the same identity instead of steering.
+- Lane 3 (`3.1`, `3.2`, `3.7`): the provisional-`ERROR` exemption is suppressed by the reached owned review obligation rather than the local `gate` metadata, a dispatch failure is named even when another review refuses, and the turn's abort signal reaches `advanceRun`, which checks it after each preparation await and before dispatch, record publication, completion, or persistence.
+- Lane 4 (`4.4`): a lifecycle write preserves the stored review step's attempt count and failure class, so the retry facts survive admission and stay visible in the settled record.
+- Lane 5 (`5.3`): the Runs recovery paragraph states that an `ERROR` never needs a record deletion or a run cancellation, and that a `PASS`-only step leaves the close refused until its retried round is live.
+
+Tail verification (tasks 6.1, 6.3, 6.4):
+
+- `pnpm exec vitest run packages/plugin-workflows/test/acceptance.test.ts` runs the lane loop in a throwaway `DSH_HOME` and temp git workspace: two lanes start in one close with the whole-spec and integration reviews, the waiting close submits no message and records no `VIOLATION`, a scripted `FINDINGS` then `PASS` keeps the same lane unit key across rounds, the per-task approvals are written, the whole-spec `PASS` stays current after the parallel worktree fix, and a stale integration `PASS` refuses the agent archive. Its report is written to `.tmp/acceptance-report.json`.
+- Live Codex check (real provider, 2026-11-17): the manual `live-acceptance.manual.ts` case `resumes the same review thread across two rounds of one unit key` returned `threadReuse=created` then `threadReuse=resumed` with thread id `01a1ea53-7a72-7573-a491-5d249d74c31c`; the two-round record and approval path is the acceptance scenario above. `pnpm validate:composition` packed the built setup into a throwaway `DSH_HOME` and composed it on DSH 0.2.2-rc.2; the desktop profile was not touched.
+- Spec-review durability: `review-host.test.ts` now runs a host-level whole-spec review whose frozen verdict publishes while the live artifacts change (no `reviewed-inputs-changed`; the record is stale against the edit), a live-fallback run that discards a changed-artifact verdict as `reviewed-inputs-changed`, and the digest split: a task tick and a portable approval leave the normalized change-artifact digest unchanged, while an edit to `proposal.md`/`design.md`/`specs/**` moves it. The integration record binds the worktree content tree, so a later code change stales it.
