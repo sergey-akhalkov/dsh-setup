@@ -455,6 +455,11 @@ export function apply(ctx, config = {}) {
     // Resolve the queue now so an invalid range fails the load; admission is
     // wired after the guarded run writer exists.
     const reviewQueue = resolveReviewQueue(config.reviewQueue);
+    if (reviewQueue.waitTimeoutMs < reviewTimeoutMs) {
+        // A waiting review behind the concurrency limit must outlast one full
+        // review; otherwise the queue kills a review that would have started.
+        throw new Error(`workflows reviewQueue.waitTimeoutMs (${String(reviewQueue.waitTimeoutMs)}) must be at least timeouts.review (${String(reviewTimeoutMs)})`);
+    }
     // A malformed shipped trigger or definition refuses the plugin load, naming
     // the field. The registry then holds one merged installed catalog.
     definitionsRegistry.seedShipped();

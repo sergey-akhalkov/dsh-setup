@@ -3470,6 +3470,22 @@ describe('intent engine opt-in', () => {
     expect(runs.filter((name) => name.endsWith('.json'))).toHaveLength(0)
   })
 
+  it('refuses a queue wait shorter than one review timeout', async () => {
+    // A review waiting behind the concurrency limit must outlast a full review,
+    // or the queue settles it as queue-timeout before a slot can free.
+    const allowed = fakeHost(await tempWorkspace())
+    expect(() =>
+      apply(allowed.ctx as never, {
+        reviewQueue: { waitTimeoutMs: 600_000 },
+        timeouts: { review: 600_000 },
+      }),
+    ).not.toThrow()
+    const refused = fakeHost(await tempWorkspace())
+    expect(() => apply(refused.ctx as never, { reviewQueue: { waitTimeoutMs: 1_000 } })).toThrow(
+      /reviewQueue\.waitTimeoutMs \(1000\) must be at least timeouts\.review \(600000\)/u,
+    )
+  })
+
   it('refuses a non-boolean engine allowIntent', async () => {
     const workspace = await tempWorkspace()
     const host = fakeHost(workspace)

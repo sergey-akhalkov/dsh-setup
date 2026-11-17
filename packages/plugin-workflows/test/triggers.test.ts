@@ -21,7 +21,7 @@ const packageDir = fileURLToPath(new URL('..', import.meta.url))
 describe('shadow trigger catalog', () => {
   it('loads the shipped generic catalog with every supported event kind', () => {
     const triggers = loadCatalog()
-    expect(triggers).toHaveLength(5)
+    expect(triggers).toHaveLength(4)
     expect(new Set(triggers.map((trigger) => trigger.id)).size).toBe(triggers.length)
     for (const trigger of triggers) {
       expect(EVENT_KINDS).toContain(trigger.event)

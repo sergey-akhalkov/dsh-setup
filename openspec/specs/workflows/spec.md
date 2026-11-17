@@ -839,7 +839,7 @@ run records readable. A configuration error MUST fail plugin load with the field
 
 #### Scenario: Invalid configuration
 
-- **WHEN** `maxBlocks` is zero, `runRetentionDays` is negative, `reviewQueue.concurrency` is outside 1 to 4, or a reviewer sets `model` for a provider without `agentOptions` support
+- **WHEN** `maxBlocks` is zero, `runRetentionDays` is negative, `reviewQueue.concurrency` is outside 1 to 10, or a reviewer sets `model` for a provider without `agentOptions` support
 - **THEN** plugin load fails with the field and accepted range or capability
 
 #### Scenario: Disabled engine
@@ -2070,7 +2070,7 @@ replace the authoritative record.
 ### Requirement: Review queue admission
 
 Every review run SHALL pass through one per-profile FIFO queue before its reviewer starts. The queue
-SHALL enforce a configurable concurrency limit (default 2) and a configurable waiting-list cap (default
+SHALL enforce a configurable concurrency limit (default 10) and a configurable waiting-list cap (default
 16). A run admitted while at capacity waits; a run that cannot be admitted within the wait timeout
 SHALL settle as a bounded `ERROR` in its run record and settlement observer, with the queue state, and
 no reviewer SHALL start.
@@ -2201,7 +2201,7 @@ observability surface.
 ### Requirement: Review queue configuration and off switch
 
 The review queue SHALL be configured by `reviewQueue` with `enabled` (default true), `concurrency`
-(default 2), `maxQueued` (default 16), `maxAttempts` (default 3), `baseDelayMs`, `maxDelayMs`, and
+(default 10), `maxQueued` (default 16), `maxAttempts` (default 3), `baseDelayMs`, `maxDelayMs`, and
 `waitTimeoutMs`. Invalid values MUST fail plugin load with the field. The engine runs reviews only
 through the queue, so `enabled: false` SHALL fail the review step with a `config` `ERROR` and start no
 reviewer.
@@ -2209,7 +2209,7 @@ reviewer.
 #### Scenario: Defaults apply
 
 - **WHEN** the row omits `reviewQueue`
-- **THEN** the queue is enabled with concurrency 2 and the documented defaults
+- **THEN** the queue is enabled with concurrency 10 and the documented defaults
 
 #### Scenario: Invalid configuration
 

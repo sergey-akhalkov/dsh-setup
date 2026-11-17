@@ -183,12 +183,15 @@ export function resolveReviewer(reviewers, target) {
 }
 export const DEFAULT_REVIEW_QUEUE = Object.freeze({
     enabled: true,
-    concurrency: 2,
+    concurrency: 10,
     maxQueued: 16,
     maxAttempts: 3,
     baseDelayMs: 5_000,
     maxDelayMs: 60_000,
-    waitTimeoutMs: 300_000,
+    // Above the default review timeout: a review waiting behind the concurrency
+    // limit must outlast a full review, or the section runs the engine starts
+    // together settle as queue-timeout before a slot frees.
+    waitTimeoutMs: 1_200_000,
 });
 const REVIEW_QUEUE_KEYS = new Set([
     'enabled',
@@ -223,7 +226,7 @@ export function resolveReviewQueue(raw) {
         enabled: enabled ?? DEFAULT_REVIEW_QUEUE.enabled,
         concurrency: raw.concurrency === undefined
             ? DEFAULT_REVIEW_QUEUE.concurrency
-            : integerIn(raw.concurrency, 'concurrency', 1, 4),
+            : integerIn(raw.concurrency, 'concurrency', 1, 10),
         maxQueued: raw.maxQueued === undefined
             ? DEFAULT_REVIEW_QUEUE.maxQueued
             : integerIn(raw.maxQueued, 'maxQueued', 1, 100),

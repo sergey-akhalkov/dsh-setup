@@ -348,12 +348,12 @@
         reasoningEffort: xhigh
     reviewQueue:
       enabled: true
-      concurrency: 2
+      concurrency: 10
       maxQueued: 16
       maxAttempts: 3
       baseDelayMs: 5000
       maxDelayMs: 60000
-      waitTimeoutMs: 300000
+      waitTimeoutMs: 1200000
     timeouts:
       review: 600000
 - id: dsh-setup-goal-continuity

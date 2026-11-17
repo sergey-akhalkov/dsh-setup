@@ -269,12 +269,15 @@ export interface ReviewQueueConfig {
 
 export const DEFAULT_REVIEW_QUEUE: ReviewQueueConfig = Object.freeze({
   enabled: true,
-  concurrency: 2,
+  concurrency: 10,
   maxQueued: 16,
   maxAttempts: 3,
   baseDelayMs: 5_000,
   maxDelayMs: 60_000,
-  waitTimeoutMs: 300_000,
+  // Above the default review timeout: a review waiting behind the concurrency
+  // limit must outlast a full review, or the section runs the engine starts
+  // together settle as queue-timeout before a slot frees.
+  waitTimeoutMs: 1_200_000,
 })
 
 const REVIEW_QUEUE_KEYS = new Set([
@@ -313,7 +316,7 @@ export function resolveReviewQueue(raw: unknown): ReviewQueueConfig {
     concurrency:
       raw.concurrency === undefined
         ? DEFAULT_REVIEW_QUEUE.concurrency
-        : integerIn(raw.concurrency, 'concurrency', 1, 4),
+        : integerIn(raw.concurrency, 'concurrency', 1, 10),
     maxQueued:
       raw.maxQueued === undefined
         ? DEFAULT_REVIEW_QUEUE.maxQueued

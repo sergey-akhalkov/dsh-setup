@@ -65,12 +65,12 @@ describe('review queue config', () => {
     expect(resolveReviewQueue(undefined)).toEqual(DEFAULT_REVIEW_QUEUE)
     expect(DEFAULT_REVIEW_QUEUE).toEqual({
       enabled: true,
-      concurrency: 2,
+      concurrency: 10,
       maxQueued: 16,
       maxAttempts: 3,
       baseDelayMs: 5_000,
       maxDelayMs: 60_000,
-      waitTimeoutMs: 300_000,
+      waitTimeoutMs: 1_200_000,
     })
   })
 
@@ -78,7 +78,7 @@ describe('review queue config', () => {
     expect(
       resolveReviewQueue({
         enabled: false,
-        concurrency: 4,
+        concurrency: 10,
         maxQueued: 100,
         maxAttempts: 10,
         baseDelayMs: 0,
@@ -87,7 +87,7 @@ describe('review queue config', () => {
       }),
     ).toEqual({
       enabled: false,
-      concurrency: 4,
+      concurrency: 10,
       maxQueued: 100,
       maxAttempts: 10,
       baseDelayMs: 0,
@@ -100,7 +100,7 @@ describe('review queue config', () => {
     expect(resolveReviewQueue({ waitTimeoutMs: 3_600_000 }).waitTimeoutMs).toBe(3_600_000)
     for (const bad of [
       { concurrency: 0 },
-      { concurrency: 5 },
+      { concurrency: 11 },
       { maxQueued: 0 },
       { maxQueued: 101 },
       { maxAttempts: 0 },
