@@ -980,3 +980,8 @@ After the restart, apply the change again from the new session: the remaining ta
 (spec-review durability), then the lane task reviews, the whole-spec review, and the integration
 review must each be a current `PASS` before `pnpm reviews:check --change review-until-pass` reports
 the change archive-ready.
+
+The owner installed 0.44.0 on 2026-11-17; the new engine recovered the review store and marked the
+previous runs `interrupted`, so no old review is live and the next turn close dispatches fresh
+rounds. Everything before this point is committed, and the remaining work is the three tail tasks
+plus those review rounds; continue from the change's apply workflow rather than from this session.
