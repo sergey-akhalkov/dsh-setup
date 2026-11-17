@@ -739,3 +739,17 @@ export function checkpointRequired(input: CheckpointApplicabilityInput): boolean
   if ((input.requireWrite ?? true) && input.written === 0 && input.workers === 0) return false
   return true
 }
+
+/**
+ * Forget a run's turn key once the run can no longer stand for its trigger: a
+ * cancelled or failed attempt must not keep the definition deduplicated for the
+ * rest of the turn, or a cancelled review could never be re-run until a restart.
+ */
+export function forgetSettledTriggerKey(
+  seen: Map<string, Map<string, number>>,
+  run: { readonly session: string; readonly dedupeKey?: string; readonly status: string },
+): void {
+  if (run.dedupeKey === undefined) return
+  if (run.status !== 'cancelled' && run.status !== 'failed') return
+  seen.get(run.session)?.delete(run.dedupeKey)
+}

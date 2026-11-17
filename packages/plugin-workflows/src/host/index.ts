@@ -176,6 +176,7 @@ import {
   evaluateDefinitions,
   evaluateDefinitionTrigger,
   evaluateIntents,
+  forgetSettledTriggerKey,
   intentDedupeKey,
   type ObligationReason,
   obligationDedupeKey,
@@ -3037,7 +3038,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   : { turnBlocksTurn: stored.turnBlocksTurn }),
                 violations: stored.violations,
               }
-        return await persistRun(
+        const persisted = await persistRun(
           targetWorkspace,
           merged,
           auth,
@@ -3045,6 +3046,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           undefined,
           stored?.updatedAt,
         )
+        // A cancelled or failed attempt must not hold the definition's turn key.
+        forgetSettledTriggerKey(seen, settledRun)
+        return persisted
       },
       discardSnapshot: (targetWorkspace, runId) =>
         discardReviewSnapshot(targetWorkspace, runId, defaultGit),
@@ -3788,7 +3792,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (
           run.session === sessionId &&
           run.dedupeKey !== undefined &&
-          run.status !== 'cancelled'
+          run.status !== 'cancelled' &&
+          run.status !== 'failed'
         ) {
           map.set(run.dedupeKey, run.updatedAt)
         }
@@ -4941,6 +4946,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             const cancelled = await cancelRun(workspace, runId, auth, Date.now(), undefined, false)
             await writeCommit(workspace, cancelled, auth)
             bumpRunGeneration(runId)
+            forgetSettledTriggerKey(seen, cancelled)
             return cancelled
           } catch {
             return undefined

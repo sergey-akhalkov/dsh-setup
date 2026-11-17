@@ -37,7 +37,7 @@ import { addViolation, boundedPromptContext, completeNotApplicable, createRun, D
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
-import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, obligationDedupeKey, } from './triggers.js';
+import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, forgetSettledTriggerKey, intentDedupeKey, obligationDedupeKey, } from './triggers.js';
 import { attributedChangeNames } from './write-attribution.js';
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows';
@@ -2489,7 +2489,10 @@ export function apply(ctx, config = {}) {
                         : { turnBlocksTurn: stored.turnBlocksTurn }),
                     violations: stored.violations,
                 };
-            return await persistRun(targetWorkspace, merged, auth, runGeneration(settledRun.id), undefined, stored?.updatedAt);
+            const persisted = await persistRun(targetWorkspace, merged, auth, runGeneration(settledRun.id), undefined, stored?.updatedAt);
+            // A cancelled or failed attempt must not hold the definition's turn key.
+            forgetSettledTriggerKey(seen, settledRun);
+            return persisted;
         },
         discardSnapshot: (targetWorkspace, runId) => discardReviewSnapshot(targetWorkspace, runId, defaultGit),
     });
@@ -3119,7 +3122,8 @@ export function apply(ctx, config = {}) {
             for (const run of runs) {
                 if (run.session === sessionId &&
                     run.dedupeKey !== undefined &&
-                    run.status !== 'cancelled') {
+                    run.status !== 'cancelled' &&
+                    run.status !== 'failed') {
                     map.set(run.dedupeKey, run.updatedAt);
                 }
             }
@@ -4114,6 +4118,7 @@ export function apply(ctx, config = {}) {
                         const cancelled = await cancelRun(workspace, runId, auth, Date.now(), undefined, false);
                         await writeCommit(workspace, cancelled, auth);
                         bumpRunGeneration(runId);
+                        forgetSettledTriggerKey(seen, cancelled);
                         return cancelled;
                     }
                     catch {

@@ -9,6 +9,7 @@ import {
   evaluateDefinitions,
   evaluateDefinitionTrigger,
   evaluateIntents,
+  forgetSettledTriggerKey,
   type IntentClassification,
   loadCatalog,
   obligationDedupeKey,
@@ -717,4 +718,25 @@ it('captures the name from a path glob and passes it to the run start', () => {
   )
   expect(rows[0]).toMatchObject({ matched: true, reason: 'run-created', capture: 'auth' })
   expect(captures).toEqual(['auth'])
+})
+
+describe('settled trigger keys', () => {
+  it('forgets a cancelled or failed run key and keeps a live or completed one', () => {
+    const seen = new Map<string, Map<string, number>>()
+    const key = 'turn-8'
+    const session = 'session-1'
+    const held = (status: string): boolean => {
+      seen.set(session, new Map([[key, 1]]))
+      forgetSettledTriggerKey(seen, { session, dedupeKey: key, status })
+      return seen.get(session)?.has(key) === true
+    }
+    expect(held('cancelled')).toBe(false)
+    expect(held('failed')).toBe(false)
+    expect(held('running')).toBe(true)
+    expect(held('completed')).toBe(true)
+    // A run without a dedupe key changes nothing.
+    seen.set(session, new Map([[key, 1]]))
+    forgetSettledTriggerKey(seen, { session, status: 'cancelled' })
+    expect(seen.get(session)?.has(key)).toBe(true)
+  })
 })

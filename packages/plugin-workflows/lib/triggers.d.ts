@@ -166,3 +166,13 @@ export interface CheckpointApplicabilityInput {
     readonly requireWrite?: boolean;
 }
 export declare function checkpointRequired(input: CheckpointApplicabilityInput): boolean;
+/**
+ * Forget a run's turn key once the run can no longer stand for its trigger: a
+ * cancelled or failed attempt must not keep the definition deduplicated for the
+ * rest of the turn, or a cancelled review could never be re-run until a restart.
+ */
+export declare function forgetSettledTriggerKey(seen: Map<string, Map<string, number>>, run: {
+    readonly session: string;
+    readonly dedupeKey?: string;
+    readonly status: string;
+}): void;
