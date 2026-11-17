@@ -30,5 +30,6 @@ OpenSpec skill.
   settles. Never wait with a blocking sleep.
 - Treat the waiting close as the pause for a verdict: it ends the turn while every due review is
   live, the next turn resumes the loop on the same lane unit, and no write in the reviewed scope
-  happens meanwhile. The waiting close approves nothing; collect the record before ticking coverage
-  or archive.
+  happens meanwhile. The waiting close approves nothing and submits no message: it ends the turn for
+  the verdict and wakes nothing, and a user stop is never resumed by gate input; collect the record
+  before ticking coverage or archive.

@@ -154,6 +154,8 @@ export interface ReviewRecord {
     readonly reviewer: string;
     readonly session?: string;
     readonly runId?: string;
+    /** The transport attempt count this record settled. */
+    readonly attempts?: number;
     readonly failureClass?: string;
     readonly error?: string;
     readonly time: string;
@@ -298,6 +300,8 @@ export interface ReviewRunInput {
     readonly timeoutMs: number;
     readonly session: string;
     readonly now?: number;
+    /** The transport attempt this verdict/error settled, for the durable record. */
+    readonly attempts?: number;
     readonly signal?: AbortSignal;
     /** The git runner the focused diff uses; production spawns the bounded runner. */
     readonly runGit?: GitRunner;

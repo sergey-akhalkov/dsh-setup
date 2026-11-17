@@ -596,6 +596,26 @@ describe('close gate', () => {
     expect(harness.injected).toHaveLength(0)
   })
 
+  it('submits no checkpoint request when the turn is already stopped', async () => {
+    const harness = await create()
+    workingTurn(harness)
+    const controller = new AbortController()
+    controller.abort()
+    await harness.turnStopping(1, harness.agent, controller.signal)
+    expect(harness.steers).toHaveLength(0)
+    expect(harness.injected).toHaveLength(0)
+  })
+
+  it('removes a submitted checkpoint request when the turn stops', async () => {
+    const harness = await create()
+    workingTurn(harness)
+    const controller = new AbortController()
+    await harness.turnStopping(1, harness.agent, controller.signal)
+    expect(harness.steers).toHaveLength(1)
+    controller.abort()
+    expect(harness.steers).toHaveLength(0)
+  })
+
   it('allows the close once a successful checkpoint and its remedy exist', async () => {
     const harness = await create()
     workingTurn(harness)

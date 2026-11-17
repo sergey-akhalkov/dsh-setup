@@ -13,6 +13,8 @@ export interface FakeAgent {
   session: { id: string; header: { origin?: 'subagent' } }
   steers: unknown[]
   injected: unknown[]
+  /** The steering inbox: `steers` holds what is still pending until claimed or removed. */
+  inbox: { readonly nextStep: readonly unknown[]; remove(messageId: string): boolean }
   steer(message: unknown): void
   inject(message: unknown): void
 }
@@ -20,11 +22,21 @@ export interface FakeAgent {
 export function createAgent(origin?: 'subagent'): FakeAgent {
   const steers: unknown[] = []
   const injected: unknown[] = []
+  const inbox = {
+    nextStep: steers,
+    remove(messageId: string): boolean {
+      const index = steers.findIndex((message) => (message as { id?: string }).id === messageId)
+      if (index < 0) return false
+      steers.splice(index, 1)
+      return true
+    },
+  }
   return {
     id: 'agent-1',
     session: { id: 'agent-1', header: origin === undefined ? {} : { origin } },
     steers,
     injected,
+    inbox,
     steer(message: unknown): void {
       steers.push(message)
     },
@@ -113,8 +125,12 @@ export class Harness {
     ])
   }
 
-  async stop(turn = 1, agent: FakeAgent = this.agent): Promise<void> {
-    await this.fire('agent/turn-stopping', [{ agent, turn, signal: new AbortController().signal }])
+  async stop(
+    turn = 1,
+    agent: FakeAgent = this.agent,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<void> {
+    await this.fire('agent/turn-stopping', [{ agent, turn, signal }])
   }
 
   /** One successful or failed `write` result whose canonical value carries the path. */

@@ -14,7 +14,7 @@ import {
 } from '../src/host/definitions.ts'
 import { currentSpecDigest } from '../src/host/evidence.ts'
 import type { SubagentRunner, SubagentRunResult } from '../src/host/executors.ts'
-import { defaultGit, type GitRunner, worktreeDigest } from '../src/host/git.ts'
+import { defaultGit, type GitRunner } from '../src/host/git.ts'
 import { portableRecordError } from '../src/host/projection.ts'
 import {
   localReviewRecordPath,
@@ -32,7 +32,11 @@ import {
   writeLocalReviewRecord,
   writePortableApproval,
 } from '../src/host/review.ts'
-import { createReviewSnapshot, discardReviewSnapshot } from '../src/host/review-snapshot.ts'
+import {
+  createReviewSnapshot,
+  discardReviewSnapshot,
+  reviewInputTree,
+} from '../src/host/review-snapshot.ts'
 import { createRun } from '../src/host/runs.ts'
 import { taskIdOf } from '../src/host/tasks.ts'
 
@@ -2047,8 +2051,14 @@ describe('integration review worktree binding', () => {
     const root = await gitWorkspace()
     const specDigest = await currentSpecDigest(root, 'auth')
     if (specDigest === undefined) throw new Error('test change digest missing')
-    const treeBefore = await worktreeDigest(root, defaultGit)
-    if (treeBefore === undefined) throw new Error('test worktree digest missing')
+    const treeOf = (): Promise<string> =>
+      reviewInputTree(
+        root,
+        { dir: join(root, 'openspec', 'changes', 'auth') },
+        defaultGit,
+        AbortSignal.timeout(5_000),
+      )
+    const treeBefore = await treeOf()
     const first = await invokeIntegration(root, specDigest, treeBefore)
     expect(first.run.steps[0]?.state).toBe('done')
     const firstDigest = first.record?.digest
@@ -2058,8 +2068,7 @@ describe('integration review worktree binding', () => {
     // A code-only edit leaves the change artifacts untouched and moves the tree.
     await writeFile(join(root, 'src', 'engine.ts'), 'export const engine = 2\n', 'utf8')
     expect(await currentSpecDigest(root, 'auth')).toBe(specDigest)
-    const treeAfter = await worktreeDigest(root, defaultGit)
-    if (treeAfter === undefined) throw new Error('test worktree digest missing')
+    const treeAfter = await treeOf()
     expect(treeAfter).not.toBe(treeBefore)
     const freshDigest = reviewDigest({ scope: 'whole', specDigest, tree: treeAfter })
     expect(freshDigest).not.toBe(firstDigest)

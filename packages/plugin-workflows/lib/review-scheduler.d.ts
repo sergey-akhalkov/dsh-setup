@@ -1,5 +1,5 @@
 import { type ReviewRunInput } from './review.js';
-import { type QueueLimits, type SettledRunState } from './review-queue.js';
+import { type FailureClass, type QueueLimits, type SettledRunState } from './review-queue.js';
 import { type WorkflowRun } from './runs.js';
 /**
  * The engine-side review scheduler: it admits one prepared review immediately
@@ -45,6 +45,8 @@ export interface ScheduledReview {
 export interface ReviewSchedulerHost {
     persistRun: (workspace: string, run: WorkflowRun) => Promise<WorkflowRun>;
     discardSnapshot: (workspace: string, key: string) => Promise<void>;
+    /** Persist the bounded attempt facts on the stored review step of a run. */
+    persistReviewAttempts?: (workspace: string, runId: string, stepId: string, attempts: number, failureClass?: FailureClass) => Promise<void>;
     onSettled?: (status: {
         readonly runId: string;
         readonly state: SettledRunState;
@@ -100,6 +102,18 @@ export declare class ReviewScheduler {
         reviewer?: string;
     }): WorkflowRun | undefined;
     /**
+     * A live review of the same unit at any input digest. A successor must not
+     * prepare its snapshot while its predecessor is still reading the stable
+     * unit path: preparation waits for the settlement and cleanup instead.
+     */
+    liveUnit(input: {
+        workspace: string;
+        rule: string;
+        change: string;
+        taskId?: string;
+        phase?: string;
+    }): WorkflowRun | undefined;
+    /**
      * A live review of this change that already covers one of these task ids: a
      * pending section run covers its recorded `taskIds`, a per-task run its own
      * id. A run with exactly this coverage is this unit's own successor and is
@@ -120,6 +134,8 @@ export declare class ReviewScheduler {
     private reprepareIfChanged;
     /** Settle a finished attempt: retry (publishing nothing) or publish once. */
     private finish;
+    /** The request stamped with the transport attempts this settlement used. */
+    private attemptRequest;
     /** Publish the settled attempt, then release or quarantine the key. */
     private publishAndSettle;
     /** The request's live-input guard, treated as a failure when it throws. */

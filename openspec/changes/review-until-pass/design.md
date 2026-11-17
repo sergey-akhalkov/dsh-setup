@@ -51,6 +51,8 @@ with no round cap, all lanes and both whole-scope reviews in parallel, and no ar
 - No per-lane reviewer target matrix. The "role" is the unit owner: the same `codex` target with one
   thread per unit. A profile can change the target, but not assign different roles per lane.
 - No new queue UI. The status shows active runs, not positions.
+- No change to the DSH stop button's `keepInbox` policy or the inbox projection: the gates must not
+  leave messages that outlive a stop, and the client keeps its own queued prompts.
 - No change to the review instructions' P0/P1 rubric or the focused task re-review contract.
 
 ## Decisions
@@ -80,15 +82,19 @@ correctness requirement.
 **D3 — No content-round cap; the waiting close.** At a turn close the engine advances every open
 review run (a blocked `FINDINGS` step is re-requested at the new digest), starts every due unit that
 has no live run, and then decides: if every due unit has a live review, the close is allowed as a
-waiting close with a steer naming the runs and a no-writes request, and no `VIOLATION` is recorded;
-otherwise the close is refused until every due unit is live. A run that reached its owned review step
-is never released by `maxBlocks`, and a matching `ERROR` is no longer provisional evidence for a close.
-Only a current `PASS` clears a unit. Rejected: a synchronous close that blocks the host for the whole
-review (5–30 minutes, no verdict delivery, host timeouts); refusing the close while a review is live
-(the settlement starts a new turn, so a never-ending turn cannot receive the verdict — a deadlock);
-keeping `maxBlocks` (the observed "three tries and a violation"). The transport `ERROR` path stays
-retryable: a permanent start failure is refused and named, and the user's only escape is cancel or a
-fix — the cost of "no limits".
+waiting close with no message to the agent at all, and no `VIOLATION` is recorded; otherwise the close
+is refused until every due unit is live. A steer here is a refusal by construction — DSH's
+`agent/turn-stopping` contract says "fresh steering runs another step, none closes the turn" — so a
+steering waiting close could never close the turn and instead produced a step per 10-20 seconds whose
+only possible answer was "waiting". Rejected: a steer naming the runs and the no-writes request (the
+observed 176-message loop in session `be0bd63d`, 8 messages per close because the listener evaluates
+every open review run); an injected notice (non-waking, but redundant with the
+`workflows-active-runs` prompt context and claimed by an unrelated later turn); refusing the close
+while a review is live (the settlement starts a new turn, so a never-ending turn cannot receive the
+verdict — a deadlock). A run that reached its owned review step is never released by `maxBlocks`, and
+a matching `ERROR` is no longer provisional evidence for a close. Only a current `PASS` clears a unit.
+The transport `ERROR` path stays retryable: a permanent start failure is refused and named, and the
+user's only escape is cancel or a fix — the cost of "no limits".
 
 **D4 — Whole-scope reviews use the snapshot; a reviewed spec stays reviewed.** A spec review
 snapshots and binds only the change artifacts it read (proposal, design, delta specs, task text with
@@ -149,11 +155,29 @@ short hash plus a readable prefix), so two units never share a path and a path n
 separator or traversal. The prompt places the key line before `## Context`; the digest line already
 exists.
 
+**D11 — A user stop wins over every gate.** DSH's stop button cancels the turn with
+`keepInbox: true`; the agent loop reclassifies a wake that arrives after that cancel as a `next-turn`
+message (`wakingAfterAbort`), latches the wake, and opens a new turn once the aborted turn unwinds. A
+gate that submits a message after the stop therefore resumes work the user stopped: in session
+`be0bd63d` seven such messages were spliced after the stop and started turn 17. The rule is the one
+`plugin-loop-guard` already follows: a gate checks the turn's abort signal before it dispatches a
+review, persists an outcome, or submits a message, and a message it already submitted registers an
+`abort` listener that removes it from the inbox; the loop then suppresses the latched wake because the
+queue is empty. Scope: the workflows turn-close gate (every steer site and the `evaluateTurnClose`
+callback), the goal-continuity checkpoint close gate, and the installed-but-disabled verification-gate
+refusal steer, fixed so a future row enable cannot reproduce the defect. Rejected: clear the whole
+inbox on stop (DSH-owned, and it would drop the user's own queued prompt); let the client drop gate
+messages (it cannot tell the sources apart); leave it to the next close (the turn never closes
+normally and the composer shows "N queued messages").
+
 ## Risks and Mitigations
 
 - **Settlement delivery under the waiting close.** If the provider settlement cannot start a turn from
   a closed-but-waiting session, the loop stalls with a visible live run. Mitigation: the acceptance
   test covers verdict delivery; recovery is `workflows resume`; the run and record stay visible.
+- **A stop during a close.** The gate listener can be mid-await when the user stops the turn. The
+  abort-signal check and the inbox revocation keep that close from resuming the session; the residual
+  race is a message already claimed for a step, which then runs once and is visible as a step.
 - **Thread resume after the snapshot is recreated.** The provider resumes by path; a missing thread
   falls back to a new one. The round still runs; continuity is best-effort. The Codex live check
   reports `threadReuse=resumed` when it works.
@@ -191,7 +215,11 @@ exists.
 - `review-snapshot.test.ts`: the stable unit path, discard and recreate, lease/sweep.
 - `owned-gates.test.ts` / `gates.test.ts` / `host-wiring.test.ts`: lane-first units (including one
   missing task), `ERROR` is not coverage, every due unit starts in one close, the waiting close, no
-  budget release for a review run.
+  budget release for a review run, and the waiting close submits no message at all (eight live runs
+  still produce zero steers).
+- `host-wiring.test.ts` / `plugin-goal-continuity` / `plugin-verification-gate`: an aborted turn
+  performs no dispatch and no steer, and a submitted gate message is removed from the inbox when the
+  turn's abort signal aborts.
 - `review-queue.test.ts` / `review-scheduler.test.ts`: immediate admission with N concurrent runs,
   identity dedupe, retired limits, transport retry.
 - `review-host.test.ts` / `host-wiring.test.ts`: the gate dispatch path, whole-scope snapshot, stale

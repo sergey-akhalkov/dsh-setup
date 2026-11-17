@@ -591,6 +591,7 @@ it('retries a transient review start before settling', async () => {
   const def = definition()
   let calls = 0
   const persisted: WorkflowRun[] = []
+  const attemptsSeen: Array<[number, string | undefined]> = []
   const scheduler = new ReviewScheduler(
     {
       enabled: true,
@@ -607,6 +608,9 @@ it('retries a transient review start before settling', async () => {
         return run
       },
       discardSnapshot: async () => undefined,
+      persistReviewAttempts: async (_workspace, _runId, _stepId, attempts, failureClass) => {
+        attemptsSeen.push([attempts, failureClass])
+      },
     },
   )
   const runner: SubagentRunner = {
@@ -640,6 +644,18 @@ it('retries a transient review start before settling', async () => {
   await waitFor(async () => persisted.length === 1)
   expect(calls).toBe(2)
   expect(persisted[0]?.steps[0]?.state).toBe('done')
+  // The retry's attempt facts reach the host while it is active, and the settled
+  // record carries the final attempt count.
+  expect(attemptsSeen.some(([count]) => count === 1)).toBe(true)
+  expect(attemptsSeen.some(([, failureClass]) => failureClass === 'child-limit')).toBe(true)
+  expect(attemptsSeen.at(-1)?.[0]).toBe(2)
+  const record = JSON.parse(
+    await readFile(
+      join(root, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json'),
+      'utf8',
+    ),
+  ) as Record<string, unknown>
+  expect(record.attempts).toBe(2)
   scheduler.dispose()
 })
 

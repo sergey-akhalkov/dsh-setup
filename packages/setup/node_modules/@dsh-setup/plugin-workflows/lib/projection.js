@@ -368,6 +368,12 @@ export function localRecordError(record) {
         (!Array.isArray(record.previous) || !record.previous.every(validConfirmation))) {
         return 'field "previous" must be a list of prior-finding confirmations';
     }
+    if (record.attempts !== undefined &&
+        (typeof record.attempts !== 'number' ||
+            !Number.isSafeInteger(record.attempts) ||
+            record.attempts < 1)) {
+        return 'field "attempts" must be a positive integer';
+    }
     if (record.error !== undefined && typeof record.error !== 'string') {
         return 'field "error" must be a string';
     }
@@ -612,6 +618,9 @@ export async function engineRuns(workspace) {
                 ...(typeof entry.reason === 'string' ? { reason: safeError(entry.reason) } : {}),
                 ...(typeof entry.failureClass === 'string'
                     ? { failureClass: safeText(entry.failureClass) }
+                    : {}),
+                ...(typeof entry.attempts === 'number' && Number.isSafeInteger(entry.attempts)
+                    ? { attempts: entry.attempts }
                     : {}),
                 ...(evidence === undefined
                     ? {}

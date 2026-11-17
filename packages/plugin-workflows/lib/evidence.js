@@ -5,9 +5,9 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CHANGE_NAME } from './command-parse.js';
 import { globMatches } from './evaluate.js';
 import { isInside } from './fs-change.js';
-import { worktreeDigest } from './git.js';
 import { readPortableApproval, reviewerBinding, taskReviewCoverage } from './parity.js';
 import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js';
+import { reviewInputTree } from './review-snapshot.js';
 /** A validated checkpoint record path a host-computed context value may carry. */
 const CHECKPOINT_PATH = /^\.dsh\/work-checkpoints\/[a-f0-9]{16}\/[0-9]+\.json$/u;
 /** A portable review task id a host-computed context value may carry. */
@@ -590,7 +590,7 @@ async function recordCheck(evidence, context, item) {
         }
         const current = await currentSpecDigest(context.workspace, change.text);
         const tree = worktreeBound && context.runGit !== undefined
-            ? await worktreeDigest(context.workspace, context.runGit).catch(() => undefined)
+            ? await reviewInputTree(context.workspace, { dir: join(context.workspace, 'openspec', 'changes', change.text) }, context.runGit, AbortSignal.timeout(60_000)).catch(() => undefined)
             : undefined;
         const currentDigest = current === undefined || (worktreeBound && tree === undefined)
             ? undefined

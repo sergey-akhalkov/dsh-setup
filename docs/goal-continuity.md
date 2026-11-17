@@ -332,7 +332,9 @@ survived `bottleneckAge` checkpoints without a route change. The gate allows at 
 refusals (default 3) per turn and then allows the close with a visible `UNCHECKED` notice that states
 it is not a pass. The refusal budget is shared by the checkpoint, parallel, remedy, and age gates. An
 internal state error fails open: the close is allowed and no verification or checkpoint is claimed. A
-subagent turn is never evaluated.
+subagent turn is never evaluated. A user stop wins over the close gate: a stopped turn gets no
+checkpoint request, and a request already submitted is removed from the agent inbox when the turn's
+abort signal aborts, so it never resumes the stopped turn.
 
 ### Parallel-action gate and the serial form
 

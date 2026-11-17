@@ -14,6 +14,76 @@ const SNAPSHOT_LEASE_MS = 5 * 60_000;
 const SNAPSHOT_REFRESH_MS = 30_000;
 const SNAPSHOT_SWEEP_MS = 10 * 60_000;
 const SNAPSHOT_NO_LEASE_GRACE_MS = 10 * 60_000;
+/** Durable copy of the Codex thread map; the snapshot checkout itself is disposable. */
+const REVIEW_THREADS_STATE = '.dsh/workflows/review-threads.json';
+const CODEX_THREADS_STATE = '.dsh/delegation/codex-review-threads.json';
+function parseReviewThreads(raw) {
+    try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed.threads))
+            return [];
+        return parsed.threads.filter((entry) => typeof entry === 'object' &&
+            entry !== null &&
+            typeof entry.key === 'string');
+    }
+    catch {
+        return [];
+    }
+}
+/**
+ * Save the Codex thread map the provider wrote inside the checkout before the
+ * checkout is removed, so the next round at the same stable path resumes the
+ * thread instead of starting a fresh one.
+ */
+async function preserveReviewThreads(cwd, worktree) {
+    let incoming;
+    try {
+        incoming = parseReviewThreads(await readFile(join(worktree, CODEX_THREADS_STATE), 'utf8'));
+    }
+    catch {
+        return;
+    }
+    if (incoming.length === 0)
+        return;
+    const path = resolve(cwd, REVIEW_THREADS_STATE);
+    let prior = [];
+    try {
+        prior = parseReviewThreads(await readFile(path, 'utf8'));
+    }
+    catch {
+        prior = [];
+    }
+    const merged = new Map();
+    for (const entry of [...prior, ...incoming])
+        merged.set(entry.key, entry);
+    await mkdir(dirname(path), { recursive: true });
+    const temporary = `${path}.${String(process.pid)}.${String(Date.now())}.tmp`;
+    try {
+        await writeFile(temporary, `${JSON.stringify({ version: 1, threads: [...merged.values()] }, null, 2)}\n`, 'utf8');
+        await rename(temporary, path);
+    }
+    finally {
+        await unlink(temporary).catch(() => undefined);
+    }
+}
+/** Put the durable thread map into a freshly built checkout before the reviewer starts. */
+async function restoreReviewThreads(cwd, worktree) {
+    let state;
+    try {
+        state = await readFile(resolve(cwd, REVIEW_THREADS_STATE), 'utf8');
+    }
+    catch {
+        return;
+    }
+    try {
+        const target = join(worktree, CODEX_THREADS_STATE);
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, state, 'utf8');
+    }
+    catch {
+        // A missing restore only costs a fresh thread; it never fails the review.
+    }
+}
 const ignoredForDigest = (path) => path === '.dsh' || path.startsWith('.dsh/') || path === '.tmp' || path.startsWith('.tmp/');
 async function writeJsonAtomic(path, value) {
     await mkdir(dirname(path), { recursive: true });
@@ -195,6 +265,7 @@ export async function discardReviewSnapshot(cwd, key, runGit, remove) {
 async function discardSnapshotByName(cwd, name, runGit, remove = (path) => rm(path, { recursive: true, force: true })) {
     await stopSnapshotLeaseByName(cwd, name);
     const worktree = resolve(cwd, SNAPSHOT_DIR, name);
+    await preserveReviewThreads(cwd, worktree).catch(() => undefined);
     try {
         await runGit(['worktree', 'remove', '--force', worktree], cwd);
     }
@@ -204,6 +275,58 @@ async function discardSnapshotByName(cwd, name, runGit, remove = (path) => rm(pa
     for (const path of [worktree, resolve(cwd, SCRATCH_DIR, `${name}.index`), `${worktree}.lease`]) {
         await remove(path).catch(() => undefined);
     }
+}
+/**
+ * The git tree hash of the exact review input set: tracked files plus untracked
+ * non-ignored files, minus the change directory (frozen separately). Shared by
+ * the snapshot and the current-worktree record comparison, so a record binds the
+ * content the reviewer read regardless of when the live tree was hashed.
+ */
+async function writeInputTree(root, relChange, runGit, signal, scratch) {
+    const env = { GIT_INDEX_FILE: scratch };
+    const listed = (await runGit(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], root, signal)).toString('utf8');
+    const paths = [];
+    for (const path of listed.split('\0')) {
+        if (path === '' || ignoredForDigest(path))
+            continue;
+        if (path === relChange || path.startsWith(`${relChange}/`))
+            continue;
+        try {
+            await lstat(resolve(root, path));
+        }
+        catch {
+            // A tracked path deleted from the worktree is what a live review sees.
+            continue;
+        }
+        paths.push(path);
+    }
+    await mkdir(dirname(scratch), { recursive: true });
+    if (paths.length > 0) {
+        await runGit(['update-index', '--add', '-z', '--stdin'], root, signal, env, `${paths.join('\0')}\0`);
+    }
+    return (await runGit(['write-tree'], root, signal, env)).toString('utf8').trim();
+}
+/**
+ * The current content tree of the reviewed input set. A whole-worktree review
+ * record binds this, and the evidence check recomputes it for the live tree, so
+ * a record always describes the contents the reviewer read.
+ */
+export async function reviewInputTree(cwd, change, runGit, signal) {
+    const root = await repositoryRoot(cwd, runGit, signal);
+    const relChange = relative(await realpath(root), await realpath(change.dir))
+        .split(sep)
+        .join('/');
+    const scratch = resolve(cwd, SCRATCH_DIR, `current-${String(process.pid)}-${String(Date.now())}.index`);
+    try {
+        return await writeInputTree(root, relChange, runGit, signal, scratch);
+    }
+    finally {
+        await unlink(scratch).catch(() => undefined);
+    }
+}
+/** The change-artifact signature; a whole-spec fallback tracks only its reviewed scope. */
+export async function specInputs(changeDir) {
+    return inputSignature(await realpath(changeDir).catch(() => changeDir), CHANGE_INPUT_EXCLUDES);
 }
 /**
  * Build the disposable review snapshot from the exact review input set. The
@@ -263,30 +386,9 @@ export async function createReviewSnapshot(cwd, change, key, runGit, signal, aft
     }
     const worktree = resolve(cwd, SNAPSHOT_DIR, name);
     const scratch = resolve(cwd, SCRATCH_DIR, `${name}.index`);
-    const env = { GIT_INDEX_FILE: scratch };
     try {
-        const listed = (await runGit(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], root, signal)).toString('utf8');
-        const paths = [];
-        for (const path of listed.split('\0')) {
-            if (path === '' || ignoredForDigest(path))
-                continue;
-            if (path === relChange || path.startsWith(`${relChange}/`))
-                continue;
-            try {
-                await lstat(resolve(root, path));
-            }
-            catch {
-                // A tracked path deleted from the worktree is what a live review sees.
-                continue;
-            }
-            paths.push(path);
-        }
-        await mkdir(dirname(scratch), { recursive: true });
+        const tree = await writeInputTree(root, relChange, runGit, signal, scratch);
         await mkdir(dirname(worktree), { recursive: true });
-        if (paths.length > 0) {
-            await runGit(['update-index', '--add', '-z', '--stdin'], root, signal, env, `${paths.join('\0')}\0`);
-        }
-        const tree = (await runGit(['write-tree'], root, signal, env)).toString('utf8').trim();
         let parent;
         try {
             parent = (await runGit(['rev-parse', '--verify', 'HEAD'], root, signal))
@@ -311,6 +413,7 @@ export async function createReviewSnapshot(cwd, change, key, runGit, signal, aft
             .trim();
         await startSnapshotLeaseByName(cwd, name);
         await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal);
+        await restoreReviewThreads(cwd, worktree);
         const frozenChange = resolve(worktree, relChange);
         await mkdir(dirname(frozenChange), { recursive: true });
         await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true });

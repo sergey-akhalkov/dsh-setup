@@ -525,7 +525,14 @@ function promptKeyToken(value) {
         .replace(/\p{Cc}+/gu, ' ')
         .replace(/\s+/gu, ' ')
         .trim();
-    return token === '' ? 'untitled' : token.slice(0, 120);
+    if (token === '')
+        return 'untitled';
+    if (token.length <= 120)
+        return token;
+    // Two long headings can share their first 120 characters; the hash keeps the
+    // shortened key (and its snapshot path) unique to the complete parser key.
+    const hash = createHash('sha256').update(token).digest('hex').slice(0, 12);
+    return `${token.slice(0, 106)}-${hash}`;
 }
 /**
  * The stable review key: `review:<change>:section:<key>` for a section unit,
@@ -884,6 +891,7 @@ function baseRecord(input, now) {
                 ]),
                 reviewedTree: input.prepared.tree,
             }),
+        ...(input.attempts === undefined ? {} : { attempts: input.attempts }),
         target: targetIdentity(input.reviewer),
         reviewer: input.reviewer.id,
         session: input.session,

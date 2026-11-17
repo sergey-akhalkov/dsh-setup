@@ -384,8 +384,9 @@ export function apply(ctx: Context, config?: Config): void {
   }
 
   /** Refuse one close, or allow the capped close with an unverified notice. */
-  function evaluateStop(agent: Agent, turn: number): void {
-    if (isSubagent(agent)) return
+  function evaluateStop(agent: Agent, turn: number, signal: AbortSignal): void {
+    // A stopped turn must not be resumed by a refusal.
+    if (signal.aborted || isSubagent(agent)) return
     const state = stateFor(agent)
     beginTurn(state, turn)
     if (state.allowedAnyway) return
@@ -406,11 +407,25 @@ export function apply(ctx: Context, config?: Config): void {
       return
     }
     state.blocks += 1
+    const message = gateMessage(refusalText(resolved.commands, state))
     try {
-      agent.steer(gateMessage(refusalText(resolved.commands, state)))
+      agent.steer(message)
     } catch {
       // A disposed agent simply receives no steering.
+      return
     }
+    // Revoke a pending refusal when the turn aborts, so it never wakes it.
+    signal.addEventListener(
+      'abort',
+      () => {
+        try {
+          agent.inbox.remove(message.id)
+        } catch {
+          // A claimed or disposed message needs no removal.
+        }
+      },
+      { once: true },
+    )
   }
 
   ctx.on('agent/pre-step', (payload, next) => {
@@ -433,7 +448,7 @@ export function apply(ctx: Context, config?: Config): void {
 
   ctx.on('agent/turn-stopping', (payload) => {
     try {
-      evaluateStop(payload.agent, payload.turn)
+      evaluateStop(payload.agent, payload.turn, payload.signal)
     } catch {
       // The gate never throws into the turn; a failed evaluation fails open.
     }

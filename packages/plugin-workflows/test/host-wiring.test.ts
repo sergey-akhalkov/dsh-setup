@@ -168,6 +168,8 @@ function fakeHost(
     interpolate?: boolean
   }>
   readonly steers: readonly unknown[]
+  /** Message ids the gates removed from the inbox on a stop. */
+  readonly removed: readonly string[]
   readonly toolExecutions: Array<{
     readonly id: string
     readonly name: string
@@ -180,6 +182,7 @@ function fakeHost(
   const provided = new Map<string, unknown>()
   const fsWatchers: Array<(error?: Error) => void> = []
   const steers: unknown[] = []
+  const removed: string[] = []
   const toolExecutions: Array<{
     id: string
     name: string
@@ -191,6 +194,12 @@ function fakeHost(
     ctx: { on: () => () => {} },
     steer: (message: unknown) => {
       steers.push(message)
+    },
+    inbox: {
+      remove: (id: unknown) => {
+        removed.push(String(id))
+        return true
+      },
     },
     inject: () => {},
   }
@@ -381,6 +390,7 @@ function fakeHost(
     toolDefinitions,
     promptContributions,
     steers,
+    removed,
     toolExecutions,
     fireFs(error) {
       for (const changed of fsWatchers) changed(error)
@@ -1650,11 +1660,13 @@ describe('task-review runtime from a tasks.md change', () => {
     const workspace = await tempWorkspace()
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
     await mkdir(changeDir, { recursive: true })
-    await writeFile(
-      join(changeDir, 'tasks.md'),
-      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n\n## 2. Docs\n\n- [x] 2.1 Third task\n',
-      'utf8',
+    // Six due lanes: the delivered status is bounded, so a per-lane steer text
+    // would drop the last lanes instead of naming every one.
+    const sections = [1, 2, 3, 4, 5, 6].map(
+      (n) =>
+        `## ${String(n)}. Lane ${String(n)} (lane ${String(n)}, owns \`packages/plugin-workflows/src/host/lane-${String(n)}.ts\`)\n\n- [x] ${String(n)}.1 Work of lane ${String(n)}\n`,
     )
+    await writeFile(join(changeDir, 'tasks.md'), `# Tasks\n\n${sections.join('\n')}`, 'utf8')
     const host = fakeHost(workspace)
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 200))
@@ -1673,16 +1685,14 @@ describe('task-review runtime from a tasks.md change', () => {
         })
       )?.text ?? ''
     const text = await status()
-    // Every due lane of the change is listed together with its covered and
-    // missing tasks, not one anonymous unit per line.
+    expect(text.length).toBeLessThanOrEqual(1200)
     expect(text).toContain('review units:')
-    expect(text).toContain('change "auth" (2 due):')
-    expect(text).toContain('section "1" (1. Engine)')
-    expect(text).toContain('covered checked tasks 1.1, 1.2')
-    expect(text).toContain('missing a task-review PASS: 1.1, 1.2')
-    expect(text).toContain('section "2" (2. Docs)')
-    // A live section run is pointed at instead of a new start; the other lane
-    // still carries its own start action.
+    for (const n of [1, 2, 3, 4, 5, 6]) {
+      expect(text).toContain(
+        `change "auth" section "${String(n)}": covered ${String(n)}.1; missing a task-review PASS: ${String(n)}.1`,
+      )
+    }
+    // A live section run is named on its lane instead of the lane looking due.
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
@@ -1696,20 +1706,18 @@ describe('task-review runtime from a tasks.md change', () => {
         name: 'auth',
         taskId: sectionRecordId('1'),
         section: '1',
-        sectionTitle: '1. Engine',
-        taskIds: [taskIdOf('First task'), taskIdOf('Second task')],
+        sectionTitle: '1. Lane 1',
+        taskIds: [taskIdOf('Work of lane 1')],
       },
       steps: ['review', 'complete-review'],
       now: 1_000,
     })
     await runs.writeRun(workspace, pending, auth)
     const pendingText = await status()
-    expect(pendingText).toContain('the live review run')
-    expect(pendingText).toContain('instead of a new start')
     expect(pendingText).toContain(
-      'workflows(action: "start", definitionId: "task-review", change: "auth", section: "2")',
+      `section "1": covered 1.1; missing a task-review PASS: 1.1; live run "${pending.id}" covers it`,
     )
-    expect(pendingText).not.toContain('delegate(')
+    expect(pendingText).toContain('change "auth" section "6": covered 6.1')
   })
 
   it('starts one section run for two missing tasks and no per-task run', async () => {
@@ -1773,7 +1781,7 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(record.verdict).toBe('ERROR')
   })
 
-  it('starts only the uncovered task when a pending section run covers part of it', async () => {
+  it('starts the expanded lane unit when a pending section run covers part of it', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
@@ -1789,8 +1797,9 @@ describe('task-review runtime from a tasks.md change', () => {
     const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const [first, second, third] = ['First task', 'Second task', 'Third task'].map(taskIdOf)
-    // A section run covering the first two tasks is still pending when the
-    // third is ticked; re-reviewing the whole section would review them twice.
+    // A section run covering the first two tasks was prepared before the third
+    // was ticked: the expanded lane is due, starts on the same unit key, and the
+    // provider serializes it behind the live predecessor's thread.
     const pending = runs.createRun({
       definition: 'task-review',
       trigger: 'fs.change',
@@ -1813,13 +1822,17 @@ describe('task-review runtime from a tasks.md change', () => {
       (await runs.listAuthenticatedRuns(workspace, auth))
         .filter((entry) => entry.definition.id === 'task-review')
         .map((entry) => ({ id: entry.id, context: entry.context }))
-    await waitFor(async () => (await reviewRuns()).some((run) => run.context.taskId === third))
-    // Give a section start the chance to appear before asserting the fallback.
+    await waitFor(async () => (await reviewRuns()).some((run) => run.id !== pending.id))
+    // Give a per-task start the chance to appear before asserting the lane unit.
     await new Promise((resolve) => setTimeout(resolve, 200))
     const created = (await reviewRuns()).filter((run) => run.id !== pending.id)
     expect(created).toHaveLength(1)
-    expect(created[0]?.context).toMatchObject({ name: 'auth', taskId: third })
-    expect(created[0]?.context.section).toBeUndefined()
+    expect(created[0]?.context).toMatchObject({
+      name: 'auth',
+      taskId: sectionRecordId('1'),
+      section: '1',
+      taskIds: [first, second, third],
+    })
   })
 
   it('suppresses a second run for a task a live run already covers', async () => {
@@ -2542,6 +2555,47 @@ describe('turn-close lane dispatch', () => {
     expect(created).toHaveLength(1)
     expect(created[0]?.context.section).toBe('1')
     expect(created[0]?.status).toBe('running')
+  })
+
+  it('abandons an aborted close without a steer or a review start', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await establishInvolvement(host)
+    const controller = new AbortController()
+    controller.abort()
+    await host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    // Give a dispatch the chance to appear before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(await taskRuns(workspace)).toHaveLength(0)
+    expect(host.steers).toHaveLength(0)
+  })
+
+  it('revokes a submitted gate message when the turn aborts', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await establishInvolvement(host)
+    const controller = new AbortController()
+    await host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    // The refused close steers; a user stop then revokes exactly those messages
+    // from the inbox, so no queued gate input resumes the stopped turn.
+    await waitFor(async () => host.steers.length > 0)
+    const submitted = host.steers.length
+    controller.abort()
+    expect(host.removed).toHaveLength(submitted)
   })
 })
 
@@ -4006,6 +4060,45 @@ describe('configured maxRuns', () => {
     }
   }
 
+  /** A review-gate definition on any trigger; its start is exempt from `maxRuns`. */
+  function reviewDefinition(id: string, trigger: Record<string, unknown>): Record<string, unknown> {
+    return {
+      v: 1,
+      id,
+      name: id,
+      version: 1,
+      trigger,
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: true,
+        gate: 'review',
+        gateIdentity: id,
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Review',
+          executor: 'review',
+          review: { target: 'codex', instruction: 'review-task', scope: 'task' },
+          evidence: {
+            kind: 'record',
+            rule: id,
+            change: '{name}',
+            scope: 'task',
+            task: '{taskId}',
+            verdicts: ['PASS', 'ERROR'],
+            path: `.dsh/workflows/records/${id}/{name}/tasks/{taskId}.json`,
+          },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+  }
+
   async function installWatch(workspace: string, id: string): Promise<void> {
     const { installDefinition } = await import('../src/host/approval-store.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
@@ -4140,6 +4233,214 @@ describe('configured maxRuns', () => {
       (run) => run.definition.id === 'task-review',
     )
     expect(reviewRuns).toHaveLength(1)
+  })
+
+  it('starts a review through the intent trigger at the run limit and still refuses a non-review intent', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const runs = await import('../src/host/runs.ts')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const plain = {
+      v: 1,
+      id: 'intent-plain',
+      name: 'Intent plain',
+      version: 1,
+      trigger: {
+        kind: 'intent',
+        match: { intent: 'new-change', classifier: 'heuristic-v1' },
+        mode: 'active',
+        dedupe: 'turn',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: true,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    // An active intent starts only from a user-confirmed definition.
+    for (const [id, definition] of [
+      [
+        'intent-review',
+        reviewDefinition('intent-review', {
+          kind: 'intent',
+          match: { intent: 'new-change', classifier: 'heuristic-v1' },
+          mode: 'active',
+          dedupe: 'turn',
+        }),
+      ],
+      ['intent-plain', plain],
+    ] as const) {
+      const path = join(workspace, `${id}.json`)
+      await writeFile(path, `${JSON.stringify(definition, null, 2)}\n`, 'utf8')
+      await installDefinition(workspace, path, auth)
+    }
+    // One open run reaches the configured limit before the intent is classified.
+    await runs.writeRun(
+      workspace,
+      runs.createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        steps: ['requirements'],
+        id: 'run-intent-limit',
+      }),
+      auth,
+    )
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, {
+      maxRuns: 1,
+      allowIntent: true,
+      reviewers: { codex: { provider: 'codex-subagent' } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 3,
+        step: 2,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'Please start a new change for auth' }],
+          },
+        ],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    const intentRows = async (): Promise<Array<Record<string, unknown>>> => {
+      const entries = (await readFile(file, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      const entry = entries.find((row) => row.kind === 'intent')
+      return Array.isArray(entry?.triggers)
+        ? (entry.triggers as Array<Record<string, unknown>>)
+        : []
+    }
+    await waitFor(async () =>
+      (await intentRows()).some(
+        (row) => row.id === 'definition:intent-review' && row.reason === 'run-created',
+      ),
+    )
+    expect(await intentRows()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'definition:intent-review', reason: 'run-created' }),
+        expect.objectContaining({
+          id: 'definition:intent-plain',
+          reason: 'run-suppressed',
+          detail: expect.stringContaining('run limit'),
+        }),
+      ]),
+    )
+    const stored = await runs.listAuthenticatedRuns(workspace, auth)
+    expect(stored.filter((run) => run.definition.id === 'intent-review')).toHaveLength(1)
+    expect(stored.some((run) => run.definition.id === 'intent-plain')).toBe(false)
+  })
+
+  it('starts a review through the pre-execute trigger at the run limit and still suppresses a non-review run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [
+        reviewDefinition('pre-execute-review', {
+          kind: 'tool.pre-execute',
+          match: { tool: 'read' },
+          mode: 'active',
+          dedupe: 'callId',
+        }),
+        watchDefinition('pre-execute-plain'),
+      ],
+    })
+    try {
+      const runs = await import('../src/host/runs.ts')
+      const { HostAuth } = await import('../src/host/host-auth.ts')
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      // One open run reaches the configured limit before the tool call arrives.
+      await runs.writeRun(
+        workspace,
+        runs.createRun({
+          definition: 'change-intake',
+          trigger: 'tool.pre-execute',
+          session: 'session-1',
+          workspace,
+          steps: ['requirements'],
+          id: 'run-pre-execute-limit',
+        }),
+        auth,
+      )
+      const host = fakeHost(workspace)
+      apply(host.ctx as never, {
+        maxRuns: 1,
+        reviewers: { codex: { provider: 'codex-subagent' } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: 'review-pre-execute-call',
+          name: 'read',
+          arguments: {},
+        },
+        async () => ({ kind: 'continue' }),
+      )
+      const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+      const triggerRows = async (): Promise<Array<Record<string, unknown>>> => {
+        const entries = (await readFile(file, 'utf8').catch(() => ''))
+          .trim()
+          .split('\n')
+          .filter((line) => line !== '')
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+        const entry = entries.find((row) => row.kind === 'tools/pre-execute')
+        return Array.isArray(entry?.triggers)
+          ? (entry.triggers as Array<Record<string, unknown>>)
+          : []
+      }
+      await waitFor(async () =>
+        (await triggerRows()).some(
+          (row) => row.id === 'definition:pre-execute-review' && row.reason === 'run-created',
+        ),
+      )
+      expect(await triggerRows()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'definition:pre-execute-review',
+            reason: 'run-created',
+          }),
+          expect.objectContaining({
+            id: 'definition:pre-execute-plain',
+            reason: 'run-suppressed',
+            detail: expect.stringContaining('run limit'),
+          }),
+        ]),
+      )
+      const stored = await runs.listAuthenticatedRuns(workspace, auth)
+      expect(stored.filter((run) => run.definition.id === 'pre-execute-review')).toHaveLength(1)
+      expect(stored.some((run) => run.definition.id === 'pre-execute-plain')).toBe(false)
+    } finally {
+      unregister()
+    }
   })
 })
 
@@ -8455,5 +8756,200 @@ describe('public review start through the workflows tool', () => {
     ).rejects.toThrow(/overlaps|does not cover/u)
     expect(stub.releases.length).toBe(1)
     stub.releases.shift()?.()
+  })
+
+  it('allows a waiting close with eight live reviews and submits no steer', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const dir = await tempWorkspace()
+    const change = join(dir, 'openspec', 'changes', 'auth')
+    await mkdir(change, { recursive: true })
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    const sections = [1, 2, 3, 4, 5, 6, 7, 8].map(
+      (n) => `## ${String(n)}. Lane ${String(n)}\n\n- [x] ${String(n)}.1 Task ${String(n)}\n`,
+    )
+    await writeFile(join(change, 'tasks.md'), `# Tasks\n\n${sections.join('\n')}`, 'utf8')
+    await mkdir(join(dir, 'openspec'), { recursive: true })
+    await writeFile(
+      join(dir, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true }),
+      'utf8',
+    )
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: dir, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const stub = reviewerStub()
+    const host = fakeHost(dir, { subagents: stub.runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'involved-write',
+        name: 'write',
+        arguments: { file_path: 'openspec/changes/auth/design.md' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    const before = host.steers.length
+    // The close itself starts every due lane, then waits for their verdicts: a
+    // waiting close submits nothing and starts no step.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const all = await runs.listAuthenticatedRuns(dir, auth)
+    const lanes = all.filter((entry) => entry.definition.id === 'task-review')
+    expect(lanes).toHaveLength(8)
+    for (const lane of lanes) {
+      expect(lane.status).toBe('blocked')
+      expect(lane.steps.find((step) => step.id === 'review')?.state).toBe('open')
+    }
+    await waitFor(() => stub.releases.length >= 8, 10_000)
+    // The waiting close is silent: eight live reviews, no steer, no step.
+    expect(host.steers.length).toBe(before)
+  })
+
+  it('fails a review loud and discards its snapshot when the review queue is off', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const dir = await sectionWorkspace('- [x] 1.1 Task\n')
+    const stub = reviewerStub()
+    const host = fakeHost(dir, { subagents: stub.runtime })
+    apply(host.ctx as never, {
+      reviewers: { codex: { provider: 'codex-subagent' } },
+      reviewQueue: { enabled: false },
+    })
+    await runStart(host, {
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      section: '1',
+    })
+    const { sectionRecordId } = await import('../src/host/tasks.ts')
+    const recordPath = join(
+      dir,
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      'auth',
+      'tasks',
+      `${sectionRecordId('1')}.json`,
+    )
+    await waitFor(async () => (await readFile(recordPath, 'utf8').catch(() => '')) !== '')
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
+    expect(record).toMatchObject({ verdict: 'ERROR', failureClass: 'config' })
+    expect(String(record.error)).toContain('reviewQueue')
+    expect(stub.releases).toHaveLength(0)
+    const { readdir } = await import('node:fs/promises')
+    const snapshots = await readdir(join(dir, '.dsh', 'workflows', 'snapshots')).catch(() => [])
+    expect(snapshots).toHaveLength(0)
+  })
+})
+
+describe('agent archive integration review requirement', () => {
+  it('refuses a missing or stale integration PASS and allows a current one', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    await mkdir(join(workspace, 'src'), { recursive: true })
+    await writeFile(join(workspace, 'src', 'engine.ts'), 'export const engine = 1\n', 'utf8')
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    for (const file of ['proposal.md', 'design.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
+    await writeFile(join(change, 'tasks.md'), '- [x] 1.1 Complete work\n', 'utf8')
+    const { currentSpecDigest, reviewDigest } = await import('../src/host/evidence.ts')
+    const { defaultGit } = await import('../src/host/git.ts')
+    const { reviewInputTree } = await import('../src/host/review-snapshot.ts')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const specDigest = await currentSpecDigest(workspace, 'auth')
+    expect(specDigest).toBeDefined()
+    // Otherwise valid authorization: a current whole-spec PASS, an adoption
+    // receipt, and the portable coverage the archive audit requires.
+    const specRecord = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(specRecord, { recursive: true })
+    await writeFile(
+      join(specRecord, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest: specDigest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    await receipts.issueAdoptionReceipt(workspace, 'auth', specDigest as string, auth, 3_000)
+    const taskId = taskIdOf('Complete work')
+    await mkdir(join(change, 'reviews'), { recursive: true })
+    await writeFile(
+      join(change, 'reviews', `${taskId}.json`),
+      `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], target: { provider: 'codex-subagent' }, time: '2026-11-08T00:00:00.000Z' })}\n`,
+      'utf8',
+    )
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'archive-test')
+    git('config', 'user.email', 'archive-test@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const archive = async (
+      callId: string,
+    ): Promise<{ kind?: string; reason?: string } | undefined> =>
+      (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId,
+          name: 'pwsh',
+          arguments: { command: 'openspec archive auth' },
+        },
+        async () => ({ kind: 'continue' }),
+      )) as { kind?: string; reason?: string } | undefined
+    // The production listener refuses the agent archive without an integration
+    // record, and names the required review.
+    const missing = await archive('archive-missing-integration')
+    expect(missing?.kind).toBe('deny')
+    expect(missing?.reason).toContain('integration-review')
+    const integrationRecord = join(
+      workspace,
+      '.dsh',
+      'workflows',
+      'records',
+      'integration-review',
+      'auth',
+    )
+    await mkdir(integrationRecord, { recursive: true })
+    const tree = await reviewInputTree(
+      workspace,
+      { dir: change },
+      defaultGit,
+      AbortSignal.timeout(10_000),
+    )
+    await writeFile(
+      join(integrationRecord, 'integration.json'),
+      `${JSON.stringify({ rule: 'integration-review', change: 'auth', phase: 'integration', scope: 'whole', verdict: 'PASS', digest: reviewDigest({ scope: 'whole', specDigest: specDigest as string, tree }), findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    const allowed = await archive('archive-current-integration')
+    if (allowed?.kind === 'deny') throw new Error(`current integration denied: ${allowed.reason}`)
+    expect(allowed?.kind).not.toBe('deny')
+    // A code-only change moves the frozen content tree: the same PASS is stale
+    // and the agent archive is refused again.
+    await writeFile(join(workspace, 'src', 'engine.ts'), 'export const engine = 2\n', 'utf8')
+    const stale = await archive('archive-stale-integration')
+    expect(stale?.kind).toBe('deny')
+    expect(stale?.reason).toContain('integration-review')
   })
 })

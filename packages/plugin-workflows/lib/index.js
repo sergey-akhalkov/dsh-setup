@@ -11,7 +11,7 @@ import { runWorkflowCommand } from './commands.js';
 import { buildConditionContext, conditionNeedsWorktree, evaluateConditions } from './condition.js';
 import { KNOWN_LEGACY_SOURCES, resolveOwnership, reviewIdentityOf, workspaceDefinitionsDirectory, } from './definitions.js';
 import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
-import { activeChangeNames, codeChangedThisTurn, evaluateOwnedLaneGate, evaluateOwnedProgressGate, goalCompletionRefusal, pruneLaneDecisions, reviewRunSteer, reviewUnits, reviewUnitText, taskTicksOf, workerLaneTag, } from './engine-gates.js';
+import { activeChangeNames, codeChangedThisTurn, evaluateOwnedLaneGate, evaluateOwnedProgressGate, goalCompletionRefusal, pruneLaneDecisions, reviewRunSteer, reviewUnitSummary, reviewUnits, reviewUnitText, taskTicksOf, workerLaneTag, } from './engine-gates.js';
 import { evaluateEvent } from './evaluate.js';
 import { commandMatches, currentSpecDigest, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
@@ -31,7 +31,7 @@ import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
 import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, reviewUnitKey, sectionReviewDigest, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
-import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, signatureHash, } from './review-snapshot.js';
+import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, reviewInputTree, signatureHash, specInputs, } from './review-snapshot.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, MAX_CONTEXT_BYTES, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
@@ -416,10 +416,14 @@ function coveredTaskIds(context) {
     }
     return covered;
 }
-/** The live task-review runs that cover at least one missing task of a unit. */
+/** The live task-review runs that cover every checked task of a unit as it is now. */
 function liveUnitRuns(change, unit, openRuns) {
-    return openRuns.filter((run) => run.change === change &&
-        unit.missing.some((task) => coveredTaskIds(run.context).includes(task.id)));
+    return openRuns.filter((run) => {
+        if (run.change !== change)
+            return false;
+        const ids = coveredTaskIds(run.context);
+        return unit.covered.every((task) => ids.includes(task.id));
+    });
 }
 /**
  * The owned review obligation of one review run at the turn close: every due
@@ -1376,31 +1380,31 @@ export function apply(ctx, config = {}) {
                                         if (attempted.has(recordId))
                                             continue;
                                         attempted.add(recordId);
-                                        // A live review, or one this same event already started,
-                                        // that covers one of the section's tasks makes the section
-                                        // unit a duplicate: the covered tasks wait for that run,
-                                        // and only the uncovered missing tasks start their own
-                                        // per-task review.
+                                        // A run that covers only part of the section leaves the
+                                        // expanded lane due: the section starts again through the
+                                        // same unit key and the provider serializes the thread.
                                         const coveredIds = unit.covered.map((task) => task.id);
                                         const startedOverlap = coveredIds.some((id) => startedCovered.has(id));
                                         const covering = startedOverlap
                                             ? undefined
                                             : liveRuns.find((run) => {
-                                                if (coveredIds.includes(String(run.context.taskId)))
-                                                    return true;
                                                 const taskIds = run.context.taskIds;
-                                                return (Array.isArray(taskIds) &&
-                                                    coveredIds.some((id) => taskIds.includes(id)));
+                                                const runIds = Array.isArray(taskIds)
+                                                    ? taskIds.filter((id) => typeof id === 'string')
+                                                    : [];
+                                                if (typeof run.context.taskId === 'string' &&
+                                                    !runIds.includes(run.context.taskId)) {
+                                                    runIds.push(run.context.taskId);
+                                                }
+                                                return coveredIds.every((id) => runIds.includes(id));
                                             });
                                         if (startedOverlap || covering !== undefined) {
                                             suppressed ??= {
                                                 ok: false,
                                                 reason: startedOverlap
                                                     ? `a review started by this tasks.md change already covers a task in section "${section.key}"`
-                                                    : `a live run "${covering?.id ?? ''}" already covers a task in section "${section.key}"`,
+                                                    : `a live run "${covering?.id ?? ''}" already covers section "${section.key}"`,
                                             };
-                                            for (const task of unit.missing)
-                                                startTask(task.id);
                                             continue;
                                         }
                                         const context = {
@@ -1678,7 +1682,8 @@ export function apply(ctx, config = {}) {
                                             reason: 'the host key is unavailable; no run was created',
                                         };
                                     }
-                                    if (intentFull || openRunCount(intentRuns) + intentStarted >= maxRuns) {
+                                    if (!isReviewDefinition(definition) &&
+                                        (intentFull || openRunCount(intentRuns) + intentStarted >= maxRuns)) {
                                         return {
                                             ok: false,
                                             reason: `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
@@ -2473,6 +2478,39 @@ export function apply(ctx, config = {}) {
             return persisted;
         },
         discardSnapshot: (targetWorkspace, key) => discardReviewSnapshot(targetWorkspace, key, defaultGit),
+        persistReviewAttempts: async (targetWorkspace, runId, stepId, attempts, failureClass) => {
+            const auth = storedAuth;
+            if (auth === undefined)
+                return;
+            // A retry's attempt facts belong on the stored review step: the status
+            // and the projection read them there, while the run keeps its own
+            // guarded lifecycle writes. This writer never waits on the per-run
+            // lifecycle lock (the close holds it while the review starts).
+            try {
+                const stored = await readAuthenticatedRun(targetWorkspace, runId, auth);
+                if (stored === undefined)
+                    return;
+                const step = stored.steps.find((entry) => entry.id === stepId);
+                if (step === undefined ||
+                    (step.attempts === attempts && step.failureClass === failureClass)) {
+                    return;
+                }
+                const stamped = {
+                    ...stored,
+                    steps: stored.steps.map((entry) => entry.id === stepId
+                        ? {
+                            ...entry,
+                            attempts,
+                            ...(failureClass === undefined ? {} : { failureClass }),
+                        }
+                        : entry),
+                };
+                await persistRun(targetWorkspace, stamped, auth, runGeneration(runId), undefined, stored.updatedAt);
+            }
+            catch {
+                // Attempt facts are diagnostics; a failed write never fails a review.
+            }
+        },
     });
     ctx.effect(() => () => {
         reviewScheduler.dispose();
@@ -2682,6 +2720,18 @@ export function apply(ctx, config = {}) {
                     // The step stays open and the background settlement writes the record.
                     if (reviewScheduler?.liveRunById(reviewRun.id) !== undefined)
                         return undefined;
+                    // A live review of the same unit at another digest is a predecessor
+                    // still reading the stable unit path: prepare nothing over its
+                    // checkout, and let the next close start this round after it settles.
+                    const sameUnit = reviewScheduler?.liveUnit({
+                        workspace,
+                        rule: reviewRule,
+                        change,
+                        ...(recordId === undefined ? {} : { taskId: recordId }),
+                        phase: reviewPhase(spec.scope, spec.phase),
+                    });
+                    if (sameUnit !== undefined && sameUnit.id !== reviewRun.id)
+                        return undefined;
                     const live = reviewScheduler?.liveRun({
                         workspace,
                         rule: reviewRule,
@@ -2761,42 +2811,58 @@ export function apply(ctx, config = {}) {
                         });
                         const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined);
                         if (snapshot !== undefined) {
-                            // The record binds the frozen plan digest; an integration review
-                            // also binds the worktree digest captured when the snapshot was
-                            // taken. A later write stales the record instead of discarding it.
-                            const digest = reviewDigest({
-                                scope: spec.scope,
-                                specDigest: snapshot.specDigest,
-                                ...(liveTree === undefined ? {} : { tree: liveTree }),
-                            });
+                            // The record binds the frozen content tree, so a write between the
+                            // live hash and the snapshot cannot leave a PASS for code the
+                            // reviewer never read.
+                            const tree = bindsWorktree ? snapshot.tree : undefined;
                             return {
                                 prepared: {
                                     specDigest: snapshot.specDigest,
-                                    ...(liveTree === undefined ? {} : { tree: liveTree }),
+                                    ...(tree === undefined ? {} : { tree }),
                                     reviewCwd: snapshot.worktree,
                                 },
-                                digest,
+                                digest: reviewDigest({
+                                    scope: spec.scope,
+                                    specDigest: snapshot.specDigest,
+                                    ...(tree === undefined ? {} : { tree }),
+                                }),
                                 liveDigest,
                             };
                         }
                         // A snapshot that cannot be built falls back to the live inputs.
                         // A spec review only guards the plan artifacts; the worktree is not
-                        // its reviewed scope.
+                        // its reviewed scope. The integration fallback guards the union and
+                        // binds the current content tree, which the evidence check recomputes.
+                        const specCaptured = bindsWorktree
+                            ? undefined
+                            : await specInputs(changeDir).catch(() => undefined);
                         const liveGuard = bindsWorktree
                             ? guardFor(signature, liveTree)
                             : async () => {
-                                const current = await currentSpecDigest(workspace, change);
-                                if (current === undefined)
+                                if (specCaptured === undefined)
+                                    return 'the change artifacts could not be read';
+                                const next = await specInputs(changeDir).catch(() => undefined);
+                                if (next === undefined)
                                     return 'the change artifacts could not be re-read';
-                                return current === specDigest ? undefined : 'the change digest changed';
+                                const changed = changedInputPaths(specCaptured, next);
+                                if (changed.length === 0)
+                                    return undefined;
+                                return `${String(changed.length)} change artifact(s) changed: ${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ', …' : ''}`;
                             };
+                        const fallbackTree = bindsWorktree
+                            ? await reviewInputTree(workspace, { dir: changeDir }, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined)
+                            : undefined;
                         return {
                             prepared: {
                                 specDigest,
-                                ...(liveTree === undefined ? {} : { tree: liveTree }),
+                                ...(fallbackTree === undefined ? {} : { tree: fallbackTree }),
                                 liveGuard,
                             },
-                            digest: liveDigest,
+                            digest: reviewDigest({
+                                scope: spec.scope,
+                                specDigest,
+                                ...(fallbackTree === undefined ? {} : { tree: fallbackTree }),
+                            }),
                             liveDigest,
                         };
                     }
@@ -3156,7 +3222,7 @@ export function apply(ctx, config = {}) {
         if (tasks.length === 0 || tasks.some((task) => !task.checked))
             return undefined;
         const { verdict: _verdict, verdicts: _verdicts, ...rest } = step.evidence;
-        const check = await verifyEvidence({ ...rest, verdict: 'PASS' }, { workspace, values: { name: change } });
+        const check = await verifyEvidence({ ...rest, verdict: 'PASS' }, { workspace, values: { name: change }, runGit: defaultGit });
         if (check.ok)
             return undefined;
         const state = check.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid';
@@ -3415,8 +3481,9 @@ export function apply(ctx, config = {}) {
                             });
                             continue;
                         }
-                        if (atRunLimit(workspace, knownRuns) ||
-                            openRunCount(knownRuns) + startedThisEvent >= maxRuns) {
+                        if (definition.settings.gate !== 'review' &&
+                            (atRunLimit(workspace, knownRuns) ||
+                                openRunCount(knownRuns) + startedThisEvent >= maxRuns)) {
                             triggerRows.push({
                                 ...row,
                                 matched: true,
@@ -3671,6 +3738,41 @@ export function apply(ctx, config = {}) {
         try {
             if (payload.agent.session.header.origin === 'subagent')
                 return;
+            // A user stop wins over every gate: nothing is dispatched or submitted
+            // after it, and an already submitted message is revoked from the inbox
+            // when the turn's signal aborts (design D11). A host without the signal
+            // keeps the pre-existing behavior.
+            const stopSignal = payload.signal;
+            // A function, not a narrowed property read: an abort can land during any
+            // await of this listener.
+            const stopped = () => stopSignal?.aborted === true;
+            if (stopped())
+                return;
+            const gateMessages = new Set();
+            const revokeGateMessages = () => {
+                for (const id of gateMessages) {
+                    try {
+                        payload.agent.inbox.remove(id);
+                    }
+                    catch {
+                        // A disposed agent owns no inbox any more.
+                    }
+                }
+                gateMessages.clear();
+            };
+            stopSignal?.addEventListener('abort', revokeGateMessages, { once: true });
+            const steer = (text) => {
+                if (stopped())
+                    return;
+                const message = {
+                    id: randomUUID(),
+                    role: 'user',
+                    content: [{ type: 'text', text }],
+                    source: { kind: 'workflows-gate' },
+                };
+                payload.agent.steer(message);
+                gateMessages.add(message.id);
+            };
             // Capture the session lifecycle before any await: a disposal and
             // recreation during the queue/auth/store waits must abandon this close.
             const sessionGenerationAtEntry = sessionGeneration(String(payload.agent.session.id));
@@ -3691,6 +3793,12 @@ export function apply(ctx, config = {}) {
             if (sessionGenerationAtEntry !== sessionGeneration(String(payload.agent.session.id))) {
                 // The session ended while this close awaited its queue or store; the
                 // new agent owns the next close, not this stale one.
+                await refreshPromptRuns(workspace);
+                return;
+            }
+            if (stopped()) {
+                // The user stopped the turn during the wait: persist nothing, start
+                // nothing, and let the next turn own the obligation.
                 await refreshPromptRuns(workspace);
                 return;
             }
@@ -3800,7 +3908,10 @@ export function apply(ctx, config = {}) {
             // not wait for a tick. Each start uses the trigger's own start path with
             // a synthetic turn event, so neither the trigger's dedupe key nor its
             // per-turn suppression blocks or consumes the start.
+            let dispatchFailure;
             const dispatchDueUnits = async () => {
+                if (stopped())
+                    return;
                 const taskReview = definitions.find((entry) => entry.id === 'task-review');
                 if (taskReview === undefined)
                     return;
@@ -3814,7 +3925,6 @@ export function apply(ctx, config = {}) {
                     (run.status === 'running' || run.status === 'blocked') &&
                     services.agents.get(run.session) !== undefined);
                 const dispatched = [];
-                const startedCovered = new Set();
                 const event = {
                     kind: 'turn.stopping',
                     subject: 'turn-close',
@@ -3824,16 +3934,21 @@ export function apply(ctx, config = {}) {
                 for (const change of [
                     ...(await involvedChangesOf(workspace, sessionId, payload.turn)),
                 ].sort()) {
+                    // Task identity hashes only the text, so a sibling section of this
+                    // change that shares the text must not start a second run. Coverage
+                    // is per change: two changes with the same task text review apart.
+                    const startedCovered = new Set();
+                    if (stopped())
+                        return;
                     const units = (await reviewUnits(workspace, change)) ?? [];
                     for (const unit of units) {
-                        // Task identity hashes only the text, so a task a unit started in
-                        // this pass already covers (a second section with the same text)
-                        // must not start a second run.
+                        if (stopped())
+                            return;
                         if (unit.covered.some((task) => startedCovered.has(task.id)))
                             continue;
                         const covered = liveRuns(change).some((run) => {
                             const ids = taskIdsOf(run.context);
-                            return unit.covered.some((task) => ids.includes(task.id));
+                            return unit.covered.every((task) => ids.includes(task.id));
                         });
                         if (covered)
                             continue;
@@ -3863,12 +3978,23 @@ export function apply(ctx, config = {}) {
                         }
                         let started = false;
                         for (const context of contexts) {
+                            if (stopped())
+                                return;
                             const outcome = startDefinitionRun(workspace, taskReview, event, false, context);
-                            if (!outcome.ok || outcome.runId === undefined)
+                            if (!outcome.ok || outcome.runId === undefined) {
+                                dispatchFailure ??= outcome.reason;
                                 continue;
+                            }
                             const created = await readAuthenticatedRun(workspace, outcome.runId, auth);
-                            if (created === undefined)
+                            if (created === undefined) {
+                                dispatchFailure ??= `run "${outcome.runId}" could not be authenticated after it started`;
                                 continue;
+                            }
+                            if (stopped()) {
+                                // The start landed while the user stopped: the next close owns
+                                // its advance, and this close must not dispatch or persist it.
+                                return;
+                            }
                             dispatched.push(created);
                             started = true;
                         }
@@ -3877,7 +4003,7 @@ export function apply(ctx, config = {}) {
                                 startedCovered.add(task.id);
                     }
                 }
-                if (dispatched.length === 0)
+                if (dispatched.length === 0 || stopped())
                     return;
                 // The gate's own decision and steer read the same run list; the new
                 // units must be advanced by this close, not only by the next one.
@@ -3885,12 +4011,19 @@ export function apply(ctx, config = {}) {
                 ordered.push(...dispatched);
             };
             await dispatchDueUnits();
+            if (stopped()) {
+                await refreshPromptRuns(workspace);
+                return;
+            }
             // Advance every run first: an owned tool step (the review start) must
             // dispatch for every newly checked task before one close is refused.
             const advanced = new Map();
             const advancedGenerations = new Map();
             const definitionOf = new Map();
             for (const run of ordered) {
+                // A stop after the dispatch must not start or persist another advance.
+                if (stopped())
+                    break;
                 const definition = definitions.find((entry) => entry.id === run.definition.id);
                 if (definition === undefined)
                     continue;
@@ -3937,6 +4070,8 @@ export function apply(ctx, config = {}) {
                 }
             }
             for (const run of ordered) {
+                if (stopped())
+                    break;
                 const current = advanced.get(run.id);
                 const definition = definitionOf.get(run.id);
                 if (current === undefined || definition === undefined)
@@ -4026,12 +4161,7 @@ export function apply(ctx, config = {}) {
                     run: current,
                     definition,
                     agent: {
-                        steer: (text) => payload.agent.steer({
-                            id: randomUUID(),
-                            role: 'user',
-                            content: [{ type: 'text', text }],
-                            source: { kind: 'workflows-gate' },
-                        }),
+                        steer: (text) => steer(text),
                     },
                     evidenceContext: closeContext,
                     turn: payload.turn,
@@ -4046,7 +4176,7 @@ export function apply(ctx, config = {}) {
                     ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
                     onError: (error) => publishListenerError(workspace, error),
                 });
-                if (outcome.run !== current) {
+                if (outcome.run !== current && !stopped()) {
                     // A completed-soft settlement is final: fence its queued or late
                     // reviewer before persisting so no verdict can publish over it.
                     if (isSoftSettled(outcome.run))
@@ -4064,10 +4194,16 @@ export function apply(ctx, config = {}) {
                     mainStepOwners.delete(sessionId);
                 }
             }
+            // A due unit whose start failed is refused, never released: the next
+            // close retries it and the failure names the cause.
+            if (!refusedThisClose && !stopped() && dispatchFailure !== undefined) {
+                steer(`the close is refused: the review run for a due unit could not start: ${dispatchFailure.slice(0, 200)}; the next close retries it`);
+                refusedThisClose = true;
+            }
             // A completed retro run must not hide a checkpoint that went stale
             // later in the same turn: re-check the current-turn record on every
             // close and steer when the obligation reappears.
-            if (!refusedThisClose && workflowOwnsCheckpoint) {
+            if (!refusedThisClose && workflowOwnsCheckpoint && !stopped()) {
                 const candidate = runs.find((run) => run.definition.id === 'retro' &&
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) === payload.turn &&
@@ -4089,43 +4225,23 @@ export function apply(ctx, config = {}) {
                             ...incrementTurnBlocks(currentRetro, journal.time()),
                             turnBlocksTurn: payload.turn,
                         }, auth, runGenerationsAtRead.get(currentRetro.id), sessionGenerationAtRead, currentRetro.updatedAt);
-                        payload.agent.steer({
-                            id: randomUUID(),
-                            role: 'user',
-                            content: [{ type: 'text', text: issue.text }],
-                            source: { kind: 'workflows-gate' },
-                        });
+                        steer(issue.text);
                         refusedThisClose = true;
                     }
                     else if (issue !== undefined && blocks === limit) {
                         const violated = addViolation(currentRetro, `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`, { at: journal.time() });
                         await persistRun(workspace, { ...violated, turnBlocksTurn: payload.turn, turnBlocks: limit + 1 }, auth, runGenerationsAtRead.get(currentRetro.id), sessionGenerationAtRead, currentRetro.updatedAt);
-                        payload.agent.steer({
-                            id: randomUUID(),
-                            role: 'user',
-                            content: [
-                                {
-                                    type: 'text',
-                                    text: `Work checkpoint UNCHECKED: ${issue.text} This is not a pass.`,
-                                },
-                            ],
-                            source: { kind: 'workflows-gate' },
-                        });
+                        steer(`Work checkpoint UNCHECKED: ${issue.text} This is not a pass.`);
                     }
                 }
             }
             // The engine-owned work-progress and lane gates share this listener. A
             // close a run step already refused is held; the next close evaluates
             // them once that obligation settles.
-            if (!refusedThisClose) {
+            if (!refusedThisClose && !stopped()) {
                 const ownedText = await ownedGateRefusal(workspace, sessionId, payload.turn);
                 if (ownedText !== undefined) {
-                    payload.agent.steer({
-                        id: randomUUID(),
-                        role: 'user',
-                        content: [{ type: 'text', text: ownedText }],
-                        source: { kind: 'workflows-gate' },
-                    });
+                    steer(ownedText);
                     refusedThisClose = true;
                 }
             }
@@ -4519,9 +4635,9 @@ export function apply(ctx, config = {}) {
         }));
     }
     /**
-     * The outstanding review units of one workspace, with their open runs. Every
-     * due lane of one change is listed on that change's line, so the status shows
-     * the parallel units instead of one unit per line without a change.
+     * The outstanding review units of one workspace, one compact line per unit.
+     * Every due lane of every change is listed, so a delivered status with many
+     * lanes never drops one to the truncation budget.
      */
     const reviewUnitLines = async (workspace, runs, definitions) => {
         const openRuns = pendingReviewRuns(runs, definitions);
@@ -4531,11 +4647,8 @@ export function apply(ctx, config = {}) {
         const lines = [];
         for (const name of changes) {
             const units = (await reviewUnits(workspace, name)) ?? [];
-            if (units.length === 0)
-                continue;
-            lines.push(`change "${name}" (${String(units.length)} due): ${units
-                .map((unit) => reviewUnitText(name, unit, { openRuns }))
-                .join('; ')}`);
+            for (const unit of units)
+                lines.push(reviewUnitSummary(name, unit, { openRuns }));
         }
         return lines;
     };
@@ -4702,7 +4815,7 @@ export function apply(ctx, config = {}) {
                             const units = await reviewUnitLines(workspace, runs, definitions);
                             return [
                                 `definitions: ${String(definitions.length)}; open runs: ${String(open.length)}; receipts: ${String((await listReceipts(workspace, auth)).length)}`,
-                                ...(units.length === 0 ? [] : [`review units: ${units.join('; ')}`]),
+                                ...(units.length === 0 ? [] : ['review units:', ...units]),
                             ].join('\n');
                         },
                     };

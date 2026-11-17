@@ -373,17 +373,18 @@ describe('uncapped review turn close', () => {
     })
   }
 
-  it('allows the waiting close naming the runs and asking for no writes', () => {
+  it('allows the waiting close silently and records the reason', () => {
     const agent = new FakeAgent()
     const run = reviewRun()
     const outcome = gate(run, agent, 1, { uncovered: [], live: ['run-live'] })
     expect(outcome).toMatchObject({ kind: 'allow' })
     expect(outcome.run).toBe(run)
     expect(outcome.run.violations).toHaveLength(0)
-    expect(agent.messages).toHaveLength(1)
-    expect(agent.messages[0]).toContain('run-live')
-    expect(agent.messages[0]).toContain('write nothing')
-    expect(agent.messages[0]).toContain('waiting close')
+    expect(agent.messages).toHaveLength(0)
+    if (outcome.kind === 'allow') {
+      expect(outcome.reason).toContain('run-live')
+      expect(outcome.reason).toContain('waiting close')
+    }
   })
 
   it('refuses without a budget release while a due unit has no live review', () => {

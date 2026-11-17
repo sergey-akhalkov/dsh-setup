@@ -23,6 +23,8 @@ export interface RunStep {
     };
     /** The producer-owned class of a blocked or failed step. */
     readonly failureClass?: string;
+    /** The transport attempts a review step used, for a retrying review. */
+    readonly attempts?: number;
     readonly reason?: string;
     /** A display row synthesized for a violation, not a real step. */
     readonly synthetic?: boolean;

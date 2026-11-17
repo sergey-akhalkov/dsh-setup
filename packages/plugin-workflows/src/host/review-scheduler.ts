@@ -96,6 +96,14 @@ interface ScheduledEntry extends QueueRun {
 export interface ReviewSchedulerHost {
   persistRun: (workspace: string, run: WorkflowRun) => Promise<WorkflowRun>
   discardSnapshot: (workspace: string, key: string) => Promise<void>
+  /** Persist the bounded attempt facts on the stored review step of a run. */
+  persistReviewAttempts?: (
+    workspace: string,
+    runId: string,
+    stepId: string,
+    attempts: number,
+    failureClass?: FailureClass,
+  ) => Promise<void>
   onSettled?: (status: {
     readonly runId: string
     readonly state: SettledRunState
@@ -325,6 +333,23 @@ export class ReviewScheduler {
   }
 
   /**
+   * A live review of the same unit at any input digest. A successor must not
+   * prepare its snapshot while its predecessor is still reading the stable
+   * unit path: preparation waits for the settlement and cleanup instead.
+   */
+  liveUnit(input: {
+    workspace: string
+    rule: string
+    change: string
+    taskId?: string
+    phase?: string
+  }): WorkflowRun | undefined {
+    const prefix = `${input.workspace}\u0000${input.rule}\u0000${input.change}\u0000${input.taskId ?? ''}\u0000${input.phase ?? ''}\u0000`
+    for (const [key, run] of this.liveRuns) if (key.startsWith(prefix)) return run
+    return undefined
+  }
+
+  /**
    * A live review of this change that already covers one of these task ids: a
    * pending section run covers its recorded `taskIds`, a per-task run its own
    * id. A run with exactly this coverage is this unit's own successor and is
@@ -375,11 +400,23 @@ export class ReviewScheduler {
     this.maxAttempts = limits.maxAttempts
     this.queue = new ReviewQueue<ScheduledEntry>(limits, {
       start: (entry) => this.start(entry),
-      persist: () => undefined,
+      persist: async (entry) => {
+        try {
+          await this.host.persistReviewAttempts?.(
+            entry.workspace,
+            entry.run.id,
+            entry.request.step.id,
+            Math.max(1, entry.file.attempts ?? 0),
+            entry.file.failureClass,
+          )
+        } catch {
+          // Attempt facts are diagnostics; they never fail a review.
+        }
+      },
       fail: async (entry, error, failureClass: FailureClass) => {
         if (this.disposed) return
         const failure = await recordReviewFailure({
-          ...entry.request,
+          ...this.attemptRequest(entry),
           error: error instanceof Error ? error.message : String(error),
           failureClass,
         }).catch(() => undefined)
@@ -398,9 +435,16 @@ export class ReviewScheduler {
         // snapshot until teardown confirms; the quarantine callback releases
         // them, then discards the snapshot.
         if (info?.quarantined !== true) {
-          this.forgetLive(entry.run.id)
-          this.admitted.delete(entry.run.id)
-          void this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined)
+          // Release the live slot only after its checkout is gone: a successor
+          // must not prepare the stable unit path while this cleanup can still
+          // delete it.
+          void this.host
+            .discardSnapshot(entry.workspace, entry.snapshotKey)
+            .catch(() => undefined)
+            .finally(() => {
+              this.forgetLive(entry.run.id)
+              this.admitted.delete(entry.run.id)
+            })
         }
         this.host.onSettled?.({
           runId: entry.run.id,
@@ -430,7 +474,8 @@ export class ReviewScheduler {
     // while it is pending, so ownership is checked again before start.
     if (this.disposed || !this.queue.owns(entry.file.id)) return
     entry.started = true
-    const attempt = await beginReviewAttempt(entry.request)
+    // The attempt's own record carries the transport attempt it settled.
+    const attempt = await beginReviewAttempt(this.attemptRequest(entry))
     // Disposal can land while the asynchronous preparation reads its inputs.
     if (this.disposed || !this.queue.owns(entry.file.id)) {
       void attempt.result.catch(() => undefined)
@@ -453,7 +498,7 @@ export class ReviewScheduler {
         if (this.disposed || !this.queue.owns(entry.file.id)) return
         void attempt.result.catch(() => undefined)
         const failure = await recordReviewFailure({
-          ...entry.request,
+          ...this.attemptRequest(entry),
           error:
             'provider activation timed out before the reviewer started; the reviewer could not be confirmed cancelled, so its review slot stays held until teardown completes',
           failureClass: 'timeout',
@@ -555,6 +600,14 @@ export class ReviewScheduler {
     await this.publishAndSettle(entry, outcome, attempt.now)
   }
 
+  /** The request stamped with the transport attempts this settlement used. */
+  private attemptRequest(entry: ScheduledEntry): ReviewRunInput {
+    return {
+      ...entry.request,
+      attempts: Math.max(1, entry.file.attempts ?? this.queue.attemptsOf(entry.run.id)),
+    }
+  }
+
   /** Publish the settled attempt, then release or quarantine the key. */
   private async publishAndSettle(
     entry: ScheduledEntry,
@@ -578,7 +631,7 @@ export class ReviewScheduler {
     if (outcome.result.kind === 'verdict') {
       if (!teardownConfirmed) {
         const failure = await recordReviewFailure({
-          ...entry.request,
+          ...this.attemptRequest(entry),
           error:
             'the reviewer teardown could not be confirmed, so its verdict is not published; the review slot stays held until teardown completes',
           failureClass: 'timeout',
@@ -601,7 +654,7 @@ export class ReviewScheduler {
       }
       if (reason !== undefined) {
         const failure = await recordReviewFailure({
-          ...entry.request,
+          ...this.attemptRequest(entry),
           error: `reviewed inputs changed after the reviewer finished: ${reason}`,
           failureClass: 'reviewed-inputs-changed',
         }).catch(() => undefined)
@@ -679,12 +732,13 @@ export class ReviewScheduler {
     outcome: ReviewAttemptOutcome,
     now: number,
   ): Promise<ReviewRunResult> {
-    const result: ReviewRunResult = await publishReviewOutcome(entry.request, outcome, now).catch(
+    const request = this.attemptRequest(entry)
+    const result: ReviewRunResult = await publishReviewOutcome(request, outcome, now).catch(
       async (error: unknown): Promise<ReviewRunResult> => {
         // A publication fault must still settle visibly; the queue then releases
         // or quarantines by the actual teardown state.
         return await recordReviewFailure({
-          ...entry.request,
+          ...request,
           error: error instanceof Error ? error.message : String(error),
           failureClass: 'unknown',
         }).catch(() => ({ run: entry.run }))
@@ -720,9 +774,11 @@ export class ReviewScheduler {
       entry,
       async () => {
         await this.waitForTeardown(entry)
+        // Discard the predecessor's checkout before releasing its live slot: a
+        // successor that prepared in between would otherwise lose its snapshot.
+        await this.host.discardSnapshot(entry.workspace, entry.snapshotKey)
         this.forgetLive(entry.run.id)
         this.admitted.delete(entry.run.id)
-        await this.host.discardSnapshot(entry.workspace, entry.snapshotKey)
       },
       outcome,
     )

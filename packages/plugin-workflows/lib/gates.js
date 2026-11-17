@@ -118,7 +118,7 @@ function evaluateReviewClose(input, review, ownedText) {
     }
     const names = review.live.map((id) => `"${id}"`).join(', ');
     const text = `waiting for the live review run${review.live.length === 1 ? '' : 's'} ${names}: write nothing in the reviewed scope while the verdict is pending; this is a waiting close with no VIOLATION and no approval is granted until a current PASS. The verdict delivery starts the next turn`;
-    input.agent.steer(text);
+    // A waiting close is silent: no steer, no step, only the recorded reason.
     return { kind: 'allow', run: input.run, reason: text };
 }
 /** Evaluate one root turn stop. */
@@ -179,7 +179,11 @@ export function evaluateTurnClose(input) {
         }
         // The maxBlocks budget is per turn: a new turn starts a fresh budget, so a
         // capped run never suppresses the obligation on a later turn.
-        const step = selectBlockingStep(input.run, input.definition, input.installedLegacy, input.enabledLegacy, input.provisionalReviews);
+        // A provisional review ERROR is not coverage for a review definition's own
+        // close: only the host review resolution (a PASS or a live review) ends it.
+        // Other definitions (the change intake) keep their spec'd intermediate close.
+        const provisionalReviews = input.definition.settings.gate === 'review' ? undefined : input.provisionalReviews;
+        const step = selectBlockingStep(input.run, input.definition, input.installedLegacy, input.enabledLegacy, provisionalReviews);
         const ownedRefusal = (text) => {
             const blocks = blocksForTurn(input.run);
             if (!releaseBlocked && blocks >= input.maxBlocks) {

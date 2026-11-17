@@ -89,15 +89,20 @@ limit SHALL defer an attempt as a transient failure, not as an engine queue.
 ### Requirement: Waiting close for a live review
 
 While every due review unit has a live review run, the turn close SHALL be allowed as a waiting
-close: the steer SHALL name the runs and ask for no writes in their scope, and the close MUST record
-no `VIOLATION`. Only a current `PASS` SHALL end a unit's obligation; `FINDINGS`, `ERROR`, and a
-failed start leave it due. The close MUST NOT be released by a refusal budget while a unit is due and
-no review is live.
+close and MUST NOT submit any steering, follow-up, or injected message to the agent: the turn ends so
+the asynchronous verdict can start the next one. The close MUST record no `VIOLATION`. Only a current
+`PASS` SHALL end a unit's obligation; `FINDINGS`, `ERROR`, and a failed start leave it due. The close
+MUST NOT be released by a refusal budget while a unit is due and no review is live.
 
 #### Scenario: Waiting close is allowed
 
 - **WHEN** every due unit has a live review and no other obligation is open
-- **THEN** the close is allowed with the waiting steer and no `VIOLATION` is recorded
+- **THEN** the close is allowed with no message to the agent and no `VIOLATION` is recorded
+
+#### Scenario: Waiting close does not reopen the turn
+
+- **WHEN** the gate allows the waiting close while several review runs are live
+- **THEN** no step starts after it, and only the verdict delivery or a later user turn begins new work
 
 #### Scenario: No PASS means no approval
 
@@ -173,7 +178,11 @@ non-empty. The user-clicked archive remains the explicit human override.
 
 ### Requirement: Turn-close gate
 
-When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION`. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
+When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION` and no message. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
+
+A user stop SHALL win over the gate: when the turn's abort signal is set, the gate MUST NOT start a
+review, persist an outcome, or submit a message, and a message it already submitted SHALL be removed
+from the agent inbox when that signal aborts, so no queued gate message resumes a stopped turn.
 
 #### Scenario: Close is refused
 
@@ -193,7 +202,17 @@ When a root turn stops and an active run has an open `blockTurnClose` step that 
 #### Scenario: Live review allows the waiting close
 
 - **WHEN** every due review unit has a live review
-- **THEN** the close is allowed with the waiting steer and no `VIOLATION`
+- **THEN** the close is allowed with no message and no `VIOLATION`
+
+#### Scenario: A stopped turn is never steered
+
+- **WHEN** the turn's abort signal is set before the gate dispatches or submits anything
+- **THEN** no review starts, no message is submitted, and the stopped turn is not resumed
+
+#### Scenario: A submitted gate message does not survive a stop
+
+- **WHEN** the gate submitted a steering message and the turn's abort signal aborts before the message is claimed
+- **THEN** the message is removed from the inbox and no new turn starts from it
 
 #### Scenario: Internal error fails open
 
@@ -726,8 +745,9 @@ The documented apply loop SHALL start a lane review when any task of the lane is
 start every due lane in parallel. It SHALL allow work on another lane while a review runs on a frozen
 snapshot; when the run falls back to live worktree inputs, a write invalidates the verdict, so the
 guidance MUST require restoring snapshot support or deferring writes until settlement without a
-blocking sleep. The waiting close SHALL end the turn for the verdict, and the record MUST still be
-collected before the turn closes and before archive.
+blocking sleep. The waiting close SHALL end the turn for the verdict; the record MUST be collected before the turn
+reaches final completion and before archive, so a waiting close is the one intermediate close allowed
+while a review is live.
 
 #### Scenario: Parallel lanes proceed
 

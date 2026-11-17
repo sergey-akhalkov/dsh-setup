@@ -30,8 +30,14 @@ is possible.
 - **No round cap.** A run that reached its owned review step never releases the turn-close budget:
   `FINDINGS` and `ERROR` leave the unit due, and the next close starts the next round on the same
   thread. Only a current `PASS` ends the obligation. While a review is live, the close is the waiting
-  close (no `VIOLATION`); it ends the turn so the asynchronous verdict can be delivered, and the next
-  turn resumes the loop.
+  close (no `VIOLATION`); it ends the turn silently so the asynchronous verdict can be delivered, and
+  the next turn resumes the loop.
+- **A user stop wins over every gate.** A gate message must never survive the stop button: the gates
+  check the turn's abort signal before dispatching or submitting anything, and a message they already
+  submitted is removed from the inbox when that signal aborts, so a stopped turn is not resumed by
+  queued gate input. The rule covers the workflows turn-close gate and the goal-continuity checkpoint
+  gate; the installed-but-disabled verification-gate row gets the same guard so re-enabling it cannot
+  reproduce the defect.
 - **Maximum parallelism.** Review admission is immediate: the queue stops enforcing concurrency and
   waiting-list limits, review starts are exempt from the generic open-run limit, and the gate starts
   every due unit in one pass. The only serialization left is the shared reviewer thread of one unit,
@@ -62,6 +68,8 @@ None.
   scenario.
 - `codex-subagent`: the review key the provider parses now includes the engine's stable unit key,
   including a section key, while thread reuse and confinement are unchanged.
+- `work-checkpoints`: the checkpoint close gate checks the turn's abort signal and revokes its own
+  pending request on a user stop, instead of waking a stopped turn.
 
 ## Impact
 
@@ -70,8 +78,11 @@ None.
 - `packages/plugin-workflows/assets/reviews/*.md` (the review key line and the whole-scope focused
   sections)
 - `packages/plugin-workflows/test/**` (review, snapshot, gates, host wiring, parity, acceptance)
+- `packages/plugin-goal-continuity/src/host/index.ts` and its tests (the checkpoint close-gate steer)
+- `packages/plugin-verification-gate/src/host/index.ts` and its tests (the disabled row's refusal steer)
 - `packages/plugin-workflows/assets/parity/retire-legacy-gates.json`, `scripts/workflows-parity.ts`
 - `packages/setup/defaults.yml` and the generated setup files (review queue defaults)
 - `packages/plugin-openspec/assets/guidance/task-lanes.md` (lane-parallel apply guidance)
-- `docs/workflows.md`, `docs/codex-subagent.md`, `docs/openspec-status.md`, `AGENTS.md`
+- `docs/workflows.md`, `docs/goal-continuity.md`, `docs/codex-subagent.md`,
+  `docs/openspec-status.md`, `AGENTS.md`
 - No change to the committed approval format, the review record paths, or the archive audit.

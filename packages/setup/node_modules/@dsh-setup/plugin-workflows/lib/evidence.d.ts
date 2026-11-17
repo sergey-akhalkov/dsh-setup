@@ -1,5 +1,5 @@
 import type { Evidence } from './definitions.js';
-import { type GitRunner } from './git.js';
+import type { GitRunner } from './git.js';
 import type { RunEvidence } from './runs.js';
 /**
  * The evidence verifier. It is a pure-ish function over the workspace and the

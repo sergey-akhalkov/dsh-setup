@@ -14,9 +14,10 @@ import type {
 } from './definitions.js'
 import { globMatches } from './evaluate.js'
 import { isInside } from './fs-change.js'
-import { type GitRunner, worktreeDigest } from './git.js'
+import type { GitRunner } from './git.js'
 import { readPortableApproval, reviewerBinding, taskReviewCoverage } from './parity.js'
 import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js'
+import { reviewInputTree } from './review-snapshot.js'
 import type { RunEvidence } from './runs.js'
 
 /**
@@ -803,7 +804,12 @@ async function recordCheck(
     const current = await currentSpecDigest(context.workspace, change.text)
     const tree =
       worktreeBound && context.runGit !== undefined
-        ? await worktreeDigest(context.workspace, context.runGit).catch(() => undefined)
+        ? await reviewInputTree(
+            context.workspace,
+            { dir: join(context.workspace, 'openspec', 'changes', change.text) },
+            context.runGit,
+            AbortSignal.timeout(60_000),
+          ).catch(() => undefined)
         : undefined
     const currentDigest =
       current === undefined || (worktreeBound && tree === undefined)

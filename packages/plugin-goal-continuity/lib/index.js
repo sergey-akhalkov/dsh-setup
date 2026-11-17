@@ -2489,20 +2489,36 @@ function installCheckpointGate(ctx, config, stateFor) {
     });
     ctx.on('agent/turn-stopping', async (payload) => {
         try {
-            evaluate(payload.agent, payload.turn);
+            evaluate(payload.agent, payload.turn, payload.signal);
         }
         catch {
             // Fail open: an internal state error must never fail a turn.
         }
     });
-    /** Steer one non-waking message; a disposed agent cannot be steered. */
-    function steer(agent, text, summary) {
+    /**
+     * Steer one non-waking message; a disposed agent cannot be steered and a
+     * user stop wins over any request.
+     */
+    function steer(agent, text, summary, signal) {
+        if (signal?.aborted === true)
+            return;
+        const message = createNotice(text, summary, config.maxMessageChars);
         try {
-            agent.steer(createNotice(text, summary, config.maxMessageChars));
+            agent.steer(message);
         }
         catch {
             // A disposed agent cannot be steered; the turn is already over.
+            return;
         }
+        // Revoke a pending request when the turn aborts, so it never wakes it.
+        signal?.addEventListener('abort', () => {
+            try {
+                agent.inbox.remove(message.id);
+            }
+            catch {
+                // A claimed or disposed message needs no removal.
+            }
+        }, { once: true });
     }
     /** Whether the latest checkpoint is younger than one step interval. */
     function freshCheckpoint(evidence, state) {
@@ -2538,8 +2554,9 @@ function installCheckpointGate(ctx, config, stateFor) {
         }, checkpointHistory(workspace, agent.session.id, turn, config)), 'goal-continuity: periodic work checkpoint');
     }
     /** One close decision: steer one more step, or allow the close. */
-    function evaluate(agent, turn) {
-        if (!isRootAgent(agent))
+    function evaluate(agent, turn, signal) {
+        // A stopped turn must not be resumed by a checkpoint request.
+        if (signal.aborted || !isRootAgent(agent))
             return;
         const state = stateFor(agent);
         const budget = state.checkpointTurn;
@@ -2557,7 +2574,7 @@ function installCheckpointGate(ctx, config, stateFor) {
                 stalePlan.outcome === 'continue' &&
                 stalePlan.bottleneck !== undefined &&
                 !remedyMatched(evidence, stalePlan.bottleneck, checkpointIdFor(agent.session.id, turn), workspace, workerVisible)) {
-                refuse(agent, budget, composeRemedyRequest(checkpointIdFor(agent.session.id, turn), stalePlan.bottleneck, config.maxMessageChars, workspace, workerVisible), 'goal-continuity: work checkpoint remedy required', `this turn closed without the ${stalePlan.bottleneck.action} remedy for bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
+                refuse(agent, budget, composeRemedyRequest(checkpointIdFor(agent.session.id, turn), stalePlan.bottleneck, config.maxMessageChars, workspace, workerVisible), 'goal-continuity: work checkpoint remedy required', `this turn closed without the ${stalePlan.bottleneck.action} remedy for bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`, signal);
                 return;
             }
             // An aged bottleneck keeps its refusal even after the checkpoint expires.
@@ -2570,12 +2587,12 @@ function installCheckpointGate(ctx, config, stateFor) {
                 !staleAge.changed &&
                 staleBottleneck !== undefined &&
                 staleBottleneck.action !== 'user_decision') {
-                refuse(agent, budget, composeAgeRequest(checkpointIdFor(agent.session.id, turn), staleBottleneck, staleAge.age, config.maxMessageChars, workspace), 'goal-continuity: work checkpoint bottleneck is aged', `the bottleneck "${storedText(staleBottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${staleAge.age} checkpoints after the refusal cap`);
+                refuse(agent, budget, composeAgeRequest(checkpointIdFor(agent.session.id, turn), staleBottleneck, staleAge.age, config.maxMessageChars, workspace), 'goal-continuity: work checkpoint bottleneck is aged', `the bottleneck "${storedText(staleBottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${staleAge.age} checkpoints after the refusal cap`, signal);
                 return;
             }
             if (!checkpointRequired(evidence, config))
                 return;
-            refuse(agent, budget, composeCheckpointRequest(evidence, workspace, config.maxMessageChars, undefined, checkpointHistory(workspace, agent.session.id, turn, config)), 'goal-continuity: work checkpoint required', 'this turn closed without a successful work_checkpoint after the refusal cap');
+            refuse(agent, budget, composeCheckpointRequest(evidence, workspace, config.maxMessageChars, undefined, checkpointHistory(workspace, agent.session.id, turn, config)), 'goal-continuity: work checkpoint required', 'this turn closed without a successful work_checkpoint after the refusal cap', signal);
             return;
         }
         const plan = checkpointPlan(evidence, workspace);
@@ -2589,14 +2606,14 @@ function installCheckpointGate(ctx, config, stateFor) {
             plan.parallelComputed &&
             workerVisible &&
             !taggedWorkerStarted(evidence, id)) {
-            refuse(agent, budget, composeParallelRequest(id, config.maxMessageChars), `goal-continuity: work checkpoint ${id} needs a parallel worker`, `this turn closed without a tagged worker start for ${id} after the refusal cap`);
+            refuse(agent, budget, composeParallelRequest(id, config.maxMessageChars), `goal-continuity: work checkpoint ${id} needs a parallel worker`, `this turn closed without a tagged worker start for ${id} after the refusal cap`, signal);
             return;
         }
         const bottleneck = plan.bottleneck;
         if (bottleneck === undefined)
             return;
         if (!remedyMatched(evidence, bottleneck, id, workspace, workerVisible)) {
-            refuse(agent, budget, composeRemedyRequest(id, bottleneck, config.maxMessageChars, workspace, workerVisible), `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`, `this turn closed without the ${bottleneck.action} remedy for bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
+            refuse(agent, budget, composeRemedyRequest(id, bottleneck, config.maxMessageChars, workspace, workerVisible), `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`, `this turn closed without the ${bottleneck.action} remedy for bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`, signal);
             return;
         }
         // The write counted the preceding checkpoint, in this turn or an earlier one.
@@ -2608,17 +2625,17 @@ function installCheckpointGate(ctx, config, stateFor) {
         // is the data escape and already raised `changed`.
         if (bottleneck.action === 'user_decision')
             return;
-        refuse(agent, budget, composeAgeRequest(id, bottleneck, age.age, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} bottleneck is aged`, `the bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${age.age} checkpoints after the refusal cap`);
+        refuse(agent, budget, composeAgeRequest(id, bottleneck, age.age, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} bottleneck is aged`, `the bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${age.age} checkpoints after the refusal cap`, signal);
     }
     /** Steer once per refusal, then allow the close with one UNCHECKED notice. */
-    function refuse(agent, budget, text, summary, detail) {
+    function refuse(agent, budget, text, summary, detail, signal) {
         if (budget.refusals >= config.maxBlocks) {
             budget.unchecked = true;
             deliverNotice(agent, `Work checkpoint UNCHECKED: ${detail} (${config.maxBlocks} refusals). This is not a pass; the next substantial turn must still checkpoint its work.`, 'goal-continuity: work checkpoint UNCHECKED');
             return;
         }
         budget.refusals += 1;
-        steer(agent, text, summary);
+        steer(agent, text, summary, signal);
     }
 }
 /**

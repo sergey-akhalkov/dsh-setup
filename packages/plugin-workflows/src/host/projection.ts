@@ -55,6 +55,8 @@ export interface RunStep {
   readonly evidenceRef?: { readonly kind: string; readonly ref?: string; readonly at?: number }
   /** The producer-owned class of a blocked or failed step. */
   readonly failureClass?: string
+  /** The transport attempts a review step used, for a retrying review. */
+  readonly attempts?: number
   readonly reason?: string
   /** A display row synthesized for a violation, not a real step. */
   readonly synthetic?: boolean
@@ -530,6 +532,14 @@ export function localRecordError(record: Record<string, unknown>): string | unde
   ) {
     return 'field "previous" must be a list of prior-finding confirmations'
   }
+  if (
+    record.attempts !== undefined &&
+    (typeof record.attempts !== 'number' ||
+      !Number.isSafeInteger(record.attempts) ||
+      record.attempts < 1)
+  ) {
+    return 'field "attempts" must be a positive integer'
+  }
   if (record.error !== undefined && typeof record.error !== 'string') {
     return 'field "error" must be a string'
   }
@@ -825,6 +835,9 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
         ...(typeof entry.reason === 'string' ? { reason: safeError(entry.reason) } : {}),
         ...(typeof entry.failureClass === 'string'
           ? { failureClass: safeText(entry.failureClass) }
+          : {}),
+        ...(typeof entry.attempts === 'number' && Number.isSafeInteger(entry.attempts)
+          ? { attempts: entry.attempts }
           : {}),
         ...(evidence === undefined
           ? {}

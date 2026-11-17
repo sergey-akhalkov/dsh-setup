@@ -322,6 +322,12 @@ function runCoveredIds(run: ReviewUnitRun): string[] {
   return covered
 }
 
+/** Whether one open run covers every checked task of the unit as it is now. */
+function coversUnit(run: ReviewUnitRun, unit: ReviewUnit): boolean {
+  const ids = runCoveredIds(run)
+  return unit.covered.every((task) => ids.includes(task.id))
+}
+
 /**
  * The one-line lane unit: the section key with its covered and missing task
  * numbers (or the single task), the live runs that already cover it, and the
@@ -335,26 +341,16 @@ export function reviewUnitText(
   options: ReviewUnitTextOptions = {},
 ): string {
   const rule = options.rule ?? 'task-review'
+  // Only a run covering the unit as it is now is pending; a run created before a
+  // newly checked task does not cover the expanded lane.
   const pending = (options.openRuns ?? []).filter(
-    (run) =>
-      run.change === change && unit.missing.some((task) => runCoveredIds(run).includes(task.id)),
-  )
-  const uncovered = unit.missing.filter(
-    (task) => !pending.some((run) => runCoveredIds(run).includes(task.id)),
+    (run) => run.change === change && coversUnit(run, unit),
   )
   const names = pending.map((run) => `"${run.id}"`).join(', ')
-  const action = (selector: string): string => {
-    if (pending.length === 0) {
-      return `; start it with workflows(action: "start", definitionId: "${rule}", change: "${change}", ${selector})`
-    }
-    const reference =
-      pending.length === 1
-        ? `the live review run ${names} covers ${uncovered.length === 0 ? 'it' : 'part of it'}`
-        : `the live review runs ${names} cover ${uncovered.length === 0 ? 'it' : 'part of it'}`
-    return uncovered.length === 0
-      ? `; ${reference}, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`
-      : `; ${reference}, so start only the uncovered tasks with workflows(action: "start", definitionId: "${rule}", change: "${change}", task: "<task id>")`
-  }
+  const action = (selector: string): string =>
+    pending.length === 0
+      ? `; start it with workflows(action: "start", definitionId: "${rule}", change: "${change}", ${selector})`
+      : `; the live review run${pending.length === 1 ? '' : 's'} ${names} cover${pending.length === 1 ? 's' : ''} it, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`
   const section = unit.section
   if (section === undefined) {
     const task = unit.missing[0]
@@ -364,6 +360,33 @@ export function reviewUnitText(
   }
   const head = `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) is one lane unit; covered checked tasks ${boundedNumbers(unit.covered)}; missing a ${rule} PASS: ${boundedNumbers(unit.missing)}`
   return clampUnitText(head, action(`section: "${section.key}"`))
+}
+
+/**
+ * The compact status form of one due unit: every due lane fits the delivered
+ * status budget, so the title is omitted and the covered/missing task numbers
+ * stay. Built from the same coverage as `reviewUnitText`.
+ */
+export function reviewUnitSummary(
+  change: string,
+  unit: ReviewUnit,
+  options: ReviewUnitTextOptions = {},
+): string {
+  const rule = options.rule ?? 'task-review'
+  const pending = (options.openRuns ?? []).filter(
+    (run) => run.change === change && coversUnit(run, unit),
+  )
+  const live =
+    pending.length === 0
+      ? ''
+      : `; live run${pending.length === 1 ? '' : 's'} ${pending.map((run) => `"${run.id}"`).join(', ')} cover${pending.length === 1 ? 's' : ''} it`
+  const section = unit.section
+  if (section === undefined) {
+    const task = unit.missing[0]
+    if (task === undefined) return `change "${change}" has no outstanding review unit`
+    return `change "${change}" task "${clipped(task.number + ' ' + task.text, 40)}" (${task.id}): no ${rule} PASS${live}`
+  }
+  return `change "${change}" section "${clipped(section.key, 40)}": covered ${boundedNumbers(unit.covered)}; missing a ${rule} PASS: ${boundedNumbers(unit.missing)}${live}`
 }
 
 /**

@@ -950,3 +950,20 @@ that are fixed on `main` and recorded here as owner follow-ups:
   regression for re-checking the final task over a stored `ERROR`.
 - Also open from the same change: the native `spec-review` trigger's `dedupe: turn` key was released
   only by the 0.41.4 fix; a cancelled or failed run no longer holds it (`7da60ce`).
+
+The `review-until-pass` change is being completed, not released. v0.43.0 shipped its core: lane-owned
+review units, one reviewer thread per unit key with the stable snapshot path, uncapped review gates,
+immediate parallel admission, the required integration review, and the retired soft integration
+parity entry. The change also adds four source behaviors that are not in v0.43.0: the silent waiting
+close (no message to the agent, no step, and no `VIOLATION`, so the turn ends for the verdict), the
+user-stop contract (an aborted turn starts no review and submits no message, and a submitted gate
+message is revoked from the inbox in the workflows turn-close gate, goal-continuity's checkpoint
+close gate, and the installed-but-disabled verification-gate steer), the integration record's git
+content-tree digest (stale after a later code change), and the persisted attempt count and failure
+class on a retried review's step and record. The parity report
+(`packages/plugin-workflows/assets/parity/retire-legacy-gates.json`) declares the retired soft
+integration scenario as a difference (`differences.integration-review`) and replays no soft
+settlement sequence; the remaining scenarios, the template hashes, and
+`pnpm workflows:parity --check` stay green. The installed profile runs v0.43.0, the next release
+ships the four behaviors, and the change's acceptance, live Codex, and spec-review durability checks
+remain open before the archive.

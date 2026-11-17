@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import type { MessageId, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { apply, type Config } from '../lib/index.js'
@@ -40,6 +40,15 @@ export class CheckpointHarness {
   readonly events: SessionEvent[] = []
   readonly steers: UserMessage[] = []
   readonly injected: UserMessage[] = []
+  /** The steering inbox: `steers` holds what is still pending until claimed or removed. */
+  readonly inbox = {
+    remove: (messageId: MessageId): boolean => {
+      const index = this.steers.findIndex((message) => message.id === messageId)
+      if (index < 0) return false
+      this.steers.splice(index, 1)
+      return true
+    },
+  }
   readonly tools = new Map<string, ToolDefinition>()
   readonly availableTools: Set<string>
   readonly goalCalls: string[] = []
@@ -82,6 +91,7 @@ export class CheckpointHarness {
       steer: (message: UserMessage) => {
         this.steers.push(message)
       },
+      inbox: this.inbox,
     } as unknown as Agent
     const agents = new Map<string, Agent>([[this.sessionId, this.agent]])
     this.ctx.provide('agents', {
@@ -266,7 +276,11 @@ export class CheckpointHarness {
   }
 
   /** Run the registered turn-stopping listeners. */
-  async turnStopping(turn = 1, agent: Agent = this.agent): Promise<void> {
+  async turnStopping(
+    turn = 1,
+    agent: Agent = this.agent,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<void> {
     const serial = this.ctx.serial as unknown as (
       name: string,
       payload: unknown,
@@ -274,7 +288,7 @@ export class CheckpointHarness {
     await serial.call(this.ctx, 'agent/turn-stopping', {
       agent,
       turn,
-      signal: new AbortController().signal,
+      signal,
     })
   }
 

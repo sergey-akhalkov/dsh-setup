@@ -367,6 +367,26 @@ describe('verification gate message bounds', () => {
   })
 })
 
+describe('verification gate abort guard', () => {
+  it('submits no steer when the turn is already stopped', async () => {
+    const harness = await dirtyTurn()
+    const controller = new AbortController()
+    controller.abort()
+    await harness.stop(1, harness.agent, controller.signal)
+    expect(harness.steerTexts()).toEqual([])
+    expect(harness.noticeTexts()).toEqual([])
+  })
+
+  it('removes a submitted steer when the turn stops', async () => {
+    const harness = await dirtyTurn()
+    const controller = new AbortController()
+    await harness.stop(1, harness.agent, controller.signal)
+    expect(harness.steerTexts()).toHaveLength(1)
+    controller.abort()
+    expect(harness.steerTexts()).toEqual([])
+  })
+})
+
 describe('verification gate observation order', () => {
   it('keeps state per agent', async () => {
     const first: FakeAgent = createAgent()

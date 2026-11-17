@@ -3263,19 +3263,37 @@ function installCheckpointGate(
   })
   ctx.on('agent/turn-stopping', async (payload) => {
     try {
-      evaluate(payload.agent, payload.turn)
+      evaluate(payload.agent, payload.turn, payload.signal)
     } catch {
       // Fail open: an internal state error must never fail a turn.
     }
   })
 
-  /** Steer one non-waking message; a disposed agent cannot be steered. */
-  function steer(agent: Agent, text: string, summary: string): void {
+  /**
+   * Steer one non-waking message; a disposed agent cannot be steered and a
+   * user stop wins over any request.
+   */
+  function steer(agent: Agent, text: string, summary: string, signal?: AbortSignal): void {
+    if (signal?.aborted === true) return
+    const message = createNotice(text, summary, config.maxMessageChars)
     try {
-      agent.steer(createNotice(text, summary, config.maxMessageChars))
+      agent.steer(message)
     } catch {
       // A disposed agent cannot be steered; the turn is already over.
+      return
     }
+    // Revoke a pending request when the turn aborts, so it never wakes it.
+    signal?.addEventListener(
+      'abort',
+      () => {
+        try {
+          agent.inbox.remove(message.id)
+        } catch {
+          // A claimed or disposed message needs no removal.
+        }
+      },
+      { once: true },
+    )
   }
 
   /** Whether the latest checkpoint is younger than one step interval. */
@@ -3320,8 +3338,9 @@ function installCheckpointGate(
   }
 
   /** One close decision: steer one more step, or allow the close. */
-  function evaluate(agent: Agent, turn: number): void {
-    if (!isRootAgent(agent)) return
+  function evaluate(agent: Agent, turn: number, signal: AbortSignal): void {
+    // A stopped turn must not be resumed by a checkpoint request.
+    if (signal.aborted || !isRootAgent(agent)) return
     const state = stateFor(agent)
     const budget = state.checkpointTurn
     if (budget === undefined || budget.turn !== turn || budget.unchecked) return
@@ -3357,6 +3376,7 @@ function installCheckpointGate(
           ),
           'goal-continuity: work checkpoint remedy required',
           `this turn closed without the ${stalePlan.bottleneck.action} remedy for bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`,
+          signal,
         )
         return
       }
@@ -3392,6 +3412,7 @@ function installCheckpointGate(
           ),
           'goal-continuity: work checkpoint bottleneck is aged',
           `the bottleneck "${storedText(staleBottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${staleAge.age} checkpoints after the refusal cap`,
+          signal,
         )
         return
       }
@@ -3408,6 +3429,7 @@ function installCheckpointGate(
         ),
         'goal-continuity: work checkpoint required',
         'this turn closed without a successful work_checkpoint after the refusal cap',
+        signal,
       )
       return
     }
@@ -3429,6 +3451,7 @@ function installCheckpointGate(
         composeParallelRequest(id, config.maxMessageChars),
         `goal-continuity: work checkpoint ${id} needs a parallel worker`,
         `this turn closed without a tagged worker start for ${id} after the refusal cap`,
+        signal,
       )
       return
     }
@@ -3441,6 +3464,7 @@ function installCheckpointGate(
         composeRemedyRequest(id, bottleneck, config.maxMessageChars, workspace, workerVisible),
         `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`,
         `this turn closed without the ${bottleneck.action} remedy for bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`,
+        signal,
       )
       return
     }
@@ -3464,6 +3488,7 @@ function installCheckpointGate(
       composeAgeRequest(id, bottleneck, age.age, config.maxMessageChars, workspace),
       `goal-continuity: work checkpoint ${id} bottleneck is aged`,
       `the bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${age.age} checkpoints after the refusal cap`,
+      signal,
     )
   }
 
@@ -3474,6 +3499,7 @@ function installCheckpointGate(
     text: string,
     summary: string,
     detail: string,
+    signal: AbortSignal,
   ): void {
     if (budget.refusals >= config.maxBlocks) {
       budget.unchecked = true
@@ -3485,7 +3511,7 @@ function installCheckpointGate(
       return
     }
     budget.refusals += 1
-    steer(agent, text, summary)
+    steer(agent, text, summary, signal)
   }
 }
 /** The roster shape the Web client reads through `agentPresets/list`. */

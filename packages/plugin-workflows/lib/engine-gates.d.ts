@@ -66,6 +66,12 @@ export declare function reviewUnits(workspace: string, change: string): Promise<
  */
 export declare function reviewUnitText(change: string, unit: ReviewUnit, options?: ReviewUnitTextOptions): string;
 /**
+ * The compact status form of one due unit: every due lane fits the delivered
+ * status budget, so the title is omitted and the covered/missing task numbers
+ * stay. Built from the same coverage as `reviewUnitText`.
+ */
+export declare function reviewUnitSummary(change: string, unit: ReviewUnit, options?: ReviewUnitTextOptions): string;
+/**
  * The selected unit of one task-review run, rendered for an intermediate close:
  * a run whose review step is still open names its section and missing tasks
  * even while unchecked tasks remain (the completion coverage only speaks once

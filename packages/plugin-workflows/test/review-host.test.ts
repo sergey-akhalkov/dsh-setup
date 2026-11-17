@@ -606,7 +606,9 @@ describe('shared whole-spec review admission', () => {
       expect(host.steers.at(-1)).toContain('spec-review')
       // The shared identity ran one reviewer, not two.
       expect(host.digests).toHaveLength(1)
-      expect(steersTwo.length).toBeGreaterThan(0)
+      // A waiting close submits no steer: session 2's own close ends silently
+      // while its review is live (design D3).
+      expect(steersTwo).toHaveLength(0)
       // The shared PASS record satisfies the intake step, so its close passes
       // and the completed intake issues its receipt.
       const release = host.releases[0]

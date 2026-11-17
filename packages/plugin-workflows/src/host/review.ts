@@ -448,6 +448,8 @@ export interface ReviewRecord {
   readonly reviewer: string
   readonly session?: string
   readonly runId?: string
+  /** The transport attempt count this record settled. */
+  readonly attempts?: number
   readonly failureClass?: string
   readonly error?: string
   readonly time: string
@@ -744,7 +746,12 @@ function promptKeyToken(value: string): string {
     .replace(/\p{Cc}+/gu, ' ')
     .replace(/\s+/gu, ' ')
     .trim()
-  return token === '' ? 'untitled' : token.slice(0, 120)
+  if (token === '') return 'untitled'
+  if (token.length <= 120) return token
+  // Two long headings can share their first 120 characters; the hash keeps the
+  // shortened key (and its snapshot path) unique to the complete parser key.
+  const hash = createHash('sha256').update(token).digest('hex').slice(0, 12)
+  return `${token.slice(0, 106)}-${hash}`
 }
 
 /**
@@ -1099,6 +1106,8 @@ export interface ReviewRunInput {
   readonly timeoutMs: number
   readonly session: string
   readonly now?: number
+  /** The transport attempt this verdict/error settled, for the durable record. */
+  readonly attempts?: number
   readonly signal?: AbortSignal
   /** The git runner the focused diff uses; production spawns the bounded runner. */
   readonly runGit?: GitRunner
@@ -1264,6 +1273,7 @@ function baseRecord(
           ]),
           reviewedTree: input.prepared.tree,
         }),
+    ...(input.attempts === undefined ? {} : { attempts: input.attempts }),
     target: targetIdentity(input.reviewer),
     reviewer: input.reviewer.id,
     session: input.session,

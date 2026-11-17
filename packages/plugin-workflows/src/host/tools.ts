@@ -303,7 +303,12 @@ export async function executeWorkflowsTool(
       const current = run.steps.find((step) => step.state === 'open' || step.state === 'blocked')
       return bounded(
         `run ${run.id} [${run.status}] ${run.definition.name} (${run.definition.id}); next ${current?.id ?? 'end'}; ${run.steps
-          .map((step) => `${step.id}:${step.state}`)
+          .map(
+            (step) =>
+              `${step.id}:${step.state}${
+                step.attempts === undefined ? '' : ` (attempts ${String(step.attempts)})`
+              }`,
+          )
           .join(' ')}`,
       )
     }
