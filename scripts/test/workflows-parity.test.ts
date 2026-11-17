@@ -266,7 +266,7 @@ describe('retirement parity report', () => {
       'task-progress',
     )
     expect(gateIssue).toContain('task-progress')
-    expect(gateIssue).toContain('delegation.gates.taskProgress: true')
+    expect(gateIssue).toContain('fix the parity report')
   })
 
   it('fails when an exhausted soft run still blocks an authorized archive', async () => {

@@ -648,15 +648,15 @@ describe('workflows read API', () => {
 
   it('serves settled evidence text only from the requesting workspace', async () => {
     const value = await setup()
-    const record = '.dsh/delegation/task-review/add-x/runs/run-mw6abcde-1234abcd.json'
-    await mkdir(join(value.workspaceOne, '.dsh', 'delegation', 'task-review', 'add-x', 'runs'), {
+    const record = '.dsh/workflows/runs/run-mw6abcde-1234abcd.json'
+    await mkdir(join(value.workspaceOne, '.dsh', 'workflows', 'runs'), {
       recursive: true,
     })
     await writeFile(join(value.workspaceOne, record), 'review evidence', 'utf8')
     await writeFile(join(value.workspaceOne, 'package.json'), '{}', 'utf8')
     const evidenceRoute = value.routes.find((route) => route.path === EVIDENCE_ROUTE)
     if (evidenceRoute === undefined) throw new Error('the evidence route is missing')
-    const secretRecord = '.dsh/delegation/task-review/add-x/runs/secret.json'
+    const secretRecord = '.dsh/workflows/runs/secret.json'
     await writeFile(
       join(value.workspaceOne, secretRecord),
       '{"detail":"Authorization: Bearer synthetic-review-credential"}',
@@ -669,7 +669,7 @@ describe('workflows read API', () => {
     )
     expect(await secretResponse.text()).not.toContain('synthetic-review-credential')
 
-    const structured = '.dsh/delegation/task-review/add-x/runs/structured.json'
+    const structured = '.dsh/workflows/runs/structured.json'
     await writeFile(
       join(value.workspaceOne, structured),
       JSON.stringify(
@@ -705,7 +705,7 @@ describe('workflows read API', () => {
     expect(outside.status).toBe(400)
     const traversal = await request(value, EVIDENCE_ROUTE, {
       session: 's1',
-      query: 'path=.dsh%2Fdelegation%2F..%2F..%2Fpackage.json',
+      query: 'path=.dsh%2Fworkflows%2F..%2F..%2Fpackage.json',
     })
     expect(traversal.status).toBe(400)
     const direct = await request(value, EVIDENCE_ROUTE, {
@@ -715,7 +715,7 @@ describe('workflows read API', () => {
     expect(direct.status).toBe(400)
     const missing = await request(value, EVIDENCE_ROUTE, {
       session: 's1',
-      query: 'path=.dsh/delegation/none.json',
+      query: 'path=.dsh/workflows/runs/none.json',
     })
     expect(missing.status).toBe(404)
     const empty = await request(value, EVIDENCE_ROUTE, { session: 's1' })

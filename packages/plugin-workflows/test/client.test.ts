@@ -339,7 +339,7 @@ function runView(overrides: Record<string, unknown> = {}): Record<string, unknow
         title: 'Requirements',
         state: 'done',
         at: 1_762_500_030_000,
-        evidenceRef: { kind: 'record', ref: '.dsh/delegation/record.json' },
+        evidenceRef: { kind: 'record', ref: '.dsh/workflows/runs/record.json' },
       },
       {
         id: 'spec-review',
@@ -713,7 +713,7 @@ describe('Workflows Client half', () => {
       (element) => element.type === 'a' && element.props['data-evidence-kind'] === 'record',
     )
     expect(String(link?.props.href)).toContain('/api/workflows/evidence')
-    expect(String(link?.props.href)).toContain('.dsh%2Fdelegation%2Frecord.json')
+    expect(String(link?.props.href)).toContain('.dsh%2Fworkflows%2Fruns%2Frecord.json')
     const back = elements(detail).find((element) => element.type === 'button')
     ;(back?.props.onClick as (() => void) | undefined)?.()
     expect(backed).toBe(1)

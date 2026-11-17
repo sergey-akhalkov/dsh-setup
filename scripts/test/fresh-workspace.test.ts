@@ -82,9 +82,8 @@ describe('fresh-workspace migration', () => {
     expect(ownership.get('verify')).toBe('own')
   })
 
-  it('ships the retired switches and keeps the retained gates', () => {
+  it('ships the surviving gate settings', () => {
     const patch = readFileSync(join(setup, 'cordis.patch.yml'), 'utf8')
-    expect(patch).toContain('workflowOwned: false')
     expect(patch).toContain('automation: false')
     expect(patch).toContain('- id: dsh-setup-verification-gate')
     expect(patch.match(/disabled: true/gu)?.length).toBe(1)
@@ -93,7 +92,6 @@ describe('fresh-workspace migration', () => {
     expect(patch).toContain('bottleneckAge: 2')
     expect(patch).toContain('stepInterval: 40')
     expect(patch).toContain('enforceParallel: true')
-    for (const retained of ['spec-review', 'lane-fanout']) expect(patch).toContain(retained)
     // Standalone plugin installs keep the legacy enforcement; only the setup
     // bundle flips the retirement switches.
     const goalFragment = readFileSync(
@@ -101,20 +99,7 @@ describe('fresh-workspace migration', () => {
       'utf8',
     )
     expect(goalFragment).not.toContain('automation: false')
-    const delegationFragment = readFileSync(
-      join(repoRoot, 'packages', 'plugin-delegation-rules', 'cordis.fragment.yml'),
-      'utf8',
-    )
-    for (const name of [
-      'workflowOwned',
-      'specReview',
-      'integrationReview',
-      'taskProgress',
-      'laneFanout',
-    ]) {
-      expect(delegationFragment).toContain(`${name}: false`)
-    }
-    expect(delegationFragment).toContain('when: implementation-work')
+    expect(patch).not.toContain('dsh-setup-delegation-rules')
   })
 
   it('accepts two profile verify settings, including a cap above 128', () => {

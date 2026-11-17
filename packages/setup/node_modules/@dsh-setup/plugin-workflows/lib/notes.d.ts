@@ -6,14 +6,10 @@ import { type GitRunner } from './git.js';
  * the worktree digest it was written against, so a later write makes it stale.
  * A serial note also names its lane and the session that wrote it, so the
  * workflow lane gate treats that one lane as the serial decision only for the
- * writing session; a legacy note has no lane and falls back to its digest.
- * While the progress signal is legacy the note goes to the legacy store with
- * that owner's HEAD-less digest, so its gate reads the note as current.
+ * writing session.
  */
-/** Where each owner keeps its progress note. */
+/** Where the engine keeps its progress note. */
 export declare const NOTES_DIR = ".dsh/workflows/notes";
-export declare const LEGACY_NOTES_DIR = ".dsh/delegation/task-progress";
-export type NoteOwner = 'workflows' | 'legacy';
 export type ProgressStatus = 'in-progress' | 'blocked';
 export declare const PROGRESS_STATUSES: readonly ProgressStatus[];
 export interface ProgressNote {
@@ -33,12 +29,12 @@ export interface NoteInput {
     readonly status: ProgressStatus;
     readonly reason?: string;
 }
-/** The workspace-relative note path of one owner. */
-export declare function notePathFor(owner: NoteOwner, change: string): string;
+/** The workspace-relative note path of one change. */
+export declare function notePathFor(change: string): string;
 /** Parse one note; a malformed document is undefined, never a partial note. */
 export declare function parseProgressNote(value: unknown): ProgressNote | undefined;
-/** The active owner's note for a change, or undefined when absent or malformed. */
-export declare function readProgressNote(workspace: string, change: string, owner: NoteOwner): Promise<ProgressNote | undefined>;
+/** The engine's note for a change, or undefined when absent or malformed. */
+export declare function readProgressNote(workspace: string, change: string): Promise<ProgressNote | undefined>;
 export interface WrittenNote {
     readonly text: string;
     readonly note: ProgressNote;
@@ -46,13 +42,12 @@ export interface WrittenNote {
     readonly lane?: string;
 }
 /**
- * Write one owner's progress note. The worktree digest is captured now, so the
- * note authorizes only the worktree it was written against; the legacy owner
- * gets its HEAD-less digest. An unreadable tasks.md or an uncomputable digest
- * refuses the note instead of writing evidence the gates could never accept.
+ * Write the engine's progress note. The worktree digest is captured now, so the
+ * note authorizes only the worktree it was written against. An unreadable
+ * tasks.md or an uncomputable digest refuses the note instead of writing
+ * evidence the gates could never accept.
  */
 export declare function writeProgressNote(workspace: string, input: NoteInput, options?: {
-    readonly owner?: NoteOwner;
     readonly runGit?: GitRunner;
     readonly now?: number;
     /** The writing session, so the lane decision is bound to it. */

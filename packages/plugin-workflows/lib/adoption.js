@@ -45,16 +45,11 @@ async function linkedChangePath(workspace, change) {
 }
 /**
  * Verify the current whole-spec `PASS` record. The native review store is the
- * active owner after Release A, so it is read first; the legacy store stays as
- * the compatibility fallback. Reading only the legacy path made a change whose
- * spec review ran natively impossible to adopt or archive.
+ * active owner, and it is the only store a change can adopt or archive from.
  */
 export async function verifyWholeSpecRecord(workspace, change) {
     const context = evidenceContext(workspace, change);
-    const paths = [
-        '.dsh/workflows/records/spec-review/{name}/spec.json',
-        '.dsh/delegation/spec-review/{name}/spec.json',
-    ];
+    const paths = ['.dsh/workflows/records/spec-review/{name}/spec.json'];
     const checks = [];
     for (const path of paths) {
         const check = await verifyEvidence({

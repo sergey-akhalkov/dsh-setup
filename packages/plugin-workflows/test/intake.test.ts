@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildConditionContext } from '../src/host/condition.ts'
-import { type Definition, resolveOwnership, validateDefinition } from '../src/host/definitions.ts'
+import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import {
   DRAFTS_ROOT,
   draftDirectory,
@@ -11,7 +11,7 @@ import {
   readDraft,
   writeDraft,
 } from '../src/host/drafts.ts'
-import { collectEvidencePaths, currentSpecDigest, verifyEvidence } from '../src/host/evidence.ts'
+import { collectEvidencePaths, currentSpecDigest } from '../src/host/evidence.ts'
 import { OwnedCalls, runHumanStep } from '../src/host/executors.ts'
 import { evaluateTurnClose } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
@@ -27,7 +27,7 @@ import {
 } from '../src/host/runs.ts'
 import { renderMainSteer } from '../src/host/steer.ts'
 import { taskIdOf } from '../src/host/tasks.ts'
-import { contributedIntake, registeredIntake } from './intake-definition.ts'
+import { contributedIntake } from './intake-definition.ts'
 
 const TEMP_DIRECTORIES: string[] = []
 
@@ -211,28 +211,12 @@ describe('change-intake engine', () => {
     return digest
   }
 
-  /** The host's deferred read: the same contract against the selected store. */
-  function deferredReader(
-    workspace: string,
-    values: Readonly<Record<string, unknown>>,
-  ): (
-    step: Definition['steps'][number],
-    owner: 'workflows' | 'legacy',
-  ) => ReturnType<typeof verifyEvidence> {
-    return (step, owner) =>
-      verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
-        workspace,
-        values,
-        reviewOwner: owner,
-      })
-  }
-
   it('walks the seven steps in order, completes create-change from its owned call, and never dispatches delegate', async () => {
     const workspace = await tempWorkspace()
     const definition = intakeDefinition()
     const specReviewStep = definition.steps.find((step) => step.id === 'spec-review')
     expect(specReviewStep?.executor).toBe('review')
-    expect(specReviewStep?.ownership).toBe('own')
+    expect(specReviewStep?.ownership).toBeUndefined()
     const owned = new OwnedCalls()
     const auth = HostAuth.fromKey('test-intake-advance-key-012345')
     const toolCalls: Array<{
@@ -353,50 +337,6 @@ describe('change-intake engine', () => {
     expect(reviewStarts).toBe(1)
     expect(delegateCalls).toBe(0)
     expect(toolCalls).toHaveLength(1)
-  })
-
-  it('defers the spec review to an enabled legacy signal and never dispatches the executor', async () => {
-    const workspace = await tempWorkspace()
-    const definition = registeredIntake()
-    const installedLegacy: ReadonlySet<string> = new Set(['delegation-rules', 'goal-continuity'])
-    const enabledLegacy: ReadonlySet<string> = new Set(['delegation-rules/spec-review'])
-    const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy)
-    expect(resolved.issues).toEqual([])
-    expect(resolved.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('defer')
-
-    let run = newRun(definition, workspace)
-    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
-      run = settleStep(run, step, 'done', { at: 1_500 })
-    }
-    await writeChangeArtifacts(workspace)
-    const digest = await writeSpecReviewRecord(workspace, 'PASS', '.dsh/delegation')
-    let legacyReads = 0
-    let reviewStarts = 0
-    const result = await advanceIntake({
-      run,
-      definition,
-      values: { name: 'auth' },
-      evidenceContext: { workspace, values: { name: 'auth' } },
-      owned: new OwnedCalls(),
-      installedLegacy,
-      enabledLegacy,
-      now: 2_000,
-      readRecord: async (step, owner) => {
-        legacyReads += 1
-        return deferredReader(workspace, { name: 'auth' })(step, owner)
-      },
-      reviewStep: async () => {
-        reviewStarts += 1
-        return undefined
-      },
-    })
-    expect(reviewStarts).toBe(0)
-    expect(legacyReads).toBe(1)
-    const review = result.run.steps.find((step) => step.id === 'spec-review')
-    expect(review?.state).toBe('done')
-    expect(review?.evidence?.path).toBe('.dsh/delegation/spec-review/auth/spec.json')
-    expect(review?.evidence?.digest).toBe(digest)
-    expect(result.waiting?.stepId).toBe('approval')
   })
 
   it('settles the spec review from a current native whole-spec PASS without starting a review', async () => {

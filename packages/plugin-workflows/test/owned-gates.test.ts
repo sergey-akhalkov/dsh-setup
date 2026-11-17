@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Definition } from '../src/host/definitions.ts'
 import {
@@ -15,7 +15,7 @@ import {
   reviewUnitText,
   taskReviewEvidence,
 } from '../src/host/engine-gates.ts'
-import { type GitRunner, legacyWorktreeDigest, worktreeDigest } from '../src/host/git.ts'
+import type { GitRunner } from '../src/host/git.ts'
 import { notePathFor, readProgressNote, writeProgressNote } from '../src/host/notes.ts'
 import { taskReviewCompletion } from '../src/host/parity.ts'
 import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
@@ -135,14 +135,15 @@ describe('the note action', () => {
       },
     )
     expect(written.lane).toBe('2. Docs (lane 2, owns `docs/**`)')
-    expect(written.text).toContain(notePathFor('workflows', 'change-a'))
-    const note = await readProgressNote(root, 'change-a', 'workflows')
+    expect(written.text).toContain(notePathFor('change-a'))
+    const note = await readProgressNote(root, 'change-a')
     expect(note?.taskId).toBe(taskIdOf('Doc task'))
     expect(note?.session).toBe('session-1')
     expect(note?.worktreeDigest).toMatch(/^[0-9a-f]{64}$/u)
-    expect(
-      JSON.parse(await readFile(join(root, notePathFor('workflows', 'change-a')), 'utf8')),
-    ).toMatchObject({ lane: '2. Docs (lane 2, owns `docs/**`)', session: 'session-1' })
+    expect(JSON.parse(await readFile(join(root, notePathFor('change-a')), 'utf8'))).toMatchObject({
+      lane: '2. Docs (lane 2, owns `docs/**`)',
+      session: 'session-1',
+    })
   })
 
   it('refuses a checked task and an unknown change', async () => {
@@ -206,8 +207,6 @@ describe('the owned work-progress gate', () => {
       calls,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
-      reviewOwner: 'workflows',
       runGit,
     })
     expect(current.decision).toBe('allow')
@@ -219,8 +218,6 @@ describe('the owned work-progress gate', () => {
       calls,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
-      reviewOwner: 'workflows',
       runGit,
     })
     expect(stale.decision).toBe('refuse')
@@ -233,8 +230,7 @@ describe('the owned work-progress gate', () => {
     const root = await workspace(FIRST_PLAN)
     const taskId = taskIdOf('First task')
     await writeTaskPass(root, taskId)
-    expect(await taskReviewEvidence(root, 'change-a', taskId, 'workflows')).toBe(true)
-    expect(await taskReviewEvidence(root, 'change-a', taskId, 'legacy')).toBe(false)
+    expect(await taskReviewEvidence(root, 'change-a', taskId)).toBe(true)
     await writeFile(
       join(root, 'openspec', 'changes', 'change-a', 'tasks.md'),
       FIRST_CHECKED,
@@ -257,8 +253,6 @@ describe('the owned work-progress gate', () => {
       calls,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
-      reviewOwner: 'workflows',
       runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
     })
     expect(decision.decision).toBe('allow')
@@ -294,8 +288,6 @@ describe('the owned work-progress gate', () => {
       calls,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
-      reviewOwner: 'workflows',
       runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
     })
     expect(decision.decision).toBe('refuse')
@@ -334,8 +326,6 @@ describe('the owned work-progress gate', () => {
       calls,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
-      reviewOwner: 'workflows',
       runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
     })
     expect(decision.decision).toBe('refuse')
@@ -362,7 +352,6 @@ describe('the owned lane-assignment gate', () => {
       calls: implementation,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-1',
     })
     expect(decision.decision).toBe('refuse')
@@ -389,7 +378,6 @@ describe('the owned lane-assignment gate', () => {
       calls: implementation,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-1',
       decisions: new Map([['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned']]),
     })
@@ -415,7 +403,6 @@ describe('the owned lane-assignment gate', () => {
       calls,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-1',
       decisions: new Map(),
     })
@@ -435,7 +422,6 @@ describe('the owned lane-assignment gate', () => {
       calls: implementation,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-1',
     })
     expect(decision.decision).toBe('refuse')
@@ -458,7 +444,6 @@ describe('the owned lane-assignment gate', () => {
       calls: implementation,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-b',
       decisions,
     })
@@ -471,7 +456,6 @@ describe('the owned lane-assignment gate', () => {
       calls: implementation,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-a',
       decisions,
     })
@@ -497,7 +481,6 @@ describe('the owned lane-assignment gate', () => {
       calls: implementation,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-1',
       decisions,
     })
@@ -515,7 +498,6 @@ describe('the owned lane-assignment gate', () => {
       calls: implementation,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-1',
       decisions,
     })
@@ -533,7 +515,6 @@ describe('the owned lane-assignment gate', () => {
           calls: implementation,
           turn: 1,
           codeChanged: true,
-          noteOwner: 'workflows',
           session: 'session-1',
         })
       ).decision,
@@ -547,7 +528,6 @@ describe('the owned lane-assignment gate', () => {
           calls: implementation,
           turn: 1,
           codeChanged: true,
-          noteOwner: 'workflows',
           session: 'session-1',
         })
       ).decision,
@@ -564,7 +544,6 @@ describe('the kept lane decisions', () => {
       ['3. Gone (owns `src/**`)', 'assigned'],
     ])
     await pruneLaneDecisions(root, 'change-a', decisions, {
-      owner: 'workflows',
       session: 'session-1',
     })
     expect([...decisions.keys()]).toEqual([
@@ -577,7 +556,6 @@ describe('the kept lane decisions', () => {
       ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
     ])
     await pruneLaneDecisions(completed, 'change-a', kept, {
-      owner: 'workflows',
       session: 'session-1',
     })
     expect(kept.size).toBe(0)
@@ -599,11 +577,10 @@ describe('the kept lane decisions', () => {
     // Completion prunes the serial decision together with its persisted note.
     await writeFile(tasks, PLAN.replace('- [ ] 2.1', '- [x] 2.1'), 'utf8')
     await pruneLaneDecisions(root, 'change-a', decisions, {
-      owner: 'workflows',
       session: 'session-1',
     })
     expect(decisions.has('2. Docs (lane 2, owns `docs/**`)')).toBe(false)
-    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
+    expect(await readProgressNote(root, 'change-a')).toBeUndefined()
     // Reopening the lane does not resurrect the completed lane's old note.
     await writeFile(tasks, PLAN, 'utf8')
     const calls = [
@@ -622,7 +599,6 @@ describe('the kept lane decisions', () => {
         calls,
         turn: 1,
         codeChanged: true,
-        noteOwner: 'workflows',
         session: 'session-1',
         decisions,
         runGit,
@@ -656,26 +632,23 @@ describe('the kept lane decisions', () => {
     await writeProgressNote(root, noteInput, { runGit, session: 'session-2' })
     await writeFile(tasks, completed, 'utf8')
     await pruneLaneDecisions(root, 'change-a', new Map(), {
-      owner: 'workflows',
       session: 'session-1',
     })
-    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeDefined()
+    expect(await readProgressNote(root, 'change-a')).toBeDefined()
     // The writing session's own completed lane drops its note without a decision.
     await pruneLaneDecisions(root, 'change-a', new Map(), {
-      owner: 'workflows',
       session: 'session-2',
     })
-    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
+    expect(await readProgressNote(root, 'change-a')).toBeUndefined()
     // Reopen, take a fresh serial note, and complete the lane again; the empty
     // map is what a fresh host holds after a reload.
     await writeFile(tasks, PLAN, 'utf8')
     await writeProgressNote(root, noteInput, { runGit, session: 'session-1' })
     await writeFile(tasks, completed, 'utf8')
     await pruneLaneDecisions(root, 'change-a', new Map(), {
-      owner: 'workflows',
       session: 'session-1',
     })
-    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
+    expect(await readProgressNote(root, 'change-a')).toBeUndefined()
     // Reopening the lane does not resurrect the completed lane's stale note.
     await writeFile(tasks, PLAN, 'utf8')
     const calls = [
@@ -693,7 +666,6 @@ describe('the kept lane decisions', () => {
       calls,
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-1',
       decisions: new Map([[laneOne, 'assigned']]),
       runGit,
@@ -708,10 +680,9 @@ describe('the kept lane decisions', () => {
       'utf8',
     )
     await pruneLaneDecisions(root, 'change-a', new Map(), {
-      owner: 'workflows',
       session: 'session-1',
     })
-    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
+    expect(await readProgressNote(root, 'change-a')).toBeUndefined()
   })
 
   it('satisfies a lane from a kept decision after the tool buffer lost the tag', async () => {
@@ -722,162 +693,11 @@ describe('the kept lane decisions', () => {
       calls: [],
       turn: 1,
       codeChanged: true,
-      noteOwner: 'workflows',
       session: 'session-1',
       decisions: new Map([['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned']]),
     })
     expect(decision.decision).toBe('refuse')
     expect(decision.lanes?.map((lane) => lane.n)).toEqual([2])
-  })
-})
-
-describe('mixed ownership', () => {
-  it('reads the legacy note path when the progress signal is legacy', async () => {
-    const root = await workspace()
-    const runGit = fakeGit(() => IMPLEMENTATION_STATUS, root)
-    await writeProgressNote(
-      root,
-      { change: 'change-a', task: '2.1 Doc task', status: 'in-progress', reason: 'serial' },
-      { owner: 'legacy', runGit, now: 1_000, session: 'session-1' },
-    )
-    expect(await readProgressNote(root, 'change-a', 'legacy')).toBeDefined()
-    expect(await readProgressNote(root, 'change-a', 'workflows')).toBeUndefined()
-    const calls = [
-      {
-        callId: 'write-1',
-        name: 'write',
-        arguments: { file_path: 'packages/engine/src/engine.ts' },
-        ok: true,
-        at: 1_000,
-        turn: 1,
-      },
-    ]
-    // The progress signal is legacy but the lane gate is owned: the legacy note
-    // satisfies both the note digest and the lane's serial decision.
-    expect(
-      (
-        await evaluateOwnedProgressGate({
-          workspace: root,
-          change: 'change-a',
-          calls,
-          turn: 1,
-          codeChanged: true,
-          noteOwner: 'legacy',
-          reviewOwner: 'workflows',
-          runGit,
-        })
-      ).decision,
-    ).toBe('allow')
-    const lane = await evaluateOwnedLaneGate({
-      workspace: root,
-      change: 'change-a',
-      calls,
-      turn: 1,
-      codeChanged: true,
-      noteOwner: 'legacy',
-      session: 'session-1',
-    })
-    expect(lane.decision).toBe('refuse')
-    expect(lane.lanes?.map((entry) => entry.n)).toEqual([1])
-  })
-
-  it('keeps the HEAD binding on workflow notes and the legacy digest on legacy notes', async () => {
-    const root = await workspace()
-    let head = 'a'.repeat(40)
-    const runGit: GitRunner = async (args) => {
-      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
-        return Buffer.from(`${root}\n`)
-      }
-      if (args[0] === 'rev-parse') return Buffer.from(`${head}\n`)
-      if (args[0] === 'status') return Buffer.from(IMPLEMENTATION_STATUS)
-      return Buffer.from('')
-    }
-    const workflow = await writeProgressNote(
-      root,
-      { change: 'change-a', task: '1.1 Engine task', status: 'in-progress', reason: 'workflow' },
-      { runGit, now: 1_000 },
-    )
-    const legacy = await writeProgressNote(
-      root,
-      { change: 'change-a', task: '1.1 Engine task', status: 'in-progress', reason: 'legacy' },
-      { runGit, now: 1_000, owner: 'legacy', session: 'session-1' },
-    )
-    expect(workflow.note.worktreeDigest).toBe(await worktreeDigest(root, runGit))
-    expect(legacy.note.worktreeDigest).toBe(await legacyWorktreeDigest(root, runGit))
-    // A clean commit moves only the workflow format's HEAD identity.
-    head = 'b'.repeat(40)
-    expect(await worktreeDigest(root, runGit)).not.toBe(workflow.note.worktreeDigest)
-    expect(await legacyWorktreeDigest(root, runGit)).toBe(legacy.note.worktreeDigest)
-    const calls = [
-      {
-        callId: 'write-1',
-        name: 'write',
-        arguments: { file_path: 'packages/engine/src/engine.ts' },
-        ok: true,
-        at: 1_000,
-        turn: 1,
-      },
-    ]
-    const progress = (
-      noteOwner: 'workflows' | 'legacy',
-    ): ReturnType<typeof evaluateOwnedProgressGate> =>
-      evaluateOwnedProgressGate({
-        workspace: root,
-        change: 'change-a',
-        calls,
-        turn: 1,
-        codeChanged: true,
-        noteOwner,
-        reviewOwner: 'workflows',
-        runGit,
-      })
-    expect((await progress('workflows')).decision).toBe('refuse')
-    expect((await progress('legacy')).decision).toBe('allow')
-  })
-
-  it('accepts a title-less legacy serial note only while its worktree is current', async () => {
-    const root = await workspace()
-    let status = IMPLEMENTATION_STATUS
-    const runGit = fakeGit(() => status, root)
-    // The legacy writer records the HEAD-less digest; the note it wrote is
-    // current under that same algorithm.
-    const digest = await legacyWorktreeDigest(root, runGit)
-    expect(digest).toBeDefined()
-    const path = join(root, notePathFor('legacy', 'change-a'))
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(
-      path,
-      JSON.stringify({
-        taskId: taskIdOf('Doc task'),
-        status: 'in-progress',
-        reason: 'legacy serial',
-        worktreeDigest: digest,
-        time: '2026-11-16T00:00:00.000Z',
-      }),
-      'utf8',
-    )
-    const decisions = new Map<string, 'assigned' | 'serial'>([
-      ['1. Engine (lane 1, owns `packages/engine/**`)', 'assigned'],
-    ])
-    const gate = (): ReturnType<typeof evaluateOwnedLaneGate> =>
-      evaluateOwnedLaneGate({
-        workspace: root,
-        change: 'change-a',
-        calls: [],
-        turn: 1,
-        codeChanged: true,
-        noteOwner: 'legacy',
-        session: 'session-1',
-        decisions,
-        runGit,
-      })
-    expect((await gate()).decision).toBe('allow')
-    // A plan change makes the captured digest stale, so the old serial note is
-    // no longer evidence for the renamed lane.
-    status = ' M packages/engine/src/engine.ts\n M packages/engine/src/other.ts\0'
-    const stale = await gate()
-    expect(stale.decision).toBe('refuse')
-    expect(stale.lanes?.map((lane) => lane.n)).toEqual([2])
   })
 })
 
@@ -911,7 +731,7 @@ const DONE_PLAN = `# Tasks
 
 /** The first selected unit; selection produced none when this throws. */
 async function firstUnit(root: string): Promise<ReviewUnit> {
-  const unit = (await reviewUnits(root, 'change-a', 'workflows'))?.[0]
+  const unit = (await reviewUnits(root, 'change-a'))?.[0]
   if (unit === undefined) throw new Error('no review unit was selected')
   return unit
 }
@@ -920,7 +740,7 @@ describe('the section-first review units', () => {
   it('selects one section unit covering every checked task for two missing records', async () => {
     const root = await workspace(SECTIONED_PLAN)
     await writeTaskPass(root, taskIdOf('Doc task'))
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     expect(units).toHaveLength(1)
     expect(units?.[0]?.section).toEqual({
       key: '1',
@@ -934,7 +754,7 @@ describe('the section-first review units', () => {
     const root = await workspace(
       '# Tasks\n\n##\t1. Engine\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n- [ ] 1.3 Pending\n',
     )
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     expect(units).toHaveLength(1)
     expect(units?.[0]?.section).toEqual({ key: '1', title: '1. Engine' })
     expect(units?.[0]?.covered.map((task) => task.number)).toEqual(['1.1', '1.2'])
@@ -944,7 +764,7 @@ describe('the section-first review units', () => {
     const root = await workspace(
       '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n\n## 1. Docs\n\n- [x] 1.3 Third task\n',
     )
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     expect(units?.every((unit) => unit.section === undefined)).toBe(true)
     expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([
       ['1.1'],
@@ -959,7 +779,7 @@ describe('the section-first review units', () => {
     const root = await workspace(
       '# Tasks\n\n## 1. Setup\n\n- [x] 1.1 First task\n\n## Setup\n\n- [x] 1.2 Second task\n- [x] 1.3 Third task\n',
     )
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     expect(units?.every((unit) => unit.section === undefined)).toBe(true)
     expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([
       ['1.1'],
@@ -973,7 +793,7 @@ describe('the section-first review units', () => {
     await writeTaskPass(root, taskIdOf('Engine task'))
     await writeTaskPass(root, taskIdOf('Engine follow-up'))
     await writeTaskPass(root, taskIdOf('Doc task'))
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([['1.3']])
     expect(units?.[0]?.section).toBeUndefined()
   })
@@ -983,14 +803,14 @@ describe('the section-first review units', () => {
     for (const text of ['Engine task', 'Engine follow-up', 'Engine cleanup', 'Doc task']) {
       await writeTaskPass(root, taskIdOf(text))
     }
-    expect(await reviewUnits(root, 'change-a', 'workflows')).toEqual([])
+    expect(await reviewUnits(root, 'change-a')).toEqual([])
   })
 
   it('keeps the per-task unit for a task outside any section', async () => {
     const root = await workspace(
       '# Tasks\n\n- [x] 0.1 Unsectioned task\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n',
     )
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([
       ['1.1'],
       ['0.1'],
@@ -1002,7 +822,7 @@ describe('the section-first review units', () => {
     const root = await workspace(SECTIONED_PLAN)
     await writeTaskPass(root, taskIdOf('Engine follow-up'))
     await writeTaskPass(root, taskIdOf('Doc task'))
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     expect(units).toHaveLength(1)
     expect(units?.[0]?.covered.map((task) => task.number)).toEqual(['1.1', '1.2', '1.3'])
     expect(units?.[0]?.missing.map((task) => task.number)).toEqual(['1.1', '1.3'])
@@ -1015,7 +835,9 @@ describe('the review unit steer', () => {
     const text = reviewUnitText('change-a', await firstUnit(root))
     expect(text).toContain('section "1" (1. Engine')
     expect(text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2, 1.3')
-    expect(text).toContain('delegate(rule: "task-review", change: "change-a", section: "1")')
+    expect(text).toContain(
+      'workflows(action: "start", definitionId: "task-review", change: "change-a", section: "1")',
+    )
   })
 
   it('points the status line at a pending section run instead of a new start', async () => {
@@ -1037,7 +859,7 @@ describe('the review unit steer', () => {
       ],
     })
     expect(text).toContain('the open review run "run-1" covers it')
-    expect(text).not.toContain('delegate(')
+    expect(text).not.toContain('workflows(action: "start"')
   })
 
   it('keeps the per-task form for a single missing task', async () => {
@@ -1047,7 +869,7 @@ describe('the review unit steer', () => {
     const text = reviewUnitText('change-a', unit)
     expect(text).toContain('task "1.1 Engine task"')
     expect(text).toContain(
-      `delegate(rule: "task-review", change: "change-a", task: "${taskIdOf('Engine task')}")`,
+      `workflows(action: "start", definitionId: "task-review", change: "change-a", task: "${taskIdOf('Engine task')}")`,
     )
   })
 
@@ -1069,7 +891,7 @@ describe('the review unit steer', () => {
       ],
     })
     expect(text).toContain('the open review run "run-2" covers it')
-    expect(text).not.toContain('delegate(')
+    expect(text).not.toContain('workflows(action: "start"')
   })
 
   it('names the run unit while unchecked tasks defer the completion coverage', async () => {
@@ -1084,7 +906,9 @@ describe('the review unit steer', () => {
     })
     expect(text).toContain('section "1" (1. Engine')
     expect(text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2, 1.3')
-    expect(text).toContain('delegate(rule: "task-review", change: "change-a", section: "1")')
+    expect(text).toContain(
+      'workflows(action: "start", definitionId: "task-review", change: "change-a", section: "1")',
+    )
   })
 
   it('points the completion steer at a pending section run instead of a new start', async () => {
@@ -1107,7 +931,7 @@ describe('the review unit steer', () => {
     })
     expect(completion?.ok).toBe(false)
     expect(completion?.text).toContain('the open review run "run-1" covers it')
-    expect(completion?.text).not.toContain('delegate(')
+    expect(completion?.text).not.toContain('workflows(action: "start"')
   })
 
   it('points a single-task completion gap at the pending run that covers it', async () => {
@@ -1123,7 +947,7 @@ describe('the review unit steer', () => {
     })
     expect(completion?.ok).toBe(false)
     expect(completion?.text).toContain('the open review run "run-1" covers it')
-    expect(completion?.text).not.toContain('delegate(')
+    expect(completion?.text).not.toContain('workflows(action: "start"')
   })
 
   it('points an expanded section at the pending runs that cover its tasks', async () => {
@@ -1153,7 +977,7 @@ describe('the review unit steer', () => {
     })
     expect(completion?.ok).toBe(false)
     expect(completion?.text).toContain('the open review runs "run-1", "run-2" cover it')
-    expect(completion?.text).not.toContain('delegate(')
+    expect(completion?.text).not.toContain('workflows(action: "start"')
   })
 
   it('keeps the start action inside the bounded steer for a large section', async () => {
@@ -1162,11 +986,13 @@ describe('the review unit steer', () => {
       (_, index) => `- [x] 1.${String(index + 1)} Task number ${String(index + 1)}`,
     ).join('\n')
     const root = await workspace(`# Tasks\n\n## 1. Engine\n\n${tasks}\n`)
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     const first = units?.[0]
     if (first === undefined) throw new Error('no review unit was selected')
     const text = reviewUnitText('change-a', first)
-    expect(text).toContain('delegate(rule: "task-review", change: "change-a", section: "1")')
+    expect(text).toContain(
+      'workflows(action: "start", definitionId: "task-review", change: "change-a", section: "1")',
+    )
     expect(text).toContain('and 20 more')
     expect(text.length).toBeLessThan(600)
   })
@@ -1179,7 +1005,7 @@ describe('the review unit steer', () => {
     expect(completion?.ok).toBe(false)
     expect(completion?.text).toContain('2.1, 2.2, 2.3, 2.4')
     expect(completion?.text).toContain(
-      'delegate(rule: "task-review", change: "change-a", section: "2")',
+      'workflows(action: "start", definitionId: "task-review", change: "change-a", section: "2")',
     )
     // The gate bounds the delivered note to 600 characters; the action must survive.
     expect(completion?.text?.length ?? 0).toBeLessThanOrEqual(600)
@@ -1210,14 +1036,10 @@ describe('the review unit steer', () => {
       }),
       'utf8',
     )
-    expect(await taskReviewEvidence(root, 'change-a', taskIdOf('Engine task'), 'workflows')).toBe(
-      true,
-    )
-    expect(await taskReviewEvidence(root, 'change-a', taskIdOf('Doc task'), 'workflows')).toBe(
-      false,
-    )
+    expect(await taskReviewEvidence(root, 'change-a', taskIdOf('Engine task'))).toBe(true)
+    expect(await taskReviewEvidence(root, 'change-a', taskIdOf('Doc task'))).toBe(false)
     // The selection sees the covered section tasks as reviewed.
-    const units = await reviewUnits(root, 'change-a', 'workflows')
+    const units = await reviewUnits(root, 'change-a')
     expect(units?.some((unit) => unit.missing.some((task) => task.text === 'Engine task'))).toBe(
       false,
     )
@@ -1231,7 +1053,7 @@ describe('the review unit steer', () => {
     expect(completion?.text).toContain('section "1" (1. Engine')
     expect(completion?.text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2')
     expect(completion?.text).toContain(
-      'delegate(rule: "task-review", change: "change-a", section: "1")',
+      'workflows(action: "start", definitionId: "task-review", change: "change-a", section: "1")',
     )
   })
 })

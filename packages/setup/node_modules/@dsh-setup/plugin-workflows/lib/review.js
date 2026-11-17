@@ -596,14 +596,11 @@ export function renderReviewPrompt(input) {
     lines.push(input.snapshot
         ? '- Reviewed state: a frozen worktree snapshot taken when the review started; later writes are not in it.'
         : '- Reviewed state: the live worktree; a changed input discards the verdict.');
-    const contextParts = [input.extra, input.context]
+    const contextParts = [input.extra]
         .map((value) => value?.trim() ?? '')
         .filter((value) => value !== '');
     if (contextParts.length > 0)
         lines.push('', '## Context', '', contextParts.join('\n\n'));
-    if (input.objective !== undefined && input.objective.trim() !== '') {
-        lines.push('', '## Objective', '', input.objective.trim());
-    }
     if (input.focused !== undefined) {
         lines.push('', previousFindingsBlock(input.focused.previous));
         lines.push('', input.focused.changes === undefined
@@ -1181,8 +1178,6 @@ async function prepareAttempt(input, now) {
         digest: record.digest,
         snapshot: input.prepared.reviewCwd !== undefined,
         ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
-        ...(input.callerContext === undefined ? {} : { context: input.callerContext }),
-        ...(input.callerObjective === undefined ? {} : { objective: input.callerObjective }),
         ...(focused === undefined ? {} : { focused: focused.context }),
     };
     try {

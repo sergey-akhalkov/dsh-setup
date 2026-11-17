@@ -12,54 +12,6 @@
       name: "@dsh-setup/plugin-answer-page"
     - id: dsh-setup-codex-subagent
       name: "@dsh-setup/plugin-codex-subagent"
-    - id: dsh-setup-delegation-rules
-      name: "@dsh-setup/plugin-delegation-rules"
-      config:
-        targets:
-          codex:
-            provider: codex-subagent
-            model: gpt-6-astra
-            reasoningEffort: xhigh
-        rules:
-          - id: spec-review
-            when: spec-ready
-            to: codex
-            contract: review
-            phase: spec
-            scope: whole
-            gate: strict
-            instruction: bundled:review-spec
-          - id: task-review
-            when: spec-task-ready
-            to: codex
-            contract: review
-            scope: task
-            gate: strict
-            instruction: bundled:review-task
-          - id: integration-review
-            when: implementation-complete
-            to: codex
-            contract: review
-            phase: integration
-            scope: whole
-            gate: soft
-            instruction: bundled:review-integration
-          - id: lane-fanout
-            when: lane-assignment
-            contract: note
-            gate: strict
-          - id: implementation-work
-            when: implementation-work
-            contract: note
-            gate: strict
-        timeouts:
-          review: 600000
-        gates:
-          workflowOwned: false
-          specReview: false
-          integrationReview: false
-          taskProgress: false
-          laneFanout: false
     - id: dsh-setup-goal-continuity
       name: "@dsh-setup/plugin-goal-continuity"
       config:
@@ -232,19 +184,6 @@
 - id: dsh-setup-observability
   config:
     rows:
-      - id: delegation-rules
-        label: Delegation rules
-        kind: signal
-        trigger: a delegation rule runs through the delegate tool or a progress note is recorded
-        goal: delegation shortens the work it can split
-        match:
-          - tool: delegate
-          - tool: task_progress
-          - tool: delegation_status
-          - sourceKind: delegation-rules
-        eligible:
-          - tool: edit
-          - tool: write
       - id: mcp-lazy
         label: Lazy MCP
         kind: signal
@@ -380,13 +319,6 @@
         window: week
         minSamples: 20
         guardrail: failure-rate
-      - description: delegation reduces the active minutes a task needs
-        metric: active-minutes-per-episode
-        direction: decrease
-        threshold: 5
-        window: week
-        minSamples: 20
-        guardrail: failure-rate
 - id: dsh-setup-workflows
   config:
     checkpointApplicability:
@@ -446,50 +378,3 @@
       bottleneckAge: 2
       laneStaleCheckpoints: 2
       automation: false
-- id: dsh-setup-delegation-rules
-  config:
-    targets:
-      codex:
-        provider: codex-subagent
-        model: gpt-6-astra
-        reasoningEffort: xhigh
-    rules:
-      - id: spec-review
-        when: spec-ready
-        to: codex
-        contract: review
-        phase: spec
-        scope: whole
-        gate: strict
-        instruction: bundled:review-spec
-      - id: task-review
-        when: spec-task-ready
-        to: codex
-        contract: review
-        scope: task
-        gate: strict
-        instruction: bundled:review-task
-      - id: integration-review
-        when: implementation-complete
-        to: codex
-        contract: review
-        phase: integration
-        scope: whole
-        gate: soft
-        instruction: bundled:review-integration
-      - id: lane-fanout
-        when: lane-assignment
-        contract: note
-        gate: strict
-      - id: implementation-work
-        when: implementation-work
-        contract: note
-        gate: strict
-    timeouts:
-      review: 600000
-    gates:
-      workflowOwned: false
-      specReview: false
-      integrationReview: false
-      taskProgress: false
-      laneFanout: false

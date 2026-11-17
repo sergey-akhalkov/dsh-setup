@@ -1,6 +1,6 @@
 /**
- * Pure approval core shared by the Host engine and the repository audit script.
- * No DSH imports and no filesystem access: the Host and `scripts/reviews-check.ts`
+ * Pure portable-approval core shared by the workflow review tests and the
+ * repository audit script. No DSH imports and no filesystem access: every reader
  * must compute the same task ids, records, coverage, and archive recognition.
  */
 
@@ -343,16 +343,6 @@ export function portableTaskRecordDisplayPath(changeDirectory: string, taskId: s
   return `${changeDirectory}/${REVIEWS_DIRECTORY}/${taskId}.json`
 }
 
-/** Absolute path of one local `.dsh` task-review record the export may copy. */
-export function localTaskRecordPath(
-  workspaceRoot: string,
-  rule: string,
-  change: string,
-  taskId: string,
-): string {
-  return join(workspaceRoot, '.dsh', 'delegation', rule, change, 'tasks', `${taskId}.json`)
-}
-
 /** What the coverage reader found at one record path. */
 export type ApprovalRecordState =
   | { kind: 'missing' }
@@ -483,7 +473,7 @@ export function formatApprovalGapLines(coverage: ApprovalCoverage): string[] {
     const label = task.state === 'missing' ? 'missing' : 'not approved'
     const detail = task.state === 'missing' || task.detail === undefined ? '' : ` (${task.detail})`
     lines.push(
-      `${label} ${task.number} "${task.text}"${detail} -> delegate(rule: "${coverage.rule}", change: "${coverage.change}", task: "${task.id}")`,
+      `${label} ${task.number} "${task.text}"${detail} -> workflows(action: "start", definitionId: "${coverage.rule}", change: "${coverage.change}", task: "${task.id}")`,
     )
     lines.push(`record: ${task.recordPath}`)
   }
@@ -835,79 +825,6 @@ export function recognizeArchiveCommands(command: string, cwd: string): ArchiveI
     intents.push(...archiveMoveIntents(cwd, tokens))
   }
   return intents
-}
-
-/** Identity a local `.dsh` task-review record must carry to be exported. */
-export interface ExportRecordInput {
-  value: unknown
-  rule: string
-  change: string
-  taskId: string
-}
-
-/**
- * Turn one local `.dsh` PASS record into the sanitized portable record. Only a
- * PASS that names this rule, change, and task id is copied; the export cannot
- * invent an approval.
- */
-export function portableRecordFromLocal(input: ExportRecordInput): {
-  record?: PortableTaskReviewRecord
-  error?: string
-} {
-  const value = input.value
-  if (!isRecord(value)) return { error: 'local record must be a JSON object' }
-  if (value.rule !== input.rule) {
-    return { error: `local record rule "${String(value.rule)}" does not match "${input.rule}"` }
-  }
-  if (value.change !== input.change) {
-    return {
-      error: `local record change "${String(value.change)}" does not match "${input.change}"`,
-    }
-  }
-  if (value.scope !== 'task') return { error: 'local record is not task-scoped' }
-  if (value.taskId !== input.taskId) {
-    return {
-      error: `local record task id "${String(value.taskId)}" does not match "${input.taskId}"`,
-    }
-  }
-  if (value.verdict !== 'PASS') {
-    return { error: `local record verdict is ${String(value.verdict)}; only PASS is exported` }
-  }
-  if (typeof value.digest !== 'string' || !DIGEST_PATTERN.test(value.digest)) {
-    return { error: 'local record digest is not a 64-character sha256 hex string' }
-  }
-  if (
-    value.worktreeDigest !== undefined &&
-    (typeof value.worktreeDigest !== 'string' || !DIGEST_PATTERN.test(value.worktreeDigest))
-  ) {
-    return { error: 'local record worktreeDigest is not a 64-character sha256 hex string' }
-  }
-  const findings: unknown[] = Array.isArray(value.findings) ? value.findings : []
-  if (!Array.isArray(value.findings)) {
-    return { error: 'local record findings must be a list' }
-  }
-  if (findings.length > 0) return { error: 'a PASS local record must have zero findings' }
-  if (!isReviewTarget(value.target)) {
-    return { error: 'local record target must name a provider and optional model/effort' }
-  }
-  if (!isNonEmptyString(value.time)) return { error: 'local record time must be a timestamp' }
-  const record: PortableTaskReviewRecord = {
-    rule: input.rule,
-    change: input.change,
-    scope: 'task',
-    taskId: input.taskId,
-    digest: value.digest,
-    ...(value.worktreeDigest === undefined ? {} : { worktreeDigest: value.worktreeDigest }),
-    verdict: 'PASS',
-    findings: [],
-    target: value.target,
-    time: value.time,
-  }
-  const checked = parsePortableTaskReviewRecord(record)
-  if (checked.record === undefined) {
-    return { error: checked.error ?? 'the sanitized record is not valid' }
-  }
-  return { record: checked.record }
 }
 
 /** The legacy intermediate-review predicate: PASS/ERROR only, identified. */

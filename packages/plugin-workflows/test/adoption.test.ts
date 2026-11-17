@@ -68,20 +68,13 @@ async function writeArtifact(
 }
 
 /** Write the four artifacts and a current whole-spec PASS record. */
-async function adoptable(
-  workspace: string,
-  change = 'auth',
-  store: 'native' | 'legacy' = 'legacy',
-): Promise<string> {
+async function adoptable(workspace: string, change = 'auth'): Promise<string> {
   await writeArtifact(workspace, `openspec/changes/${change}/proposal.md`)
   await writeArtifact(workspace, `openspec/changes/${change}/design.md`)
   await writeArtifact(workspace, `openspec/changes/${change}/tasks.md`)
   await writeArtifact(workspace, `openspec/changes/${change}/specs/${change}/spec.md`)
   const digest = (await currentSpecDigest(workspace, change)) as string
-  const directory =
-    store === 'native'
-      ? `.dsh/workflows/records/spec-review/${change}`
-      : `.dsh/delegation/spec-review/${change}`
+  const directory = `.dsh/workflows/records/spec-review/${change}`
   await writeArtifact(
     workspace,
     `${directory}/spec.json`,
@@ -146,7 +139,7 @@ describe('adoption of existing changes', () => {
 
   it('adopts a change whose whole-spec PASS exists only in the native store', async () => {
     const workspace = await tempWorkspace()
-    const digest = await adoptable(workspace, 'auth', 'native')
+    const digest = await adoptable(workspace, 'auth')
     const result = await adoptChange({
       workspace,
       change: 'auth',
@@ -160,23 +153,11 @@ describe('adoption of existing changes', () => {
     }
   })
 
-  it('prefers the current record across both stores and names a stale one', async () => {
+  it('names a stale record instead of a missing one', async () => {
     const workspace = await tempWorkspace()
-    const digest = await adoptable(workspace, 'auth', 'native')
+    await adoptable(workspace)
     expect((await verifyWholeSpecRecord(workspace, 'auth')).ok).toBe(true)
-    // A stale native record does not hide a current legacy fallback.
-    await writeArtifact(
-      workspace,
-      '.dsh/delegation/spec-review/auth/spec.json',
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-07T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
-    )
-    await writeArtifact(
-      workspace,
-      '.dsh/workflows/records/spec-review/auth/spec.json',
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest: 'a'.repeat(64), findings: [], time: '2026-11-07T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
-    )
-    expect((await verifyWholeSpecRecord(workspace, 'auth')).ok).toBe(true)
-    // With both records stale, the failure names the staleness, not absence.
+    // A changed artifact makes the recorded digest stale, not absent.
     await writeArtifact(workspace, 'openspec/changes/auth/design.md', '# changed design\n')
     const stale = await verifyWholeSpecRecord(workspace, 'auth')
     expect(stale.ok).toBe(false)
@@ -267,7 +248,7 @@ describe('adoption of existing changes', () => {
           const digest = (await currentSpecDigest(workspace, 'auth')) as string
           await writeArtifact(
             workspace,
-            '.dsh/delegation/spec-review/auth/spec.json',
+            '.dsh/workflows/records/spec-review/auth/spec.json',
             `${JSON.stringify(
               {
                 rule: 'spec-review',
@@ -418,7 +399,7 @@ describe('adoption of existing changes', () => {
           ok: true,
           evidence: {
             kind: 'record',
-            path: '.dsh/delegation/spec-review/auth/spec.json',
+            path: '.dsh/workflows/records/spec-review/auth/spec.json',
             digest: 'a'.repeat(64),
           },
         },

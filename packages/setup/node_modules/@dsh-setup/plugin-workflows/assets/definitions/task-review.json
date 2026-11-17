@@ -11,14 +11,13 @@
     "dedupe": "path+content-hash"
   },
   "settings": {
-    "allowModelStart": false,
+    "allowModelStart": true,
     "risk": "low",
     "gateOwnership": "own",
     "maxBlocks": 3,
     "allowIntent": false,
     "gate": "review",
-    "gateIdentity": "task-review",
-    "legacy": { "plugin": "delegation-rules", "signal": "task-review" }
+    "gateIdentity": "task-review"
   },
   "steps": [
     {

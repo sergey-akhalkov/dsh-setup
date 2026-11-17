@@ -308,7 +308,8 @@ export function definitionsUrl(session: string, id?: string): string {
 export function isRecordEvidence(value: string): boolean {
   if (!value.endsWith('.json')) return false
   return (
-    value.startsWith('.dsh/delegation/') ||
+    value.startsWith('.dsh/workflows/records/') ||
+    value.startsWith('.dsh/workflows/runs/') ||
     value.startsWith('.dsh/work-checkpoints/') ||
     value.startsWith('openspec/changes/')
   )

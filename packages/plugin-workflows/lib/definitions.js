@@ -1047,7 +1047,7 @@ export function workspaceDraftsDirectory(workspace) {
     return join(workspace, '.dsh', 'workflows', 'drafts');
 }
 /** The legacy plugins this engine knows how to defer to. */
-export const KNOWN_LEGACY_SOURCES = ['delegation-rules', 'goal-continuity'];
+export const KNOWN_LEGACY_SOURCES = ['goal-continuity'];
 /** Whether one legacy signal would actually steer right now. */
 function signalEnabled(plugin, signal, installed, enabled) {
     if (enabled === undefined)
@@ -1056,13 +1056,6 @@ function signalEnabled(plugin, signal, installed, enabled) {
 }
 /** The exact profile switch that owns each legacy signal. */
 export const SWITCH_BY_SIGNAL = {
-    'spec-review': 'delegation.gates.specReview',
-    'task-review': 'delegation.gates.workflowOwned',
-    archive: 'delegation.gates.workflowOwned',
-    'integration-review': 'delegation.gates.integrationReview',
-    'task-progress': 'delegation.gates.taskProgress',
-    'lane-assignment': 'delegation.gates.laneFanout',
-    'lane-boundary': 'delegation.gates.laneFanout',
     work_checkpoint: 'checkpoint.automation',
     'verification-gate': 'the verification-gate row',
 };

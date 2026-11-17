@@ -69,7 +69,7 @@ describe('parity load gate and verify settings', () => {
     const missing = parityLoadIssues(definitions, undefined, '/plugins/parity.json', undefined)
     expect([...missing.refused]).toEqual(expect.arrayContaining(['retro', 'task-review', 'verify']))
     expect(missing.issues.join('\n')).toMatch(/checkpoint\.automation: true/u)
-    expect(missing.issues.join('\n')).toMatch(/delegation\.gates\.workflowOwned: true/u)
+    expect(missing.issues.join('\n')).toMatch(/fix the parity report/u)
 
     const report = {
       v: 1 as const,
@@ -107,13 +107,9 @@ describe('parity load gate and verify settings', () => {
     expect(verify.settings.maxBlocks).toBe(8)
   })
 
-  it('loads the owned intake with the spec-review step following the retained signal', () => {
+  it('loads the owned intake with its spec-review step owned', () => {
     const intake = registeredIntake()
-    const enabled = new Set(['delegation-rules/spec-review'])
-    const deferred = resolveOwnership(intake, new Set(['delegation-rules']), enabled)
-    expect(deferred.issues).toEqual([])
-    expect(deferred.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('defer')
-    const owned = resolveOwnership(intake, new Set(['delegation-rules']), new Set())
+    const owned = resolveOwnership(intake, new Set())
     expect(owned.issues).toEqual([])
     const byId = new Map(owned.steps.map((step) => [step.id, step.ownership]))
     expect(byId.get('spec-review')).toBe('own')
@@ -131,7 +127,7 @@ describe('parity load gate and verify settings', () => {
     // mismatch each refuse the intake's owned spec-review path.
     const missing = parityLoadIssues([intake], undefined, path, 'not found')
     expect([...missing.refused]).toContain('change-intake')
-    expect(missing.issues.join('\n')).toContain('delegation.gates.specReview: true')
+    expect(missing.issues.join('\n')).toContain('fix the parity report')
 
     const absent = parityLoadIssues(
       [intake],
@@ -166,7 +162,7 @@ describe('parity load gate and verify settings', () => {
     )
     for (const issue of missing.issues) {
       expect(issue.slice(0, 300)).toMatch(
-        /checkpoint\.automation: true|delegation\.gates\.(?:workflowOwned|specReview|integrationReview): true|verification-gate/u,
+        /checkpoint\.automation: true|fix the parity report|verification-gate/u,
       )
     }
   })
@@ -696,56 +692,6 @@ describe('owned checkpoint decisions', () => {
       enforceParallel: true,
     })
     expect(sibling).toContain('execute the bottleneck remedy')
-  })
-
-  it('accepts a started delegate as a worker remedy and rejects a cached answer', () => {
-    const record = {
-      outcome: 'continue' as const,
-      lanes: [],
-      bottleneck: {
-        id: 'guard',
-        owner: 'lane',
-        action: 'worker_start' as const,
-        blockingLanes: ['edit'],
-      },
-    }
-    const args = { checkpoint: 'checkpoint-1-aaaaaaaa', bottleneck: 'guard' }
-    const started = checkpointCloseIssue({
-      record,
-      checkpointId: 'checkpoint-1-aaaaaaaa',
-      observations: [
-        {
-          toolName: 'delegate',
-          arguments: args,
-          ok: true,
-          at: 300,
-          detail: 'rule "task-review" review started',
-        },
-      ],
-      bottleneckAge: 2,
-      fresh: true,
-      workerVisible: true,
-      enforceParallel: true,
-    })
-    expect(started).toBeUndefined()
-    const cached = checkpointCloseIssue({
-      record,
-      checkpointId: 'checkpoint-1-aaaaaaaa',
-      observations: [
-        {
-          toolName: 'delegate',
-          arguments: args,
-          ok: true,
-          at: 300,
-          detail: 'rule "task-review" PASS (reused record abc)',
-        },
-      ],
-      bottleneckAge: 2,
-      fresh: true,
-      workerVisible: true,
-      enforceParallel: true,
-    })
-    expect(cached).toContain('execute the bottleneck remedy')
   })
 
   it('fails open to a targeted lead action when no worker tool is visible', () => {

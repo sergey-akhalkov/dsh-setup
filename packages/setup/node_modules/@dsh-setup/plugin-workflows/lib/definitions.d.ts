@@ -252,7 +252,7 @@ export interface OwnershipResolution {
     readonly issues: readonly string[];
 }
 /** The legacy plugins this engine knows how to defer to. */
-export declare const KNOWN_LEGACY_SOURCES: readonly ["delegation-rules", "goal-continuity"];
+export declare const KNOWN_LEGACY_SOURCES: readonly ["goal-continuity"];
 /** The legacy signal state a load or gate decision resolves against. */
 export interface LegacySignalState {
     readonly installed: ReadonlySet<string>;

@@ -36,8 +36,10 @@ export interface WorkflowsToolRequest {
   readonly change?: string
   /** The host resolves and verifies the declared evidence; text is never it. */
   readonly evidence?: { readonly kind: string; readonly ref: string }
-  /** The note action's task text or stable task id. */
+  /** The note action's task text or stable task id, or a review start's selector. */
   readonly task?: string
+  /** A task-scoped review start's section selector (the tasks.md level-2 key). */
+  readonly section?: string
   readonly status?: ProgressStatus
   readonly reason?: string
 }
@@ -56,6 +58,11 @@ export interface WorkflowsToolHost {
   startRun(
     definition: Definition,
     at: number,
+    selection?: {
+      readonly change?: string
+      readonly task?: string
+      readonly section?: string
+    },
   ): Promise<{ readonly run: WorkflowRun; readonly firstStep: string }>
   resumeRun(
     runId: string,
@@ -94,6 +101,7 @@ export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
     'change',
     'evidence',
     'task',
+    'section',
     'status',
     'reason',
   ])
@@ -147,7 +155,17 @@ export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
   const stepId = text('stepId')
   const change = text('change')
   const task = text('task')
+  const section = text('section')
   const reason = text('reason')
+  if ((task !== undefined || section !== undefined) && change === undefined) {
+    fail('a task or section selector needs the change it reviews')
+  }
+  if (task !== undefined && section !== undefined) {
+    fail('a review start accepts a task or a section, not both')
+  }
+  if (section !== undefined && action !== 'start') {
+    fail('a section selector is available only to the start action')
+  }
   return {
     action: action as WorkflowsToolAction,
     ...(definitionId === undefined ? {} : { definitionId }),
@@ -156,6 +174,7 @@ export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
     ...(change === undefined ? {} : { change }),
     ...(evidence === undefined ? {} : { evidence }),
     ...(task === undefined ? {} : { task }),
+    ...(section === undefined ? {} : { section }),
     ...(status === undefined ? {} : { status }),
     ...(reason === undefined ? {} : { reason }),
   }
@@ -260,7 +279,11 @@ export async function executeWorkflowsTool(
       if (definition.settings.risk === 'high' && !(await confirmHighRisk(host, definition.name))) {
         fail(`the high-risk start of "${definition.id}" needs a direct user yes; nothing started`)
       }
-      const started = await host.startRun(definition, at)
+      const started = await host.startRun(definition, at, {
+        ...(request.change === undefined ? {} : { change: request.change }),
+        ...(request.task === undefined ? {} : { task: request.task }),
+        ...(request.section === undefined ? {} : { section: request.section }),
+      })
       return `run ${started.run.id} started at step "${started.firstStep}"`
     }
     case 'resume': {

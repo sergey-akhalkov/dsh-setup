@@ -15,8 +15,14 @@ OpenSpec skill.
 - Keep shared files, generated output, and the full repository gate in the serial tail.
 - A lane does not edit the change's spec artifacts or another lane's tasks.
 - When applying, before the first implementation task, read the level-2 headings once and assign
-  each independent lane to a worker or record its serial decision (a heading containing `serial` or
-  the task's `task_progress` note); no new tool or state.
+  each independent lane to a worker or record its serial decision (a heading containing `serial`, or
+  a `workflows` `note` action naming a task in the lane with the reason); no new tool or state.
 - Within one lane the sequential loop still runs. For two or more independent lanes, start parallel
   writers in separate git worktrees with their task ids and owned paths, merge each after its checks
   and any configured task review, then run the serial lane.
+- Start a checked task's review immediately with `workflows(action: "start", definitionId:
+  "task-review", change: "<change>", task: "<taskId>")`; keep implementing the next independent
+  task only while that review runs on a frozen snapshot.
+- When the run reports that it fell back to the live worktree, a write can discard its verdict:
+  restore snapshot support and re-run, or defer writes until the run settles. Never wait with a
+  blocking sleep. Collect the record before the turn closes and before archive.

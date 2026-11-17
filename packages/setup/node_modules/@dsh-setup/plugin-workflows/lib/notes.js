@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { CHANGE_NAME } from './command-parse.js';
-import { defaultGit, legacyWorktreeDigest, worktreeDigest } from './git.js';
+import { defaultGit, worktreeDigest } from './git.js';
 import { sanitizeReviewText } from './review.js';
 import { taskIdOf, taskLanes } from './tasks.js';
 /**
@@ -11,22 +11,19 @@ import { taskIdOf, taskLanes } from './tasks.js';
  * the worktree digest it was written against, so a later write makes it stale.
  * A serial note also names its lane and the session that wrote it, so the
  * workflow lane gate treats that one lane as the serial decision only for the
- * writing session; a legacy note has no lane and falls back to its digest.
- * While the progress signal is legacy the note goes to the legacy store with
- * that owner's HEAD-less digest, so its gate reads the note as current.
+ * writing session.
  */
-/** Where each owner keeps its progress note. */
+/** Where the engine keeps its progress note. */
 export const NOTES_DIR = '.dsh/workflows/notes';
-export const LEGACY_NOTES_DIR = '.dsh/delegation/task-progress';
 export const PROGRESS_STATUSES = ['in-progress', 'blocked'];
 const TASK_ID = /^[0-9a-f]{16}$/u;
 const DIGEST = /^[0-9a-f]{64}$/u;
 const MAX_REASON_CHARS = 2_000;
-/** The workspace-relative note path of one owner. */
-export function notePathFor(owner, change) {
+/** The workspace-relative note path of one change. */
+export function notePathFor(change) {
     if (!CHANGE_NAME.test(change))
         throw new Error(`"${change}" is not a change name`);
-    return `${owner === 'legacy' ? LEGACY_NOTES_DIR : NOTES_DIR}/${change}.json`;
+    return `${NOTES_DIR}/${change}.json`;
 }
 /** Parse one note; a malformed document is undefined, never a partial note. */
 export function parseProgressNote(value) {
@@ -60,10 +57,10 @@ export function parseProgressNote(value) {
             : {}),
     };
 }
-/** The active owner's note for a change, or undefined when absent or malformed. */
-export async function readProgressNote(workspace, change, owner) {
+/** The engine's note for a change, or undefined when absent or malformed. */
+export async function readProgressNote(workspace, change) {
     try {
-        return parseProgressNote(JSON.parse(await readFile(join(workspace, notePathFor(owner, change)), 'utf8')));
+        return parseProgressNote(JSON.parse(await readFile(join(workspace, notePathFor(change)), 'utf8')));
     }
     catch {
         return undefined;
@@ -103,13 +100,12 @@ function resolveTask(markdown, wanted) {
     throw new Error(`the task "${wanted}" was not found in the change's tasks.md; pass its task text or its 16-character task id`);
 }
 /**
- * Write one owner's progress note. The worktree digest is captured now, so the
- * note authorizes only the worktree it was written against; the legacy owner
- * gets its HEAD-less digest. An unreadable tasks.md or an uncomputable digest
- * refuses the note instead of writing evidence the gates could never accept.
+ * Write the engine's progress note. The worktree digest is captured now, so the
+ * note authorizes only the worktree it was written against. An unreadable
+ * tasks.md or an uncomputable digest refuses the note instead of writing
+ * evidence the gates could never accept.
  */
 export async function writeProgressNote(workspace, input, options = {}) {
-    const owner = options.owner ?? 'workflows';
     let markdown;
     try {
         markdown = await readFile(join(workspace, 'openspec', 'changes', input.change, 'tasks.md'), 'utf8');
@@ -118,7 +114,7 @@ export async function writeProgressNote(workspace, input, options = {}) {
         throw new Error(`the change "${input.change}" has no readable tasks.md; fix openspec/changes/${input.change}/tasks.md and retry`);
     }
     const task = resolveTask(markdown, input.task);
-    const digest = await (owner === 'legacy' ? legacyWorktreeDigest : worktreeDigest)(workspace, options.runGit ?? defaultGit);
+    const digest = await worktreeDigest(workspace, options.runGit ?? defaultGit);
     if (digest === undefined) {
         throw new Error('the worktree digest could not be computed (git status failed); fix the git workspace so the note can be checked against it');
     }
@@ -134,7 +130,7 @@ export async function writeProgressNote(workspace, input, options = {}) {
             ? {}
             : { session: options.session }),
     };
-    const relative = notePathFor(owner, input.change);
+    const relative = notePathFor(input.change);
     const path = join(workspace, relative);
     await mkdir(dirname(path), { recursive: true });
     const temporary = `${path}.${String(process.pid)}.${String(Date.now())}.tmp`;

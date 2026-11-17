@@ -528,58 +528,6 @@ describe('workflow event recorder', () => {
     expect(JSON.stringify(records)).not.toContain('SECRET-TOKEN-123')
   })
 
-  it('keeps a delegate run handle so the run projection can attribute it', async () => {
-    const workspace = await tempWorkspace()
-    const host = createHost(workspace)
-    apply(host.ctx as never)
-    const journal = new Journal()
-    host.emit(
-      'tools/result',
-      { agent: host.agent, callId: 'call-run', name: 'delegate', arguments: {} },
-      {
-        isError: false,
-        content: [
-          {
-            type: 'text',
-            text: 'rule "task-review" review started\nrun: run-mw6abcde-1234abcd\nstate: running\npassword: HUNTER-secret',
-          },
-        ],
-      },
-    )
-    await waitFor(
-      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
-    )
-    const { records } = await journal.read(workspace, 'session-1', 0, 50)
-    expect(records[0]?.summary).toBe('delegate review started; run: run-mw6abcde-1234abcd')
-    expect(JSON.stringify(records)).not.toContain('HUNTER-secret')
-  })
-
-  it('does not treat an arbitrary run line as a delegate handle', async () => {
-    const workspace = await tempWorkspace()
-    const host = createHost(workspace)
-    apply(host.ctx as never)
-    const journal = new Journal()
-    host.emit(
-      'tools/result',
-      { agent: host.agent, callId: 'call-forged', name: 'delegate', arguments: {} },
-      {
-        isError: false,
-        content: [
-          {
-            type: 'text',
-            text: 'rule "task-review" review started\nrun: HUNTER-secret',
-          },
-        ],
-      },
-    )
-    await waitFor(
-      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
-    )
-    const { records } = await journal.read(workspace, 'session-1', 0, 50)
-    expect(records[0]?.summary).toBe('delegate ok; output omitted')
-    expect(JSON.stringify(records)).not.toContain('HUNTER-secret')
-  })
-
   it('marks an oversized tool result as truncated', async () => {
     const workspace = await tempWorkspace()
     const host = createHost(workspace)

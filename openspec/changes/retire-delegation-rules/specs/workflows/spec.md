@@ -17,6 +17,11 @@ satisfy a whole-spec step.
 - **WHEN** `.dsh/workflows/records/spec-review/auth/spec.json` has rule `spec-review`, change `auth`, phase `spec`, scope `whole`, verdict `PASS`, and the current spec digest
 - **THEN** the review step is marked done with the record path and digest
 
+#### Scenario: ERROR allows an intermediate close
+
+- **WHEN** the whole-spec record is `ERROR` with the current digest and the turn has no other open obligation
+- **THEN** the turn may close with the failure visible, no `PASS` exists, and the next close starts a new review
+
 #### Scenario: Legacy record is not consulted
 
 - **WHEN** only `.dsh/delegation/spec-review/auth/spec.json` exists
@@ -53,6 +58,16 @@ legacy switch is available to re-enable.
 
 - **WHEN** every legacy scenario produces the same allow/refuse decision in the workflow shadow run
 - **THEN** the workflow definition may be `own`
+
+#### Scenario: Soft signal keeps its refusal sequence
+
+- **WHEN** the legacy soft integration rule refuses one close and allows the next
+- **THEN** the workflow definition refuses the first close and allows the next with a recorded violation, and its parity entry passes
+
+#### Scenario: Exhausted soft run does not block archive
+
+- **WHEN** the integration run closed on its exhausted soft budget, every checked task has a PASS, and the intake receipt exists
+- **THEN** the archive gate allows the archive and the integration run is reported as closed without a pass, never as an approval
 
 #### Scenario: Parity mismatch has no legacy fallback
 
@@ -164,6 +179,31 @@ every checked task. `ERROR` MUST allow an intermediate turn close and MUST NOT a
 
 - **WHEN** a change has a checked task without a PASS
 - **THEN** the archive gate refuses and names the run and the missing task
+
+#### Scenario: Section with two missing tasks is one unit
+
+- **WHEN** section 1 has two or more checked tasks without a matching PASS or ERROR record and no other missing task
+- **THEN** the workflow selects one section unit for section 1 and starts no per-task review for its missing tasks
+
+#### Scenario: Single missing task keeps the task unit
+
+- **WHEN** a section has exactly one checked task without a matching PASS or ERROR record
+- **THEN** the workflow selects that task's unit and the per-task start
+
+#### Scenario: Section unit covers approved tasks
+
+- **WHEN** a section contains an approved checked task and two missing tasks
+- **THEN** the one section run covers every checked task in the section, preserves a matching per-task approval byte-identically, and publishes only the missing or nonmatching approvals
+
+#### Scenario: Pending section run suppresses a duplicate
+
+- **WHEN** a section run for the change's section is queued or running
+- **THEN** the gate points at that run and starts no per-task or second section run for its covered tasks
+
+#### Scenario: Steer names the section
+
+- **WHEN** the turn-close gate refuses for missing records in a section
+- **THEN** the steer names the section key, the missing tasks, and the start action that covers them
 
 #### Scenario: Review runtime remains
 

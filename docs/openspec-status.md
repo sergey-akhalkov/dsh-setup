@@ -255,19 +255,14 @@ rule, the portable record, and the audit commands are in [review-approval.md](re
 
 ## Open owner follow-ups
 
-The active `move-review-runtime-into-workflows` change is Release A of a two-release migration: the
-workflows engine owns the review executor, the trigger `condition`, reviewer routing and the review
-queue, the `.dsh/workflows/records/` store, the work-progress and lane gates, and the goal-complete
-guard, while the delegation row stays installed dormant with its rules, target, and all five `gates`
-switches false. Release B is `retire-delegation-rules`
-(`openspec/changes/retire-delegation-rules/`), created by this change's task 6.1 with deletion-only
-tasks and started only after the installed profile has run one native review that produced a local
-record and its committed approval. It deletes the plugin, the row, `docs/delegation-rules.md`, the
-skill, the observability row, the legacy prompt copies, the `reviews:export` legacy-store fallback,
-and the bundle entries, and folds the plugin's requirements into `workflows` and
-`review-approval`. Rollback
-before Release B is one switch flip per signal (`workflowOwned`, `specReview`, `integrationReview`,
-`taskProgress`, `laneFanout`).
+Release B (`retire-delegation-rules`) completes the two-release review-runtime migration:
+`workflows` is the only review and gate owner. It deletes the delegation plugin, its row, its docs
+page, skill, observability row, legacy prompt copies, and local-store approval fallback, folds the
+plugin's requirements into `workflows` and `review-approval`, and keeps the committed approvals and
+audit modes unchanged. A profile that still configures the removed row, its `rules`/`targets`, or
+`delegation.gates` fails at load and migrates to the workflow `reviewers` map and the shipped
+definitions; a local `.dsh/delegation/**` record cannot become an approval; rollback is a version
+downgrade to the last Release A build. See [workflows.md](workflows.md#migration-and-rollback).
 
 The archived parent change (`2026-10-26-add-portable-dsh-setup`) tasks record 32/35. Open owner
 follow-ups: 7.1 first published release/tag verification, 7.4 second release update visibility, 8.1
@@ -292,9 +287,7 @@ an owner follow-up.
 
 The archived `2026-10-26-add-delegation-rules` tasks record 51/61; the open 8.x tasks are the live
 DSH-profile acceptance (real review/patch/gate/non-Codex target). Codex sign-in, a completed
-app-server turn, and the standalone `.cmd`/`.exe`/PATH/status probe are verified. The final delegation
-Host was edited after its recorded 3.3 live acceptance, so a live re-acceptance of the final Host
-remains an owner follow-up.
+app-server turn, and the standalone `.cmd`/`.exe`/PATH/status probe are verified.
 
 The archived `2026-10-29-add-hindsight-memory` tasks record 25/28; the open 4.7, 6.2, and 6.5 checks
 are the clean-machine install, isolated-profile live acceptance, and live desktop install

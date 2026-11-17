@@ -14,14 +14,13 @@
     }
   },
   "settings": {
-    "allowModelStart": false,
+    "allowModelStart": true,
     "risk": "low",
     "gateOwnership": "own",
     "maxBlocks": 1,
     "allowIntent": false,
     "gate": "review",
-    "gateIdentity": "integration-review",
-    "legacy": { "plugin": "delegation-rules", "signal": "integration-review" }
+    "gateIdentity": "integration-review"
   },
   "steps": [
     {

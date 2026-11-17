@@ -146,11 +146,11 @@ describe('aggregation buckets', () => {
     expect(result.rows.get('other-abort')?.counts).toEqual([0, 0])
   })
 
-  it('attributes a delegation gate message by its source kind', () => {
+  it('attributes a workflow gate message by its source kind', () => {
     const records = extractRecords('s', [
       event(
         'user/message',
-        { role: 'user', id: 'm', content: [], source: { kind: 'delegation-rules' } },
+        { role: 'user', id: 'm', content: [], source: { kind: 'workflows-gate' } },
         NOW - MINUTE,
       ),
     ])
@@ -159,17 +159,17 @@ describe('aggregation buckets', () => {
       ...configured({
         rows: [
           {
-            id: 'delegation-rules',
-            label: 'Delegation rules',
+            id: 'workflows-gate',
+            label: 'Workflows gate',
             kind: 'signal',
-            match: [{ sourceKind: 'delegation-rules' }],
+            match: [{ sourceKind: 'workflows-gate' }],
           },
         ],
       }),
     ]
     const result = aggregate(records, rows, 'session', NOW)
-    expect(result.rows.get('sources.delegation-rules')?.counts).toEqual([1])
-    expect(result.rows.get('delegation-rules')?.counts).toEqual([1])
+    expect(result.rows.get('sources.workflows-gate')?.counts).toEqual([1])
+    expect(result.rows.get('workflows-gate')?.counts).toEqual([1])
   })
 
   it('counts errors and attributes a failed result to its tool row', () => {

@@ -659,31 +659,6 @@ describe('gate-preserving intake override', () => {
       conflictLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
     ).toBe('OpenSpec change intake')
 
-    // Removing the installed step's legacy binding is refused too: the binding
-    // selects the owner, and the installed definition stays effective.
-    const stripped = contributedIntake()
-    stripped.name = 'Stripped binding copy'
-    const strippedStep = (stripped.steps as Array<Record<string, unknown>>).find(
-      (step) => step.id === 'spec-review',
-    )
-    if (strippedStep !== undefined) delete strippedStep.legacy
-    const strippedDraft = await writeDefinitionFile(
-      workspace,
-      workspaceDraftsDirectory(workspace),
-      'stripped-intake.json',
-      stripped,
-    )
-    await installDefinition(workspace, strippedDraft, auth())
-    const strippedLoad = await loadApprovedDefinitions(workspace, {
-      auth: auth(),
-      shipped: [...loadShippedDefinitions(), intake],
-      installedLegacy: new Set(['delegation-rules']),
-      enabledLegacy: new Set(['delegation-rules/spec-review']),
-    })
-    expect(strippedLoad.errors.join('\n')).toMatch(/legacy ownership binding/u)
-    expect(
-      strippedLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
-    ).toBe('OpenSpec change intake')
     // A copy saved from the installed template keeps the gate and loads.
     const reapproved = contributedIntake()
     reapproved.name = 'Reapproved local intake'

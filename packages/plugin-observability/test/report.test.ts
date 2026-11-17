@@ -57,8 +57,8 @@ function fixture() {
   const configured = parseRows({
     rows: [
       {
-        id: 'delegation-rules',
-        label: 'Delegation rules',
+        id: 'workflows-gate',
+        label: 'Workflows gate',
         kind: 'signal',
         match: [{ tool: 'delegate' }],
       },
@@ -109,9 +109,9 @@ describe('dashboard report data', () => {
     expect(byId.get('sources.goal')?.group).toBe('sources')
     expect(byId.get('aborts.loop-guard')?.group).toBe('aborts')
     expect(byId.get('errors')?.group).toBe('errors')
-    expect(byId.get('delegation-rules')?.group).toBe('plugin')
-    expect(byId.get('delegation-rules')?.status).toBe('error')
-    expect(byId.get('delegation-rules')?.lastActivity).toBe(NOW - 3 * MINUTE)
+    expect(byId.get('workflows-gate')?.group).toBe('plugin')
+    expect(byId.get('workflows-gate')?.status).toBe('error')
+    expect(byId.get('workflows-gate')?.lastActivity).toBe(NOW - 3 * MINUTE)
     expect(byId.get('prompt-only')?.kind).toBe('guidance')
     expect(byId.get('prompt-only')?.status).toBeUndefined()
     expect(byId.get('prompt-only')?.lastActivity).toBeUndefined()

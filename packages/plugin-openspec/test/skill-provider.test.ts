@@ -162,7 +162,16 @@ describe('openspec plugin', () => {
     expect(text).toContain(
       'When applying, before the first implementation task, read the level-2 headings once and assign each independent lane to a worker or record its serial decision',
     )
+    expect(text).toContain('`workflows` `note` action')
     expect(text).toContain('no new tool or state')
+    expect(text).toContain("Start a checked task's review immediately")
+    expect(text).toContain('definitionId: "task-review"')
+    expect(text).toContain('only while that review runs on a frozen snapshot')
+    expect(text).toContain(
+      'restore snapshot support and re-run, or defer writes until the run settles',
+    )
+    expect(text).toContain('Never wait with a blocking sleep')
+    expect(guidance).not.toContain(['task', 'progress'].join('_'))
   })
 
   it('ships the task-lane guidance outside the pinned asset directory', () => {

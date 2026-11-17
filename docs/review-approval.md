@@ -3,7 +3,7 @@
 This page is the repository-level approval boundary for OpenSpec changes: a change is archived,
 pushed, or merged only when every checked task carries a committed task-review `PASS`. The engine
 that produces and evaluates the records is described in
-[delegation-rules.md](delegation-rules.md); this page is the repository rule and its enforcement.
+[workflows.md](workflows.md#review-executor); this page is the repository rule and its enforcement.
 
 ## The approval rule
 
@@ -20,12 +20,12 @@ that produces and evaluates the records is described in
   a turn with the failure visible, but it never approves an archive or a push.
 - When the marker declares a reviewer, the record's `target.provider` must match and, when declared,
   so must `target.model`. A mismatch is an approval error whose detail names the expected and actual
-  values; it is not a missing record. The live archive gate, the live task gate, `delegation_status`,
-  and every `pnpm reviews:check` mode apply the same binding. A marker without the fields keeps the
-  previous provider-agnostic behavior.
+  values; it is not a missing record. The live archive gate, the live task gate, the `workflows`
+  status summary, and every `pnpm reviews:check` mode apply the same binding. A marker without the
+  fields keeps the previous provider-agnostic behavior.
 - A cached local record is reused only when its target matches the declared reviewer. A record from
-  another provider is treated as unreviewed, so `nextTaskForReview` selects that task and the
-  prescribed `delegate` call starts the required reviewer instead of returning the old `PASS`.
+  another provider is treated as unreviewed, so the task review starts the required reviewer instead
+  of returning the old `PASS`.
 
 ## The portable record
 
@@ -53,10 +53,9 @@ inputs, so an approval written later never stales the whole-spec review it was p
 
 A task review that runs in a worktree writes the record into that worktree's change; merging the
 branch carries the approval into the main workspace. A `PASS` that exists only under `.dsh` is not
-visible from another clone: run `pnpm reviews:export --change <name>` once for a change reviewed
-before the portable write was installed. The export copies only a local task-scope `PASS` whose rule,
-change, and task id match; it refuses `ERROR`/`FINDINGS`, a foreign change, and a task-id mismatch,
-and it cannot invent an approval.
+visible from another clone and cannot become an approval: no command copies a local record into the
+committed path. Start the native task review, which writes `reviews/<taskId>.json` directly; the
+audit reports a task approved only through that record.
 
 ## Audit commands
 
@@ -65,7 +64,6 @@ pnpm reviews:check --change <name>   # one active change
 pnpm reviews:check --all             # every archived change, cutoff and exception reported
 pnpm reviews:check --push            # the archived changes a push adds or modifies (stdin refs)
 pnpm reviews:check --staged          # the archived changes this commit stages
-pnpm reviews:export --change <name>  # copy existing local .dsh PASS records into the change
 pnpm hooks:install                   # select the checked-in .githooks as core.hooksPath (once per clone)
 ```
 
@@ -73,7 +71,7 @@ Each audit prints the per-change coverage and names every gap with its exact rev
 
 ```text
 add-goal-block-review: task-review PASS 0/17, ERROR 0, missing 17; archive-ready: no
-  missing 1.1 "Extend ..." -> delegate(rule: "task-review", change: "add-goal-block-review", task: "<id>")
+  missing 1.1 "Extend ..." -> workflows(action: "start", definitionId: "task-review", change: "add-goal-block-review", task: "<id>")
   record: openspec/changes/add-goal-block-review/reviews/<id>.json
 ```
 
@@ -105,15 +103,16 @@ A repository opts in with a tracked `openspec/review-approval.json`:
 }
 ```
 
-`taskRule` must name a configured strict task-scoped review rule. `reviewerProvider` and
+`taskRule` names the workflow review definition whose task-scoped PASS is the approval (default
+`task-review`); the audit's printed call names that definition. `reviewerProvider` and
 `reviewerModel` pin the reviewer identity: a record whose `target.provider` (and, when declared,
 `target.model`) differs is unapproved, and the detail names both values. Both fields are optional;
 omitting them keeps the provider-agnostic behavior for standalone and other repositories. `cutoff`
 names the tag before which archives are the historical baseline. `grandfathered` lists changes that
 are reported as an explicit exception. Without the marker, or with `"archiveGate": false`, nothing
-changes: the plugin is global, and a workspace that did not opt in keeps its archive behavior. A
-malformed marker, an unreadable `tasks.md`/record, or a `taskRule` that is missing, not task-scoped,
-or not strict refuses the archive with the cause (fail closed).
+changes: the engine is global, and a workspace that did not opt in keeps its archive behavior. A
+malformed marker, an unreadable `tasks.md`/record, or a `taskRule` that is missing or not a kebab-case
+rule id refuses the archive with the cause (fail closed).
 
 The repository's own marker sets the `v0.12.0` cutoff and grandfathers the three v0.12.0 changes;
 [openspec-status.md](openspec-status.md) records the post-hoc integration review `PASS` and the
@@ -122,27 +121,22 @@ pre-cutoff baseline.
 
 ## The archive gate
 
-With `archiveGate: true`, the delegation engine's `tools/pre-execute` guard recognizes:
+With `archiveGate: true`, the workflows engine's pre-execute archive gate recognizes:
 
 - `openspec archive <change>` (also through `pnpm exec`/`npx`);
 - `mv`, `Move-Item`, or `git mv` whose sources are active change directories and whose destination
   is under `openspec/changes/archive/` — every source of a multi-source move is evaluated.
 
 It refuses the command **before** it runs, listing every missing task (number, text, task id), the
-expected record path, and the exact `delegate` calls; the change remains active, so nothing has to be
-restored. It applies to subagents too (only the turn-stopping gate skips them). On success it lets
-the command run unchanged. It is a guard, not a sandbox: a deliberately obfuscated move can archive
-locally, and the push audit is the backstop for that.
+expected record path, and the exact `workflows` review calls; the change remains active, so nothing
+has to be restored. It applies to subagents too (only the turn-stopping gate skips them). On success
+it lets the command run unchanged. It is a guard, not a sandbox: a deliberately obfuscated move can
+archive locally, and the push audit is the backstop for that. `pnpm reviews:check --change <name>`
+prints the same missing-task list and review calls, so run it before an archive.
 
-When `delegation.gates.workflowOwned` is `false`, this legacy guard does not run. The workflow
-`task-review` definition (`own`) then owns the same four command forms through its pre-execute
-archive gate and reads the same `reviews/<taskId>.json` portable PASS records, including the
-marker's reviewer binding; the refusal names the missing tasks and the review calls. The legacy
-switch and the definition flip are one config change, and the tracked parity report
-(`assets/parity/retire-legacy-gates.json`) covers the four move forms before either ships.
-The owned gate has one deliberate difference: it archives **one change per command**. A multi-source
-move is refused even when every source has approvals, so archive each change with its own command.
-Rollback is the reverse pair: `gates.workflowOwned: true` and the definition back to `defer`.
+The owned gate has one deliberate difference from a plain command: it archives **one change per
+command**. A multi-source move is refused even when every source has approvals, so archive each
+change with its own command.
 
 ## Hooks, push, and CI
 

@@ -93,27 +93,29 @@ when complete and start its task-scoped review immediately. Keep implementing an
 independent task while the run uses a frozen snapshot. A `FINDINGS` re-review confirms each prior
 finding (`closed`/`open`) against a bounded diff from the prior tree. When the run reports the
 live worktree, a write can discard its verdict: restore snapshot support and re-run, or defer writes
-until the run settles. No blocking sleep. Stop mid-task with `task_progress` instead of ticking. The
-gate refuses a code-changing turn without the record; see
-[docs/delegation-rules.md](docs/delegation-rules.md).
+until the run settles. No blocking sleep. Stop mid-task with the `workflows` `note` action instead of
+ticking. The gate refuses a code-changing turn without the record; see
+[docs/workflows.md](docs/workflows.md).
 
-**Workflow-owned gates (`retire-legacy-gates`).** The `workflows` definitions own the checkpoint
-(`retro`), task-review, and verification closes; `checkpoint.automation: false` and
-`delegation.gates.workflowOwned: false` are the gate-only retirement switches that keep the tools and
-records. The whole-spec `spec-review` rule and the task-progress and lane-assignment/lane-boundary
-gates stay enabled; a `defer` task-review/retro definition beside its disabled switch is refused at
-load. A legacy behavior moves to `own` only after the tracked parity report
+**Review and gate ownership.** `workflows` is the only review and gate owner: its definitions own the
+checkpoint (`retro`), task-review, and verification closes, while `goal-continuity` and
+`verification-gate` keep their rows and legacy sources. A legacy behavior moves
+to `own` only after the tracked parity report
 (`packages/plugin-workflows/assets/parity/retire-legacy-gates.json`) passes; `--check` must be wired
-into the release gate. Rollback is one config flip per signal: re-enable the switch and return the
-definition to `defer`. The legacy rows stay installed for one release.
+into the release gate. Rollback is a version downgrade to the previous release; a profile that still
+configures the removed delegation row, its `rules`/`targets`, or `delegation.gates` fails at load and
+migrates to `reviewers` and the shipped definitions
+([migration](docs/workflows.md#migration-and-rollback)).
 
 A checked task is approved only by a committed `openspec/changes/<change>/reviews/<taskId>.json`
 task-review PASS. When `openspec/review-approval.json` sets `archiveGate: true`, the engine refuses
 `openspec archive` and `mv`/`Move-Item`/`git mv` into `changes/archive/` until every checked task has
-one; run `pnpm reviews:check --change <name>` before archiving and `pnpm reviews:check --all` before
+one; the audit prints the remedy
+`workflows(action: "start", definitionId: "task-review", change: "<change>", task: "<taskId>")`. Run
+`pnpm reviews:check --change <name>` before archiving and `pnpm reviews:check --all` before
 release. Install the pre-push hook once per clone with `pnpm hooks:install` (it runs
 `pnpm reviews:check --push`); both CI workflows run `--all` with full history. See
-[docs/delegation-rules.md](docs/delegation-rules.md#portable-task-approvals) and
+[docs/review-approval.md](docs/review-approval.md) and
 [docs/contributing.md](docs/contributing.md#review-approval-and-the-archive-gate).
 
 Change history, archived task counts, and open owner follow-ups:
@@ -214,16 +216,16 @@ Detail and local reproduction: [docs/contributing.md](docs/contributing.md#ci-ga
 
 ## 12. Where to look
 
-| Need                                    | File                                                                                                   |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Add/change a plugin, Client slots, HMR  | [docs/plugins.md](docs/plugins.md), `packages/plugin-rust/**` (package shape)                          |
-| Setup patch/manifest/vendor generation  | [docs/setup-composition.md](docs/setup-composition.md), `scripts/lib/generate.ts`                      |
-| Installer, manual install, dogfood      | [docs/install.md](docs/install.md), `install.ps1`, `scripts/dogfood.ts`                                |
-| Release, Pages, version accumulation    | [docs/releasing.md](docs/releasing.md), `.github/workflows/release.yml`                                |
-| Requirements, history, owner follow-ups | `openspec/specs/*/spec.md`, [docs/openspec-status.md](docs/openspec-status.md)                         |
-| Delegation, Codex fork                  | [docs/delegation-rules.md](docs/delegation-rules.md), [docs/codex-subagent.md](docs/codex-subagent.md) |
-| Validation assertions                   | `scripts/validate-repo.ts`, `scripts/validate-composition.ts`, `scripts/validate-installer.ts`         |
-| DSH API types                           | `node_modules/@deepseek-ai/cordis`, `node_modules/@deepseek-ai/dsh-client-ui-*`                        |
+| Need                                    | File                                                                                           |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Add/change a plugin, Client slots, HMR  | [docs/plugins.md](docs/plugins.md), `packages/plugin-rust/**` (package shape)                  |
+| Setup patch/manifest/vendor generation  | [docs/setup-composition.md](docs/setup-composition.md), `scripts/lib/generate.ts`              |
+| Installer, manual install, dogfood      | [docs/install.md](docs/install.md), `install.ps1`, `scripts/dogfood.ts`                        |
+| Release, Pages, version accumulation    | [docs/releasing.md](docs/releasing.md), `.github/workflows/release.yml`                        |
+| Requirements, history, owner follow-ups | `openspec/specs/*/spec.md`, [docs/openspec-status.md](docs/openspec-status.md)                 |
+| Reviews, Codex fork                     | [docs/workflows.md](docs/workflows.md), [docs/codex-subagent.md](docs/codex-subagent.md)       |
+| Validation assertions                   | `scripts/validate-repo.ts`, `scripts/validate-composition.ts`, `scripts/validate-installer.ts` |
+| DSH API types                           | `node_modules/@deepseek-ai/cordis`, `node_modules/@deepseek-ai/dsh-client-ui-*`                |
 
 Troubleshooting and the full reference table:
 [docs/contributing.md](docs/contributing.md#troubleshooting).

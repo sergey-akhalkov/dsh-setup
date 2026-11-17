@@ -312,37 +312,19 @@ function main(): number {
         }
       })
 
-      step('ship the four retained review rules and no removed rule', () => {
-        const row = rowBlock(dump.stdout, 'dsh-setup-delegation-rules')
-        if (row === '') throw new Error('delegation-rules row is missing')
-        for (const [id, when] of [
-          ['spec-review', 'spec-ready'],
-          ['task-review', 'spec-task-ready'],
-          ['integration-review', 'implementation-complete'],
-          ['lane-fanout', 'lane-assignment'],
-        ] as const) {
-          const index = row.indexOf(`id: ${id}`)
-          if (index === -1) throw new Error(`delegation-rules row lacks the "${id}" rule`)
-          const window = row.slice(index, index + 160)
-          if (!window.includes(`when: ${when}`)) {
-            throw new Error(`the "${id}" rule has the wrong trigger`)
-          }
+      step('ship the workflow review owner and no delegation row', () => {
+        if (rowBlock(dump.stdout, 'dsh-setup-delegation-rules') !== '') {
+          throw new Error('the removed delegation-rules row is still mounted')
         }
-        for (const removed of [
-          'task-progress',
-          'lane-boundary',
-          'blocker',
-          'research',
-          'advisor',
-          'worker-fast',
-          'worker-deep',
-          'bug-fix',
-          'codex-write',
-          'codex-astra',
+        const row = rowBlock(dump.stdout, 'dsh-setup-workflows')
+        if (row === '') throw new Error('workflows row is missing')
+        for (const expected of [
+          'reviewers:',
+          'codex:',
+          'provider: codex-subagent',
+          'reasoningEffort: xhigh',
         ]) {
-          if (row.includes(`${removed}:`) || row.includes(`id: ${removed}`)) {
-            throw new Error(`delegation-rules row still ships the removed "${removed}"`)
-          }
+          if (!row.includes(expected)) throw new Error(`workflows row lacks "${expected}"`)
         }
       })
 

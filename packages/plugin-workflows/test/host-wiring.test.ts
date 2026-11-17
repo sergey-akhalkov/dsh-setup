@@ -1245,7 +1245,7 @@ describe('parity report refusal at runtime', () => {
 })
 
 describe('retro applicability evidence', () => {
-  it('counts only successful writes and started delegates', async () => {
+  it('counts only successful writes and started workers', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const host = fakeHost(workspace)
@@ -1322,12 +1322,12 @@ describe('retro applicability evidence', () => {
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'not-applicable'))
     expect(await retroRuns()).toHaveLength(0)
 
-    // Three reads plus a started delegate is a worker: one run.
+    // Three reads plus a started worker is a worker: one run.
     await emitTurn(2, [
       { name: 'read', args: {} },
       { name: 'read', args: {} },
       { name: 'read', args: {} },
-      { name: 'delegate', args: {}, text: 'rule "task-review" review started' },
+      { name: 'subagent', args: {}, text: 'worker started' },
     ])
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
     expect(await retroRuns()).toHaveLength(1)
@@ -4862,97 +4862,6 @@ describe('intake end-to-end in a fake host', () => {
     expect(approval?.reason).toContain('no')
     expect(await receipts.readReceipt(workspace, 'auth', auth)).toBeUndefined()
   })
-
-  it('loads the spec-review rollback with a failed retained group and completes the deferred step from the legacy PASS', async () => {
-    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
-    const workspace = await tempWorkspace()
-    // The rollback flips only gates.specReview while the matching retained group
-    // failed to replay: the effectively deferred signal must not refuse the
-    // intake, and the legacy PASS must complete its deferred step.
-    const real = JSON.parse(
-      readFileSync(
-        fileURLToPath(new URL('../assets/parity/retire-legacy-gates.json', import.meta.url)),
-        'utf8',
-      ),
-    ) as { retained: Record<string, unknown> }
-    parityMock.active = true
-    parityMock.report = {
-      ...real,
-      retained: { ...real.retained, 'spec-review': { cases: 3, replayed: 2, status: 'failed' } },
-    }
-    // The switch alone restores the legacy owner for the contributed step.
-    const host = fakeHost(workspace, { userQuestions: true, specReview: true })
-    apply(host.ctx as never)
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    const runs = await import('../src/host/runs.ts')
-    const receipts = await import('../src/host/receipts.ts')
-    const { resolveOwnership } = await import('../src/host/definitions.ts')
-    const { currentSpecDigest } = await import('../src/host/evidence.ts')
-    const { HostAuth } = await import('../src/host/host-auth.ts')
-    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const intake = definitionsRegistry.installed('change-intake')?.definition
-    expect(intake).toBeDefined()
-    if (intake === undefined) return
-    const resolved = resolveOwnership(
-      intake,
-      new Set(['delegation-rules']),
-      new Set(['delegation-rules/spec-review']),
-    )
-    expect(resolved.issues).toEqual([])
-    expect(resolved.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('defer')
-
-    const change = join(workspace, 'openspec', 'changes', 'auth')
-    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
-    for (const [file, text] of [
-      ['proposal.md', '# artifact\n'],
-      ['design.md', '# artifact\n'],
-      ['tasks.md', '# artifact\n'],
-      ['specs/auth/spec.md', '# spec\n'],
-    ] as const) {
-      await writeFile(join(change, file), text, 'utf8')
-    }
-    const digest = await currentSpecDigest(workspace, 'auth')
-    if (digest === undefined) throw new Error('the auth change artifacts are unreadable')
-    const legacy = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
-    await mkdir(legacy, { recursive: true })
-    await writeFile(
-      join(legacy, 'spec.json'),
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
-      'utf8',
-    )
-    let run = runs.createRun({
-      definition: 'change-intake',
-      trigger: 'tool.pre-execute',
-      session: 'session-1',
-      workspace,
-      context: { name: 'auth' },
-      steps: intake.steps.map((step) => step.id),
-      id: 'run-intake-deferred',
-      now: 1_000,
-    })
-    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
-      run = runs.settleStep(run, step, 'done', { at: 1_100 })
-    }
-    await runs.writeRun(workspace, run, auth)
-    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    const stored = await runs.readAuthenticatedRun(workspace, 'run-intake-deferred', auth)
-    const review = stored?.steps.find((step) => step.id === 'spec-review')
-    // The intake loaded through the failed report, read the legacy record as its
-    // evidence, and never dispatched the native executor.
-    expect(review?.state).toBe('done')
-    expect(review?.evidence?.path).toBe('.dsh/delegation/spec-review/auth/spec.json')
-    expect(review?.evidence?.digest).toBe(digest)
-    await expect(
-      readFile(join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json')),
-    ).rejects.toThrow()
-    // The deferred step adds no steer; approval completes and the run receipts.
-    expect(host.steers).toHaveLength(0)
-    expect(stored?.status).toBe('completed')
-    expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
-      kind: 'intake',
-      change: 'auth',
-    })
-  })
 })
 
 describe('/workflows adopt from the real command invocation', () => {
@@ -4977,7 +4886,7 @@ describe('/workflows adopt from the real command invocation', () => {
       await writeFile(join(changeDir, file), text, 'utf8')
     }
     const digest = await currentSpecDigest(workspace, 'auth')
-    const recordDir = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
     await mkdir(recordDir, { recursive: true })
     await writeFile(
       join(recordDir, 'spec.json'),
@@ -6492,7 +6401,7 @@ describe('archive gate on an unreadable run store', () => {
     const { currentSpecDigest } = await import('../src/host/evidence.ts')
     const digest = await currentSpecDigest(workspace, 'auth')
     expect(digest).toBeDefined()
-    const record = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    const record = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
     await mkdir(record, { recursive: true })
     await writeFile(
       join(record, 'spec.json'),
@@ -6580,7 +6489,7 @@ describe('user-clicked archive authorization', () => {
     await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
     const { currentSpecDigest } = await import('../src/host/evidence.ts')
     const digest = await currentSpecDigest(workspace, 'auth')
-    const record = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    const record = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
     await mkdir(record, { recursive: true })
     await writeFile(
       join(record, 'spec.json'),
@@ -6638,7 +6547,7 @@ describe('user-clicked archive authorization', () => {
 
     const missing = await tempWorkspace()
     await completeChange(missing)
-    await rm(join(missing, '.dsh', 'delegation', 'spec-review', 'auth', 'spec.json'))
+    await rm(join(missing, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json'))
     const missingHost = fakeHost(missing)
     apply(missingHost.ctx as never)
     const missingResult = await serviceOf(missingHost).authorizeAndCheck(missing, 'auth')
@@ -6703,6 +6612,63 @@ describe('user-clicked archive authorization', () => {
     await completeChange(malformed)
     await writeFile(join(malformed, 'openspec', 'review-approval.json'), '{ not json', 'utf8')
     expect(await authorizeUserArchive(malformed, 'auth', auth)).toEqual({ ok: true })
+  })
+})
+
+describe('workflows start action selectors', () => {
+  it('resolves the printed task and section selectors and refuses invalid ones', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    await writeFile(
+      join(change, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine (owns `src/**`)\n\n- [x] 1.1 First task\n- [ ] 1.2 Second task\n',
+      'utf8',
+    )
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | { execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }> }
+      | undefined
+    if (tool === undefined) throw new Error('the workflows tool is missing')
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const start = (args: Record<string, unknown>) => tool.execute(args, { agent: host.agent })
+    const started = await start({
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      task: 'First task',
+    })
+    expect(started.text).toContain('started')
+    let stored = await runs.listAuthenticatedRuns(workspace, auth)
+    expect(stored.find((run) => run.definition.id === 'task-review')?.context).toMatchObject({
+      name: 'auth',
+      taskId: taskIdOf('First task'),
+    })
+    await start({
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      section: '1',
+    })
+    stored = await runs.listAuthenticatedRuns(workspace, auth)
+    const sectionRun = stored.filter((run) => run.definition.id === 'task-review').at(-1)
+    expect(sectionRun?.context).toMatchObject({ name: 'auth', section: '1' })
+    expect(sectionRun?.context.taskIds).toContain(taskIdOf('First task'))
+    await expect(
+      start({ action: 'start', definitionId: 'task-review', change: 'auth', task: 'Missing' }),
+    ).rejects.toThrow(/was not found/u)
+    await expect(
+      start({ action: 'start', definitionId: 'task-review', change: 'auth', task: 'Second task' }),
+    ).rejects.toThrow(/not checked/u)
+    await expect(
+      start({ action: 'start', definitionId: 'task-review', task: 'First task' }),
+    ).rejects.toThrow(/needs the change/u)
   })
 })
 
@@ -7576,7 +7542,9 @@ describe('engine-owned gates', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(steered(host)).toContain('changed implementation files in change "auth"')
     // The committed change still needs a current note like any other code change.
-    const refusals = host.steers.length
+    const progressSteers = (): number =>
+      host.steers.filter((message) => JSON.stringify(message).includes('task-progress')).length
+    const refusals = progressSteers()
     const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
       | { execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }> }
       | undefined
@@ -7591,7 +7559,7 @@ describe('engine-owned gates', () => {
       { agent: host.agent },
     )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    expect(host.steers.length).toBe(refusals)
+    expect(progressSteers()).toBe(refusals)
   })
 
   it('keeps earlier serial-lane decisions after a later serial note', async () => {
@@ -7894,7 +7862,7 @@ describe('engine-owned gates', () => {
       const refused = steered(host)
       expect(refused).toContain('rule "task-progress"')
       expect(refused).toContain('did not replay')
-      expect(refused).toContain('delegation.gates.taskProgress: true')
+      expect(refused).toContain('fix the parity report')
     } finally {
       parityMock.active = false
       parityMock.report = undefined

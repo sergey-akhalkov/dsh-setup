@@ -33,7 +33,7 @@ import { checkedTaskIdsOf } from './tasks.js'
  * The intake runner. It walks the declared steps in order, completes a main
  * step only through the evidence verifier, completes `create-change` only from
  * its owned tool call plus `.openspec.yaml`, reads the deferred `spec-review`
- * record without dispatching `delegate`, and asks the user only at `approval`.
+ * record without starting a review, and asks the user only at `approval`.
  */
 
 export interface IntakeAdvanceInput {
@@ -52,8 +52,8 @@ export interface IntakeAdvanceInput {
     readonly step: Step
     readonly context: EvidenceContext
   }) => Promise<WorkflowRun | undefined>
-  /** The deferred-step record reader; it must not call delegate. */
-  readonly readRecord?: (step: Step, owner: 'workflows' | 'legacy') => Promise<EvidenceCheck>
+  /** The deferred-step record reader; it must not start a review. */
+  readonly readRecord?: (step: Step) => Promise<EvidenceCheck>
   readonly installedLegacy: ReadonlySet<string>
   /** `${plugin}/${signal}` entries that would actually steer. */
   readonly enabledLegacy?: ReadonlySet<string>
@@ -144,13 +144,8 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
         for (const reviewStep of input.definition.steps) {
           if (reviewStep.executor !== 'review') continue
           if (run.steps.find((entry) => entry.id === reviewStep.id)?.state !== 'done') continue
-          const reviewOwner =
-            resolved.steps.find((entry) => entry.id === reviewStep.id)?.ownership === 'defer'
-              ? 'legacy'
-              : 'workflows'
           const check = await verifyEvidence(reviewStep.evidence ?? { kind: 'declaration' }, {
             ...input.evidenceContext,
-            reviewOwner,
           })
           if (check.ok) continue
           const reason = `the review evidence is no longer current: ${check.failure.detail.slice(0, 160)}`
@@ -302,7 +297,7 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
         installedLegacy: input.installedLegacy,
         ...(input.enabledLegacy === undefined ? {} : { enabledLegacy: input.enabledLegacy }),
         readRecord: (deferredStep) =>
-          input.readRecord?.(deferredStep, 'legacy') ??
+          input.readRecord?.(deferredStep) ??
           Promise.resolve({
             ok: false as const,
             failure: { reason: 'unsupported' as const, detail: 'no deferred record reader' },
@@ -328,7 +323,7 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
     if (step.executor === 'tool') {
       const current = run.steps.find((entry) => entry.id === step.id)
       // Task-review: a matching PASS/ERROR record settles the start step
-      // without dispatching delegate again.
+      // without starting another review.
       if (input.definition.id === 'task-review' && step.id === 'start-review') {
         const name = run.context.name
         const taskId = run.context.taskId
@@ -450,10 +445,7 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
       continue
     }
     if (step.executor === 'review') {
-      const stepContext: EvidenceContext = {
-        ...input.evidenceContext,
-        reviewOwner: 'workflows',
-      }
+      const stepContext: EvidenceContext = { ...input.evidenceContext }
       // A matching current PASS or ERROR record settles the step without
       // starting a second review.
       const existing = await verifyEvidence(step.evidence ?? { kind: 'declaration' }, stepContext)

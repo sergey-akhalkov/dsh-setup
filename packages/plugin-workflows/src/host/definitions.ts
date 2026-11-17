@@ -1458,7 +1458,7 @@ export interface OwnershipResolution {
 }
 
 /** The legacy plugins this engine knows how to defer to. */
-export const KNOWN_LEGACY_SOURCES = ['delegation-rules', 'goal-continuity'] as const
+export const KNOWN_LEGACY_SOURCES = ['goal-continuity'] as const
 
 /** Whether one legacy signal would actually steer right now. */
 function signalEnabled(
@@ -1480,13 +1480,6 @@ export interface LegacySignalState {
 
 /** The exact profile switch that owns each legacy signal. */
 export const SWITCH_BY_SIGNAL: Readonly<Record<string, string>> = {
-  'spec-review': 'delegation.gates.specReview',
-  'task-review': 'delegation.gates.workflowOwned',
-  archive: 'delegation.gates.workflowOwned',
-  'integration-review': 'delegation.gates.integrationReview',
-  'task-progress': 'delegation.gates.taskProgress',
-  'lane-assignment': 'delegation.gates.laneFanout',
-  'lane-boundary': 'delegation.gates.laneFanout',
   work_checkpoint: 'checkpoint.automation',
   'verification-gate': 'the verification-gate row',
 }

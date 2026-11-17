@@ -119,9 +119,9 @@ function route(path, handler) {
 }
 /** Only settled record evidence inside the workspace may be served. */
 const EVIDENCE_PREFIXES = [
-    '.dsh/delegation/',
-    '.dsh/work-checkpoints/',
+    '.dsh/workflows/records/',
     '.dsh/workflows/runs/',
+    '.dsh/work-checkpoints/',
     'openspec/changes/',
 ];
 async function readEvidence(workspace, path) {

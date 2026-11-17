@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { CHANGE_NAME } from './command-parse.js';
 import { lastCodeWriteAt } from './evidence.js';
 import { evaluateLaneParity, evaluateProgressParity } from './gates.js';
-import { defaultGit, legacyWorktreeDigest, worktreeDigest } from './git.js';
+import { defaultGit, worktreeDigest } from './git.js';
 import { notePathFor, readProgressNote } from './notes.js';
 import { reviewerBinding, reviewUnitText, taskReviewCoverage, } from './parity.js';
 import { checkedTaskIds, numberedTasks, sectionSelectable, taskLanes, taskSections, } from './tasks.js';
@@ -20,13 +20,9 @@ async function readPlan(workspace, change) {
         return undefined;
     }
 }
-/**
- * The current worktree digest in the format the note's owner records: the
- * legacy store's writer omits HEAD, so its notes are checked with that
- * algorithm; the workflow note keeps the HEAD binding.
- */
-async function noteDigest(input, owner) {
-    return await (owner === 'legacy' ? legacyWorktreeDigest : worktreeDigest)(input.workspace, input.runGit ?? defaultGit);
+/** The current worktree digest the note was bound to. */
+async function noteDigest(input) {
+    return await worktreeDigest(input.workspace, input.runGit ?? defaultGit);
 }
 /** The active change names; the archive collection is not an active change. */
 export async function activeChangeNames(workspace) {
@@ -81,7 +77,7 @@ function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 /** Whether one parsed record satisfies the task-review contract for a task. */
-function recordApprovesTask(value, change, owner) {
+function recordApprovesTask(value, change) {
     if (!isRecord(value))
         return false;
     if (value.rule !== 'task-review' ||
@@ -99,7 +95,7 @@ function recordApprovesTask(value, change, owner) {
         typeof value.time !== 'string') {
         return false;
     }
-    if (owner === 'workflows' && value.phase !== 'task')
+    if (value.phase !== 'task')
         return false;
     if (value.verdict === 'PASS' && value.findings.length !== 0)
         return false;
@@ -114,16 +110,14 @@ function recordNamesTask(value, taskId) {
     return Array.isArray(value.taskIds) && value.taskIds.includes(taskId);
 }
 /**
- * Whether one task has a matching task-review PASS/ERROR record in the active
- * review owner's store. The native record is a superset of the legacy one, so
- * one predicate covers both; a record that changed its reviewed inputs or
- * failed internally never approves. A section record approves every checked
- * task it covers, the same way its publication writes one approval each.
+ * Whether one task has a matching task-review PASS/ERROR record in the
+ * workflow store. The native record is a superset of the legacy one, so one
+ * predicate covers both; a record that changed its reviewed inputs or failed
+ * internally never approves. A section record approves every checked task it
+ * covers, the same way its publication writes one approval each.
  */
-export async function taskReviewEvidence(workspace, change, taskId, owner) {
-    const directory = owner === 'workflows'
-        ? `.dsh/workflows/records/task-review/${change}/tasks`
-        : `.dsh/delegation/task-review/${change}/tasks`;
+export async function taskReviewEvidence(workspace, change, taskId) {
+    const directory = `.dsh/workflows/records/task-review/${change}/tasks`;
     let entries;
     try {
         entries = await readdir(join(workspace, directory));
@@ -148,7 +142,7 @@ export async function taskReviewEvidence(workspace, change, taskId, owner) {
         }
         if (!recordNamesTask(value, taskId))
             continue;
-        if (!recordApprovesTask(value, change, owner))
+        if (!recordApprovesTask(value, change))
             continue;
         const target = value.target;
         if (binding?.provider !== undefined && target.provider !== binding.provider)
@@ -166,14 +160,14 @@ export async function taskReviewEvidence(workspace, change, taskId, owner) {
  * task outside any section, and a section that cannot resolve keep the per-task
  * unit. Undefined when the plan is unreadable.
  */
-export async function reviewUnits(workspace, change, owner) {
+export async function reviewUnits(workspace, change) {
     const plan = await readPlan(workspace, change);
     if (plan === undefined)
         return undefined;
     const checked = numberedTasks(plan).filter((task) => task.checked);
     const missing = new Set();
     for (const task of checked) {
-        if (!(await taskReviewEvidence(workspace, change, task.id, owner)))
+        if (!(await taskReviewEvidence(workspace, change, task.id)))
             missing.add(task.id);
     }
     const units = [];
@@ -218,7 +212,7 @@ export async function reviewUnits(workspace, change, owner) {
  * every task is checked).
  */
 export async function reviewRunSteer(workspace, change, context, options = {}) {
-    const units = await reviewUnits(workspace, change, 'workflows');
+    const units = await reviewUnits(workspace, change);
     if (units === undefined)
         return undefined;
     const sectionKey = typeof context.section === 'string' ? context.section : undefined;
@@ -246,7 +240,7 @@ export async function evaluateOwnedProgressGate(input) {
     ].filter((taskId) => checked.has(taskId));
     let tickedReviewed = false;
     for (const taskId of ticked) {
-        if (await taskReviewEvidence(input.workspace, input.change, taskId, input.reviewOwner)) {
+        if (await taskReviewEvidence(input.workspace, input.change, taskId)) {
             tickedReviewed = true;
             break;
         }
@@ -254,11 +248,11 @@ export async function evaluateOwnedProgressGate(input) {
     let note;
     let stale;
     if (input.codeChanged && !tickedReviewed) {
-        const saved = await readProgressNote(input.workspace, input.change, input.noteOwner);
+        const saved = await readProgressNote(input.workspace, input.change);
         if (saved !== undefined) {
             const current = tasks.find((task) => task.id === saved.taskId);
             if (current !== undefined && !current.checked) {
-                const digest = await noteDigest(input, input.noteOwner);
+                const digest = await noteDigest(input);
                 note = { digest: saved.worktreeDigest, currentDigest: digest };
                 if (digest !== undefined && digest !== saved.worktreeDigest) {
                     stale = ` The last note is stale: it names worktree digest ${saved.worktreeDigest.slice(0, 12)}, current ${digest.slice(0, 12)}.`;
@@ -279,7 +273,7 @@ export async function evaluateOwnedProgressGate(input) {
         : `workflows { action: "note", change: "${input.change}", task: "${task.number} ${task.text}", status: "in-progress", reason: "..." }`;
     const reviewCall = task === undefined
         ? `workflows status`
-        : `delegate(rule: "task-review", change: "${input.change}", task: "${task.id}")`;
+        : `workflows(action: "start", definitionId: "task-review", change: "${input.change}", task: "${task.id}")`;
     const digest = note?.currentDigest === undefined ? '(unavailable)' : note.currentDigest.slice(0, 12);
     return {
         decision: 'refuse',
@@ -371,34 +365,26 @@ export async function pruneLaneDecisions(workspace, change, decisions, note) {
         if (stale(title))
             decisions.delete(title);
     // Another session's note is that session's evidence and stays untouched.
-    const saved = await readProgressNote(workspace, change, note.owner);
+    const saved = await readProgressNote(workspace, change);
     if (saved?.lane === undefined || saved.session !== note.session || !stale(saved.lane))
         return;
-    await unlink(join(workspace, notePathFor(note.owner, change))).catch(() => undefined);
+    await unlink(join(workspace, notePathFor(change))).catch(() => undefined);
 }
 /**
  * Whether a persisted note still describes the lane it would decide serial for
- * the calling session. A workflow note records its lane title and its writing
- * session, so another session's note never decides this session's lane. A legacy
- * note carries no title or session; its captured worktree digest is the only
- * proof the plan is unchanged, compared in the legacy store's own format.
+ * the calling session. A note records its lane title and its writing session,
+ * so another session's note never decides this session's lane.
  */
 async function noteDecidesLane(input, note, title) {
-    if (note.lane !== undefined) {
-        return note.session === input.session && note.lane === title;
-    }
-    if (note.session !== undefined)
-        return false;
-    const digest = await noteDigest(input, input.noteOwner);
-    return digest !== undefined && digest === note.worktreeDigest;
+    return note.lane === title && note.session === input.session;
 }
 /**
  * The owned lane-assignment gate. A serial note naming a task in a lane decides
  * only that lane, only for the session that wrote it, and only while the note
- * still names the current lane title; a legacy note needs a current worktree.
- * Every other unassigned lane stays reported. The gate fails open on an
- * unreadable plan, a plan without level-2 headings, and a lane without owned
- * paths (the shared parity table enforces the last one).
+ * still names the current lane title. Every other unassigned lane stays
+ * reported. The gate fails open on an unreadable plan, a plan without level-2
+ * headings, and a lane without owned paths (the shared parity table enforces
+ * the last one).
  */
 export async function evaluateOwnedLaneGate(input) {
     const plan = await readPlan(input.workspace, input.change);
@@ -427,7 +413,7 @@ export async function evaluateOwnedLaneGate(input) {
         if (lane !== undefined && lane.unchecked.length > 0)
             assigned.add(title);
     }
-    const note = await readProgressNote(input.workspace, input.change, input.noteOwner);
+    const note = await readProgressNote(input.workspace, input.change);
     if (note !== undefined) {
         const task = tasks.find((entry) => entry.id === note.taskId);
         if (task !== undefined) {
@@ -512,6 +498,6 @@ export async function goalCompletionRefusal(input) {
     }
     if (gaps.length === 0)
         return undefined;
-    gaps.push('The goal stays active. Run the delegate calls above and complete the goal again; to close the work instead, archive the change.');
+    gaps.push('The goal stays active. Run the workflows review calls above and complete the goal again; to close the work instead, archive the change.');
     return gaps.join('\n');
 }

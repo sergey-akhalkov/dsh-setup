@@ -1,8 +1,7 @@
 /**
  * The bounded git seam shared by the trigger condition's worktree digest and
  * the review snapshot. The shell is never used: arguments are fixed and no
- * user text is interpolated. Ported from the delegation runtime; the copy is
- * dropped with that plugin in Release B.
+ * user text is interpolated.
  */
 /** One fixed-argument git invocation; output is raw bytes so diffs stay lossless. */
 export type GitRunner = (args: readonly string[], cwd: string, signal?: AbortSignal, 
@@ -32,10 +31,3 @@ export declare function implementationFingerprint(cwd: string, runGit: GitRunner
  * engine's own `.dsh` and `.tmp` state. Undefined when git cannot read the tree.
  */
 export declare function worktreeDigest(cwd: string, runGit: GitRunner, signal?: AbortSignal): Promise<string | undefined>;
-/**
- * The digest the retained legacy progress writer records: the same worktree
- * state without the HEAD identity, so a note routed to that store by either
- * writer is current under the legacy gate's own algorithm. The workflow digest
- * keeps its HEAD binding; the two formats are deliberately different.
- */
-export declare function legacyWorktreeDigest(cwd: string, runGit: GitRunner, signal?: AbortSignal): Promise<string | undefined>;

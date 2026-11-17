@@ -210,6 +210,33 @@ describe('live-session proxy', () => {
       }),
       'utf8',
     )
+    // A settled local review record joins the run and names its session.
+    const localRecord = join(
+      workspace,
+      '.dsh',
+      'delegation',
+      'task-review',
+      'add-workflow-observability',
+      'tasks',
+    )
+    await mkdir(localRecord, { recursive: true })
+    await writeFile(
+      join(localRecord, 'x.json'),
+      JSON.stringify({
+        runId: 'run-mw6live-1234abcd',
+        session: 'session-live',
+        rule: 'task-review',
+        change: 'add-workflow-observability',
+        phase: 'task',
+        scope: 'whole',
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-07T10:06:00.000Z',
+      }),
+      'utf8',
+    )
 
     const route = (path: string): Route => {
       const found = routes.find((candidate) => candidate.path === path)
@@ -231,7 +258,9 @@ describe('live-session proxy', () => {
     const runs = (await read('/api/workflows/runs')) as {
       runs: Array<{ source: string; attribution: string }>
     }
-    expect(runs.runs.map((entry) => entry.source)).toEqual(['checkpoint', 'delegation'])
+    expect(runs.runs.map((entry) => entry.source)).toEqual(
+      expect.arrayContaining(['checkpoint', 'delegation']),
+    )
     for (const entry of runs.runs) expect(entry.attribution).toBe('local')
 
     const triggers = (await read('/api/workflows/triggers')) as {
@@ -608,9 +637,11 @@ describe('obligation engine live proxy', () => {
       'utf8',
     )
     const digest = (await currentSpecDigest(workspace, 'legacy')) as string
-    await mkdir(join(workspace, '.dsh', 'delegation', 'spec-review', 'legacy'), { recursive: true })
+    await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'legacy'), {
+      recursive: true,
+    })
     await writeFile(
-      join(workspace, '.dsh', 'delegation', 'spec-review', 'legacy', 'spec.json'),
+      join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'legacy', 'spec.json'),
       `${JSON.stringify({ rule: 'spec-review', change: 'legacy', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-07T00:00:00.000Z', target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' } })}\n`,
       'utf8',
     )

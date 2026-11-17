@@ -66,7 +66,7 @@ export interface ToolCallObservation {
   readonly turn?: number
   /** The pre-step index the call was observed at, for checkpoint freshness. */
   readonly step?: number
-  /** A bounded result text, for classifying delegate starts/answers. */
+  /** A bounded result text, for classifying worker starts/answers. */
   readonly detail?: string
   /** The observation order, for remedy/call ordering. */
   readonly seq?: number
@@ -123,11 +123,6 @@ export interface EvidenceContext {
   readonly answers?: readonly HumanAnswerObservation[]
   /** Whether the step is marked nonCritical, the only declaration consumer. */
   readonly nonCriticalStep?: boolean
-  /**
-   * Which owner's record store a review record is read from. An owned step
-   * reads the workflows store; a rolled-back deferred step reads the legacy one.
-   */
-  readonly reviewOwner?: 'workflows' | 'legacy'
   /** The host git runner a worktree-bound record digest is recomputed with. */
   readonly runGit?: GitRunner
 }
@@ -499,9 +494,9 @@ function hashParts(parts: readonly string[]): string {
 }
 
 /**
- * The change artifact digest, replicated from the delegation-rules reader: it
- * hashes every file under the change directory (except `.openspec.yaml` and the
- * portable `reviews/` directory), normalizing `tasks.md` checkbox state.
+ * The change artifact digest: it hashes every file under the change directory
+ * (except `.openspec.yaml` and the portable `reviews/` directory), normalizing
+ * `tasks.md` checkbox state.
  */
 export async function specDigest(changeDir: string): Promise<string> {
   const files: string[] = []
@@ -575,26 +570,10 @@ function mismatch(detail: string, path?: string, item?: string): EvidenceCheck {
 }
 
 /**
- * Resolve the record path its step's ownership selects. The new shipped
- * definitions name the workflows store; under a rolled-back switch the same
- * suffix is read from the legacy store, and an explicit legacy path under an
- * owned step is read from the workflows store. The committed approval path is
- * ownership-independent and never rewritten.
+ * Resolve the record path a step reads. A record contract without an explicit
+ * path derives the workflows record store. The committed approval path is
+ * independent of this store and never rewritten.
  */
-export function ownedReviewRecordPath(
-  path: string,
-  owner: 'workflows' | 'legacy' | undefined,
-): string {
-  const normalized = path.replaceAll('\\', '/')
-  if (owner === 'legacy' && normalized.startsWith('.dsh/workflows/records/')) {
-    return `.dsh/delegation/${normalized.slice('.dsh/workflows/records/'.length)}`
-  }
-  if (owner === 'workflows' && normalized.startsWith('.dsh/delegation/')) {
-    return `.dsh/workflows/records/${normalized.slice('.dsh/delegation/'.length)}`
-  }
-  return path
-}
-
 async function recordCheck(
   evidence: RecordEvidence,
   context: EvidenceContext,
@@ -608,8 +587,8 @@ async function recordCheck(
   const derived =
     change === undefined
       ? undefined
-      : `.dsh/delegation/${rule.text}/${change.text}/${evidence.phase ?? 'spec'}.json`
-  let path =
+      : `.dsh/workflows/records/${rule.text}/${change.text}/${evidence.phase ?? 'spec'}.json`
+  const path =
     evidence.path === undefined
       ? derived === undefined
         ? undefined
@@ -623,7 +602,6 @@ async function recordCheck(
       item,
     )
   }
-  path = { ok: true, text: ownedReviewRecordPath(path.text, context.reviewOwner) }
   const read = await readWorkspaceFile(context.workspace, path.text)
   if (read === undefined) {
     return failure(
@@ -1205,7 +1183,7 @@ export function collectEvidencePaths(
       if (change !== undefined && !change.ok) return []
       return change === undefined
         ? []
-        : [`.dsh/delegation/${rule.text}/${change.text}/${value.phase ?? 'spec'}.json`]
+        : [`.dsh/workflows/records/${rule.text}/${change.text}/${value.phase ?? 'spec'}.json`]
     }
     default:
       return []

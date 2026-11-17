@@ -731,9 +731,6 @@ export interface ReviewPromptInput {
   readonly digest: string
   readonly snapshot: boolean
   readonly extra?: string
-  /** Caller-supplied facts carried by the delegate alias into this review. */
-  readonly context?: string
-  readonly objective?: string
   /** The prior findings and bounded diff when this unit's last record is a moved FINDINGS. */
   readonly focused?: FocusedReviewContext
 }
@@ -833,13 +830,10 @@ export function renderReviewPrompt(input: ReviewPromptInput): string {
       ? '- Reviewed state: a frozen worktree snapshot taken when the review started; later writes are not in it.'
       : '- Reviewed state: the live worktree; a changed input discards the verdict.',
   )
-  const contextParts = [input.extra, input.context]
+  const contextParts = [input.extra]
     .map((value) => value?.trim() ?? '')
     .filter((value) => value !== '')
   if (contextParts.length > 0) lines.push('', '## Context', '', contextParts.join('\n\n'))
-  if (input.objective !== undefined && input.objective.trim() !== '') {
-    lines.push('', '## Objective', '', input.objective.trim())
-  }
   if (input.focused !== undefined) {
     lines.push('', previousFindingsBlock(input.focused.previous))
     lines.push(
@@ -1074,9 +1068,6 @@ export interface ReviewRunInput {
   readonly baseline?: ReviewRecordBaseline
   /** True once the run settled completed-soft; a late verdict is discarded. */
   readonly cancelled?: () => boolean
-  /** The delegate alias's caller payload, persisted in the run context. */
-  readonly callerContext?: string
-  readonly callerObjective?: string
   /** Test seams; production writes the real stores. */
   readonly writePortable?: typeof writePortableApproval
   readonly writeLocal?: typeof writeLocalReviewRecord
@@ -1679,8 +1670,6 @@ async function prepareAttempt(
     digest: record.digest,
     snapshot: input.prepared.reviewCwd !== undefined,
     ...(input.step.prompt === undefined ? {} : { extra: input.step.prompt }),
-    ...(input.callerContext === undefined ? {} : { context: input.callerContext }),
-    ...(input.callerObjective === undefined ? {} : { objective: input.callerObjective }),
     ...(focused === undefined ? {} : { focused: focused.context }),
   }
   try {

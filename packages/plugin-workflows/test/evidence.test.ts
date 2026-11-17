@@ -178,7 +178,7 @@ describe('record and tool evidence', () => {
   it('accepts a matching whole-spec PASS record and its current digest', async () => {
     const workspace = await tempWorkspace()
     const digest = await writeChangeArtifacts(workspace)
-    await writeJson(workspace, '.dsh/delegation/spec-review/auth/spec.json', {
+    await writeJson(workspace, '.dsh/workflows/records/spec-review/auth/spec.json', {
       rule: 'spec-review',
       change: 'auth',
       phase: 'spec',
@@ -202,7 +202,7 @@ describe('record and tool evidence', () => {
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.evidence).toMatchObject({ kind: 'record', digest })
     const explicit = await verifyEvidence(
-      { ...evidence, path: '.dsh/delegation/spec-review/{name}/spec.json' } as Evidence,
+      { ...evidence, path: '.dsh/workflows/records/spec-review/{name}/spec.json' } as Evidence,
       { workspace, values },
     )
     expect(explicit.ok).toBe(true)
@@ -211,7 +211,7 @@ describe('record and tool evidence', () => {
   it('refuses a stale digest, a missing record, and a task-scoped record as whole-spec evidence', async () => {
     const workspace = await tempWorkspace()
     await writeChangeArtifacts(workspace)
-    await writeJson(workspace, '.dsh/delegation/spec-review/auth/spec.json', {
+    await writeJson(workspace, '.dsh/workflows/records/spec-review/auth/spec.json', {
       rule: 'spec-review',
       change: 'auth',
       phase: 'spec',
@@ -233,9 +233,12 @@ describe('record and tool evidence', () => {
     }
     expect(await verifyEvidence(record, { workspace, values })).toMatchObject({
       ok: false,
-      failure: { reason: 'record-mismatch', path: '.dsh/delegation/spec-review/auth/spec.json' },
+      failure: {
+        reason: 'record-mismatch',
+        path: '.dsh/workflows/records/spec-review/auth/spec.json',
+      },
     })
-    await writeJson(workspace, '.dsh/delegation/spec-review/auth/spec.json', {
+    await writeJson(workspace, '.dsh/workflows/records/spec-review/auth/spec.json', {
       rule: 'spec-review',
       change: 'auth',
       phase: 'spec',
@@ -253,7 +256,7 @@ describe('record and tool evidence', () => {
       expect(taskScoped.failure.detail).toMatch(/task-scoped record is not whole-spec/u)
     expect(
       await verifyEvidence(
-        { ...record, path: '.dsh/delegation/spec-review/auth/missing.json' } as Evidence,
+        { ...record, path: '.dsh/workflows/records/spec-review/auth/missing.json' } as Evidence,
         { workspace, values },
       ),
     ).toMatchObject({ ok: false, failure: { reason: 'missing-file' } })
@@ -641,7 +644,7 @@ describe('record validation through the shared readers', () => {
   it('refuses a PASS record that still carries findings', async () => {
     const workspace = await tempWorkspace()
     const digest = await writeChangeArtifacts(workspace)
-    await writeJson(workspace, '.dsh/delegation/spec-review/auth/spec.json', {
+    await writeJson(workspace, '.dsh/workflows/records/spec-review/auth/spec.json', {
       rule: 'spec-review',
       change: 'auth',
       phase: 'spec',
@@ -691,7 +694,7 @@ describe('record validation through the shared readers', () => {
 
   it('refuses a local task PASS missing digest, findings, target, or time', async () => {
     const workspace = await tempWorkspace()
-    const path = `.dsh/delegation/task-review/auth/0123456789abcdef.json`
+    const path = `.dsh/workflows/records/task-review/auth/0123456789abcdef.json`
     await writeJson(workspace, path, {
       rule: 'task-review',
       change: 'auth',
@@ -742,7 +745,7 @@ describe('record validation through the shared readers', () => {
 
 it('matches the canonical taskId only and refuses a conflicting alias', async () => {
   const workspace = await tempWorkspace()
-  const path = `.dsh/delegation/task-review/auth/0123456789abcdef.json`
+  const path = `.dsh/workflows/records/task-review/auth/0123456789abcdef.json`
   await writeJson(workspace, path, {
     rule: 'task-review',
     change: 'auth',
@@ -833,7 +836,7 @@ describe('resolved evidence descriptions', () => {
       },
       context,
     )
-    expect(record).toContain('.dsh/delegation/spec-review/auth/spec.json')
+    expect(record).toContain('.dsh/workflows/records/spec-review/auth/spec.json')
     expect(record).toContain('scope=whole')
     expect(record).toContain('digest=current')
     const taskRecord = describeEvidence(

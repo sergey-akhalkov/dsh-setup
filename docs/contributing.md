@@ -60,7 +60,6 @@ rebuild (`git diff --exit-code` after `pnpm build`, plus `pnpm gen:check`).
 | `pnpm reviews:check --change <name>`          | Audits one change's checked tasks against the committed `reviews/` PASS records                                                       | before archiving a change                                                       |
 | `pnpm reviews:check --all`                    | Audits every archived change against the marker cutoff, the v0.12.0 exception, and the pre-cutoff baseline                            | before release; CI                                                              |
 | `pnpm reviews:check --push`                   | Audits the archived changes the push adds (reads the pre-push refs from stdin)                                                        | automatically from the pre-push hook                                            |
-| `pnpm reviews:export --change <name>`         | Copies existing local `.dsh` PASS records into the change as portable approval evidence                                               | once, for a change reviewed before the portable write existed                   |
 
 Useful environment variables: `DSH_CLI` (CLI command to use instead of `pnpm dlx @deepseek-ai/dsh@<runtime>`),
 `DSH_KEEP=1` (keep throwaway Harness homes), `DSH_VERSION` (`validate:installer` DSH version),
@@ -236,22 +235,22 @@ A checked task is approved only by a committed `openspec/changes/<change>/review
 task-review PASS whose rule, change, and task id match. The engine computes this coverage from the
 change, independent of which session ticked what: `ERROR`, `FINDINGS`, a missing or malformed record,
 and an unparseable checked line are unapproved; unchecked tasks are reported only. A session whose
-tick makes the task list fully checked must obtain a PASS for every checked task. The
-`delegation_status` line is `task-review PASS x/y, ERROR z, missing n; archive-ready: yes|no` and
-names each missing task with its exact review call.
+tick makes the task list fully checked must obtain a PASS for every checked task. The `workflows`
+status summary reports `task-review PASS x/y, ERROR z, missing n; archive-ready: yes|no` and names
+each missing task with its exact review call.
 
 This repository opts in with `openspec/review-approval.json` (`archiveGate: true`, `taskRule:
-task-review`, the `v0.12.0` cutoff, and the grandfathered changes). With the marker, the
-delegation-rules `tools/pre-execute` guard refuses `openspec archive` and `mv`/`Move-Item`/`git mv`
-from `openspec/changes/<change>` into `changes/archive/` before the command runs, lists every missing
-task and the exact `delegate` calls, and leaves the change active. It fails closed on an unreadable
-`tasks.md`/record or an invalid marker rule and applies to subagents too. Without the marker, or with
-`archiveGate: false`, nothing changes.
+task-review`, the `v0.12.0` cutoff, and the grandfathered changes). With the marker, the workflows
+pre-execute archive gate refuses `openspec archive` and `mv`/`Move-Item`/`git mv` from
+`openspec/changes/<change>` into `changes/archive/` before the command runs, lists every missing
+task and the exact `workflows` review calls, and leaves the change active. It fails closed on an
+unreadable `tasks.md`/record or an invalid marker rule and applies to subagents too. Without the
+marker, or with `archiveGate: false`, nothing changes.
 
 Before archiving run `pnpm reviews:check --change <name>`; before a release run
-`pnpm reviews:check --all` (it reports the v0.12.0 exception and the pre-cutoff baseline).
-`pnpm reviews:export --change <name>` copies the local `.dsh` PASS records of a change reviewed
-before the portable write existed.
+`pnpm reviews:check --all` (it reports the v0.12.0 exception and the pre-cutoff baseline). A local
+`.dsh` record alone cannot become an approval: no command copies it, so start the native task review,
+which writes the committed record directly.
 
 The checked-in `.githooks/pre-push` hook runs `pnpm reviews:check --push` and refuses a push whose
 archived changes lack an approval; install it once per clone with `pnpm hooks:install` (it sets
@@ -509,17 +508,17 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 
 ## Where to look
 
-| Need                                                   | File                                                                                                                                                           |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Add/change a plugin, Client slots, HMR behavior        | [plugins.md](plugins.md), `packages/plugin-rust/**` (package shape)                                                                                            |
-| How the setup patch/manifest/vendor tree are generated | [setup-composition.md](setup-composition.md), `scripts/lib/generate.ts`, `scripts/lib/fragments.ts`                                                            |
-| Installer behavior, options, manual install            | [install.md](install.md), `install.ps1`                                                                                                                        |
-| Owner-profile dogfood without touching the live state  | [install.md](install.md#dogfood-on-the-current-machine), `scripts/dogfood.ts`, `scripts/lib/dogfood.ts`                                                        |
-| Release, Pages, version accumulation, DSH bump         | [releasing.md](releasing.md), `.github/workflows/release.yml`                                                                                                  |
-| Requirements and invariants                            | `openspec/specs/*/spec.md`, `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/{proposal,design}.md`                                                  |
-| Supported versions and installer bundle lists          | `dsh.json`, `install.ps1`                                                                                                                                      |
-| Build wrapper and client loader contract               | `scripts/build.ts`                                                                                                                                             |
-| Market schema/pinning/merge                            | `scripts/lib/market.ts`, `scripts/generate-market.ts`                                                                                                          |
-| Delegate tasks to another model / installed-Codex fork | [delegation-rules.md](delegation-rules.md), [codex-subagent.md](codex-subagent.md), `packages/plugin-delegation-rules/**`, `packages/plugin-codex-subagent/**` |
-| Validation assertions                                  | `scripts/validate-repo.ts`, `scripts/validate-composition.ts`, `scripts/validate-installer.ts`                                                                 |
-| DSH API types                                          | `node_modules/@deepseek-ai/cordis`, `node_modules/@deepseek-ai/dsh-client-ui-*` (pinned in `packages/plugin-*/package.json`)                                   |
+| Need                                                   | File                                                                                                                                      |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Add/change a plugin, Client slots, HMR behavior        | [plugins.md](plugins.md), `packages/plugin-rust/**` (package shape)                                                                       |
+| How the setup patch/manifest/vendor tree are generated | [setup-composition.md](setup-composition.md), `scripts/lib/generate.ts`, `scripts/lib/fragments.ts`                                       |
+| Installer behavior, options, manual install            | [install.md](install.md), `install.ps1`                                                                                                   |
+| Owner-profile dogfood without touching the live state  | [install.md](install.md#dogfood-on-the-current-machine), `scripts/dogfood.ts`, `scripts/lib/dogfood.ts`                                   |
+| Release, Pages, version accumulation, DSH bump         | [releasing.md](releasing.md), `.github/workflows/release.yml`                                                                             |
+| Requirements and invariants                            | `openspec/specs/*/spec.md`, `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/{proposal,design}.md`                             |
+| Supported versions and installer bundle lists          | `dsh.json`, `install.ps1`                                                                                                                 |
+| Build wrapper and client loader contract               | `scripts/build.ts`                                                                                                                        |
+| Market schema/pinning/merge                            | `scripts/lib/market.ts`, `scripts/generate-market.ts`                                                                                     |
+| Workflow reviews and installed-Codex fork              | [workflows.md](workflows.md), [codex-subagent.md](codex-subagent.md), `packages/plugin-workflows/**`, `packages/plugin-codex-subagent/**` |
+| Validation assertions                                  | `scripts/validate-repo.ts`, `scripts/validate-composition.ts`, `scripts/validate-installer.ts`                                            |
+| DSH API types                                          | `node_modules/@deepseek-ai/cordis`, `node_modules/@deepseek-ai/dsh-client-ui-*` (pinned in `packages/plugin-*/package.json`)              |

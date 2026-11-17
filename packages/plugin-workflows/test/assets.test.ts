@@ -2,12 +2,10 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { resolveBundledInstruction } from '../../plugin-delegation-rules/src/host/index.ts'
 import { readReviewInstruction } from '../src/host/review.ts'
 
 const ROOT = join(fileURLToPath(new URL('..', import.meta.url)), '..', '..')
 const SHIPPED = join(ROOT, 'packages/plugin-workflows/assets/reviews')
-const LEGACY = join(ROOT, 'packages/plugin-delegation-rules/assets/delegation-rules')
 const IDS = ['review-spec', 'review-task', 'review-integration']
 
 describe('bundled review instructions', () => {
@@ -34,14 +32,11 @@ describe('bundled review instructions', () => {
     }
   })
 
-  it('resolves both copies through their readers', () => {
+  it('resolves the shipped instructions through their reader', () => {
     for (const id of IDS) {
       const text = readReviewInstruction(id)
       expect(text, id).toBe(readFileSync(join(SHIPPED, `${id}.md`), 'utf8'))
     }
-    expect(resolveBundledInstruction('bundled:review-task')).toBe(
-      readFileSync(join(LEGACY, 'review-task.md'), 'utf8'),
-    )
   })
 
   it('ships only review instruction ids', () => {

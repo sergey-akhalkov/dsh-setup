@@ -144,8 +144,9 @@ describe('shipped review definitions', () => {
       gate: 'review',
       gateIdentity: 'spec-review',
       gateOwnership: 'own',
-      legacy: { plugin: 'delegation-rules', signal: 'spec-review' },
+      allowModelStart: true,
     })
+    expect(definition.settings.legacy).toBeUndefined()
     expect(definition.trigger).toMatchObject({ kind: 'turn.stopping', mode: 'active' })
 
     const condition = definition.trigger.condition
@@ -199,8 +200,9 @@ describe('shipped review definitions', () => {
       gate: 'review',
       gateIdentity: 'task-review',
       gateOwnership: 'own',
-      legacy: { plugin: 'delegation-rules', signal: 'task-review' },
+      allowModelStart: true,
     })
+    expect(definition.settings.legacy).toBeUndefined()
     expect(definition.trigger.condition).toBeUndefined()
   })
 
@@ -230,8 +232,9 @@ describe('shipped review definitions', () => {
       gate: 'review',
       gateIdentity: 'integration-review',
       gateOwnership: 'own',
-      legacy: { plugin: 'delegation-rules', signal: 'integration-review' },
+      allowModelStart: true,
     })
+    expect(definition.settings.legacy).toBeUndefined()
     const condition = definition.trigger.condition
     if (condition === undefined) throw new Error('the integration-review condition is missing')
     expect(evaluateCondition(condition, conditionContext({ completed: true }))).toBe(true)

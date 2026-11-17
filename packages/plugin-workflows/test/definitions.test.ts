@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parse } from 'yaml'
 import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import {
   type Definition,
@@ -131,9 +130,8 @@ describe('workflow definition schema', () => {
     expect(specItems.map((item) => item.kind)).toEqual(['file', 'file', 'file', 'file', 'check'])
     const review = definition.steps.find((step) => step.id === 'spec-review')
     expect(review?.executor).toBe('review')
-    expect(review?.ownership).toBe('own')
-    // Declared own, but the enabled legacy signal resolves it to defer.
-    expect(review?.legacy).toEqual({ plugin: 'delegation-rules', signal: 'spec-review' })
+    expect(review?.ownership).toBeUndefined()
+    expect(review?.legacy).toBeUndefined()
     expect(review?.review).toEqual({
       target: 'codex',
       instruction: 'review-spec',
@@ -400,19 +398,12 @@ describe('workflow definition schema', () => {
 })
 
 describe('ownership and the installed legacy profile', () => {
-  it('keeps the contributed intake owned while the spec-review signal is off', () => {
+  it('keeps the contributed intake owned beside an installed legacy source', () => {
     const intake = registeredIntake()
-    const resolved = resolveOwnership(
-      intake,
-      profile('delegation-rules', 'goal-continuity'),
-      new Set(),
-    )
+    const resolved = resolveOwnership(intake, profile('goal-continuity'), new Set())
     expect(resolved.issues).toEqual([])
     const byId = new Map(resolved.steps.map((step) => [step.id, step]))
-    expect(byId.get('spec-review')).toMatchObject({
-      ownership: 'own',
-      legacy: { plugin: 'delegation-rules', signal: 'spec-review' },
-    })
+    expect(byId.get('spec-review')).toMatchObject({ ownership: 'own' })
     for (const id of [
       'requirements',
       'architecture',
@@ -424,14 +415,6 @@ describe('ownership and the installed legacy profile', () => {
     ]) {
       expect(byId.get(id)?.ownership).toBe('own')
     }
-    // The switch alone returns the step to the legacy owner.
-    const deferred = resolveOwnership(
-      intake,
-      profile('delegation-rules', 'goal-continuity'),
-      new Set(['delegation-rules/spec-review']),
-    )
-    expect(deferred.issues).toEqual([])
-    expect(deferred.steps.find((step) => step.id === 'spec-review')?.ownership).toBe('defer')
   })
 
   it('refuses a deferred synthetic step when its legacy source is not installed', async () => {
@@ -459,11 +442,11 @@ describe('ownership and the installed legacy profile', () => {
   it('refuses an own step that declares an installed legacy source and allows it once retired', () => {
     const own = valid()
     const step = firstStep(own)
-    step.legacy = { plugin: 'delegation-rules', signal: 'task-review' }
+    step.legacy = { plugin: 'goal-continuity', signal: 'work_checkpoint' }
     step.ownership = 'own'
     const definition = validateDefinition(own)
-    expect(resolveOwnership(definition, profile('delegation-rules')).issues.join('\n')).toMatch(
-      /step "requirements".*"delegation-rules\/task-review" is still enabled via delegation\.gates\.workflowOwned/u,
+    expect(resolveOwnership(definition, profile('goal-continuity')).issues.join('\n')).toMatch(
+      /step "requirements".*"goal-continuity\/work_checkpoint" is still enabled via checkpoint\.automation/u,
     )
     expect(resolveOwnership(definition, profile()).issues).toEqual([])
   })
@@ -509,27 +492,12 @@ it('checks a deferred step override even when the definition-level source is ins
   )
 })
 
-it('resolves the shipped intake against the shipped strict spec-review rule', () => {
-  const fragmentPath = join(packageDir, '..', 'plugin-delegation-rules', 'cordis.fragment.yml')
-  const fragment = parse(readFileSync(fragmentPath, 'utf8')) as {
-    rows: Array<{ id: string; config: { rules: Array<Record<string, unknown>> } }>
-  }
-  const row = fragment.rows.find((entry) => entry.id === 'dsh-setup-delegation-rules')
-  const rule = row?.config.rules.find((entry) => entry.id === 'spec-review')
-  expect(rule).toMatchObject({
-    when: 'spec-ready',
-    contract: 'review',
-    phase: 'spec',
-    scope: 'whole',
-    gate: 'strict',
-  })
+it('loads the shipped intake with its spec-review step owned', () => {
   const intake = registeredIntake()
-  const resolved = resolveOwnership(intake, profile('delegation-rules', 'goal-continuity'))
+  const resolved = resolveOwnership(intake, new Set())
   expect(resolved.issues).toEqual([])
   const byId = new Map(resolved.steps.map((step) => [step.id, step]))
-  // The retained strict spec-review rule owns the review; the switch alone
-  // restores the workflow executor.
-  expect(byId.get('spec-review')).toMatchObject({ ownership: 'defer' })
+  expect(byId.get('spec-review')).toMatchObject({ ownership: 'own' })
   expect(byId.get('requirements')?.ownership).toBe('own')
 })
 

@@ -90,10 +90,7 @@ describe('shipped ownership after the retirement flip', () => {
     const taskReview = definition('task-review')
     expect(taskReview.trigger).toMatchObject({ kind: 'fs.change', mode: 'active' })
     expect(taskReview.settings.gateOwnership).toBe('own')
-    expect(taskReview.settings.legacy).toEqual({
-      plugin: 'delegation-rules',
-      signal: 'task-review',
-    })
+    expect(taskReview.settings.legacy).toBeUndefined()
     expect(taskReview.steps.map((step) => step.id)).toEqual(['review', 'complete-review'])
     expect(taskReview.steps[0]?.executor).toBe('review')
 
@@ -133,27 +130,6 @@ describe('shipped ownership after the retirement flip', () => {
     for (const id of ['retro', 'task-review', 'verify']) {
       expect(resolveOwnership(definition(id), INSTALLED, DISABLED).issues).toEqual([])
     }
-  })
-
-  it('resolves the shipped review gate from the switch beside its enabled signal', async () => {
-    const workspace = await tempWorkspace()
-    const loaded = await loadApprovedDefinitions(workspace, {
-      auth: auth(),
-      installedLegacy: INSTALLED,
-      enabledLegacy: ENABLED,
-    })
-    // A shipped review definition follows the switch instead of refusing: its
-    // steps are effectively deferred while the legacy signal is enabled.
-    expect(loaded.definitions.map((entry) => entry.id)).toContain('task-review')
-    expect(loaded.definitions.map((entry) => entry.id)).not.toContain('retro')
-    expect(loaded.errors.join('\n')).toMatch(/still enabled/u)
-    expect(loaded.errors.join('\n')).toMatch(/checkpoint\.automation/u)
-    expect(
-      resolveOwnership(definition('task-review'), INSTALLED, ENABLED).steps.map(
-        (step) => step.ownership,
-      ),
-    ).toEqual(['defer', 'defer'])
-    expect(resolveOwnership(definition('task-review'), INSTALLED, DISABLED).issues).toEqual([])
   })
 })
 

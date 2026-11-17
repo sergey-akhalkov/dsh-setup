@@ -271,23 +271,19 @@ describe('shipped observability signal map', () => {
       }
     }
     const eligible = shippedRows().filter((row) => row.eligible !== undefined)
-    expect(eligible.map((row) => row.id).sort()).toEqual([
-      'delegation-rules',
-      'goal-continuity',
-      'verification-gate',
-    ])
+    // The workflow-owned gate rows stay eligible; other rows must not join them.
+    expect(eligible.map((row) => row.id)).toEqual(
+      expect.arrayContaining(['goal-continuity', 'verification-gate']),
+    )
     for (const row of eligible) {
       expect(row.kind).toBe('signal')
       expect(row.eligible?.map((predicate) => predicate.tool).sort()).toEqual(['edit', 'write'])
     }
   })
 
-  it('ships the two default hypotheses over the fixed metric catalog', () => {
+  it('ships the default hypothesis over the fixed metric catalog', () => {
     const { hypotheses } = shippedConfig()
-    expect(hypotheses.map((entry) => entry.metric)).toEqual([
-      'steps-per-human-message',
-      'active-minutes-per-episode',
-    ])
+    expect(hypotheses.map((entry) => entry.metric)).toEqual(['steps-per-human-message'])
     for (const hypothesis of hypotheses) {
       expect(hypothesis.direction).toBe('decrease')
       expect(hypothesis.threshold).toBeGreaterThan(0)

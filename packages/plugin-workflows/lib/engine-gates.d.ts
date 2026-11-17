@@ -2,18 +2,15 @@ import type { Definition } from './definitions.js';
 import { type ToolCallObservation } from './evidence.js';
 import { type LaneParityLane } from './gates.js';
 import { type GitRunner } from './git.js';
-import { type NoteOwner } from './notes.js';
 import { type ReviewUnit, type ReviewUnitTextOptions, reviewUnitText } from './parity.js';
 export { type ReviewUnit, reviewUnitText };
 /**
  * The engine-owned gates: work progress, lane assignment, and goal completion.
  * Their decisions are the parity tables (`evaluateProgressParity`,
  * `evaluateLaneParity`), shared with the tracked parity report; this module only
- * gathers the evidence each decision needs. Ownership is resolved by the host:
- * a gate is called only while its legacy switch is false.
+ * gathers the evidence each decision needs. The host owns these gates; only the
+ * checkpoint and verification definitions keep a legacy source.
  */
-/** The active review owner whose record store supplies task-review evidence. */
-export type ReviewOwner = 'workflows' | 'legacy';
 export interface GateEvidence {
     readonly workspace: string;
     readonly change: string;
@@ -46,13 +43,13 @@ export declare function taskTicksOf(workspace: string, call: ToolCallObservation
 /** The task ids one turn's canonical `tasks.md` writes newly checked. */
 export declare function newlyCheckedTaskIds(calls: readonly ToolCallObservation[], workspace: string, change: string, turn: number | undefined): string[];
 /**
- * Whether one task has a matching task-review PASS/ERROR record in the active
- * review owner's store. The native record is a superset of the legacy one, so
- * one predicate covers both; a record that changed its reviewed inputs or
- * failed internally never approves. A section record approves every checked
- * task it covers, the same way its publication writes one approval each.
+ * Whether one task has a matching task-review PASS/ERROR record in the
+ * workflow store. The native record is a superset of the legacy one, so one
+ * predicate covers both; a record that changed its reviewed inputs or failed
+ * internally never approves. A section record approves every checked task it
+ * covers, the same way its publication writes one approval each.
  */
-export declare function taskReviewEvidence(workspace: string, change: string, taskId: string, owner: ReviewOwner): Promise<boolean>;
+export declare function taskReviewEvidence(workspace: string, change: string, taskId: string): Promise<boolean>;
 /**
  * The section-first review units of one change: checked tasks without a matching
  * PASS/ERROR record in one level-2 section are one unit covering every checked
@@ -60,7 +57,7 @@ export declare function taskReviewEvidence(workspace: string, change: string, ta
  * task outside any section, and a section that cannot resolve keep the per-task
  * unit. Undefined when the plan is unreadable.
  */
-export declare function reviewUnits(workspace: string, change: string, owner: ReviewOwner): Promise<ReviewUnit[] | undefined>;
+export declare function reviewUnits(workspace: string, change: string): Promise<ReviewUnit[] | undefined>;
 /**
  * The selected unit of one task-review run, rendered for an intermediate close:
  * a run whose review step is still open names its section and missing tasks
@@ -70,8 +67,6 @@ export declare function reviewUnits(workspace: string, change: string, owner: Re
 export declare function reviewRunSteer(workspace: string, change: string, context: Readonly<Record<string, unknown>>, options?: ReviewUnitTextOptions): Promise<string | undefined>;
 export interface ProgressGateInput extends GateEvidence {
     readonly codeChanged: boolean;
-    readonly noteOwner: NoteOwner;
-    readonly reviewOwner: ReviewOwner;
 }
 /**
  * The owned work-progress gate: a code-changing turn needs a newly checked and
@@ -103,12 +98,10 @@ export type LaneDecision = 'assigned' | 'serial';
  * keeps the decisions: the gate already fails open there.
  */
 export declare function pruneLaneDecisions(workspace: string, change: string, decisions: Map<string, LaneDecision>, note: {
-    readonly owner: NoteOwner;
     readonly session: string;
 }): Promise<void>;
 export interface LaneGateInput extends GateEvidence {
     readonly codeChanged: boolean;
-    readonly noteOwner: NoteOwner;
     /** The calling session; its own lane decisions and session-bound notes decide. */
     readonly session: string;
     /**
@@ -125,10 +118,10 @@ export interface LaneGateDecision extends GateDecision {
 /**
  * The owned lane-assignment gate. A serial note naming a task in a lane decides
  * only that lane, only for the session that wrote it, and only while the note
- * still names the current lane title; a legacy note needs a current worktree.
- * Every other unassigned lane stays reported. The gate fails open on an
- * unreadable plan, a plan without level-2 headings, and a lane without owned
- * paths (the shared parity table enforces the last one).
+ * still names the current lane title. Every other unassigned lane stays
+ * reported. The gate fails open on an unreadable plan, a plan without level-2
+ * headings, and a lane without owned paths (the shared parity table enforces
+ * the last one).
  */
 export declare function evaluateOwnedLaneGate(input: LaneGateInput): Promise<LaneGateDecision>;
 export interface GoalGuardInput {

@@ -7,7 +7,7 @@ import { type WorkflowRun } from './runs.js';
  * The intake runner. It walks the declared steps in order, completes a main
  * step only through the evidence verifier, completes `create-change` only from
  * its owned tool call plus `.openspec.yaml`, reads the deferred `spec-review`
- * record without dispatching `delegate`, and asks the user only at `approval`.
+ * record without starting a review, and asks the user only at `approval`.
  */
 export interface IntakeAdvanceInput {
     readonly run: WorkflowRun;
@@ -25,8 +25,8 @@ export interface IntakeAdvanceInput {
         readonly step: Step;
         readonly context: EvidenceContext;
     }) => Promise<WorkflowRun | undefined>;
-    /** The deferred-step record reader; it must not call delegate. */
-    readonly readRecord?: (step: Step, owner: 'workflows' | 'legacy') => Promise<EvidenceCheck>;
+    /** The deferred-step record reader; it must not start a review. */
+    readonly readRecord?: (step: Step) => Promise<EvidenceCheck>;
     readonly installedLegacy: ReadonlySet<string>;
     /** `${plugin}/${signal}` entries that would actually steer. */
     readonly enabledLegacy?: ReadonlySet<string>;

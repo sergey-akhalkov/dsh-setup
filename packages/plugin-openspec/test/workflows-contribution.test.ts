@@ -100,9 +100,8 @@ describe('OpenSpec workflow contribution', () => {
     ])
     const step = definition.steps.find((entry) => entry.id === 'spec-review')
     expect(step?.executor).toBe('review')
-    expect(step?.ownership).toBe('own')
-    // The declared own ownership resolves defer while the signal is enabled.
-    expect(step?.legacy).toEqual({ plugin: 'delegation-rules', signal: 'spec-review' })
+    expect(step?.ownership).toBeUndefined()
+    expect(step?.legacy).toBeUndefined()
     expect(step?.review).toEqual({
       target: 'codex',
       instruction: 'review-spec',

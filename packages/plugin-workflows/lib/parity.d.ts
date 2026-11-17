@@ -168,7 +168,7 @@ export interface CheckpointObservation {
     readonly arguments: Readonly<Record<string, unknown>>;
     readonly ok: boolean;
     readonly at?: number;
-    /** The tool result text; used to tell a started delegate from a cached answer. */
+    /** The tool result text; used to tell a started worker from a cached answer. */
     readonly detail?: string;
     /** Observation order, so calls after the checkpoint are unambiguous. */
     readonly seq?: number;

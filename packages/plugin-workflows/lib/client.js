@@ -13603,7 +13603,7 @@ window.__ModuleLoader__.load({
     }
     function isRecordEvidence(value2) {
       if (!value2.endsWith(".json")) return false;
-      return value2.startsWith(".dsh/delegation/") || value2.startsWith(".dsh/work-checkpoints/") || value2.startsWith("openspec/changes/");
+      return value2.startsWith(".dsh/workflows/records/") || value2.startsWith(".dsh/workflows/runs/") || value2.startsWith(".dsh/work-checkpoints/") || value2.startsWith("openspec/changes/");
     }
     function evidenceUrl(session, path) {
       const search = new URLSearchParams({ session, path });

@@ -550,20 +550,18 @@ with a host-signed approval in `.dsh/workflows/approved.json`; the host key is h
 gives tamper-evidence against model-mediated writes, while a hostile same-user shell is outside the
 threat model. Completed intake and adoption write authenticated receipts under
 `.dsh/workflows/receipts/`. The engine ships `spec-review`, `task-review`, `integration-review`,
-`retro`, and `verify` (active, `own`, with their legacy source recorded); the three review definitions
-run on the `review` executor, and the OpenSpec plugin contributes `change-intake` (active, see
-[OpenSpec workflow contribution](#openspec-workflow-contribution)).
-The review executor resolves a target from the workflows row's `reviewers` map, starts the provider
+`retro`, and `verify`: the three review definitions are `own` with no legacy source, while `retro`
+and `verify` keep their `goal-continuity` and `verification-gate` source references. The three review
+definitions run on the `review` executor, and the OpenSpec plugin contributes `change-intake`
+(active, see [OpenSpec workflow contribution](#openspec-workflow-contribution)).
+The review executor resolves a reviewer from the workflows row's `reviewers` map, starts the provider
 with the configured model and effort, accepts one fenced JSON verdict that echoes the prepared digest,
 and writes the local record and the portable task approval under `.dsh/workflows/records/` and
 `openspec/changes/<change>/reviews/` (see [workflows](workflows.md#review-executor)). The engine also
 owns the work-progress, lane-assignment, goal-complete, and archive gates, each rendered as a
-read-only contract card in the Workflows overview rather than a definition. The progress and lane
-gates are active only while their per-signal legacy switch is false, and the goal-complete guard is
-engine-owned in every combination; `workflowOwned` transfers the legacy task-review and
-portable-approval enforcement, while the archive gate always keeps its intake, open-step, and
-whole-spec checks in workflows. One switch flip restores the matching retained delegation steer for
-rollback. The `workflows` tool exposes list, start, resume, status, evidence, cancel, adopt and note;
+read-only contract card in the Workflows overview rather than a definition; `workflows` is the only
+review and gate owner, and the archive gate keeps its intake, open-step, and whole-spec checks. The
+`workflows` tool exposes list, start, resume, status, evidence, cancel, adopt and note;
 `adopt` asks the user in the question UI and writes the host-authenticated receipt only after a yes.
 The `/workflows` command family covers run, resume, install, adopt and status; `/workflows` itself
 names the Workflows tab as the session entry and the `Workflow design` card as the editor entry and
@@ -576,8 +574,8 @@ includes `checkpointApplicability` (`minToolCalls` default 4, `requireWrite` def
 `retro` definition — the operator must mirror the installed `goal-continuity` checkpoint settings
 because one plugin row cannot read another's config — plus `reviewers` (the shipped `codex`
 model/effort), `reviewQueue`, and `timeouts.review` (default 600000 ms). The setup default row is
-`- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates, intake/adoption
-flow, per-signal switches, and the Release B plan are documented in [workflows](workflows.md).
+`- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates, and
+intake/adoption flow are documented in [workflows](workflows.md).
 
 ### Editor and Workflow design page
 

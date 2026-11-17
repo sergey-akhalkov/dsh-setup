@@ -19,8 +19,7 @@ import { type GitRunner, repositoryRoot } from './git.js'
 
 /**
  * The frozen task-review snapshot: a disposable worktree built from the exact
- * review input set, its lease, and the stale-snapshot sweep. Ported from the
- * delegation runtime; the copy is dropped with that plugin in Release B.
+ * review input set, its lease, and the stale-snapshot sweep.
  */
 
 export const SNAPSHOT_DIR = '.dsh/workflows/snapshots'

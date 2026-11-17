@@ -59,12 +59,8 @@ export async function advanceIntake(input) {
                         continue;
                     if (run.steps.find((entry) => entry.id === reviewStep.id)?.state !== 'done')
                         continue;
-                    const reviewOwner = resolved.steps.find((entry) => entry.id === reviewStep.id)?.ownership === 'defer'
-                        ? 'legacy'
-                        : 'workflows';
                     const check = await verifyEvidence(reviewStep.evidence ?? { kind: 'declaration' }, {
                         ...input.evidenceContext,
-                        reviewOwner,
                     });
                     if (check.ok)
                         continue;
@@ -194,7 +190,7 @@ export async function advanceIntake(input) {
                 stepId: step.id,
                 installedLegacy: input.installedLegacy,
                 ...(input.enabledLegacy === undefined ? {} : { enabledLegacy: input.enabledLegacy }),
-                readRecord: (deferredStep) => input.readRecord?.(deferredStep, 'legacy') ??
+                readRecord: (deferredStep) => input.readRecord?.(deferredStep) ??
                     Promise.resolve({
                         ok: false,
                         failure: { reason: 'unsupported', detail: 'no deferred record reader' },
@@ -217,7 +213,7 @@ export async function advanceIntake(input) {
         if (step.executor === 'tool') {
             const current = run.steps.find((entry) => entry.id === step.id);
             // Task-review: a matching PASS/ERROR record settles the start step
-            // without dispatching delegate again.
+            // without starting another review.
             if (input.definition.id === 'task-review' && step.id === 'start-review') {
                 const name = run.context.name;
                 const taskId = run.context.taskId;
@@ -331,10 +327,7 @@ export async function advanceIntake(input) {
             continue;
         }
         if (step.executor === 'review') {
-            const stepContext = {
-                ...input.evidenceContext,
-                reviewOwner: 'workflows',
-            };
+            const stepContext = { ...input.evidenceContext };
             // A matching current PASS or ERROR record settles the step without
             // starting a second review.
             const existing = await verifyEvidence(step.evidence ?? { kind: 'declaration' }, stepContext);

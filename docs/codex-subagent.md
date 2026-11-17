@@ -8,10 +8,9 @@ overrides. The provider is an MIT-attributed fork of the official
 `@deepseek-ai/dsh-subagent-codex` provider with its app-server protocol adapter
 retained.
 
-Use it when you want the delegation review rules from
-[delegation-rules](delegation-rules.md) to call Codex for whole-spec, per-task, section, and
-integration reviews, or when you want an ad-hoc Codex second opinion through the `codex_subagent`
-tool.
+Use it when you want the [workflows](workflows.md#review-executor) review definitions to call
+Codex for whole-spec, per-task, section, and integration reviews, or when you want an ad-hoc Codex
+second opinion through the `codex_subagent` tool.
 
 ## Prerequisite: log in once
 
@@ -38,18 +37,18 @@ worktree-confinement guarantee covers only Codex-sandboxed operations.
 
 ## Review thread reuse
 
-For a review run the delegation engine's prompt carries a stable `- Review key:
-review:<change>:task:<id>` line (whole-scope: `review:<change>:whole:<phase>`), which the provider
-parses as the thread key; an optional `agentOptions.reviewKey` overrides it only for hosts/tests and
-must match the prompt line when both exist. The provider starts a persistent Codex thread on the
-first review of that key and persists `{threadId, cwd, sandbox}` in
-`.dsh/delegation/codex-review-threads.json`; later reviews of the same key call `thread/resume` with
-the run's cwd, sandbox, model/effort, and the same fixed sandbox policy instead of rebuilding the
-context from scratch. A different key never resumes another key's thread; a missing or mismatched
-entry starts a fresh persistent thread. The review result reports `threadReuse: created | resumed`
-and the thread id. The thread state is local scratch under `.dsh/delegation`; the user's Codex
-config is never read or written for it. Same-key runs are serialized by the engine, and a persistent
-Codex thread's rollout lives in Codex's own session store.
+The provider parses a stable `- Review key: review:<change>:task:<id>` line from the prompt
+(whole-scope: `review:<change>:whole:<phase>`) as the thread key; an optional
+`agentOptions.reviewKey` overrides it only for hosts/tests and must match the prompt line when both
+exist. The provider starts a persistent Codex thread on the first review of that key and persists
+`{threadId, cwd, sandbox}` in `.dsh/delegation/codex-review-threads.json`; later reviews of the same
+key call `thread/resume` with the run's cwd, sandbox, model/effort, and the same fixed sandbox policy
+instead of rebuilding the context from scratch. A different key never resumes another key's thread; a
+missing or mismatched entry starts a fresh persistent thread. The review result reports
+`threadReuse: created | resumed` and the thread id. The thread state is local scratch under
+`.dsh/delegation`; the user's Codex config is never read or written for it. Same-key runs are
+serialized by the review engine, and a persistent Codex thread's rollout lives in Codex's own session
+store.
 
 ## Discovery
 
@@ -101,7 +100,7 @@ diagnostic carries the same login command as the next action.
 Session's subagent list as an **external** entry. Rule-driven reviews on the
 same external provider also appear there (`delegation:<rule>`) and deliver their
 verdict as a settlement notice; the manual tool remains the explicit-run path for
-work outside a delegation rule.
+work outside a workflow review definition.
 
 The tool accepts `prompt` (required), `description` (required, the task label in
 the list), `name` (optional child name), and `cwd` (optional). It returns the
@@ -109,26 +108,26 @@ child name immediately; the answer arrives as a settlement notice that starts a
 new turn. The entry is a leaf — not openable, no token or duration metrics, no
 follow-up messages — and it uses the read-only `codex-subagent` provider. Write
 work goes through a write-capable `subagent` in an isolated `create_worktree`
-checkout; no shipped delegation contract runs the write provider.
+checkout; no shipped workflow review definition runs the write provider.
 
 ## Providers and target options
 
 One row registers two instances with fixed names and permissions:
 
-| Provider               | Sandbox           | Used for                                                                                             |
-| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------- |
-| `codex-subagent`       | `read-only`       | The delegation `review` contract and the visible `codex_subagent` tool                               |
-| `codex-subagent-write` | `workspace-write` | No shipped delegation contract; selectable through the first-party `subagent` tool for isolated work |
+| Provider               | Sandbox           | Used for                                                                                                            |
+| ---------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `codex-subagent`       | `read-only`       | The workflow review executor and the visible `codex_subagent` tool                                                  |
+| `codex-subagent-write` | `workspace-write` | No shipped workflow review definition uses it; selectable through the first-party `subagent` tool for isolated work |
 
 Both use Codex's non-interactive approval policy (`never`); the sandbox fixes the
 permission boundary, so a read-only rule cannot silently escalate itself. The
 official `codex` provider may stay installed in the same profile.
 
-The providers declare `agentOptions` support and accept a target's `model` and
+The providers declare `agentOptions` support and accept a reviewer's `model` and
 `reasoningEffort`:
 
 ```yaml
-targets:
+reviewers:
   codex:
     provider: codex-subagent
     model: gpt-6-astra
@@ -137,23 +136,22 @@ targets:
 
 - `model` maps to Codex `thread/start` `model`.
 - `reasoningEffort` maps to `thread/start` `config.model_reasoning_effort`.
-- A target value wins over the row defaults; a target without values keeps the
+- A reviewer value wins over the row defaults; a reviewer without values keeps the
   row default or the user's Codex `config.toml` route.
 - Any other `agentOptions` entry is rejected before a process starts with a
   `subagent-codex:` diagnostic naming the unsupported option.
 
-The setup's delegation rules use the `codex` target with `gpt-6-astra` at `xhigh` by default.
-Override the target in the delegation config (not the provider row) to change a rule's model or
-effort; a target that sets neither falls back to the provider row's `model`/`reasoningEffort` or the
-user's Codex route.
+The setup's workflows `reviewers.codex` entry uses `gpt-6-astra` at `xhigh` by default. Override it
+in the workflows config (not the provider row) to change a review's model or effort; a reviewer that
+sets neither falls back to the provider row's `model`/`reasoningEffort` or the user's Codex route.
 
 Invalid model or effort strings are passed to Codex and surface as a normal
-non-completed run, which the delegation engine records as an ERROR for that
-target.
+non-completed run, which the workflows review executor records as an ERROR for that
+reviewer.
 
 The write provider stays registered and selectable through the first-party `subagent` tool; no
-shipped delegation contract or rule uses it. Give it an isolated `create_worktree` checkout and
-review the returned diff and tests before applying them; the engine merges nothing.
+shipped workflow review definition uses it. Give it an isolated `create_worktree` checkout and
+review the returned diff and tests before applying them; the workflows engine merges nothing.
 
 ## Configuration
 
@@ -209,11 +207,11 @@ login, plus a signed-out case on an isolated `CODEX_HOME`; it is not part of
 Every delegation starts one app-server and runs one turn on a fresh ephemeral
 thread, or resumes the persisted thread when a review key is reused; it costs a
 Codex request and tokens, and reviews
-are slow by nature. Per-task reviews multiply the runs. The shipped delegation
-target selects `gpt-6-astra` at `xhigh`, so every default Codex review pays the
-strong-model rate; override `codex` for routine reviews. The rules engine's
-`task_progress` note runs no model and is the cheap way to close a turn while a
-task is still in progress.
+are slow by nature. Per-task reviews multiply the runs. The shipped workflow
+reviewer selects `gpt-6-astra` at `xhigh`, so every default Codex review pays the
+strong-model rate; override `codex` for routine reviews. The workflows `note`
+action runs no model and is the cheap way to close a turn while a task is still in
+progress.
 
 ## License and maintenance
 
@@ -226,7 +224,7 @@ procedure.
 
 A DSH support-version change rebases the fork; a Codex version bump updates the
 dependency, lockfile, status, NOTICE, docs, and the live acceptance together.
-Only the fork package's vendored code changes, not the generic rules engine.
+Only the fork package's vendored code changes, not the generic review engine.
 
 ## Troubleshooting
 

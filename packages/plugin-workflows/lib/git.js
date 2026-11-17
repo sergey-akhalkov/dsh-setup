@@ -155,7 +155,11 @@ export async function implementationFingerprint(cwd, runGit, signal) {
     parts.push((await committedImplementationState(root, runGit, signal)) ?? '[no-head]');
     return hashParts(parts);
 }
-async function worktreeDigestOf(cwd, runGit, bindHead, signal) {
+/**
+ * The worktree content digest: tracked diffs plus untracked files, ignoring the
+ * engine's own `.dsh` and `.tmp` state. Undefined when git cannot read the tree.
+ */
+export async function worktreeDigest(cwd, runGit, signal) {
     const root = await repositoryRoot(cwd, runGit, signal);
     let status;
     try {
@@ -178,15 +182,13 @@ async function worktreeDigestOf(cwd, runGit, bindHead, signal) {
             }
         }
     }
-    if (bindHead) {
-        try {
-            // Include the committed tree identity: a clean checkout's status is empty,
-            // so two different revisions would otherwise hash identically.
-            parts.push(await runGit(['rev-parse', 'HEAD'], cwd, signal));
-        }
-        catch {
-            // An unborn HEAD has no committed tree; the working status still identifies it.
-        }
+    try {
+        // Include the committed tree identity: a clean checkout's status is empty,
+        // so two different revisions would otherwise hash identically.
+        parts.push(await runGit(['rev-parse', 'HEAD'], cwd, signal));
+    }
+    catch {
+        // An unborn HEAD has no committed tree; the working status still identifies it.
     }
     try {
         parts.push(await runGit(['diff', '--binary', 'HEAD'], cwd, signal));
@@ -195,20 +197,4 @@ async function worktreeDigestOf(cwd, runGit, bindHead, signal) {
         return undefined;
     }
     return hashParts(parts);
-}
-/**
- * The worktree content digest: tracked diffs plus untracked files, ignoring the
- * engine's own `.dsh` and `.tmp` state. Undefined when git cannot read the tree.
- */
-export async function worktreeDigest(cwd, runGit, signal) {
-    return await worktreeDigestOf(cwd, runGit, true, signal);
-}
-/**
- * The digest the retained legacy progress writer records: the same worktree
- * state without the HEAD identity, so a note routed to that store by either
- * writer is current under the legacy gate's own algorithm. The workflow digest
- * keeps its HEAD binding; the two formats are deliberately different.
- */
-export async function legacyWorktreeDigest(cwd, runGit, signal) {
-    return await worktreeDigestOf(cwd, runGit, false, signal);
 }

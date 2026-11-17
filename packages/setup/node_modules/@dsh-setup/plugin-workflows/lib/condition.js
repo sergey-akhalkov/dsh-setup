@@ -88,7 +88,6 @@ export async function buildConditionContext(input) {
         }
         Object.assign(tasksRecords, await readTaskRecords(input.workspace, change, [
             `.dsh/workflows/records/task-review/${change}/tasks`,
-            `.dsh/delegation/task-review/${change}/tasks`,
         ]));
     }
     // A condition may not read a filesystem path out of the workspace: an

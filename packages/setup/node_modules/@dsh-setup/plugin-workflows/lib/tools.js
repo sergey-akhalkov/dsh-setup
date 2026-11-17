@@ -40,6 +40,7 @@ export function parseWorkflowsToolArgs(value) {
         'change',
         'evidence',
         'task',
+        'section',
         'status',
         'reason',
     ]);
@@ -88,7 +89,17 @@ export function parseWorkflowsToolArgs(value) {
     const stepId = text('stepId');
     const change = text('change');
     const task = text('task');
+    const section = text('section');
     const reason = text('reason');
+    if ((task !== undefined || section !== undefined) && change === undefined) {
+        fail('a task or section selector needs the change it reviews');
+    }
+    if (task !== undefined && section !== undefined) {
+        fail('a review start accepts a task or a section, not both');
+    }
+    if (section !== undefined && action !== 'start') {
+        fail('a section selector is available only to the start action');
+    }
     return {
         action: action,
         ...(definitionId === undefined ? {} : { definitionId }),
@@ -97,6 +108,7 @@ export function parseWorkflowsToolArgs(value) {
         ...(change === undefined ? {} : { change }),
         ...(evidence === undefined ? {} : { evidence }),
         ...(task === undefined ? {} : { task }),
+        ...(section === undefined ? {} : { section }),
         ...(status === undefined ? {} : { status }),
         ...(reason === undefined ? {} : { reason }),
     };
@@ -184,7 +196,11 @@ export async function executeWorkflowsTool(value, host) {
             if (definition.settings.risk === 'high' && !(await confirmHighRisk(host, definition.name))) {
                 fail(`the high-risk start of "${definition.id}" needs a direct user yes; nothing started`);
             }
-            const started = await host.startRun(definition, at);
+            const started = await host.startRun(definition, at, {
+                ...(request.change === undefined ? {} : { change: request.change }),
+                ...(request.task === undefined ? {} : { task: request.task }),
+                ...(request.section === undefined ? {} : { section: request.section }),
+            });
             return `run ${started.run.id} started at step "${started.firstStep}"`;
         }
         case 'resume': {

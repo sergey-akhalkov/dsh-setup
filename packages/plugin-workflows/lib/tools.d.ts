@@ -25,8 +25,10 @@ export interface WorkflowsToolRequest {
         readonly kind: string;
         readonly ref: string;
     };
-    /** The note action's task text or stable task id. */
+    /** The note action's task text or stable task id, or a review start's selector. */
     readonly task?: string;
+    /** A task-scoped review start's section selector (the tasks.md level-2 key). */
+    readonly section?: string;
     readonly status?: ProgressStatus;
     readonly reason?: string;
 }
@@ -41,7 +43,11 @@ export interface WorkflowsToolHost {
     /** Whether a session still has a live agent; absent means "treat it as live". */
     readonly sessionLive?: (session: string) => boolean;
     /** The host-owned starter; it persists the run before returning. */
-    startRun(definition: Definition, at: number): Promise<{
+    startRun(definition: Definition, at: number, selection?: {
+        readonly change?: string;
+        readonly task?: string;
+        readonly section?: string;
+    }): Promise<{
         readonly run: WorkflowRun;
         readonly firstStep: string;
     }>;

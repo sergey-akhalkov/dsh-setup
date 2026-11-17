@@ -13,14 +13,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  Harness as DelegationHarness,
-  defaultTestConfig,
-  FakeSubagents,
-  makeWorkspace,
-  runIdFrom,
-  writeChange,
-} from '../../plugin-delegation-rules/test/helpers.ts'
 import { CheckpointHarness } from '../../plugin-goal-continuity/test/checkpoint-harness.ts'
 import {
   DELEGATION_DIR,
@@ -389,45 +381,6 @@ describe('delegation and review projection', () => {
     )
     expect(run?.attribution).toBe('unattributed')
     expect(run?.steps.map((step) => step.id)).not.toContain('record')
-  })
-
-  it('projects runs and records written by the real delegation harness', async () => {
-    const created = await makeWorkspace()
-    try {
-      await writeChange(created.root, 'change-a', [
-        { number: '1.1', text: 'Do the thing', checked: true },
-      ])
-      const subagents = new FakeSubagents()
-      subagents.addProvider('codex-subagent')
-      subagents.addProvider('codex-subagent-write')
-      const harness = new DelegationHarness({
-        cwd: created.root,
-        config: defaultTestConfig(),
-        agents: subagents,
-      })
-      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
-      await harness.waitForRun(runId)
-      const run = (await workspaceRuns(created.root)).find(
-        (candidate) => candidate.id === `delegation:${runId}`,
-      )
-      expect(run?.status).toBe('done')
-      expect(run?.attribution).toBe('local')
-      expect(run?.session).toBeTruthy()
-      expect(run?.steps.find((step) => step.id === 'record')?.state).toBe('PASS')
-      expect(run?.steps.find((step) => step.id === 'target')?.evidence).toContain('codex-subagent')
-
-      const handle = await harness.toolText('delegate', { rule: 'task-review', change: 'change-a' })
-      const taskRun = runIdFrom(handle)
-      await harness.waitForRun(taskRun)
-      const portable = (await workspaceRuns(created.root)).find(
-        (candidate) => candidate.source === 'review' && candidate.attribution === 'portable',
-      )
-      expect(portable).toBeDefined()
-      expect(portable?.session).toBeTruthy()
-      expect(portable?.status).toBe('done')
-    } finally {
-      await created.cleanup()
-    }
   })
 
   it('shows malformed and incomplete delegation records as error rows naming the file', async () => {

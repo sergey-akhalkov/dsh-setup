@@ -182,7 +182,6 @@ export async function buildConditionContext(
       tasksRecords,
       await readTaskRecords(input.workspace, change, [
         `.dsh/workflows/records/task-review/${change}/tasks`,
-        `.dsh/delegation/task-review/${change}/tasks`,
       ]),
     )
   }

@@ -1,25 +1,16 @@
 /**
- * Approval audit and export for portable task-review records.
+ * Approval audit for portable task-review records.
  *
  * `--change <name>` audits one active change, `--all` audits the archived
  * changes against the marker cutoff and exception, `--push` audits the archived
  * changes a push adds (reading the pre-push refs from stdin), `--staged` audits
- * the archived changes the index stages, and `--export --change <name>` copies
- * existing local `.dsh` PASS records into the change. Every mode fails closed:
+ * the archived changes the index stages. Every mode fails closed:
  * an unknown range or unreadable evidence is a refusal that names the manual
  * command.
  */
 
 import { spawnSync } from 'node:child_process'
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -29,20 +20,16 @@ import {
   approvalSummaryLine,
   computeApprovalCoverage,
   formatApprovalGapLines,
-  localTaskRecordPath,
-  type PortableTaskReviewRecord,
   parsePortableTaskReviewRecord,
   parseReviewApprovalMarker,
   parseTasksText,
-  portableRecordFromLocal,
-  portableTaskRecordDisplayPath,
   portableTaskRecordPath,
   REVIEWS_DIRECTORY,
   type ReviewApprovalMarker,
   type ReviewerBinding,
   reviewerBindingOf,
   unparseableCheckedLines,
-} from '../packages/plugin-delegation-rules/src/shared/approval.ts'
+} from '../packages/plugin-workflows/src/shared/approval.ts'
 
 const MANUAL_AUDIT = 'run `pnpm reviews:check --all` manually'
 const ZERO_SHA = /^0+$/
@@ -707,125 +694,14 @@ export async function auditStaged(cwd: string): Promise<AuditResult> {
   return { ok, lines }
 }
 
-function writeJsonAtomic(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const temporary = `${path}.${process.pid}.tmp`
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-  renameSync(temporary, path)
-}
-
-export interface ExportResult {
-  ok: boolean
-  lines: string[]
-}
-
-/** Copy each checked task's local `.dsh` PASS into the change's reviews/ directory. */
-export function exportChange(cwd: string, change: string): ExportResult {
-  const lines: string[] = []
-  const openspecRoot = findOpenSpecRoot(cwd)
-  if (openspecRoot === undefined) {
-    return {
-      ok: false,
-      lines: ['no openspec/changes directory was found from the working directory'],
-    }
-  }
-  const changeDir = join(openspecRoot, 'changes', change)
-  if (!statSync(changeDir, { throwIfNoEntry: false })?.isDirectory()) {
-    return { ok: false, lines: [`change "${change}" was not found under openspec/changes`] }
-  }
-  const marker = readMarker(openspecRoot)
-  if (marker.kind === 'malformed') {
-    return { ok: false, lines: [marker.error] }
-  }
-  const rule = approvalRuleOf(marker)
-
-  let markdown: string
-  try {
-    markdown = readFileSync(join(changeDir, 'tasks.md'), 'utf8')
-  } catch (error) {
-    return { ok: false, lines: [`change "${change}" has no readable tasks.md: ${message(error)}`] }
-  }
-  const tasks = parseTasksText(markdown)
-  const unparseable = unparseableCheckedLines(markdown)
-  lines.push(`reviews:export change "${change}" (rule "${rule}")`)
-  let failed = false
-  let written = 0
-  for (const line of unparseable) {
-    failed = true
-    lines.push(
-      `  failed: checked line ${line.line} "${line.text}" is not a numbered task; fix tasks.md first`,
-    )
-  }
-  for (const task of tasks) {
-    if (!task.checked) continue
-    const portablePath = portableTaskRecordPath(changeDir, task.id)
-    if (existsSync(portablePath)) {
-      const existing = readExistingRecord(portablePath)
-      if (
-        existing !== undefined &&
-        existing.rule === rule &&
-        existing.change === change &&
-        existing.taskId === task.id &&
-        existing.verdict === 'PASS'
-      ) {
-        lines.push(
-          `  already present: ${portableTaskRecordDisplayPath(`openspec/changes/${change}`, task.id)}`,
-        )
-        continue
-      }
-      failed = true
-      lines.push(
-        `  failed ${task.number} "${task.text}": an existing record at ${portableTaskRecordDisplayPath(`openspec/changes/${change}`, task.id)} is not a valid PASS; review it manually`,
-      )
-      continue
-    }
-    const localPath = localTaskRecordPath(cwd, rule, change, task.id)
-    let localValue: unknown
-    try {
-      localValue = JSON.parse(readFileSync(localPath, 'utf8'))
-    } catch (error) {
-      failed = true
-      lines.push(
-        `  failed ${task.number} "${task.text}": no readable local PASS record at ${localTaskRecordPath('.', rule, change, task.id).replaceAll('\\', '/')} (${message(error)})`,
-      )
-      continue
-    }
-    const copied = portableRecordFromLocal({ value: localValue, rule, change, taskId: task.id })
-    if (copied.record === undefined) {
-      failed = true
-      lines.push(`  failed ${task.number} "${task.text}": ${copied.error}`)
-      continue
-    }
-    writeJsonAtomic(portablePath, copied.record)
-    written += 1
-    lines.push(`  wrote ${portableTaskRecordDisplayPath(`openspec/changes/${change}`, task.id)}`)
-  }
-  lines.push(
-    failed
-      ? `export incomplete: ${written} record(s) written; fix the failures above and re-run`
-      : `export complete: ${written} record(s) written`,
-  )
-  return { ok: !failed, lines }
-}
-
-function readExistingRecord(path: string): PortableTaskReviewRecord | undefined {
-  try {
-    const parsed = parsePortableTaskReviewRecord(JSON.parse(readFileSync(path, 'utf8')))
-    return parsed.record
-  } catch {
-    return undefined
-  }
-}
-
-type CliMode = 'export' | 'change' | 'all' | 'push' | 'staged'
+type CliMode = 'change' | 'all' | 'push' | 'staged'
 
 interface CliArguments {
   mode: CliMode
   change?: string
 }
 
-const USAGE =
-  'usage: reviews-check --export --change <name> | --change <name> | --all | --push | --staged'
+const USAGE = 'usage: reviews-check --change <name> | --all | --push | --staged'
 
 function flagValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag)
@@ -835,12 +711,6 @@ function flagValue(argv: readonly string[], flag: string): string | undefined {
 }
 
 function parseArguments(argv: readonly string[]): CliArguments | { error: string } {
-  if (argv.includes('--export')) {
-    const change = flagValue(argv, '--change')
-    return change === undefined
-      ? { error: 'reviews:export needs --change <name>' }
-      : { mode: 'export', change }
-  }
   if (argv.includes('--all')) return { mode: 'all' }
   if (argv.includes('--push')) return { mode: 'push' }
   if (argv.includes('--staged')) return { mode: 'staged' }
@@ -860,9 +730,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2
   }
   let result: AuditResult
-  if (parsed.mode === 'export') {
-    result = exportChange(process.cwd(), parsed.change as string)
-  } else if (parsed.mode === 'change') {
+  if (parsed.mode === 'change') {
     result = await auditActive(process.cwd(), parsed.change as string)
   } else if (parsed.mode === 'all') {
     result = await auditAll(process.cwd())

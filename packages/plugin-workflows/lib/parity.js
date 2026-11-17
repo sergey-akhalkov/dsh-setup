@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveOwnership, SWITCH_BY_SIGNAL, } from './definitions.js';
+import { resolveOwnership, } from './definitions.js';
 import { sectionSelectable, taskSections } from './tasks.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
@@ -47,13 +47,13 @@ export function templateHash(definition) {
     return `sha256-${createHash('sha256').update(canonical(template)).digest('hex')}`;
 }
 /** The five retirement ids, bound by id even if editable metadata is removed. */
-const RETIREMENT_BINDINGS = {
-    retro: { plugin: 'goal-continuity', signal: 'work_checkpoint' },
-    'task-review': { plugin: 'delegation-rules', signal: 'task-review' },
-    verify: { plugin: 'verification-gate', signal: 'verification-gate' },
-    'spec-review': { plugin: 'delegation-rules', signal: 'spec-review' },
-    'integration-review': { plugin: 'delegation-rules', signal: 'integration-review' },
-};
+const RETIREMENT_IDS = new Set([
+    'retro',
+    'task-review',
+    'verify',
+    'spec-review',
+    'integration-review',
+]);
 /** No legacy signal steers, so a definition keeps its declared ownership. */
 const NO_LEGACY = { installed: new Set(), enabled: new Set() };
 /** The profile's effective ownership of a definition and its steps. */
@@ -72,16 +72,20 @@ export function reportBoundDefinitions(definitions, legacy) {
     return definitions.filter((definition) => {
         const resolved = effectiveOwnership(definition, legacy);
         return (resolved.ownership === 'own' &&
-            (RETIREMENT_BINDINGS[definition.id] !== undefined ||
-                ownedRetirementSignals(definition, resolved).length > 0));
+            (RETIREMENT_IDS.has(definition.id) || ownedRetirementSignals(definition, resolved).length > 0));
     });
 }
-/** The rollback switch for one retirement definition id. */
+/**
+ * The remedy for a refused retirement definition. A review definition has no
+ * legacy switch after Release B; the surviving checkpoint and verification
+ * sources keep theirs.
+ */
 function retirementSwitch(definitionId) {
-    const binding = RETIREMENT_BINDINGS[definitionId];
-    return binding === undefined
-        ? 'enable the legacy gate'
-        : legacySwitchFor(binding.plugin, binding.signal);
+    if (definitionId === 'retro')
+        return 'checkpoint.automation: true';
+    if (definitionId === 'verify')
+        return 'enable the verification-gate row';
+    return 'fix the parity report, the retained baseline, or the definition';
 }
 /** The assets/parity directory, resolving from src and from lib. */
 export function parityAssetDirectory() {
@@ -193,10 +197,6 @@ export function readParityReport(file = shippedParityReportPath()) {
 }
 /** The rollback switch a refused definition names. */
 export function legacySwitchFor(plugin, signal) {
-    if (plugin === 'delegation-rules') {
-        const switchName = SWITCH_BY_SIGNAL[signal];
-        return switchName === undefined ? 'the per-signal gate switch' : `${switchName}: true`;
-    }
     if (plugin === 'goal-continuity')
         return 'checkpoint.automation: true';
     if (plugin === 'verification-gate')
@@ -225,7 +225,10 @@ function ownedRetirementSignals(definition, resolved) {
         const ownership = resolved.steps.find((entry) => entry.id === step.id)?.ownership ?? step.ownership ?? 'own';
         if (ownership !== 'own')
             continue;
-        const signal = step.legacy?.signal;
+        const signal = step.legacy?.signal ??
+            (step.executor === 'review' && (step.id === 'spec-review' || step.id === 'integration-review')
+                ? step.id
+                : undefined);
         if (signal === 'spec-review' || signal === 'integration-review')
             signals.add(signal);
     }
@@ -245,7 +248,7 @@ function retainedCertified(entry) {
  * from a stale table. Returns one line naming the cause and the rollback.
  */
 export function retiredGateIssue(report, reportError, reportPath, group) {
-    const remedy = `set ${legacySwitchFor('delegation-rules', group)} to restore the legacy gate, or run pnpm workflows:parity`;
+    const remedy = `fix the parity report, the retained baseline, or the definition, then run pnpm workflows:parity`;
     if (report === undefined) {
         return `the parity report is missing or unreadable at "${reportPath}" (${reportError ?? 'no report'}); ${remedy}`;
     }
@@ -277,9 +280,9 @@ export function parityLoadIssues(definitions, report, reportPath, reportError, l
     if (report === undefined) {
         for (const definition of bound) {
             refused.add(definition.id);
-            if (RETIREMENT_BINDINGS[definition.id] === undefined) {
-                for (const signal of ownedSignals(definition)) {
-                    issues.push(`workflow definition "${definition.id}": set ${legacySwitchFor('delegation-rules', signal)} to fall back to the legacy gate; the parity report is missing at "${reportPath}" (${reportError ?? 'no report'})`);
+            if (!RETIREMENT_IDS.has(definition.id)) {
+                if (ownedSignals(definition).length > 0) {
+                    issues.push(`workflow definition "${definition.id}": fix the parity report, the retained baseline, or the definition; the parity report is missing at "${reportPath}" (${reportError ?? 'no report'})`);
                 }
                 continue;
             }
@@ -293,7 +296,7 @@ export function parityLoadIssues(definitions, report, reportPath, reportError, l
         : `the parity report records ${String(report.mismatches.length)} mismatch(es) ("${(report.mismatches[0] ?? '').slice(0, 200)}"); a decision mismatch fails certification`;
     const verifyIsBound = bound.some((definition) => definition.id === 'verify');
     for (const definition of bound) {
-        if (RETIREMENT_BINDINGS[definition.id] === undefined) {
+        if (!RETIREMENT_IDS.has(definition.id)) {
             // A contributed step owns the signal and writes the shared record, so the
             // signal's replayed retained cases certify it; no template hash covers a
             // definition the workflows plugin does not ship.
@@ -629,14 +632,14 @@ export function reviewUnitText(change, unit, options = {}) {
     const names = pending.map((run) => `"${run.id}"`).join(', ');
     const action = (selector) => {
         if (pending.length === 0) {
-            return `; start it with delegate(rule: "${rule}", change: "${change}", ${selector})`;
+            return `; start it with workflows(action: "start", definitionId: "${rule}", change: "${change}", ${selector})`;
         }
         const reference = pending.length === 1
             ? `the open review run ${names} covers ${uncovered.length === 0 ? 'it' : 'part of it'}`
             : `the open review runs ${names} cover ${uncovered.length === 0 ? 'it' : 'part of it'}`;
         return uncovered.length === 0
             ? `; ${reference}, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`
-            : `; ${reference}, so start only the uncovered tasks with delegate(rule: "${rule}", change: "${change}", task: "<task id>")`;
+            : `; ${reference}, so start only the uncovered tasks with workflows(action: "start", definitionId: "${rule}", change: "${change}", task: "<task id>")`;
     };
     const section = unit.section;
     if (section === undefined) {
@@ -710,7 +713,7 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review', opti
         const unitTask = { ...task, checked: true };
         const pending = pendingRunsOf(change, { covered: [unitTask], missing: [unitTask] }, options.openRuns ?? []);
         const action = pending.length === 0
-            ? `run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`
+            ? `run workflows(action: "start", definitionId: "${rule}", change: "${change}", task: "${task.id}")`
             : `the open review run${pending.length === 1 ? '' : 's'} ${pending.map((run) => `"${run.id}"`).join(', ')} cover${pending.length === 1 ? 's' : ''} it, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`;
         return `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); ${action}`;
     };
@@ -795,21 +798,8 @@ function targetMatches(targets, destination, workspace) {
         return wanted === '' || path === wanted || path.startsWith(prefix);
     });
 }
-function delegateStarted(detail) {
-    if (detail === undefined)
-        return false;
-    if (detail.trimEnd().endsWith('(no gate record: this answer does not satisfy a strict review rule)')) {
-        return true;
-    }
-    const first = detail.split(/\r?\n/u)[0] ?? '';
-    if (/^rule "[^"]+" review (?:already pending|queued)$/u.test(first))
-        return false;
-    return !/^rule "[^"]+" (?:PASS|FINDINGS|ERROR) \(reused record /u.test(first);
-}
 const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
 function isWorkerStart(entry) {
-    if (entry.toolName === 'delegate')
-        return delegateStarted(entry.detail);
     return WORKER_TOOLS.has(entry.toolName);
 }
 function taggedWorkerStart(later, checkpointId, bottleneckId) {

@@ -37,19 +37,10 @@ describe('setup release composition', () => {
     return last.config
   }
 
-  it('composes a dormant Release A profile with the native review configuration', async () => {
-    const delegation = await configFor('dsh-setup-delegation-rules')
-    const rules = delegation.rules as Array<Record<string, unknown>>
-    expect(rules.find((rule) => rule.when === 'implementation-work')).toMatchObject({
-      contract: 'note',
-    })
-    expect(delegation.gates).toEqual({
-      workflowOwned: false,
-      specReview: false,
-      integrationReview: false,
-      taskProgress: false,
-      laneFanout: false,
-    })
+  it('composes the Release B profile with the native review configuration', async () => {
+    const parsed = parse(await loadPatch()) as Array<{ insert?: PatchRow[] }> | PatchRow[]
+    const rows = parsed.flatMap((entry) => ('insert' in entry ? (entry.insert ?? []) : []))
+    expect(rows.find((row) => row.id === 'dsh-setup-delegation-rules')).toBeUndefined()
     const workflows = await configFor('dsh-setup-workflows')
     expect(workflows.reviewers).toMatchObject({
       codex: {
@@ -68,31 +59,7 @@ describe('setup release composition', () => {
       .filter((identity): identity is string => identity !== undefined)
     expect(new Set(identities).size).toBe(identities.length)
   })
-  it('composes the retained review rules and the retired switches', async () => {
-    const delegation = await configFor('dsh-setup-delegation-rules')
-    const rules = delegation.rules as Array<Record<string, unknown>>
-    for (const [id, when, gate] of [
-      ['spec-review', 'spec-ready', 'strict'],
-      ['task-review', 'spec-task-ready', 'strict'],
-      ['integration-review', 'implementation-complete', 'soft'],
-      ['lane-fanout', 'lane-assignment', 'strict'],
-    ] as const) {
-      const rule = rules.find((entry) => entry.id === id)
-      expect(rule).toMatchObject({ when, gate })
-    }
-    for (const removed of [
-      'task-progress',
-      'lane-boundary',
-      'blocker',
-      'research',
-      'advisor',
-      'worker-fast',
-      'worker-deep',
-      'bug-fix',
-    ]) {
-      expect(rules.some((entry) => entry.id === removed)).toBe(false)
-    }
-    expect((delegation.gates as Record<string, unknown>).workflowOwned).toBe(false)
+  it('composes the surviving gate settings', async () => {
     const goal = await configFor('dsh-setup-goal-continuity')
     expect((goal.checkpoint as Record<string, unknown>).automation).toBe(false)
     const workflows = await configFor('dsh-setup-workflows')
@@ -103,14 +70,17 @@ describe('setup release composition', () => {
   })
 
   it('loads the built setup tree in a fresh profile', async () => {
-    for (const [packageName, entry] of [
-      ['plugin-delegation-rules', 'lib/host/index.js'],
-      ['plugin-workflows', 'lib/index.js'],
-    ] as const) {
-      const file = join(repo, 'packages', 'setup', 'node_modules', '@dsh-setup', packageName, entry)
-      const module = (await import(pathToFileURL(file).href)) as { apply?: unknown }
-      expect(typeof module.apply).toBe('function')
-    }
+    const file = join(
+      repo,
+      'packages',
+      'setup',
+      'node_modules',
+      '@dsh-setup',
+      'plugin-workflows',
+      'lib/index.js',
+    )
+    const module = (await import(pathToFileURL(file).href)) as { apply?: unknown }
+    expect(typeof module.apply).toBe('function')
   })
 
   it('loads both accepted verify profiles against the shipped definition', async () => {

@@ -12,7 +12,7 @@ import {
   validateDefinition,
   withSource,
 } from '../src/host/definitions.ts'
-import { currentSpecDigest, verifyEvidence } from '../src/host/evidence.ts'
+import { currentSpecDigest } from '../src/host/evidence.ts'
 import type { SubagentRunner, SubagentRunResult } from '../src/host/executors.ts'
 import { defaultGit, type GitRunner, worktreeDigest } from '../src/host/git.ts'
 import { portableRecordError } from '../src/host/projection.ts'
@@ -1369,65 +1369,6 @@ describe('review record store', () => {
     expect(local.previous).toEqual([{ id: 'f1', status: 'closed' }])
   })
 
-  it('reads the path its ownership selects', async () => {
-    const root = await workspace()
-    roots.push(root)
-    const legacyDir = join(root, '.dsh', 'delegation', 'task-review', 'auth', 'tasks')
-    await mkdir(legacyDir, { recursive: true })
-    await writeFile(
-      join(legacyDir, `${TASK_ID}.json`),
-      JSON.stringify({
-        rule: 'task-review',
-        change: 'auth',
-        phase: 'task',
-        scope: 'task',
-        taskId: TASK_ID,
-        digest: DIGEST,
-        verdict: 'PASS',
-        findings: [],
-        target: { provider: 'codex-subagent' },
-        time: '2026-11-14T00:00:00.000Z',
-      }),
-      'utf8',
-    )
-    const evidence = {
-      kind: 'record' as const,
-      rule: 'task-review',
-      change: '{name}',
-      scope: 'task',
-      task: '{taskId}',
-      verdicts: ['PASS', 'ERROR'],
-      path: `.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json`,
-    }
-    const context = { workspace: root, values: { name: 'auth', taskId: TASK_ID } }
-    expect((await verifyEvidence(evidence, { ...context, reviewOwner: 'legacy' })).ok).toBe(true)
-    expect((await verifyEvidence(evidence, context)).ok).toBe(false)
-    expect((await verifyEvidence(evidence, { ...context, reviewOwner: 'workflows' })).ok).toBe(
-      false,
-    )
-  })
-})
-
-describe('review routing and prompt', () => {
-  it('forwards the reviewer provider, model, effort, and catalog label', async () => {
-    const root = await workspace()
-    roots.push(root)
-    let seen: Parameters<SubagentRunner['run']>[0] | undefined
-    const result = await invoke(root, {
-      run: async (request) => {
-        seen = request
-        return { childId: 'child-1', completed: true, text: PASS_TEXT }
-      },
-    })
-    expect(result.error).toBeUndefined()
-    expect(seen?.provider).toBe('codex-subagent')
-    expect(seen?.model).toBe('gpt-6-astra')
-    expect(seen?.reasoningEffort).toBe('xhigh')
-    expect(seen?.reviewer).toBe('codex')
-    expect(seen?.delivery).toBe('parent')
-    expect(seen?.label).toBe('delegation:task-review')
-  })
-
   it('renders the bundled instruction with the change, task, and digest', async () => {
     const root = await workspace()
     roots.push(root)
@@ -1995,15 +1936,12 @@ describe('review publication identity', () => {
 })
 
 describe('per-signal switch diagnostics', () => {
-  const SWITCHES: ReadonlyArray<readonly [string, string]> = [
-    ['spec-review', 'delegation.gates.specReview'],
-    ['task-review', 'delegation.gates.workflowOwned'],
-    ['integration-review', 'delegation.gates.integrationReview'],
-    ['task-progress', 'delegation.gates.taskProgress'],
-    ['lane-assignment', 'delegation.gates.laneFanout'],
+  const SWITCHES: ReadonlyArray<readonly [string, string, string]> = [
+    ['goal-continuity', 'work_checkpoint', 'checkpoint.automation'],
+    ['verification-gate', 'verification-gate', 'the verification-gate row'],
   ]
 
-  function localDefinition(signal: string): Definition {
+  function localDefinition(plugin: string, signal: string): Definition {
     return validateDefinition({
       v: 1,
       id: 'local-legacy',
@@ -2016,7 +1954,7 @@ describe('per-signal switch diagnostics', () => {
         gateOwnership: 'own',
         maxBlocks: 3,
         allowIntent: false,
-        legacy: { plugin: 'delegation-rules', signal },
+        legacy: { plugin, signal },
       },
       steps: [
         {
@@ -2031,40 +1969,27 @@ describe('per-signal switch diagnostics', () => {
     })
   }
 
-  it('names the exact switch for every signal', () => {
-    for (const [signal, switchName] of SWITCHES) {
+  it('names the exact switch for every surviving signal', () => {
+    for (const [plugin, signal, switchName] of SWITCHES) {
       const issues = resolveOwnership(
-        localDefinition(signal),
-        new Set(['delegation-rules']),
-        new Set([`delegation-rules/${signal}`]),
+        localDefinition(plugin, signal),
+        new Set([plugin]),
+        new Set([`${plugin}/${signal}`]),
       ).issues.join('\n')
       expect(issues).toContain(switchName)
     }
   })
 
   it('refuses a deferred shipped copy beside a disabled switch', () => {
-    for (const [signal, switchName] of SWITCHES) {
-      const base = withSource(localDefinition(signal), 'shipped')
+    for (const [plugin, signal, switchName] of SWITCHES) {
+      const base = withSource(localDefinition(plugin, signal), 'shipped')
       const deferred = {
         ...base,
         settings: { ...base.settings, gateOwnership: 'defer' as const },
       }
-      const issues = resolveOwnership(deferred, new Set(['delegation-rules']), new Set()).issues
+      const issues = resolveOwnership(deferred, new Set([plugin]), new Set()).issues
       expect(issues.join('\n')).toContain(switchName)
       expect(issues.join('\n')).toContain('off')
     }
-  })
-  it('resolves a shipped review definition from its switch', () => {
-    const shipped = withSource(taskDefinition(), 'shipped')
-    const enabled = resolveOwnership(
-      shipped,
-      new Set(['delegation-rules']),
-      new Set(['delegation-rules/task-review']),
-    )
-    expect(enabled.issues).toEqual([])
-    expect(enabled.steps.every((step) => step.ownership === 'defer')).toBe(true)
-    const disabled = resolveOwnership(shipped, new Set(['delegation-rules']), new Set())
-    expect(disabled.issues).toEqual([])
-    expect(disabled.steps.every((step) => step.ownership === 'own')).toBe(true)
   })
 })

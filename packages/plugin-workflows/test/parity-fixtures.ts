@@ -2,23 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import {
-  apply as applyDelegationRules,
-  type BundleConfig as DelegationConfig,
-  type GatesConfig,
-} from '../../plugin-delegation-rules/lib/index.js'
-import {
-  computeApprovalCoverage,
-  legacyRecordSatisfies,
-  parsePortableTaskReviewRecord,
-  parseReviewApprovalMarker,
-  parseTasksText,
-  portableTaskRecordPath,
-  type ReviewApprovalMarker,
-  recognizeArchiveCommands,
-  reviewerBindingOf,
-} from '../../plugin-delegation-rules/src/shared/approval.ts'
+import { join } from 'node:path'
 import { CheckpointHarness } from '../../plugin-goal-continuity/test/checkpoint-harness.ts'
 import { decideVerifyClose } from '../../plugin-verification-gate/src/host/index.ts'
 import {
@@ -43,6 +27,18 @@ import {
   taskReviewCoverage,
 } from '../lib/parity.js'
 import { createRun, incrementTurnBlocks, settleStep } from '../lib/runs.js'
+import {
+  computeApprovalCoverage,
+  legacyRecordSatisfies,
+  parsePortableTaskReviewRecord,
+  parseReviewApprovalMarker,
+  parseTasksText,
+  portableTaskRecordPath,
+  type ReviewApprovalMarker,
+  recognizeArchiveCommands,
+  reviewerBindingOf,
+} from '../src/shared/approval.ts'
+import { RETAINED_BASELINE, RETAINED_SEQUENCES } from './parity-baseline.ts'
 
 /**
  * The shared retirement-parity fixture table. Each case carries the legacy
@@ -829,7 +825,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'spec-review' },
     legacy: REFUSE,
-    legacyCheck: () => legacySpecReviewCase('missing'),
+    legacyCheck: RETAINED_BASELINE['retained-spec-review-missing'],
     workflow: () => specReviewWorkflowCase('missing'),
   },
   {
@@ -837,7 +833,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'spec-review' },
     legacy: REFUSE,
-    legacyCheck: () => legacySpecReviewCase('stale'),
+    legacyCheck: RETAINED_BASELINE['retained-spec-review-stale'],
     workflow: () => specReviewWorkflowCase('stale'),
   },
   {
@@ -845,7 +841,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'spec-review' },
     legacy: ALLOW,
-    legacyCheck: () => legacySpecReviewCase('current'),
+    legacyCheck: RETAINED_BASELINE['retained-spec-review-current'],
     workflow: () => specReviewWorkflowCase('current'),
   },
   {
@@ -854,7 +850,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     retained: { group: 'integration-review' },
     legacy: REFUSE,
     sequence: {
-      legacy: legacyIntegrationSequence,
+      legacy: RETAINED_SEQUENCES['retained-integration-soft-sequence'],
       workflow: integrationSoftSequence,
     },
     violation: {
@@ -867,7 +863,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'integration-review' },
     legacy: ALLOW,
-    legacyCheck: legacyIntegrationArchiveCase,
+    legacyCheck: RETAINED_BASELINE['retained-integration-archive'],
     workflow: integrationArchiveCase,
   },
   {
@@ -875,7 +871,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'task-progress' },
     legacy: ALLOW,
-    legacyCheck: () => legacyProgressCase('current-note'),
+    legacyCheck: RETAINED_BASELINE['retained-progress-current-note'],
     workflow: async () =>
       progressWorkflowDecision({
         codeChanged: true,
@@ -888,7 +884,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'task-progress' },
     legacy: REFUSE,
-    legacyCheck: () => legacyProgressCase('stale-note'),
+    legacyCheck: RETAINED_BASELINE['retained-progress-stale-note'],
     workflow: async () =>
       progressWorkflowDecision({
         codeChanged: true,
@@ -901,7 +897,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'task-progress' },
     legacy: REFUSE,
-    legacyCheck: () => legacyProgressCase('unchecked-missing-note'),
+    legacyCheck: RETAINED_BASELINE['retained-progress-unchecked-missing-note'],
     workflow: async () => progressWorkflowDecision({ codeChanged: true, tickedReviewed: false }),
   },
   {
@@ -909,7 +905,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'task-progress' },
     legacy: ALLOW,
-    legacyCheck: () => legacyProgressCase('reviewed-tick'),
+    legacyCheck: RETAINED_BASELINE['retained-progress-reviewed-tick'],
     workflow: async () => progressWorkflowDecision({ codeChanged: true, tickedReviewed: true }),
   },
   {
@@ -917,7 +913,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'lane' },
     legacy: REFUSE,
-    legacyCheck: () => legacyLaneCase('first-implementation-turn'),
+    legacyCheck: RETAINED_BASELINE['retained-lane-first-implementation-turn'],
     workflow: async () =>
       laneWorkflowDecision({
         plan: LANE_PLAN_TWO,
@@ -931,7 +927,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'lane' },
     legacy: REFUSE,
-    legacyCheck: () => legacyLaneCase('single-remaining'),
+    legacyCheck: RETAINED_BASELINE['retained-lane-single-remaining'],
     workflow: async () =>
       laneWorkflowDecision({
         plan: LANE_PLAN_SINGLE,
@@ -945,7 +941,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'lane' },
     legacy: REFUSE,
-    legacyCheck: () => legacyLaneCase('below-threshold'),
+    legacyCheck: RETAINED_BASELINE['retained-lane-below-threshold'],
     workflow: async () =>
       laneWorkflowDecision({
         plan: LANE_PLAN_TWO,
@@ -959,7 +955,7 @@ export const PARITY_CASES: readonly ParityCase[] = [
     gate: 'retained',
     retained: { group: 'lane' },
     legacy: ALLOW,
-    legacyCheck: () => legacyLaneCase('assigned-worker'),
+    legacyCheck: RETAINED_BASELINE['retained-lane-assigned-worker'],
     workflow: async () =>
       laneWorkflowDecision({
         plan: LANE_PLAN_SINGLE,
@@ -971,9 +967,10 @@ export const PARITY_CASES: readonly ParityCase[] = [
 ]
 
 /**
- * The real legacy gates, replayed for the parity table. These run the shipped
- * provider harnesses (or the exported pure legacy decision), so the legacy
- * side is the actual implementation rather than a transcribed table.
+ * The retired gates replayed for the parity table: the checkpoint and verify
+ * cases run their surviving provider harnesses, and the retained groups use the
+ * executable baseline in `parity-baseline.ts`, which imports no deleted plugin
+ * code.
  */
 
 const CHECKPOINT_BOTTLENECK = {
@@ -1168,241 +1165,6 @@ const LEGACY_CHECKS: Readonly<Record<string, () => Promise<ParityDecision>>> = {
  * only needs status/diff for the implementation fingerprint and the worktree
  * digest; every other command returns the same empty deterministic answer.
  */
-class ParityGit {
-  status = ''
-  diff = ''
-  files: string[] = []
-
-  run = async (args: readonly string[], cwd: string): Promise<Buffer> => {
-    const command = args[0] === '-C' ? args[2] : args[0] === '-c' ? 'commit-tree' : args[0]
-    if (command === 'rev-parse') {
-      return Buffer.from(args.includes('--verify') ? 'b'.repeat(40) : cwd)
-    }
-    if (command === 'check-ignore') return Buffer.alloc(0)
-    if (command === 'ls-files') {
-      return args.includes('-u') ? Buffer.alloc(0) : Buffer.from(this.files.join('\0'))
-    }
-    if (command === 'write-tree') {
-      return Buffer.from(
-        createHash('sha256')
-          .update(`${this.status}\u0000${this.diff}\u0000${this.files.join('\u0000')}`)
-          .digest('hex'),
-      )
-    }
-    if (command === 'status') return Buffer.from(this.status)
-    if (command === 'diff') return Buffer.from(this.diff)
-    return Buffer.alloc(0)
-  }
-}
-
-interface ParityAgent {
-  readonly id: string
-  readonly session: { readonly id: string; readonly header: Record<string, never> }
-  steer: (message: unknown) => void
-}
-
-type EventHandler = (...args: never[]) => unknown
-
-/**
- * The minimal legacy runtime the parity script can run under plain Node: the
- * delegation plugin's built entry, a fake agent, a fake git, and the events the
- * gate subscribes to. The Vitest-bound helpers cannot be imported by the
- * script, which Node runs without a test runner.
- */
-class LegacyGateHarness {
-  readonly steers: string[] = []
-  readonly tools = new Map<
-    string,
-    { execute: (args: unknown, exec: unknown) => Promise<unknown> }
-  >()
-  readonly events = new Map<string, EventHandler[]>()
-  readonly git = new ParityGit()
-  readonly agent: ParityAgent
-  private readonly cwd: string
-
-  constructor(options: { readonly cwd: string; readonly config: DelegationConfig }) {
-    this.cwd = options.cwd
-    this.agent = {
-      id: 'agent-1',
-      session: { id: 'agent-1', header: {} },
-      steer: (message: unknown) => {
-        const content = (message as { content?: Array<{ text?: string }> }).content ?? []
-        this.steers.push(content.map((block) => block.text ?? '').join('\n'))
-      },
-    }
-    const events = this.events
-    const cwd = options.cwd
-    const ctx = {
-      subagents: {
-        getProvider: () => undefined,
-        startActivation: async () => {
-          throw new Error('the parity fixture never starts a target')
-        },
-      },
-      provide: () => () => undefined,
-      get: () => undefined,
-      workingDirectory: { get: () => cwd },
-      tools: {
-        register: (definition: { name: string } & Record<string, unknown>) => {
-          this.tools.set(
-            definition.name,
-            definition as unknown as {
-              execute: (args: unknown, exec: unknown) => Promise<unknown>
-            },
-          )
-          return () => undefined
-        },
-      },
-      skills: { registerProvider: () => () => undefined },
-      on: (name: string, handler: EventHandler) => {
-        const list = events.get(name) ?? []
-        list.push(handler)
-        events.set(name, list)
-        return () => undefined
-      },
-    }
-    applyDelegationRules(ctx as never, options.config, {
-      runGit: this.git.run,
-      now: () => new Date('2026-11-15T00:00:00.000Z'),
-    })
-  }
-
-  private async fire(name: string, args: unknown[]): Promise<void> {
-    for (const handler of this.events.get(name) ?? []) {
-      await (handler as (...values: unknown[]) => unknown)(...args)
-    }
-  }
-
-  async preStep(turn = 1): Promise<void> {
-    await this.fire('agent/pre-step', [
-      {
-        agent: this.agent,
-        turn,
-        step: 1,
-        messages: [],
-        signal: new AbortController().signal,
-      },
-      async () => ({ kind: 'enter', messages: [] }),
-    ])
-  }
-
-  async turnStopping(turn = 1): Promise<void> {
-    await this.fire('agent/turn-stopping', [
-      { agent: this.agent, turn, signal: new AbortController().signal },
-    ])
-  }
-
-  /** Record one successful tool call the way the delegation listeners see it. */
-  async toolOutcome(name: string, args: unknown, value: unknown): Promise<void> {
-    await this.fire('tools/result', [
-      {
-        agent: this.agent,
-        arguments: args,
-        callId: 'call-1',
-        name,
-        rootCallId: 'root-1',
-        signal: new AbortController().signal,
-        token: Symbol('token'),
-      },
-      { isError: false, value, content: [] },
-    ])
-  }
-
-  /** A first-party write result with the canonical before/after contents. */
-  async writeResult(filePath: string, before: string, after: string): Promise<void> {
-    await this.toolOutcome(
-      'write',
-      { file_path: filePath },
-      { path: resolve(this.cwd, filePath), before, after },
-    )
-  }
-
-  async toolText(name: string, args: unknown): Promise<string> {
-    const tool = this.tools.get(name)
-    if (tool === undefined) throw new Error(`the legacy runtime has no "${name}" tool`)
-    const result = (await tool.execute(args, {
-      agent: this.agent,
-      signal: new AbortController().signal,
-    })) as { text?: unknown }
-    if (typeof result.text !== 'string') {
-      throw new Error(`the "${name}" tool returned no text`)
-    }
-    return result.text
-  }
-
-  async preExecute(name: string, args: unknown): Promise<'allow' | 'deny'> {
-    let decision: unknown = { kind: 'allow' }
-    const next = async (): Promise<{ kind: 'allow' }> => ({ kind: 'allow' })
-    for (const handler of this.events.get('tools/pre-execute') ?? []) {
-      decision = await (handler as (...values: unknown[]) => unknown)(
-        {
-          agent: this.agent,
-          arguments: args,
-          callId: 'call-1',
-          name,
-          rootCallId: 'root-1',
-          signal: new AbortController().signal,
-          token: Symbol('token'),
-        },
-        next,
-      )
-    }
-    return (decision as { kind?: string }).kind === 'deny' ? 'deny' : 'allow'
-  }
-}
-
-const ALL_SWITCHES_OFF: GatesConfig = {
-  workflowOwned: false,
-  specReview: false,
-  integrationReview: false,
-  taskProgress: false,
-  laneFanout: false,
-}
-
-/** The Release A rule shapes a flipped switch restores, one signal at a time. */
-function legacyConfig(
-  gates: GatesConfig,
-  rules: NonNullable<DelegationConfig['rules']>,
-): DelegationConfig {
-  return { targets: { codex: { provider: 'codex-subagent' } }, rules, gates }
-}
-
-const SPEC_REVIEW_RULE = {
-  id: 'spec-review',
-  when: 'spec-ready' as const,
-  to: 'codex',
-  contract: 'review' as const,
-  phase: 'spec' as const,
-  scope: 'whole' as const,
-  gate: 'strict' as const,
-  instruction: 'bundled:review-spec',
-}
-
-const INTEGRATION_REVIEW_RULE = {
-  id: 'integration-review',
-  when: 'implementation-complete' as const,
-  to: 'codex',
-  contract: 'review' as const,
-  phase: 'integration' as const,
-  scope: 'whole' as const,
-  gate: 'soft' as const,
-  instruction: 'bundled:review-integration',
-}
-
-const PROGRESS_RULE = {
-  id: 'task-progress',
-  when: 'implementation-work' as const,
-  contract: 'note' as const,
-  gate: 'strict' as const,
-}
-
-const LANE_RULE = {
-  id: 'lane-fanout',
-  when: 'lane-assignment' as const,
-  contract: 'note' as const,
-  gate: 'strict' as const,
-}
-
 /** A throwaway review-ready change; the legacy and workflow readers share it. */
 async function parityWorkspace(plan: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'workflows-parity-'))
@@ -1414,66 +1176,6 @@ async function parityWorkspace(plan: string): Promise<string> {
   await writeFile(join(dir, 'tasks.md'), plan, 'utf8')
   return root
 }
-
-function legacySteersReview(harness: LegacyGateHarness, rule: string): boolean {
-  return harness.steers.join('\n').includes(`rule "${rule}"`)
-}
-
-/** One spec-review turn: a write establishes involvement, then the close runs. */
-async function legacySpecReviewCase(
-  kind: 'missing' | 'stale' | 'current',
-): Promise<ParityDecision> {
-  const plan = '# Tasks\n\n- [ ] 1.1 First task\n'
-  const root = await parityWorkspace(plan)
-  try {
-    const proposal = join(root, 'openspec', 'changes', 'change-a', 'proposal.md')
-    if (kind === 'current') await writeFile(proposal, '# Proposal\n\nWhy changed.\n', 'utf8')
-    if (kind !== 'missing') {
-      const digest =
-        kind === 'stale' ? 'b'.repeat(64) : ((await currentSpecDigest(root, 'change-a')) ?? '')
-      const record = {
-        rule: 'spec-review',
-        change: 'change-a',
-        phase: 'spec',
-        scope: 'whole',
-        digest,
-        verdict: 'PASS',
-        findings: [],
-        target: { provider: 'codex-subagent' },
-        time: '2026-11-15T00:00:00.000Z',
-      }
-      const recordDir = join(root, '.dsh', 'delegation', 'spec-review', 'change-a')
-      await mkdir(recordDir, { recursive: true })
-      await writeFile(join(recordDir, 'spec.json'), JSON.stringify(record), 'utf8')
-    }
-    const harness = new LegacyGateHarness({
-      cwd: root,
-      config: legacyConfig({ ...ALL_SWITCHES_OFF, specReview: true }, [SPEC_REVIEW_RULE]),
-    })
-    await harness.preStep(1)
-    await harness.writeResult(
-      'openspec/changes/change-a/proposal.md',
-      '# Proposal\n\nWhy.\n',
-      '# Proposal\n\nWhy changed.\n',
-    )
-    await writeFile(proposal, '# Proposal\n\nWhy changed.\n', 'utf8')
-    await harness.turnStopping(1)
-    return legacySteersReview(harness, 'spec-review') ? REFUSE : ALLOW
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-}
-
-const PROGRESS_PLAN = `# Tasks
-
-## 1. Engine (owns \`packages/engine/**\`)
-
-- [ ] 1.1 First task
-
-## 2. Docs (owns \`docs/**\`)
-
-- [ ] 2.1 Doc task
-`
 
 interface ProgressScenario {
   readonly codeChanged: boolean
@@ -1487,92 +1189,6 @@ interface ProgressScenario {
  */
 function progressWorkflowDecision(scenario: ProgressScenario): ParityDecision {
   return evaluateProgressParity(scenario)
-}
-
-async function legacyProgressCase(
-  kind: 'current-note' | 'stale-note' | 'unchecked-missing-note' | 'reviewed-tick',
-): Promise<ParityDecision> {
-  const root = await parityWorkspace(PROGRESS_PLAN)
-  try {
-    if (kind === 'reviewed-tick') {
-      const taskId = taskIdOf('First task')
-      const recordDir = join(
-        root,
-        '.dsh',
-        'workflows',
-        'records',
-        'task-review',
-        'change-a',
-        'tasks',
-      )
-      await mkdir(recordDir, { recursive: true })
-      await writeFile(
-        join(recordDir, `${taskId}.json`),
-        JSON.stringify({
-          rule: 'task-review',
-          change: 'change-a',
-          phase: 'task',
-          scope: 'task',
-          taskId,
-          digest: 'a'.repeat(64),
-          verdict: 'PASS',
-          findings: [],
-          target: { provider: 'codex-subagent' },
-          time: '2026-11-15T00:00:00.000Z',
-        }),
-        'utf8',
-      )
-    }
-    const harness = new LegacyGateHarness({
-      cwd: root,
-      config: legacyConfig({ ...ALL_SWITCHES_OFF, taskProgress: true }, [PROGRESS_RULE]),
-    })
-    harness.git.status = ' M packages/engine/src/base.ts\0'
-    await harness.preStep(1)
-    harness.git.status = ' M packages/engine/src/engine.ts\0'
-    harness.git.diff = 'diff --git a/packages/engine/src/engine.ts b/packages/engine/src/engine.ts'
-    // The legacy gate evaluates only the session's involved changes.
-    await harness.writeResult(
-      'openspec/changes/change-a/proposal.md',
-      '# Proposal\n\nWhy.\n',
-      '# Proposal\n\nWhy changed.\n',
-    )
-    await writeFile(
-      join(root, 'openspec/changes/change-a/proposal.md'),
-      '# Proposal\n\nWhy changed.\n',
-      'utf8',
-    )
-    if (kind === 'current-note' || kind === 'stale-note') {
-      await harness.toolText('task_progress', {
-        task: '2.1 Doc task',
-        status: 'in-progress',
-        reason: 'parity progress note',
-      })
-    }
-    if (kind === 'current-note') {
-      // The note binds the current digest; no later implementation change.
-    }
-    if (kind === 'stale-note') {
-      harness.git.status = ' M packages/engine/src/engine.ts\0 M docs/a.md\0'
-      harness.git.diff = 'diff --git a/docs/a.md b/docs/a.md'
-    }
-    if (kind === 'reviewed-tick') {
-      await harness.writeResult(
-        'openspec/changes/change-a/tasks.md',
-        PROGRESS_PLAN,
-        PROGRESS_PLAN.replace('- [ ] 1.1 First task', '- [x] 1.1 First task'),
-      )
-      await writeFile(
-        join(root, 'openspec/changes/change-a/tasks.md'),
-        PROGRESS_PLAN.replace('- [ ] 1.1 First task', '- [x] 1.1 First task'),
-        'utf8',
-      )
-    }
-    await harness.turnStopping(1)
-    return legacySteersReview(harness, 'task-progress') ? REFUSE : ALLOW
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
 }
 
 interface LaneScenario {
@@ -1616,152 +1232,6 @@ const LANE_PLAN_SINGLE = `# Tasks
 `
 
 const LANE_DOCS_TITLE = '2. Docs (owns `docs/**`)'
-
-async function legacyLaneCase(
-  kind: 'first-implementation-turn' | 'single-remaining' | 'below-threshold' | 'assigned-worker',
-): Promise<ParityDecision> {
-  const base =
-    kind === 'single-remaining' || kind === 'assigned-worker' ? LANE_PLAN_SINGLE : LANE_PLAN_TWO
-  const ticked = base.replace('- [ ] 1.1 First task', '- [x] 1.1 First task')
-  const root = await parityWorkspace(base)
-  try {
-    const harness = new LegacyGateHarness({
-      cwd: root,
-      config: legacyConfig({ ...ALL_SWITCHES_OFF, laneFanout: true }, [LANE_RULE]),
-    })
-    harness.git.status = ' M packages/engine/src/base.ts\0'
-    await harness.preStep(1)
-    harness.git.status = ' M packages/engine/src/engine.ts\0'
-    harness.git.diff = 'diff --git a/packages/engine/src/engine.ts b/packages/engine/src/engine.ts'
-    if (kind !== 'below-threshold') {
-      await harness.writeResult('openspec/changes/change-a/tasks.md', base, ticked)
-      await writeFile(join(root, 'openspec/changes/change-a/tasks.md'), ticked, 'utf8')
-    } else {
-      // No task tick, so the change is involved through its proposal instead.
-      await harness.writeResult(
-        'openspec/changes/change-a/proposal.md',
-        '# Proposal\n\nWhy.\n',
-        '# Proposal\n\nWhy changed.\n',
-      )
-      await writeFile(
-        join(root, 'openspec/changes/change-a/proposal.md'),
-        '# Proposal\n\nWhy changed.\n',
-        'utf8',
-      )
-    }
-    if (kind === 'assigned-worker') {
-      await harness.toolOutcome(
-        'subagent',
-        {
-          prompt: `lane-tag: change-a#2. Implement the unchecked tasks under ${LANE_DOCS_TITLE}.`,
-        },
-        { output: 'started', exitCode: 0 },
-      )
-    }
-    await harness.turnStopping(1)
-    return legacySteersReview(harness, 'lane-fanout') ? REFUSE : ALLOW
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-}
-
-/** One complete change so the legacy integration rule sees `completed`. */
-async function completeLegacyChange(root: string, plan: string): Promise<void> {
-  const harness = new LegacyGateHarness({
-    cwd: root,
-    config: legacyConfig(ALL_SWITCHES_OFF, [INTEGRATION_REVIEW_RULE]),
-  })
-  await harness.preStep(1)
-  await harness.writeResult(
-    'openspec/changes/change-a/tasks.md',
-    plan,
-    plan.replace('- [ ] 1.1 First task', '- [x] 1.1 First task'),
-  )
-  await writeFile(
-    join(root, 'openspec/changes/change-a/tasks.md'),
-    plan.replace('- [ ] 1.1 First task', '- [x] 1.1 First task'),
-    'utf8',
-  )
-  await harness.turnStopping(1)
-}
-
-/** The legacy soft integration rule: one refusal, then the next close passes. */
-async function legacyIntegrationSequence(): Promise<readonly ParityDecision[]> {
-  const plan = '# Tasks\n\n- [ ] 1.1 First task\n'
-  const root = await parityWorkspace(plan)
-  try {
-    await completeLegacyChange(root, plan)
-    const harness = new LegacyGateHarness({
-      cwd: root,
-      config: legacyConfig({ ...ALL_SWITCHES_OFF, integrationReview: true }, [
-        INTEGRATION_REVIEW_RULE,
-      ]),
-    })
-    await harness.preStep(1)
-    const first = harness.steers.length
-    await harness.turnStopping(1)
-    const firstDecision = harness.steers.length > first ? REFUSE : ALLOW
-    const second = harness.steers.length
-    await harness.turnStopping(2)
-    const secondDecision = harness.steers.length > second ? REFUSE : ALLOW
-    return [firstDecision, secondDecision]
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-}
-
-/** The legacy archive guard allows an approved, fully checked change. */
-async function legacyIntegrationArchiveCase(): Promise<ParityDecision> {
-  const plan = '# Tasks\n\n- [x] 1.1 Final task\n'
-  const root = await parityWorkspace(plan)
-  try {
-    const taskId = taskIdOf('Final task')
-    const reviews = join(root, 'openspec', 'changes', 'change-a', 'reviews')
-    await mkdir(reviews, { recursive: true })
-    await writeFile(
-      join(reviews, `${taskId}.json`),
-      JSON.stringify({
-        rule: 'task-review',
-        change: 'change-a',
-        scope: 'task',
-        taskId,
-        digest: 'a'.repeat(64),
-        verdict: 'PASS',
-        findings: [],
-        target: { provider: 'codex-subagent' },
-        time: '2026-11-15T00:00:00.000Z',
-      }),
-      'utf8',
-    )
-    await writeFile(
-      join(root, 'openspec', 'review-approval.json'),
-      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' }),
-      'utf8',
-    )
-    const harness = new LegacyGateHarness({
-      cwd: root,
-      config: legacyConfig({ ...ALL_SWITCHES_OFF, workflowOwned: true }, [
-        {
-          id: 'task-review',
-          when: 'spec-task-ready',
-          to: 'codex',
-          contract: 'review',
-          scope: 'task',
-          gate: 'strict',
-          instruction: 'bundled:review-task',
-        },
-      ]),
-    })
-    const decision = await harness.preExecute('pwsh', {
-      command: 'openspec archive change-a',
-    })
-    return decision === 'allow'
-      ? { decision: 'allow', reason: 'the legacy archive guard allows the approved change' }
-      : { decision: 'refuse', reason: 'the legacy archive guard refuses the approved change' }
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
-}
 
 /** The owned spec-review definition judged by the production evidence reader. */
 async function specReviewWorkflowCase(
