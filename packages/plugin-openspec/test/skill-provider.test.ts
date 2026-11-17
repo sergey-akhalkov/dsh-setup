@@ -164,14 +164,27 @@ describe('openspec plugin', () => {
     )
     expect(text).toContain('`workflows` `note` action')
     expect(text).toContain('no new tool or state')
-    expect(text).toContain("Start a checked task's review immediately")
     expect(text).toContain('definitionId: "task-review"')
-    expect(text).toContain('only while that review runs on a frozen snapshot')
     expect(text).toContain(
       'restore snapshot support and re-run, or defer writes until the run settles',
     )
     expect(text).toContain('Never wait with a blocking sleep')
     expect(guidance).not.toContain(['task', 'progress'].join('_'))
+  })
+
+  it('starts every due lane at once and treats the waiting close as the verdict pause', () => {
+    const text = guidance.replace(/\s+/gu, ' ')
+    expect(text).toContain("When any task of a lane is checked, start that lane's review at once")
+    expect(text).toContain('section: "<section key>"')
+    expect(text).toContain('Start every due lane in the same pass')
+    expect(text).toContain("no lane waits for another's verdict")
+    expect(text).toContain(
+      'While a review runs on a frozen snapshot, keep implementing another independent lane',
+    )
+    expect(text).toContain('Treat the waiting close as the pause for a verdict')
+    expect(text).toContain('the next turn resumes the loop on the same lane unit')
+    expect(text).toContain('The waiting close approves nothing')
+    expect(text).toContain('collect the record before ticking coverage or archive')
   })
 
   it('ships the task-lane guidance outside the pinned asset directory', () => {

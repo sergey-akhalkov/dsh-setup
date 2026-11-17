@@ -27,6 +27,7 @@ import {
   decisionText,
   PARITY_CASES,
   type ParityCase,
+  RETIRED_PARITY_ENTRIES,
   runParityCase,
   sequenceReason,
 } from '../packages/plugin-workflows/test/parity-fixtures.ts'
@@ -43,12 +44,13 @@ export interface RetainedSummary {
   status: 'replayed' | 'failed'
 }
 
-/** The declared, documented difference: a workflow VIOLATION is never a pass. */
+/**
+ * A declared, documented difference: the legacy scenario is retired, so it is
+ * not replayed and its absence is not a parity mismatch.
+ */
 export interface DeclaredDifference {
   case: string
-  turn: number
-  legacy: 'allow'
-  workflow: 'violation'
+  /** Why the scenario is retired instead of replayed. */
   declared: string
 }
 
@@ -139,6 +141,14 @@ export async function buildParityReport(
   }
   const differences: BuiltReport['differences'] = {}
   const mismatches: string[] = []
+  for (const retired of RETIRED_PARITY_ENTRIES) {
+    differences[retired.group] = { case: retired.case, declared: retired.declared }
+    if (cases.some((entry) => entry.id === retired.case)) {
+      mismatches.push(
+        `${retired.case}: a retired parity entry is still replayed; replay it and remove the declaration, or drop the case`,
+      )
+    }
+  }
   for (const parityCase of cases) {
     if (parityCase.gate === 'retained') {
       const group = parityCase.retained?.group
@@ -171,21 +181,6 @@ export async function buildParityReport(
         } else {
           mismatches.push(
             `${parityCase.id}: legacy ${parityCase.legacy.decision} (${parityCase.legacy.reason}); replayed ${result.legacyReplay?.decision ?? 'n/a'} (${result.legacyReplay?.reason ?? 'no replay'}); workflow ${result.workflow?.decision ?? 'missing'} (${result.workflow?.reason ?? 'no workflow decision'})`,
-          )
-        }
-      }
-      if (parityCase.violation !== undefined) {
-        if (result.declaredViolation === true) {
-          differences[key] = {
-            case: parityCase.id,
-            turn: parityCase.violation.turn + 1,
-            legacy: 'allow',
-            workflow: 'violation',
-            declared: parityCase.violation.reason,
-          }
-        } else {
-          mismatches.push(
-            `${parityCase.id}: the workflow sequence did not reproduce the declared VIOLATION on turn ${String(parityCase.violation.turn + 1)}`,
           )
         }
       }

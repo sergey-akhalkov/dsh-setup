@@ -26,7 +26,7 @@ import {
   taskReviewCompletion,
   taskReviewCoverage,
 } from '../lib/parity.js'
-import { createRun, incrementTurnBlocks, settleStep } from '../lib/runs.js'
+import { createRun, incrementTurnBlocks, setRunStatus, settleStep } from '../lib/runs.js'
 import {
   computeApprovalCoverage,
   legacyRecordSatisfies,
@@ -38,7 +38,7 @@ import {
   recognizeArchiveCommands,
   reviewerBindingOf,
 } from '../src/shared/approval.ts'
-import { RETAINED_BASELINE, RETAINED_SEQUENCES } from './parity-baseline.ts'
+import { RETAINED_BASELINE } from './parity-baseline.ts'
 
 /**
  * The shared retirement-parity fixture table. Each case carries the legacy
@@ -54,11 +54,9 @@ export type ParityGate = 'checkpoint' | 'task-review' | 'verification'
 export interface ParityDecision {
   readonly decision: 'allow' | 'refuse'
   readonly reason: string
-  /** The workflow recorded a visible VIOLATION instead of a plain allow. */
-  readonly violation?: boolean
 }
 
-/** A per-turn decision sequence for a `soft` signal. */
+/** A per-turn decision sequence; replaces the single legacy/workflow comparison. */
 export interface ParitySequence {
   readonly legacy?: () => Promise<readonly ParityDecision[]>
   readonly workflow?: () => Promise<readonly ParityDecision[]>
@@ -79,9 +77,32 @@ export interface ParityCase {
   readonly workflow?: () => Promise<ParityDecision>
   /** A per-turn sequence; replaces the single legacy/workflow comparison. */
   readonly sequence?: ParitySequence
-  /** The declared, documented workflow VIOLATION at this 0-based turn. */
-  readonly violation?: { readonly turn: number; readonly reason: string }
 }
+
+/**
+ * A declared, documented difference: the legacy scenario is retired, so its
+ * parity entry is absent from the replay and the report names the removal
+ * instead of replaying it.
+ */
+export interface RetiredParityEntry {
+  readonly group: 'spec-review' | 'integration-review' | 'task-progress' | 'lane-assignment'
+  readonly case: string
+  /** Why the scenario is retired instead of replayed. */
+  readonly declared: string
+}
+
+/**
+ * The retired parity entries. `workflows-parity --check` accepts the absence
+ * only because the tracked report carries one declaration per entry.
+ */
+export const RETIRED_PARITY_ENTRIES: readonly RetiredParityEntry[] = [
+  {
+    group: 'integration-review',
+    case: 'retained-integration-soft-sequence',
+    declared:
+      'integration-review is a required review; the legacy soft settlement scenario is retired and is not replayed',
+  },
+]
 
 const ALLOW: ParityDecision = { decision: 'allow', reason: 'legacy allows' }
 const REFUSE: ParityDecision = { decision: 'refuse', reason: 'legacy refuses' }
@@ -845,20 +866,6 @@ export const PARITY_CASES: readonly ParityCase[] = [
     workflow: () => specReviewWorkflowCase('current'),
   },
   {
-    id: 'retained-integration-soft-sequence',
-    gate: 'retained',
-    retained: { group: 'integration-review' },
-    legacy: REFUSE,
-    sequence: {
-      legacy: RETAINED_SEQUENCES['retained-integration-soft-sequence'],
-      workflow: integrationSoftSequence,
-    },
-    violation: {
-      turn: 1,
-      reason: 'the second close is a recorded VIOLATION on the exhausted soft budget, never a pass',
-    },
-  },
-  {
     id: 'retained-integration-archive',
     gate: 'retained',
     retained: { group: 'integration-review' },
@@ -1297,17 +1304,13 @@ async function specReviewWorkflowCase(
   }
 }
 
-/** Run the shipped integration review through two closes; return its run too. */
-async function integrationSoftSettlement(): Promise<{
-  readonly run: import('../lib/runs.js').WorkflowRun
-  readonly outcomes: readonly import('../lib/gates.js').TurnCloseOutcome[]
-}> {
-  const definition = loadShippedDefinitionsForFixtures().find(
-    (entry) => entry.id === 'integration-review',
-  )
-  if (definition === undefined)
-    throw new Error('the shipped integration-review definition is missing')
-  let run = createRun({
+/**
+ * An old run settled on the retired soft budget: the review step was released
+ * without evidence and the run closed. The definition no longer produces this
+ * state, so the fixture builds it directly for the archive scenario.
+ */
+function softSettledIntegrationRun(): import('../lib/runs.js').WorkflowRun {
+  const run = createRun({
     definition: 'integration-review',
     trigger: 'turn.stopping',
     session: 'session-1',
@@ -1316,40 +1319,11 @@ async function integrationSoftSettlement(): Promise<{
     steps: ['review'],
     now: 1_000,
   })
-  const outcomes: import('../lib/gates.js').TurnCloseOutcome[] = []
-  for (let close = 0; close < 2; close += 1) {
-    const outcome = evaluateTurnClose({
-      run,
-      definition,
-      agent: { steer: () => undefined },
-      evidenceContext: { workspace: '/workspace', values: { name: 'change-a' } },
-      turn: 1,
-      maxBlocks: definition.settings.maxBlocks,
-      installedLegacy: new Set(),
-      enabledLegacy: new Set(),
-    })
-    outcomes.push(outcome)
-    run = outcome.run
-  }
-  return { run, outcomes }
-}
-
-function integrationOutcomeDecision(
-  outcome: import('../lib/gates.js').TurnCloseOutcome,
-): ParityDecision {
-  if (outcome.kind === 'allow') return ALLOW
-  if (outcome.kind === 'refuse') return REFUSE
-  return {
-    decision: 'allow',
-    reason: 'the exhausted soft budget allows the close once as a recorded VIOLATION',
-    violation: true,
-  }
-}
-
-/** The soft signal's per-turn sequence: refuse once, then allow with a violation. */
-async function integrationSoftSequence(): Promise<readonly ParityDecision[]> {
-  const { outcomes } = await integrationSoftSettlement()
-  return outcomes.map(integrationOutcomeDecision)
+  const released = settleStep(run, 'review', 'cancelled', {
+    at: 1_001,
+    reason: `${SOFT_SETTLEMENT}: the retired refusal budget released the run without evidence`,
+  })
+  return setRunStatus(released, 'completed', 1_001, SOFT_SETTLEMENT)
 }
 
 /**
@@ -1357,13 +1331,7 @@ async function integrationSoftSequence(): Promise<readonly ParityDecision[]> {
  * authorized archive is allowed and the run never counts as a pass.
  */
 async function integrationArchiveCase(): Promise<ParityDecision> {
-  const { run, outcomes } = await integrationSoftSettlement()
-  if (outcomes[1]?.kind !== 'violation') {
-    return {
-      decision: 'refuse',
-      reason: 'the integration run did not settle on its exhausted soft budget',
-    }
-  }
+  const run = softSettledIntegrationRun()
   const receipt = {
     v: 1 as const,
     kind: 'intake' as const,
@@ -1396,8 +1364,6 @@ export interface ParityCaseResult {
   readonly legacySequence?: readonly ParityDecision[]
   /** The evaluator certification could not run. */
   readonly missing?: 'workflow' | 'legacy' | 'workflow-sequence' | 'legacy-sequence'
-  /** Whether the case's declared VIOLATION was reproduced. */
-  readonly declaredViolation?: boolean
 }
 
 export function decisionText(decisions: readonly ParityDecision[]): string {
@@ -1422,18 +1388,10 @@ export async function runParityCase(parityCase: ParityCase): Promise<ParityCaseR
       legacySequence.length === workflowSequence.length &&
       legacySequence.every((entry, index) => entry.decision === workflowSequence[index]?.decision)
     const recordedOk = legacySequence[0]?.decision === parityCase.legacy.decision
-    const declaredViolation =
-      parityCase.violation === undefined
-        ? undefined
-        : workflowSequence[parityCase.violation.turn]?.violation === true
     return {
-      ok:
-        decisionsMatch &&
-        recordedOk &&
-        (parityCase.violation === undefined || declaredViolation === true),
+      ok: decisionsMatch && recordedOk,
       legacySequence,
       workflowSequence,
-      ...(declaredViolation === undefined ? {} : { declaredViolation }),
     }
   }
   if (parityCase.workflow === undefined) return { ok: false, missing: 'workflow' }
