@@ -15,13 +15,6 @@
       "dedupe": "none"
     },
     {
-      "id": "delegate-result",
-      "event": "tool.result",
-      "filter": { "tool": "delegate" },
-      "mode": "shadow",
-      "dedupe": "none"
-    },
-    {
       "id": "worker-start",
       "event": "subagent.start",
       "filter": {},

@@ -411,8 +411,9 @@ plugin comparison is an association, not causal proof.
 The shipped signal map lives in `packages/setup/defaults.yml` and maps each shipped plugin's tools,
 message kinds, aborts, and commands to its own row; its test fails when a tool is renamed, a plugin is
 removed, a row loses its goal, eligibility appears on a guidance row, or a declared section or skill is
-no longer registered. The shipped configuration also carries two hypotheses (goal continuity on steps
-per human message and delegation on active minutes per episode) over the fixed metric catalog.
+no longer registered. The `workflows` row covers the `workflows` tool and `workflows-gate` messages.
+The shipped configuration also carries one hypothesis (goal continuity on steps per human message)
+over the fixed metric catalog.
 
 The following remain out of scope (P2): diff churn and rework measured from git, price tables and
 currency, per-session configuration or version snapshots, review verdicts, and CSV export.
@@ -487,7 +488,7 @@ workspace keeps at most 30 days and 50 MB total, pruning the oldest sessions fir
 rotates to `<sessionId>.jsonl.1` at 5 MiB and the rotation is retained beside the current file until a
 later write prunes it; a failed write leaves the previous records intact. The shipped shadow catalog
 lives in
-`packages/plugin-workflows/assets/triggers/` (turn start/stop, delegate result, subagent start/end)
+`packages/plugin-workflows/assets/triggers/` (turn start/stop, subagent start/end)
 and the OpenSpec plugin contributes the four OpenSpec entries from its `assets/workflows/` (below);
 both are evaluated by a pure function whose reasons are exactly `would-fire`, `event-mismatch`,
 `filter-mismatch`, `dedupe`,

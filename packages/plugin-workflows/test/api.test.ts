@@ -530,7 +530,7 @@ describe('workflows read API', () => {
     expect((runs.body as { runs: unknown[] }).runs).toEqual([])
     const triggers = await request(value, TRIGGERS_ROUTE, { session: 's1' })
     expect(triggers.status).toBe(200)
-    expect((triggers.body as { triggers: unknown[] }).triggers).toHaveLength(5)
+    expect((triggers.body as { triggers: unknown[] }).triggers).toHaveLength(4)
     const health = await request(value, HEALTH_ROUTE, { session: 's1' })
     expect(health.status).toBe(200)
     expect(health.body).toMatchObject({ state: 'waiting', session: 's1', listenerCount: 5 })
@@ -546,11 +546,11 @@ describe('workflows read API', () => {
         triggers: [
           { id: 'agent-turn-start', matched: true, reason: 'would-fire' },
           {
-            id: 'delegate-result',
+            id: 'worker-start',
             matched: false,
             reason: 'filter-mismatch',
             path: 'read',
-            filter: 'tool: delegate',
+            filter: 'subagent',
           },
         ],
       }),
@@ -565,7 +565,7 @@ describe('workflows read API', () => {
       matched: true,
       reason: 'would-fire',
     })
-    expect(body.triggers.find((trigger) => trigger.id === 'delegate-result')?.last?.reason).toBe(
+    expect(body.triggers.find((trigger) => trigger.id === 'worker-start')?.last?.reason).toBe(
       'filter-mismatch',
     )
   })

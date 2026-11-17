@@ -307,13 +307,7 @@ describe('workflow event recorder', () => {
     expect(records[1]?.callId).toBe('call-1')
     expect(records[1]?.ok).toBe(true)
     expect(records[1]?.turn).toBe(2)
-    expect(records[1]?.triggers).toHaveLength(14)
-    expect(
-      records[1]?.triggers?.some(
-        (evaluation) =>
-          evaluation.id === 'delegate-result' && evaluation.reason === 'filter-mismatch',
-      ),
-    ).toBe(true)
+    expect(records[1]?.triggers).toHaveLength(13)
     expect(records[3]?.subject).toBe('child-9')
     expect(records[3]?.turn).toBe(2)
     expect(records[4]?.subject).toBe('child-9')
@@ -947,7 +941,7 @@ describe('workflow event recorder', () => {
     })
     const health = (await readHealth()) ?? {}
     expect(health.listenerCount).toBe(6)
-    expect(health.triggerCount).toBe(9)
+    expect(health.triggerCount).toBe(8)
     expect(health.journalWritable).toBe(true)
     expect(health.lastEventAt).toBeUndefined()
     expect(typeof health.lastCheckAt).toBe('number')

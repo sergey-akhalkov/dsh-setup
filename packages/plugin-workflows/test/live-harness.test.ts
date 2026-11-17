@@ -179,21 +179,8 @@ describe('live-session proxy', () => {
       'utf8',
     )
 
-    // A delegate result observed in the live session; the projection uses the
-    // run handle for attribution.
-    emit(
-      'tools/result',
-      { agent, callId: 'call-delegate', name: 'delegate', arguments: {} },
-      {
-        isError: false,
-        content: [
-          {
-            type: 'text',
-            text: 'rule "task-review" review started\nrun: run-mw6live-1234abcd\nstate: running',
-          },
-        ],
-      },
-    )
+    // A settled delegation run observed in the live session; the projection
+    // attributes it through its local review record.
     const runDirectory = join(workspace, '.dsh', 'delegation', 'runs')
     await mkdir(runDirectory, { recursive: true })
     await writeFile(
@@ -262,21 +249,6 @@ describe('live-session proxy', () => {
       expect.arrayContaining(['checkpoint', 'delegation']),
     )
     for (const entry of runs.runs) expect(entry.attribution).toBe('local')
-
-    const triggers = (await read('/api/workflows/triggers')) as {
-      triggers: Array<{ id: string; last?: { reason: string } }>
-    }
-    expect(
-      triggers.triggers.find((trigger) => trigger.id === 'delegate-result')?.last?.reason,
-    ).toBe('would-fire')
-
-    const events = (await read('/api/workflows/events')) as {
-      events: Array<{ kind: string; triggers?: Array<{ id: string; reason: string }> }>
-    }
-    const delegate = events.events.find((event) => event.kind === 'tools/result')
-    expect(
-      delegate?.triggers?.find((evaluation) => evaluation.id === 'delegate-result')?.reason,
-    ).toBe('would-fire')
 
     const health = (await read('/api/workflows/health')) as { state: string; listenerCount: number }
     expect(health.listenerCount).toBeGreaterThanOrEqual(5)

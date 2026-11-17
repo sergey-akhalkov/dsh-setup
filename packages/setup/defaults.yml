@@ -106,6 +106,17 @@
         eligible:
           - tool: edit
           - tool: write
+      - id: workflows
+        label: Workflows
+        kind: signal
+        trigger: a workflow definition runs, a review starts, or an owned gate steers a message
+        goal: one workflow engine owns reviews and gates
+        match:
+          - tool: workflows
+          - sourceKind: workflows-gate
+        eligible:
+          - tool: edit
+          - tool: write
       - id: verification-gate
         label: Verification gate
         kind: signal

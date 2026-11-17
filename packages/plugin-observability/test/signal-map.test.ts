@@ -208,10 +208,15 @@ describe('shipped observability signal map', () => {
                   'spec.name',
                 ],
               }
-            : {
-                code: pluginCode(row.id),
-                required: ['defineTool(', 'ctx.tools.register('],
-              }
+            : row.id === 'workflows'
+              ? {
+                  code: pluginCode(row.id),
+                  required: ['toolsService.register(', "name: 'workflows'"],
+                }
+              : {
+                  code: pluginCode(row.id),
+                  required: ['defineTool(', 'ctx.tools.register('],
+                }
         for (const fragment of registration.required) {
           expect(registration.code, `${row.id} must contain ${fragment}`).toContain(fragment)
         }
@@ -273,8 +278,11 @@ describe('shipped observability signal map', () => {
     const eligible = shippedRows().filter((row) => row.eligible !== undefined)
     // The workflow-owned gate rows stay eligible; other rows must not join them.
     expect(eligible.map((row) => row.id)).toEqual(
-      expect.arrayContaining(['goal-continuity', 'verification-gate']),
+      expect.arrayContaining(['goal-continuity', 'verification-gate', 'workflows']),
     )
+    const workflows = shippedRows().find((row) => row.id === 'workflows')
+    expect(workflows).toMatchObject({ kind: 'signal', label: 'Workflows' })
+    expect(workflows?.match).toEqual([{ tool: 'workflows' }, { sourceKind: 'workflows-gate' }])
     for (const row of eligible) {
       expect(row.kind).toBe('signal')
       expect(row.eligible?.map((predicate) => predicate.tool).sort()).toEqual(['edit', 'write'])

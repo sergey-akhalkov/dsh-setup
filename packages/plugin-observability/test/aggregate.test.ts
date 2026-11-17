@@ -1,9 +1,26 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { aggregate, RANGES, type Range } from '../src/host/aggregate.ts'
 import { builtinRows, testableRow } from '../src/host/builtins.ts'
+import { parseConfig } from '../src/host/config.ts'
 import { extractRecords } from '../src/host/records.ts'
 import { configuredArgumentFields, parseRows } from '../src/host/rows.ts'
+
+const root = fileURLToPath(new URL('../../../', import.meta.url))
+
+function shippedRows() {
+  const document: unknown = parse(readFileSync(join(root, 'packages/setup/defaults.yml'), 'utf8'))
+  if (!Array.isArray(document)) throw new Error('defaults.yml must be an array')
+  const entry = (document as Array<{ id: string; config?: Record<string, unknown> }>).find(
+    (value) => value.id === 'dsh-setup-observability',
+  )
+  if (entry === undefined) throw new Error('defaults.yml has no dsh-setup-observability entry')
+  return parseConfig(entry.config).rows
+}
 
 let seq = 0
 
@@ -154,22 +171,10 @@ describe('aggregation buckets', () => {
         NOW - MINUTE,
       ),
     ])
-    const rows = [
-      ...builtinRows(records),
-      ...configured({
-        rows: [
-          {
-            id: 'workflows-gate',
-            label: 'Workflows gate',
-            kind: 'signal',
-            match: [{ sourceKind: 'workflows-gate' }],
-          },
-        ],
-      }),
-    ]
+    const rows = [...builtinRows(records), ...configured({ rows: [...shippedRows()] })]
     const result = aggregate(records, rows, 'session', NOW)
     expect(result.rows.get('sources.workflows-gate')?.counts).toEqual([1])
-    expect(result.rows.get('workflows-gate')?.counts).toEqual([1])
+    expect(result.rows.get('workflows')?.counts).toEqual([1])
   })
 
   it('counts errors and attributes a failed result to its tool row', () => {
