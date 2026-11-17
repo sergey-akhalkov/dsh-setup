@@ -795,3 +795,30 @@ When the session's tick completes the change's task list, the owned task-review 
 - **WHEN** the session's tick completes the task list and every checked task has a portable `PASS`
 - **THEN** the turn close is allowed and the archive is ready
 
+### Requirement: Owned work-progress gate
+
+The work-progress gate SHALL be owned by the engine: a code-changing turn SHALL be refused unless it has a newly checked and reviewed task or a `note` action whose worktree digest matches the current worktree. A stale note MUST NOT authorize the close and MUST NOT count as a `PASS`. The note SHALL be written by the `note` action to `.dsh/workflows/notes/<change>.json` and SHALL be readable by any session. The `note` action MUST require the change and the task id and MUST record a bounded reason and a timestamp; it SHALL accept only `in-progress` or `blocked` and MUST reject an unknown task. A checked task SHALL be accepted: a fully checked plan whose remaining work is review has no unchecked task to name, and its matching worktree-digest note is the only available progress evidence; a checked task's note never claims a tick and the task still needs its task-review `PASS` to complete.
+
+#### Scenario: Progress note fields and validation
+
+- **WHEN** a `note` call names a task with status `in-progress` and a reason, whether that task is checked or unchecked
+- **THEN** the note records the change, task id, status, reason, timestamp, and current digest
+- **AND WHEN** the same call names an unknown task
+- **THEN** the note is refused and nothing is written
+
+#### Scenario: Checked task note satisfies an all-checked plan
+
+- **WHEN** a code-changing turn occurs after every task is checked and a note names a checked task with a worktree digest matching the current worktree
+- **THEN** the progress gate allows the close, and the ticked task still requires its own task-review `PASS`
+
+#### Scenario: Unchecked task still needs a note
+
+- **WHEN** a code-changing turn leaves its task unchecked and has no matching note
+- **THEN** the gate steers to a note or a reviewed tick and the turn does not close for that gate
+
+#### Scenario: Current note allows the close
+
+- **WHEN** a code-changing turn carries a note whose worktree digest matches the current worktree
+- **THEN** the gate allows the close and a stale note keeps refusing it
+
+
