@@ -24,7 +24,7 @@ import { advanceIntake } from './intake.js';
 import { readInvolvement, writeInvolvement } from './involvement.js';
 import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
 import { writeProgressNote } from './notes.js';
-import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifySettings, retiredGateIssue, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
+import { checkpointGateIssue, parityLoadIssues, readParityReport, readPortableApproval, resolveVerifySettings, retiredGateIssue, reviewerBinding, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
 import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
@@ -3897,6 +3897,28 @@ export function apply(ctx, config = {}) {
         }
     }));
     const normalizedTaskText = (text) => text.replace(/\s+/gu, ' ').trim();
+    /** Whether a checked task already has the marker-bound portable PASS approval. */
+    const taskPassApproved = (workspace, change, taskId) => {
+        const binding = reviewerBinding(workspace);
+        if (binding?.invalid !== undefined)
+            return false;
+        const rule = binding?.taskRule ?? 'task-review';
+        const record = readPortableApproval(workspace, change, taskId);
+        if (record === undefined)
+            return false;
+        if (record.rule !== rule ||
+            record.change !== change ||
+            record.taskId !== taskId ||
+            record.verdict !== 'PASS') {
+            return false;
+        }
+        const target = record.target ?? {};
+        if (binding?.provider !== undefined && target.provider !== binding.provider)
+            return false;
+        if (binding?.model !== undefined && target.model !== binding.model)
+            return false;
+        return true;
+    };
     /**
      * Resolve a model start's explicit selector to the run context: the change
      * name, and for a task-scoped review exactly one checked task or one section.
@@ -3917,8 +3939,22 @@ export function apply(ctx, config = {}) {
             throw new Error(`definition "${definition.id}" is not a review`);
         }
         const context = { name: change };
-        if (selection.task === undefined && selection.section === undefined)
+        if (selection.task === undefined && selection.section === undefined) {
+            if (step.review?.scope !== 'task')
+                return context;
+            // Preserve the legacy next-checked-task selection: the first checked task
+            // that still lacks its portable PASS, in plan order.
+            const checked = numberedTasks(await readTasksPlan(workspace, change)).filter((task) => task.checked);
+            if (checked.length === 0) {
+                throw new Error(`change "${change}" has no checked task; tick the completed task in tasks.md, then start its review`);
+            }
+            const next = checked.find((task) => !taskPassApproved(workspace, change, task.id));
+            if (next === undefined) {
+                throw new Error(`every checked task of change "${change}" already has a PASS; pass a task or section to re-review, or archive the change`);
+            }
+            context.taskId = next.id;
             return context;
+        }
         if (step.review?.scope !== 'task') {
             throw new Error(`definition "${definition.id}" reviews the whole scope; omit task and section`);
         }
@@ -3996,12 +4032,77 @@ export function apply(ctx, config = {}) {
             startRun: async (definition, _at, selection) => {
                 await recoverIfNeeded(workspace);
                 const sessionId = String(agent.session.id);
-                const context = selection === undefined ? {} : await reviewStartContext(workspace, definition, selection);
+                const reviewStep = definition.steps.find((step) => step.executor === 'review');
+                let context = {};
+                if (reviewStep === undefined) {
+                    if (selection !== undefined &&
+                        (selection.change !== undefined ||
+                            selection.task !== undefined ||
+                            selection.section !== undefined)) {
+                        throw new Error(`definition "${definition.id}" has no review step; omit change, task, and section`);
+                    }
+                }
+                else {
+                    if (selection?.change === undefined) {
+                        throw new Error(`definition "${definition.id}" is a review and needs the change it reviews; pass change and optionally task or section`);
+                    }
+                    context = await reviewStartContext(workspace, definition, selection);
+                }
                 if (typeof context.name === 'string') {
                     await rememberInvolvement(workspace, sessionId, context.name);
                 }
-                const run = await startRunFor(workspace, sessionId, auth, definition, context);
-                return { run, firstStep: definition.steps[0]?.id ?? 'end' };
+                // Reuse a live run that already covers the selected unit: a repeated
+                // model start must not create a second open run for the same task. A
+                // live covering run is never advanced through this caller.
+                let run;
+                let created = false;
+                const release = await acquireAdmission(workspace);
+                try {
+                    if (reviewStep === undefined) {
+                        run = await startRunForUnlocked(workspace, sessionId, auth, definition, context);
+                        created = true;
+                    }
+                    else {
+                        // Coverage, not the context's synthetic section id, decides a
+                        // duplicate: a section run covers each task it lists, and a task
+                        // run is covered by a section run that names it.
+                        const idsOf = (values) => Array.isArray(values.taskIds)
+                            ? values.taskIds.filter((entry) => typeof entry === 'string')
+                            : typeof values.taskId === 'string'
+                                ? [values.taskId]
+                                : [];
+                        const wanted = idsOf(context);
+                        const existing = (await listAuthenticatedRuns(workspace, auth)).find((candidate) => {
+                            if (candidate.definition.id !== definition.id ||
+                                candidate.status !== 'running' ||
+                                candidate.context.name !== context.name) {
+                                return false;
+                            }
+                            if (wanted.length === 0)
+                                return true;
+                            const covered = idsOf(candidate.context);
+                            return covered.length === 0 || wanted.some((id) => covered.includes(id));
+                        });
+                        if (existing === undefined) {
+                            run = await startRunForUnlocked(workspace, sessionId, auth, definition, context);
+                            created = true;
+                        }
+                        else {
+                            run = existing;
+                        }
+                    }
+                }
+                finally {
+                    release();
+                }
+                if (!created)
+                    return { run, firstStep: definition.steps[0]?.id ?? 'end' };
+                // A model start executes its first step now: a review dispatch admits the
+                // reviewer before the tool returns, so the gate waits on a live review
+                // instead of a run that only starts when the turn closes.
+                const legacyState = legacySignalState();
+                const current = await advanceRun(workspace, run, definition, agent, auth, legacyState.installed, legacyState.enabled, turnMetrics.get(sessionId)?.turn ?? 1);
+                return { run: current, firstStep: definition.steps[0]?.id ?? 'end' };
             },
             resumeRun: async (runId) => {
                 await recoverIfNeeded(workspace);

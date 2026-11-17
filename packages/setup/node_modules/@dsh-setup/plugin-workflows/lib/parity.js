@@ -502,7 +502,7 @@ function strictPortableApprovalError(record) {
     }
     return undefined;
 }
-function readPortableApproval(workspace, change, taskId) {
+export function readPortableApproval(workspace, change, taskId) {
     try {
         const raw = JSON.parse(readFileSync(join(workspace, 'openspec', 'changes', change, 'reviews', `${taskId}.json`), 'utf8'));
         if (!isRecord(raw))
@@ -547,7 +547,8 @@ export function reviewerBinding(workspace) {
     if (typeof raw.archiveGate !== 'boolean') {
         return { invalid: 'review-approval.json archiveGate must be a boolean' };
     }
-    if (typeof raw.taskRule !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(raw.taskRule)) {
+    if (raw.taskRule !== undefined &&
+        (typeof raw.taskRule !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(raw.taskRule))) {
         return { invalid: 'review-approval.json taskRule must be a kebab-case rule id' };
     }
     if (raw.cutoff !== undefined &&
@@ -581,7 +582,7 @@ export function reviewerBinding(workspace) {
         ...(provider === undefined ? {} : { provider }),
         ...(model === undefined ? {} : { model }),
         archiveGate: raw.archiveGate,
-        taskRule: raw.taskRule,
+        ...(raw.taskRule === undefined ? {} : { taskRule: raw.taskRule }),
     };
 }
 /** One task number list bounded so the steer's action never falls off the end. */
@@ -663,7 +664,7 @@ export function reviewUnitText(change, unit, options = {}) {
  * tasks without a portable PASS is one section gap; a single missing task keeps
  * its own line.
  */
-export function taskReviewCoverage(workspace, change, rule = 'task-review', options = {}) {
+export function taskReviewCoverage(workspace, change, rule, options = {}) {
     let markdown;
     try {
         markdown = readFileSync(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
@@ -681,6 +682,7 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review', opti
             gaps: [`${reviewer.invalid}; fix openspec/review-approval.json before completing`],
         };
     }
+    const effectiveRule = rule ?? reviewer?.taskRule ?? 'task-review';
     const gaps = [];
     // A checked line the task parser cannot read is an unapproved checked task,
     // not an absent one; refuse the completion instead of silently skipping it.
@@ -696,7 +698,7 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review', opti
         if (record === undefined)
             mismatch.push('no portable PASS record');
         else {
-            if (record.rule !== rule)
+            if (record.rule !== effectiveRule)
                 mismatch.push(`rule "${String(record.rule)}"`);
             if (record.change !== change)
                 mismatch.push(`change "${String(record.change)}"`);
@@ -717,9 +719,9 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review', opti
         const unitTask = { ...task, checked: true };
         const pending = pendingRunsOf(change, { covered: [unitTask], missing: [unitTask] }, options.openRuns ?? []);
         const action = pending.length === 0
-            ? `run workflows(action: "start", definitionId: "${rule}", change: "${change}", task: "${task.id}")`
+            ? `run workflows(action: "start", definitionId: "${effectiveRule}", change: "${change}", task: "${task.id}")`
             : `the open review run${pending.length === 1 ? '' : 's'} ${pending.map((run) => `"${run.id}"`).join(', ')} cover${pending.length === 1 ? 's' : ''} it, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`;
-        return `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); ${action}`;
+        return `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${effectiveRule} PASS (${mismatch.join(', ')}); ${action}`;
     };
     const taskGaps = checkedTaskLines(markdown).map((task) => ({ task, gap: taskGap(task) }));
     const missing = new Set(taskGaps.filter((entry) => entry.gap !== undefined).map((e) => e.task.id));
@@ -741,7 +743,10 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review', opti
             section: { key: section.key, title: section.title },
             covered: section.covered,
             missing: absent,
-        }, { rule, ...(options.openRuns === undefined ? {} : { openRuns: options.openRuns }) }));
+        }, {
+            rule: effectiveRule,
+            ...(options.openRuns === undefined ? {} : { openRuns: options.openRuns }),
+        }));
         for (const task of absent)
             grouped.add(task.id);
     }
@@ -1004,13 +1009,14 @@ export function taskReviewCompletion(workspace, change, options = {}) {
     }
     if (/^\s*-\s*\[ \]\s+\d+(?:\.\d+)*\s+\S/mu.test(markdown))
         return undefined;
-    const coverage = taskReviewCoverage(workspace, change, 'task-review', options);
+    const rule = reviewerBinding(workspace)?.taskRule ?? 'task-review';
+    const coverage = taskReviewCoverage(workspace, change, rule, options);
     return {
         ok: coverage.ok,
         ...(coverage.gaps.length === 0
             ? {}
             : {
-                text: `completion of change "${change}" requires a portable task-review PASS for every checked task: ${coverage.gaps.join('; ')}`,
+                text: `completion of change "${change}" requires a portable ${rule} PASS for every checked task: ${coverage.gaps.join('; ')}`,
             }),
     };
 }

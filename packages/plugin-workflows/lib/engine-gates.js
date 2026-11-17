@@ -273,7 +273,7 @@ export async function evaluateOwnedProgressGate(input) {
         : `workflows { action: "note", change: "${input.change}", task: "${task.number} ${task.text}", status: "in-progress", reason: "..." }`;
     const reviewCall = task === undefined
         ? `workflows status`
-        : `workflows(action: "start", definitionId: "task-review", change: "${input.change}", task: "${task.id}")`;
+        : `workflows(action: "start", definitionId: "${reviewerBinding(input.workspace)?.taskRule ?? 'task-review'}", change: "${input.change}", task: "${task.id}")`;
     const digest = note?.currentDigest === undefined ? '(unavailable)' : note.currentDigest.slice(0, 12);
     return {
         decision: 'refuse',

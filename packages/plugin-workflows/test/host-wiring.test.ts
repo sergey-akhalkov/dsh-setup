@@ -27,6 +27,7 @@ vi.mock('../src/host/parity.ts', async (importOriginal) => {
 })
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { auditActive } from '../../../scripts/reviews-check.ts'
 import { apply, definitionEventsOf, inject } from '../src/host/index.ts'
 import { definitionsRegistry } from '../src/host/registry.ts'
 
@@ -154,6 +155,7 @@ function fakeHost(
     /** Default false: the task-review rule is owned by the engine. */
     readonly workflowOwned?: boolean
     readonly delegateBarrier?: Promise<void>
+    readonly subagents?: unknown
   } = {},
 ): {
   readonly ctx: Record<string, unknown>
@@ -334,6 +336,7 @@ function fakeHost(
           },
         }
       }
+      if (name === 'subagents') return options.subagents
       if (name === 'systemPrompt') {
         return {
           context: (contribution: {
@@ -7941,5 +7944,174 @@ describe('engine-owned gates', () => {
     const allowed = await complete()
     expect(allowed.nextCalled).toBe(true)
     expect(allowed.decision?.kind).toBe('continue')
+  })
+})
+
+describe('public review start through the workflows tool', () => {
+  const TASK = 'Task'
+
+  async function reviewWorkspace(): Promise<{ dir: string; taskId: string }> {
+    const dir = await tempWorkspace()
+    const change = join(dir, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(change, 'design.md'), '# Design\n', 'utf8')
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+    await writeFile(join(change, 'tasks.md'), `- [x] 1.1 ${TASK}\n`, 'utf8')
+    await mkdir(join(dir, 'openspec'), { recursive: true })
+    await writeFile(
+      join(dir, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true }),
+      'utf8',
+    )
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: dir, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    return { dir, taskId: taskIdOf(TASK) }
+  }
+
+  function reviewerStub(): { runtime: unknown; releases: Array<() => void> } {
+    const releases: Array<() => void> = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async (spec: { prompt: { text: string }[] }) => {
+        const instruction = spec.prompt.map((block) => block.text).join('\n')
+        const digest = /- Digest: ([a-f0-9]{64})/u.exec(instruction)?.[1] ?? ''
+        const pending = new Promise<void>((resolve) => {
+          releases.push(resolve)
+        })
+        return {
+          childId: `child-${releases.length}`,
+          result: pending.then(() => ({
+            output: [
+              {
+                type: 'text',
+                text: `\`\`\`json\n${JSON.stringify({ digest, verdict: 'PASS', findings: [] })}\n\`\`\``,
+              },
+            ],
+            stopReason: 'completed',
+          })),
+          dispose: async () => {},
+        }
+      },
+    }
+    return { runtime, releases }
+  }
+
+  async function runStart(
+    host: ReturnType<typeof fakeHost>,
+    args: Record<string, unknown>,
+  ): Promise<string> {
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+        }
+      | undefined
+    if (tool === undefined) throw new Error('the workflows tool is missing')
+    const started = await tool.execute(args, { agent: host.agent })
+    return started.text
+  }
+
+  async function start(
+    host: ReturnType<typeof fakeHost>,
+    definitionId: string,
+    taskId: string,
+  ): Promise<string> {
+    return runStart(host, { action: 'start', definitionId, change: 'auth', task: taskId })
+  }
+
+  async function approvalFor(dir: string, taskId: string): Promise<Record<string, unknown>> {
+    const file = join(dir, 'openspec', 'changes', 'auth', 'reviews', `${taskId}.json`)
+    await waitFor(async () => (await readFile(file, 'utf8').catch(() => '')) !== '')
+    return JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
+  }
+
+  it('executes the printed shipped task-review call and audits the runtime approval', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const { dir, taskId } = await reviewWorkspace()
+    const stub = reviewerStub()
+    const host = fakeHost(dir, { subagents: stub.runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    const text = await start(host, 'task-review', taskId)
+    expect(text).toContain('started at step "review"')
+    await waitFor(() => stub.releases.length > 0)
+    stub.releases.shift()?.()
+    const record = await approvalFor(dir, taskId)
+    expect(record.rule).toBe('task-review')
+    expect(record.verdict).toBe('PASS')
+    const audit = await auditActive(dir, 'auth')
+    expect(audit.ok, audit.lines.join('\n')).toBe(true)
+  })
+
+  it('publishes an approval the audit accepts for a non-default taskRule', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const { dir, taskId } = await reviewWorkspace()
+    await writeFile(
+      join(dir, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'focused-rereview' }),
+      'utf8',
+    )
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [
+        {
+          v: 1,
+          id: 'focused-rereview',
+          name: 'Focused re-review',
+          version: 1,
+          trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+          settings: {
+            allowModelStart: true,
+            risk: 'low',
+            gateOwnership: 'own',
+            maxBlocks: 3,
+            allowIntent: false,
+            gate: 'review',
+            gateIdentity: 'focused-rereview',
+          },
+          steps: [
+            {
+              id: 'review',
+              title: 'Review the checked task',
+              executor: 'review',
+              review: { target: 'codex', instruction: 'review-task', scope: 'task' },
+              evidence: {
+                kind: 'record',
+                rule: 'focused-rereview',
+                change: '{name}',
+                scope: 'task',
+                task: '{taskId}',
+                verdicts: ['PASS', 'ERROR'],
+                path: '.dsh/workflows/records/focused-rereview/{name}/tasks/{taskId}.json',
+              },
+              next: 'end',
+              blockTurnClose: true,
+            },
+          ],
+        },
+      ],
+    })
+    try {
+      const stub = reviewerStub()
+      const host = fakeHost(dir, { subagents: stub.runtime })
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const text = await start(host, 'focused-rereview', taskId)
+      expect(text).toContain('started at step "review"')
+      await waitFor(() => stub.releases.length > 0)
+      stub.releases.shift()?.()
+      const record = await approvalFor(dir, taskId)
+      expect(record.rule).toBe('focused-rereview')
+      const audit = await auditActive(dir, 'auth')
+      expect(audit.ok).toBe(true)
+    } finally {
+      unregister()
+    }
   })
 })

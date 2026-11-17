@@ -95,6 +95,17 @@ export interface TaskLine {
 }
 /** Checked numbered tasks from a tasks.md body. */
 export declare function checkedTaskLines(markdown: string): TaskLine[];
+interface PortableApproval {
+    readonly rule?: unknown;
+    readonly change?: unknown;
+    readonly taskId?: unknown;
+    readonly verdict?: unknown;
+    readonly target?: {
+        readonly provider?: unknown;
+        readonly model?: unknown;
+    };
+}
+export declare function readPortableApproval(workspace: string, change: string, taskId: string): PortableApproval | undefined;
 /** The marker's reviewer binding, its archive-gate settings, or its error. */
 export interface ReviewApprovalBinding {
     readonly provider?: string;
@@ -217,3 +228,4 @@ export declare function checkpointGateIssue(workspace: string, checkpointPath: s
 }): {
     readonly text: string;
 } | undefined;
+export {};

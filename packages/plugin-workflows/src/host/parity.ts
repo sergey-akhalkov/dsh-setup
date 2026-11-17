@@ -646,7 +646,7 @@ function strictPortableApprovalError(record: Record<string, unknown>): string | 
   return undefined
 }
 
-function readPortableApproval(
+export function readPortableApproval(
   workspace: string,
   change: string,
   taskId: string,
@@ -707,7 +707,10 @@ export function reviewerBinding(workspace: string): ReviewApprovalBinding | unde
   if (typeof raw.archiveGate !== 'boolean') {
     return { invalid: 'review-approval.json archiveGate must be a boolean' }
   }
-  if (typeof raw.taskRule !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(raw.taskRule)) {
+  if (
+    raw.taskRule !== undefined &&
+    (typeof raw.taskRule !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(raw.taskRule))
+  ) {
     return { invalid: 'review-approval.json taskRule must be a kebab-case rule id' }
   }
   if (
@@ -747,7 +750,7 @@ export function reviewerBinding(workspace: string): ReviewApprovalBinding | unde
     ...(provider === undefined ? {} : { provider }),
     ...(model === undefined ? {} : { model }),
     archiveGate: raw.archiveGate as boolean,
-    taskRule: raw.taskRule as string,
+    ...(raw.taskRule === undefined ? {} : { taskRule: raw.taskRule as string }),
   }
 }
 

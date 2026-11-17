@@ -545,7 +545,10 @@ export function parseReviewApprovalMarker(value: unknown): {
   if (typeof value.archiveGate !== 'boolean') {
     return { error: 'marker archiveGate must be true or false' }
   }
-  if (typeof value.taskRule !== 'string' || !RULE_ID_PATTERN.test(value.taskRule)) {
+  if (
+    value.taskRule !== undefined &&
+    (typeof value.taskRule !== 'string' || !RULE_ID_PATTERN.test(value.taskRule))
+  ) {
     return { error: 'marker taskRule must be a kebab-case rule id' }
   }
   if (value.reviewerProvider !== undefined && !isCleanString(value.reviewerProvider)) {
@@ -576,7 +579,7 @@ export function parseReviewApprovalMarker(value: unknown): {
     marker: {
       version: 1,
       archiveGate: value.archiveGate,
-      taskRule: value.taskRule,
+      taskRule: typeof value.taskRule === 'string' ? value.taskRule : 'task-review',
       ...(value.reviewerProvider === undefined ? {} : { reviewerProvider: value.reviewerProvider }),
       ...(value.reviewerModel === undefined ? {} : { reviewerModel: value.reviewerModel }),
       ...(value.cutoff === undefined ? {} : { cutoff: value.cutoff }),

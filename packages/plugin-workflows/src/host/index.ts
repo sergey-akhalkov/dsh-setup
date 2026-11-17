@@ -95,8 +95,10 @@ import {
   checkpointGateIssue,
   parityLoadIssues,
   readParityReport,
+  readPortableApproval,
   resolveVerifySettings,
   retiredGateIssue,
+  reviewerBinding,
   shippedParityReportPath,
   taskReviewCompletion,
   withVerifySettings,
@@ -4699,18 +4701,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
 
   const normalizedTaskText = (text: string): string => text.replace(/\s+/gu, ' ').trim()
 
-  /** Whether a checked task already has its portable PASS approval. */
+  /** Whether a checked task already has the marker-bound portable PASS approval. */
   const taskPassApproved = (workspace: string, change: string, taskId: string): boolean => {
-    try {
-      const raw = readFileSync(
-        join(workspace, 'openspec', 'changes', change, 'reviews', `${taskId}.json`),
-        'utf8',
-      )
-      const value: unknown = JSON.parse(raw)
-      return isRecord(value) && value.verdict === 'PASS'
-    } catch {
+    const binding = reviewerBinding(workspace)
+    if (binding?.invalid !== undefined) return false
+    const rule = binding?.taskRule ?? 'task-review'
+    const record = readPortableApproval(workspace, change, taskId)
+    if (record === undefined) return false
+    if (
+      record.rule !== rule ||
+      record.change !== change ||
+      record.taskId !== taskId ||
+      record.verdict !== 'PASS'
+    ) {
       return false
     }
+    const target = record.target ?? {}
+    if (binding?.provider !== undefined && target.provider !== binding.provider) return false
+    if (binding?.model !== undefined && target.model !== binding.model) return false
+    return true
   }
 
   /**
@@ -4874,7 +4883,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         } else {
           if (selection?.change === undefined) {
             throw new Error(
-              `definition "${definition.id}" is a review; pass change and optionally task or section`,
+              `definition "${definition.id}" is a review and needs the change it reviews; pass change and optionally task or section`,
             )
           }
           context = await reviewStartContext(workspace, definition, selection)
@@ -4883,32 +4892,49 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           await rememberInvolvement(workspace, sessionId, context.name)
         }
         // Reuse a live run that already covers the selected unit: a repeated
-        // model start must not create a second open run for the same task.
-        const covers = (candidate: Readonly<Record<string, unknown>>): boolean => {
-          if (context.taskId !== undefined) {
-            return (
-              candidate.taskId === context.taskId ||
-              (Array.isArray(candidate.taskIds) && candidate.taskIds.includes(context.taskId))
-            )
-          }
-          if (context.section !== undefined) return candidate.section === context.section
-          return true
-        }
+        // model start must not create a second open run for the same task. A
+        // live covering run is never advanced through this caller.
         let run: WorkflowRun
+        let created = false
         const release = await acquireAdmission(workspace)
         try {
-          const existing = (await listAuthenticatedRuns(workspace, auth)).find(
-            (candidate) =>
-              candidate.definition.id === definition.id &&
-              candidate.status === 'running' &&
-              candidate.context.name === context.name &&
-              covers(candidate.context),
-          )
-          run =
-            existing ?? (await startRunForUnlocked(workspace, sessionId, auth, definition, context))
+          if (reviewStep === undefined) {
+            run = await startRunForUnlocked(workspace, sessionId, auth, definition, context)
+            created = true
+          } else {
+            // Coverage, not the context's synthetic section id, decides a
+            // duplicate: a section run covers each task it lists, and a task
+            // run is covered by a section run that names it.
+            const idsOf = (values: Readonly<Record<string, unknown>>): string[] =>
+              Array.isArray(values.taskIds)
+                ? values.taskIds.filter((entry): entry is string => typeof entry === 'string')
+                : typeof values.taskId === 'string'
+                  ? [values.taskId]
+                  : []
+            const wanted = idsOf(context)
+            const existing = (await listAuthenticatedRuns(workspace, auth)).find((candidate) => {
+              if (
+                candidate.definition.id !== definition.id ||
+                candidate.status !== 'running' ||
+                candidate.context.name !== context.name
+              ) {
+                return false
+              }
+              if (wanted.length === 0) return true
+              const covered = idsOf(candidate.context)
+              return covered.length === 0 || wanted.some((id) => covered.includes(id))
+            })
+            if (existing === undefined) {
+              run = await startRunForUnlocked(workspace, sessionId, auth, definition, context)
+              created = true
+            } else {
+              run = existing
+            }
+          }
         } finally {
           release()
         }
+        if (!created) return { run, firstStep: definition.steps[0]?.id ?? 'end' }
         // A model start executes its first step now: a review dispatch admits the
         // reviewer before the tool returns, so the gate waits on a live review
         // instead of a run that only starts when the turn closes.
