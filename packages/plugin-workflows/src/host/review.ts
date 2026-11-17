@@ -1424,6 +1424,8 @@ interface PriorFindings {
   readonly digest: string
   readonly findings: readonly ReviewFinding[]
   readonly reviewedTree?: string
+  /** The checked tasks the prior review covered, for a section unit. */
+  readonly taskIds?: readonly string[]
 }
 
 function priorFindingsOf(value: unknown): PriorFindings | undefined {
@@ -1453,6 +1455,13 @@ function priorFindingsOf(value: unknown): PriorFindings | undefined {
     digest: value.digest,
     findings,
     ...(typeof value.reviewedTree === 'string' ? { reviewedTree: value.reviewedTree } : {}),
+    ...(Array.isArray(value.taskIds)
+      ? {
+          taskIds: value.taskIds.filter(
+            (entry): entry is string => typeof entry === 'string' && TASK_ID_PATTERN.test(entry),
+          ),
+        }
+      : {}),
   }
 }
 
@@ -1568,6 +1577,21 @@ async function focusedAttempt(
   if (input.step.review?.scope !== 'task') return undefined
   const prior = await priorFindingsFor(input)
   if (prior === undefined || prior.digest === record.digest) return undefined
+  // A section whose covered set changed is a different review scope: a newly
+  // checked task may have existed before the prior tree, so its defects stay
+  // outside the focused diff and would be approved unread.
+  const section = input.prepared.section
+  if (section !== undefined) {
+    const covered = section.covered.map((task) => task.id)
+    const priorCovered = prior.taskIds
+    if (
+      priorCovered === undefined ||
+      priorCovered.length !== covered.length ||
+      !covered.every((id) => priorCovered.includes(id))
+    ) {
+      return undefined
+    }
+  }
   const previous: FocusedFinding[] = prior.findings.map((finding, index) => ({
     id: `f${String(index + 1)}`,
     finding,
@@ -1796,6 +1820,23 @@ export async function beginReviewAttempt(input: ReviewRunInput): Promise<ReviewA
   const prepared = await prepareAttempt(input, now)
   if (prepared.kind === 'failed') {
     return { started: Promise.resolve(), result: Promise.resolve(prepared.outcome), now }
+  }
+  // The asynchronous preparation (prior record, focused diff) can outlive the
+  // scheduler's disposal or a fence: a disposed run must not start a reviewer on
+  // a checkout that was already released.
+  if (input.cancelled?.() === true) {
+    return {
+      started: Promise.resolve(),
+      result: Promise.resolve(
+        failureOutcome(
+          prepared.record,
+          'the run was fenced or the review scheduler disposed while the review prepared; no reviewer started',
+          'config',
+          false,
+        ),
+      ),
+      now,
+    }
   }
   const controller = new AbortController()
   const forwardAbort = (): void => controller.abort()

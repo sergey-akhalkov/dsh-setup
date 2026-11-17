@@ -1373,7 +1373,7 @@ When `retro` is `own`, the workflow SHALL request `work_checkpoint` at a substan
 
 ### Requirement: Focused re-review context
 
-After a prior `FINDINGS` record for the same task or section at a different digest, the next review prompt SHALL carry the prior findings and a bounded diff between the previously reviewed tree and the current one. When the prior reviewed tree is unavailable, the prompt SHALL carry the findings alone and name the missing input. Whole-spec reviews are unchanged.
+After a prior `FINDINGS` record for the same task or section at a different digest, and only while that record covered the same set of checked tasks, the next review prompt SHALL carry the prior findings and a bounded diff between the previously reviewed tree and the current one. When the prior reviewed tree is unavailable, the prompt SHALL carry the findings alone and name the missing input. A section whose covered task set changed SHALL be a full review. Whole-spec reviews are unchanged.
 
 #### Scenario: Previous findings and diff are rendered
 
@@ -1384,6 +1384,11 @@ After a prior `FINDINGS` record for the same task or section at a different dige
 
 - **WHEN** the prior record has no reviewed tree or its object is no longer in the repository
 - **THEN** the prompt carries the prior findings, states that the diff is unavailable, and starts the review
+
+#### Scenario: Expanded section coverage is a full review
+
+- **WHEN** a section review re-runs after a prior `FINDINGS` record that covered a different set of tasks
+- **THEN** the review is a full review, because a newly covered task may have existed before the prior reviewed tree
 
 #### Scenario: Whole-spec review is unchanged
 

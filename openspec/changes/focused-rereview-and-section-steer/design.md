@@ -44,11 +44,14 @@ See `proposal.md` for the measured loop and why now. The relevant current state 
 
 ### D1 — A focused re-review is the same review unit, not a new review kind
 
-The focused prompt applies when the unit's latest authoritative record is `FINDINGS` and its digest
-differs from the prepared digest. The unit is the existing identity: definition, change, and task id
-or section record id. A prior `PASS` is reused as today; a prior `ERROR` is a dispatch retry with a
-fresh prompt; a matching `FINDINGS` follows the existing same-digest path. The unit's scope, the
-reviewer, the queue, and the verdict outcome set are unchanged.
+The focused prompt applies when the unit's latest authoritative record is `FINDINGS`, its digest
+differs from the prepared digest, and the record covered the same checked-task set; a section whose
+coverage grew is a full review, because a newly checked task may have existed before the prior
+reviewed tree and its defects would fall outside the focused diff. The unit is the existing identity:
+definition, change, and task id or section record id. A prior `PASS` is reused as today; a prior
+`ERROR` is a dispatch retry with a fresh prompt; a matching `FINDINGS` follows the existing
+same-digest path. The unit's scope, the reviewer, the queue, and the verdict outcome set are
+unchanged.
 
 Rejected: a separate "verification" executor or definition (duplicates the queue, record, and gate
 paths); a verification run that skips the task scope (accepts a regression outside the diff without

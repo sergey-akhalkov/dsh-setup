@@ -33,6 +33,7 @@ import {
   writePortableApproval,
 } from '../src/host/review.ts'
 import { createRun } from '../src/host/runs.ts'
+import { taskIdOf } from '../src/host/tasks.ts'
 
 const TASK_ID = '0123456789abcdef'
 const DIGEST = 'a'.repeat(64)
@@ -820,6 +821,134 @@ describe('focused re-review', () => {
     expect(prompt).toContain(
       'The patch is truncated at the 400-line / 32 KiB bound; read the full change in the current snapshot checkout at /snapshot/run-1.',
     )
+  })
+
+  it('starts no reviewer when the run is cancelled during preparation', async () => {
+    const root = await workspace()
+    roots.push(root)
+    let started = 0
+    const result = await invoke(
+      root,
+      {
+        run: async () => {
+          started += 1
+          return { childId: 'child-1', completed: true, text: PASS_TEXT }
+        },
+      },
+      { cancelled: () => true },
+    )
+    expect(started).toBe(0)
+    expect(result.discarded).toBe(true)
+  })
+
+  it('keeps a full review when the prior section covered a narrower set', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const changeDir = join(root, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First covered\n- [x] 1.2 Second covered\n- [x] 1.3 Third covered\n',
+      'utf8',
+    )
+    const first = taskIdOf('First covered')
+    const second = taskIdOf('Second covered')
+    const third = taskIdOf('Third covered')
+    const priorSection: SectionReview = {
+      key: '1',
+      title: '1. Engine',
+      recordId: 'fedcba9876543210',
+      covered: [
+        { id: first, number: '1.1', text: 'First covered' },
+        { id: second, number: '1.2', text: 'Second covered' },
+      ],
+      unchecked: [],
+    }
+    const recordPath = localReviewRecordPath({
+      definition: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId: priorSection.recordId,
+    })
+    await mkdir(join(root, recordPath, '..'), { recursive: true })
+    await writeFile(
+      join(root, recordPath),
+      `${JSON.stringify(
+        {
+          definition: 'task-review',
+          rule: 'task-review',
+          change: 'auth',
+          phase: 'task',
+          scope: 'task',
+          taskId: priorSection.recordId,
+          section: '1',
+          sectionTitle: '1. Engine',
+          taskIds: [first, second],
+          digest: sectionReviewDigest(priorSection, DIGEST),
+          verdict: 'FINDINGS',
+          findings: [testFinding({ title: 'First failure' })],
+          reviewedTree: TREE_BEFORE,
+          target: { provider: 'codex-subagent' },
+          time: '2026-11-14T00:00:00.000Z',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    )
+    const currentSection: SectionReview = {
+      ...priorSection,
+      covered: [...priorSection.covered, { id: third, number: '1.3', text: 'Third covered' }],
+    }
+    let prompt = ''
+    const digest = sectionReviewDigest(currentSection, DIGEST, TREE_AFTER)
+    // A section run carries the section record id as its task id, so the step
+    // evidence path resolves to the section record.
+    const definition = taskDefinition()
+    const result = await runReviewStep({
+      run: createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace: '/workspace',
+        context: { name: 'auth', taskId: priorSection.recordId, section: '1' },
+        steps: ['review'],
+        now: 1_000,
+      }),
+      definition,
+      step: definition.steps[0] as Definition['steps'][number],
+      reviewer: reviewer(),
+      runner: {
+        run: async (request) => {
+          prompt = request.prompt
+          return {
+            childId: 'child-1',
+            completed: true,
+            text: fenced({ digest, verdict: 'PASS', findings: [] }),
+          }
+        },
+      },
+      context: {
+        workspace: root,
+        values: {
+          name: 'auth',
+          taskId: priorSection.recordId,
+          taskIds: [first, second, third],
+        },
+      },
+      change: 'auth',
+      prepared: { specDigest: DIGEST, tree: TREE_AFTER, section: currentSection },
+      timeoutMs: 5_000,
+      session: 'session-1',
+      now: 2_000,
+      runGit: fakeGit().runGit,
+      renderPrompt: renderReviewPrompt,
+    })
+    // The newly checked task existed before the prior tree, so its defects are
+    // outside the focused diff: the expanded section gets a full review.
+    expect(result.run.steps[0]?.state).toBe('done')
+    expect(prompt).not.toContain('The prior reviewed tree is')
+    expect(prompt).not.toContain('also return `previous`')
   })
 
   it('keeps the full prompt when no prior FINDINGS moved', async () => {
