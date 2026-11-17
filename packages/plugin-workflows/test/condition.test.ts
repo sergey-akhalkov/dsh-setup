@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -599,11 +599,26 @@ describe('condition context path boundary', () => {
     }
   })
 
-  it('builds a context for this change without rejecting its prose', async () => {
-    const root = join(fileURLToPath(new URL('..', import.meta.url)), '..', '..')
+  it('builds a context for this change plan without rejecting its prose', async () => {
+    const source = join(
+      fileURLToPath(new URL('..', import.meta.url)),
+      '..',
+      '..',
+      'openspec',
+      'changes',
+      'archive',
+      '2026-11-17-retire-delegation-rules',
+      'tasks.md',
+    )
+    const root = await workspace()
+    await writeFile(
+      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+      await readFile(source, 'utf8'),
+      'utf8',
+    )
     const context = await buildConditionContext({
       workspace: root,
-      change: 'retire-delegation-rules',
+      change: 'auth',
       event: { kind: 'turn.stopping' },
     })
     expect(context.change.tasks.items.length).toBeGreaterThan(0)
