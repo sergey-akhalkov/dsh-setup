@@ -10,6 +10,7 @@ import {
   createReviewSnapshot,
   discardReviewSnapshot,
   reviewedInputs,
+  reviewSnapshotName,
   signatureHash,
   startSnapshotLease,
   stopSnapshotLease,
@@ -396,8 +397,10 @@ describe('snapshot lifecycle', () => {
 
   it('writes a lease and removes it with the checkout', async () => {
     const { dir, snapshot } = await lifecycleFixture('run-lease')
+    const name = reviewSnapshotName('run-lease')
+    expect(snapshot.worktree).toBe(join(dir, SNAPSHOTS, name))
     const lease = `${snapshot.worktree}.lease`
-    const scratch = join(dir, SCRATCH, 'run-lease.index')
+    const scratch = join(dir, SCRATCH, `${name}.index`)
     const value = JSON.parse(await readFile(lease, 'utf8')) as { expiresAt: number }
     expect(value.expiresAt).toBeGreaterThan(Date.now())
     await expect(readFile(scratch)).resolves.toBeDefined()
@@ -405,6 +408,45 @@ describe('snapshot lifecycle', () => {
     await expect(readFile(lease)).rejects.toThrow()
     await expect(readFile(scratch)).rejects.toThrow()
     await expect(readFile(join(snapshot.worktree, 'a.txt'))).rejects.toThrow()
+  })
+
+  it('keeps one stable path per unit key and rebuilds a leftover checkout', async () => {
+    // A unit key contains separators and spaces; the path must stay one safe
+    // segment and the same across rounds so the provider can resume its thread.
+    const key = 'review:change-a:section:1 Engine setup'
+    const name = reviewSnapshotName(key)
+    expect(name).toMatch(/^[a-z0-9-]+$/u)
+    expect(name).not.toContain('..')
+    expect(name.length).toBeLessThanOrEqual(64)
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    await writeFile(join(dir, 'a.txt'), 'a\n')
+    const first = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      key,
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (first === undefined) throw new Error('expected a review snapshot')
+    expect(first.worktree).toBe(join(dir, SNAPSHOTS, name))
+    // The next round rebuilds the same path over the leftover, not a new one.
+    const second = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      key,
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (second === undefined) throw new Error('expected the rebuilt snapshot')
+    expect(second.worktree).toBe(first.worktree)
+    expect(await readFile(join(second.worktree, 'a.txt'), 'utf8')).toBe('a\n')
+    await discardReviewSnapshot(dir, key, defaultGit)
+    await expect(readFile(join(second.worktree, 'a.txt'))).rejects.toThrow()
+    expect(reviewSnapshotName('review:change-a:section:2')).not.toBe(name)
   })
 
   it('keeps a valid lease past the review timeout and sweeps it once expired', async () => {
@@ -454,11 +496,12 @@ describe('snapshot lifecycle', () => {
   it('renews a lease and stops without recreating it', async () => {
     const dir = await repository()
     await writeFile(join(dir, '.gitignore'), '.dsh/\n')
-    const lease = join(dir, SNAPSHOTS, 'run-renew.lease')
+    const name = reviewSnapshotName('run-renew')
+    const lease = join(dir, SNAPSHOTS, `${name}.lease`)
     await startSnapshotLease(dir, 'run-renew', 10)
     await rm(lease, { force: true })
     await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(JSON.parse(await readFile(lease, 'utf8'))).toMatchObject({ runId: 'run-renew' })
+    expect(JSON.parse(await readFile(lease, 'utf8'))).toMatchObject({ runId: name })
     await stopSnapshotLease(dir, 'run-renew')
     await rm(lease, { force: true })
     await new Promise((resolve) => setTimeout(resolve, 40))
@@ -552,6 +595,7 @@ describe('snapshot lifecycle', () => {
 
   it('retries a failed snapshot removal on a later sweep', async () => {
     const { dir, snapshot } = await lifecycleFixture('run-locked')
+    const name = reviewSnapshotName('run-locked')
     const failingGit: GitRunner = async (args, cwd, signal) => {
       if (args[0] === 'worktree' && args[1] === 'remove') throw new Error('git removal failed')
       return defaultGit(args, cwd, signal)
@@ -566,7 +610,7 @@ describe('snapshot lifecycle', () => {
     }
     await discardReviewSnapshot(dir, 'run-locked', failingGit, failingRemove)
     expect(injected).toBe(true)
-    expect(await readdir(join(dir, SNAPSHOTS))).toContain('run-locked')
+    expect(await readdir(join(dir, SNAPSHOTS))).toContain(name)
     await sweepReviewSnapshots(dir, defaultGit, Date.now() + 11 * 60_000)
     await expect(readFile(join(snapshot.worktree, 'a.txt'))).rejects.toThrow()
   })
