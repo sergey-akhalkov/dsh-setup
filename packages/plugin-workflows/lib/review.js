@@ -609,6 +609,9 @@ export function renderReviewPrompt(input) {
         lines.push('', input.focused.changes === undefined
             ? unavailableDiffBlock(input.focused)
             : changesSinceBlock(input.focused.changes));
+        // The frozen snapshot excludes the active change directory, so the tree
+        // diff never carries the artifacts the digest also binds.
+        lines.push('', 'The change artifacts (proposal, design, delta specs, and tasks) are outside this tree diff; read them in the current snapshot before confirming.');
     }
     lines.push('', 'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with `class`, `title`, `evidence`, and `fix`. Prose outside that block is ignored.');
     if (input.focused !== undefined) {

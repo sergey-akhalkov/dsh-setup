@@ -640,6 +640,7 @@ describe('focused re-review', () => {
     expect(prompt).toContain('- A\tsrc/new.ts')
     expect(prompt).toContain('+export const engine = 2')
     expect(prompt).toContain('also return `previous`')
+    expect(prompt).toContain('are outside this tree diff; read them in the current snapshot')
     const local = JSON.parse(await readFile(join(root, taskRecordPath()), 'utf8')) as ReviewRecord
     expect(local.reviewedTree).toBe(TREE_AFTER)
     expect(local.previous).toEqual([

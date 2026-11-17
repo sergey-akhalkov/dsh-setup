@@ -848,6 +848,12 @@ export function renderReviewPrompt(input: ReviewPromptInput): string {
         ? unavailableDiffBlock(input.focused)
         : changesSinceBlock(input.focused.changes),
     )
+    // The frozen snapshot excludes the active change directory, so the tree
+    // diff never carries the artifacts the digest also binds.
+    lines.push(
+      '',
+      'The change artifacts (proposal, design, delta specs, and tasks) are outside this tree diff; read them in the current snapshot before confirming.',
+    )
   }
   lines.push(
     '',
