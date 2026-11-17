@@ -6,7 +6,7 @@ import { CHANGE_NAME } from './command-parse.js';
 import { globMatches } from './evaluate.js';
 import { isInside } from './fs-change.js';
 import { worktreeDigest } from './git.js';
-import { reviewerBinding, taskReviewCoverage } from './parity.js';
+import { readPortableApproval, reviewerBinding, taskReviewCoverage } from './parity.js';
 import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js';
 /** A validated checkpoint record path a host-computed context value may carry. */
 const CHECKPOINT_PATH = /^\.dsh\/work-checkpoints\/[a-f0-9]{16}\/[0-9]+\.json$/u;
@@ -521,9 +521,10 @@ async function recordCheck(evidence, context, item) {
         return mismatch(`the record verdict "${String(record.verdict)}" is not one of: ${accepted.join(', ')}`, path.text, item);
     }
     // The marker's reviewer binding applies to intermediate PASS and ERROR
-    // records too: an old record from another reviewer is not this review.
-    if (evidence.rule === 'task-review') {
-        const binding = reviewerBinding(context.workspace);
+    // records too, for the marker-selected task rule as well as the default.
+    const binding = reviewerBinding(context.workspace);
+    const taskRule = binding?.taskRule ?? 'task-review';
+    if (record.rule === taskRule) {
         if (binding?.invalid !== undefined) {
             return mismatch(`${binding.invalid}; fix openspec/review-approval.json`, path.text, item);
         }
@@ -533,6 +534,31 @@ async function recordCheck(evidence, context, item) {
         }
         if (binding?.model !== undefined && target.model !== binding.model) {
             return mismatch(`the record target model "${String(target.model)}" is not the bound "${binding.model}"`, path.text, item);
+        }
+    }
+    // An explicit task start also refuses to reuse a local PASS whose portable
+    // approval is missing or rejected; the executor must re-review it.
+    if (context.values.explicitReview === true &&
+        record.verdict === 'PASS' &&
+        record.scope === 'task' &&
+        typeof record.taskId === 'string') {
+        const approvalChange = change?.text ?? (typeof record.change === 'string' ? record.change : undefined);
+        const approval = approvalChange === undefined
+            ? undefined
+            : readPortableApproval(context.workspace, approvalChange, record.taskId);
+        const approvalTarget = (approval?.target ?? {});
+        const recordTarget = (record.target ?? {});
+        const matching = approval !== undefined &&
+            approval.rule === record.rule &&
+            approval.change === approvalChange &&
+            approval.taskId === record.taskId &&
+            approval.verdict === 'PASS' &&
+            (binding?.provider === undefined || approvalTarget.provider === binding.provider) &&
+            (binding?.model === undefined || approvalTarget.model === binding.model) &&
+            (binding?.provider === undefined || recordTarget.provider === binding.provider) &&
+            (binding?.model === undefined || recordTarget.model === binding.model);
+        if (!matching) {
+            return mismatch('an explicit task review start needs the matching portable approval; dispatch a new review', path.text, item);
         }
     }
     // An explicit review start reopens an earlier ERROR so a retry can dispatch a

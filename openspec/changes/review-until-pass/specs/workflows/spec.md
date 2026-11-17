@@ -151,8 +151,8 @@ reviewed plan SHALL require a new round in the same thread.
 
 `integration-review` SHALL be a required review: it MUST NOT be `nonCritical`, MUST NOT settle
 `completed-soft`, and MUST iterate until a current `PASS` like the other reviews. The agent archive
-path SHALL refuse while its current `PASS` is missing or stale. The user-clicked archive remains the
-explicit human override.
+path SHALL refuse while its current `PASS` is missing or stale when the plan is complete and
+non-empty. The user-clicked archive remains the explicit human override.
 
 #### Scenario: Integration FINDINGS loops
 
@@ -161,7 +161,7 @@ explicit human override.
 
 #### Scenario: Archive requires integration PASS
 
-- **WHEN** the task list is complete and the current integration `PASS` is missing or stale
+- **WHEN** the task list is complete and non-empty and the current integration `PASS` is missing or stale
 - **THEN** the agent's `openspec archive` call is refused and names the missing integration review
 
 #### Scenario: User click overrides
@@ -173,7 +173,7 @@ explicit human override.
 
 ### Requirement: Turn-close gate
 
-When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that contains an owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION`. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
+When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION`. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
 
 #### Scenario: Close is refused
 
@@ -242,7 +242,7 @@ NOT satisfy a whole-spec step.
 
 ### Requirement: Pre-execute archive gate
 
-The engine SHALL refuse `openspec archive <change>` while a required review or spec-review step is open, no authenticated completed `change-intake` run or authenticated receipt exists, the current whole-spec `PASS` record is missing or stale, or the task list is complete and the current `integration-review` `PASS` is missing or stale. A receipt MUST verify its host HMAC; a forged or unsigned receipt MUST NOT satisfy the gate. The refusal SHALL name the run, step, and missing evidence. It MUST allow the archive when the evidence is present and MUST NOT treat a text claim as evidence. When a shell command carries a shell separator and contains an archive invocation or archive move that the parser cannot understand, the engine SHALL refuse the call with the existing "could not be parsed safely" reason instead of allowing it; a compound command that names no archive SHALL NOT be refused by this rule.
+The engine SHALL refuse `openspec archive <change>` while a required review or spec-review step is open, no authenticated completed `change-intake` run or authenticated receipt exists, the current whole-spec `PASS` record is missing or stale, or the task list is complete and non-empty and the current `integration-review` `PASS` is missing or stale. A receipt MUST verify its host HMAC; a forged or unsigned receipt MUST NOT satisfy the gate. The refusal SHALL name the run, step, and missing evidence. It MUST allow the archive when the evidence is present and MUST NOT treat a text claim as evidence. When a shell command carries a shell separator and contains an archive invocation or archive move that the parser cannot understand, the engine SHALL refuse the call with the existing "could not be parsed safely" reason instead of allowing it; a compound command that names no archive SHALL NOT be refused by this rule.
 
 #### Scenario: Archive is refused
 
@@ -261,7 +261,7 @@ The engine SHALL refuse `openspec archive <change>` while a required review or s
 
 #### Scenario: Stale integration review blocks archive
 
-- **WHEN** the task list is complete and the integration record is missing or its worktree digest is stale
+- **WHEN** the task list is complete and non-empty and the integration record is missing or its worktree digest is stale
 - **THEN** the archive is refused with the stale integration review and the next review action
 
 #### Scenario: Adopted change archives

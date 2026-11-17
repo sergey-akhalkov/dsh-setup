@@ -81,8 +81,8 @@ correctness requirement.
 review run (a blocked `FINDINGS` step is re-requested at the new digest), starts every due unit that
 has no live run, and then decides: if every due unit has a live review, the close is allowed as a
 waiting close with a steer naming the runs and a no-writes request, and no `VIOLATION` is recorded;
-otherwise the close is refused until every due unit is live. A run containing an owned review step is
-never released by `maxBlocks`, and a matching `ERROR` is no longer provisional evidence for a close.
+otherwise the close is refused until every due unit is live. A run that reached its owned review step
+is never released by `maxBlocks`, and a matching `ERROR` is no longer provisional evidence for a close.
 Only a current `PASS` clears a unit. Rejected: a synchronous close that blocks the host for the whole
 review (5–30 minutes, no verdict delivery, host timeouts); refusing the close while a review is live
 (the settlement starts a new turn, so a never-ending turn cannot receive the verdict — a deadlock);
@@ -123,7 +123,8 @@ the agent's `workflows start` (the observed sessions show it forgetting or dupli
 the trigger (a code fix does not touch `tasks.md`, so no trigger fires and the unit waits for a tick).
 
 **D7 — Integration review is required.** `integration-review` loses `nonCritical` and the soft
-settlement, and the agent archive path requires its current `PASS` when the task list is complete.
+settlement, and the agent archive path requires its current `PASS` when the task list is complete and
+non-empty.
 The user-clicked archive stays the explicit human override. The parity report drops the legacy soft
 integration entry as a declared, documented difference, and the report and template hashes are
 regenerated. Rejected: keep the soft rule (contradicts "до PASS"); make the click require it (the
@@ -178,7 +179,7 @@ exists.
 - A profile that still sets `reviewQueue.concurrency`, `maxQueued`, or `waitTimeoutMs` loads, and the
   fields have no effect. The shipped defaults and the generated setup patch drop them.
 - A local review definition that still declares `maxBlocks` or `integration-review`'s `nonCritical`
-  still loads; the gate ignores both for a run containing an owned review step.
+  still loads; the gate ignores both once the run reached its owned review step.
 - `docs/workflows.md`, `AGENTS.md` §5, and the shipped `task-lanes.md` guidance move to lane-parallel
   review and the waiting close in the same change; the repository gate (`pnpm check`, `gen:check`,
   `validate:repo`, parity) must stay green.
@@ -188,8 +189,9 @@ exists.
 - `review.test.ts`: the prompt carries the unit key; the same key across rounds; the focused task
   round; the whole-scope round is full.
 - `review-snapshot.test.ts`: the stable unit path, discard and recreate, lease/sweep.
-- `engine-gates.test.ts`: lane-first units (including one missing task), `ERROR` is not coverage, the
-  gate starts every due unit, the waiting close, no budget release for a review run.
+- `owned-gates.test.ts` / `gates.test.ts` / `host-wiring.test.ts`: lane-first units (including one
+  missing task), `ERROR` is not coverage, every due unit starts in one close, the waiting close, no
+  budget release for a review run.
 - `review-queue.test.ts` / `review-scheduler.test.ts`: immediate admission with N concurrent runs,
   identity dedupe, retired limits, transport retry.
 - `review-host.test.ts` / `host-wiring.test.ts`: the gate dispatch path, whole-scope snapshot, stale

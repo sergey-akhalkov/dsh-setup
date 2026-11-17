@@ -27,7 +27,7 @@ is possible.
   checkout lives at a stable path, so the Codex provider's existing review-thread reuse resumes the
   same conversation across rounds. Fixes are returned to that thread with the complete prior-finding
   inventory and the diff since the reviewed tree.
-- **No round cap.** A run that contains an owned review step never releases the turn-close budget:
+- **No round cap.** A run that reached its owned review step never releases the turn-close budget:
   `FINDINGS` and `ERROR` leave the unit due, and the next close starts the next round on the same
   thread. Only a current `PASS` ends the obligation. While a review is live, the close is the waiting
   close (no `VIOLATION`); it ends the turn so the asynchronous verdict can be delivered, and the next
