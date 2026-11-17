@@ -21,14 +21,6 @@ function specReview(state: 'missing' | 'stale' | 'current'): RetainedDecision {
   return allow('the current whole-spec PASS record completes the step')
 }
 
-/** The soft integration rule refuses once, then allows the next close. */
-function integrationSoft(): readonly RetainedDecision[] {
-  return [
-    refuse('the first close has no integration record'),
-    allow('the exhausted soft budget allows the next close'),
-  ]
-}
-
 /** A progress note allows the close only while it names the current worktree. */
 function progress(
   state: 'current-note' | 'stale-note' | 'unchecked-missing-note' | 'reviewed-tick',
@@ -53,8 +45,10 @@ export const RETAINED_BASELINE: Readonly<Record<string, () => Promise<RetainedDe
   'retained-spec-review-missing': async () => specReview('missing'),
   'retained-spec-review-stale': async () => specReview('stale'),
   'retained-spec-review-current': async () => specReview('current'),
+  // The soft scenario is retired: an old soft-settled run keeps no open
+  // required step, so it does not block an otherwise approved archive.
   'retained-integration-archive': async () =>
-    allow('the approved, fully checked change may archive'),
+    allow('the exhausted soft run keeps no open step and does not block the archive'),
   'retained-progress-current-note': async () => progress('current-note'),
   'retained-progress-stale-note': async () => progress('stale-note'),
   'retained-progress-unchecked-missing-note': async () => progress('unchecked-missing-note'),
@@ -63,10 +57,4 @@ export const RETAINED_BASELINE: Readonly<Record<string, () => Promise<RetainedDe
   'retained-lane-single-remaining': async () => lane('single-remaining'),
   'retained-lane-below-threshold': async () => lane('below-threshold'),
   'retained-lane-assigned-worker': async () => lane('assigned-worker'),
-}
-
-export const RETAINED_SEQUENCES: Readonly<
-  Record<string, () => Promise<readonly RetainedDecision[]>>
-> = {
-  'retained-integration-soft-sequence': async () => integrationSoft(),
 }

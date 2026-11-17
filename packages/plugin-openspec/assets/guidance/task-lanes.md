@@ -20,9 +20,15 @@ OpenSpec skill.
 - Within one lane the sequential loop still runs. For two or more independent lanes, start parallel
   writers in separate git worktrees with their task ids and owned paths, merge each after its checks
   and any configured task review, then run the serial lane.
-- Start a checked task's review immediately with `workflows(action: "start", definitionId:
-  "task-review", change: "<change>", task: "<taskId>")`; keep implementing the next independent
-  task only while that review runs on a frozen snapshot.
-- When the run reports that it fell back to the live worktree, a write can discard its verdict:
-  restore snapshot support and re-run, or defer writes until the run settles. Never wait with a
-  blocking sleep. Collect the record before the turn closes and before archive.
+- When any task of a lane is checked, start that lane's review at once with `workflows(action:
+  "start", definitionId: "task-review", change: "<change>", section: "<section key>")` (or `task:
+  "<taskId>"` when the task is outside a section). Start every due lane in the same pass; no lane
+  waits for another's verdict.
+- While a review runs on a frozen snapshot, keep implementing another independent lane that does
+  not depend on its verdict. When the run reports that it fell back to the live worktree, a write
+  can discard its verdict: restore snapshot support and re-run, or defer writes until the run
+  settles. Never wait with a blocking sleep.
+- Treat the waiting close as the pause for a verdict: it ends the turn while every due review is
+  live, the next turn resumes the loop on the same lane unit, and no write in the reviewed scope
+  happens meanwhile. The waiting close approves nothing; collect the record before ticking coverage
+  or archive.

@@ -12,6 +12,7 @@ import {
 import {
   assertArchiveRecognition,
   PARITY_CASES,
+  RETIRED_PARITY_ENTRIES,
   runParityCase,
 } from '../../packages/plugin-workflows/test/parity-fixtures.ts'
 import {
@@ -54,7 +55,7 @@ describe('retirement parity report', () => {
     }
   })
 
-  it('fails --check when the baseline changes without changing a decision', async () => {
+  it('fails --check when a retained baseline is edited, decision or not', async () => {
     const baseline = join(
       import.meta.dirname,
       '..',
@@ -67,8 +68,21 @@ describe('retirement parity report', () => {
     const original = readFileSync(baseline, 'utf8')
     try {
       writeFileSync(baseline, `${original}\n// probe: no decision changed\n`, 'utf8')
-      const result = await checkParityReport()
-      expect(result.ok).toBe(false)
+      const stale = await checkParityReport()
+      expect(stale.ok).toBe(false)
+
+      const edited = original.replace(
+        "'retained-lane-assigned-worker': async () => lane('assigned-worker'),",
+        "'retained-lane-assigned-worker': async () => lane('first-implementation-turn'),",
+      )
+      expect(edited).not.toBe(original)
+      writeFileSync(baseline, edited, 'utf8')
+      const decisionChanged = await checkParityReport()
+      expect(decisionChanged.ok).toBe(false)
+      // In-process the edited file is already imported, so the check sees the
+      // changed baseline digest; a fresh CLI run also replays the new decision
+      // and reports the case id (verified by `node scripts/workflows-parity.ts`).
+      expect(decisionChanged.detail).toContain('stale')
     } finally {
       writeFileSync(baseline, original, 'utf8')
     }
@@ -95,11 +109,22 @@ describe('retirement parity report', () => {
       expect(report.retained[group]?.status).toBe('replayed')
       expect(report.retained[group]?.replayed).toBe(report.retained[group]?.cases)
     }
-    expect(report.differences['integration-review']).toMatchObject({
+    expect(report.differences['integration-review']).toEqual({
       case: 'retained-integration-soft-sequence',
-      turn: 2,
-      legacy: 'allow',
-      workflow: 'violation',
+      declared: expect.stringContaining('retired'),
+    })
+    expect(report.retained['integration-review']).toEqual({
+      cases: 1,
+      replayed: 1,
+      status: 'replayed',
+    })
+    expect(PARITY_CASES.map((entry) => entry.id)).not.toContain(
+      'retained-integration-soft-sequence',
+    )
+    expect(RETIRED_PARITY_ENTRIES).toContainEqual({
+      group: 'integration-review',
+      case: 'retained-integration-soft-sequence',
+      declared: expect.stringContaining('required review'),
     })
     for (const retained of PARITY_CASES.filter((entry) => entry.gate === 'retained')) {
       expect(retained.legacy.decision).toMatch(/allow|refuse/u)
@@ -147,7 +172,6 @@ describe('retirement parity report', () => {
       'retained-spec-review-missing',
       'retained-spec-review-stale',
       'retained-spec-review-current',
-      'retained-integration-soft-sequence',
       'retained-integration-archive',
       'retained-progress-current-note',
       'retained-progress-stale-note',
