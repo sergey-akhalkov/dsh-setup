@@ -967,3 +967,16 @@ settlement sequence; the remaining scenarios, the template hashes, and
 `pnpm workflows:parity --check` stay green. The installed profile runs v0.43.0, the next release
 ships the four behaviors, and the change's acceptance, live Codex, and spec-review durability checks
 remain open before the archive.
+
+**Restart handoff (v0.44.0, 2026-11-17).** The working tree is committed as
+`feat(workflows): review until PASS with lane-owned reviewer threads` with version 0.44.0 built and
+generated; the full gate (tests, typecheck, lint, build, `gen:check`, the three validators, parity)
+was green at that commit. The desktop profile still runs v0.43.0, whose review loop could not settle
+the lane reviews, so the same tree must be installed before the reviews are re-run. Install it from a
+full checkout with the installer script in an external PowerShell, with the app closed; the script
+installs this checkout's `packages/setup` and restarts the app, which ends the session that ran it.
+After the restart, apply the change again from the new session: the remaining tasks are 6.1
+(acceptance in a throwaway `DSH_HOME`), 6.3 (live Codex `threadReuse=resumed`), and 6.4
+(spec-review durability), then the lane task reviews, the whole-spec review, and the integration
+review must each be a current `PASS` before `pnpm reviews:check --change review-until-pass` reports
+the change archive-ready.
