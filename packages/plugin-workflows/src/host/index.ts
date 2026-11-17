@@ -1500,8 +1500,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         changedName !== undefined && /(?:^|\/)tasks\.md$/u.test(event.subject)
           ? checkedTaskDelta(workspace, input.session, changedName, event.subject)
           : []
-      // Section-first selection over every checked task of the change: a section
-      // with two or more missing records is one unit covering its checked tasks.
+      // Lane-first selection over every checked task of the change: every
+      // checked task of a resolvable section without a current PASS is one unit
+      // covering the section's checked tasks.
       const taskReviewUnits =
         taskReviewTaskIds.length > 0 && changedName !== undefined
           ? await reviewUnits(workspace, changedName)
@@ -4129,6 +4130,31 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   )
 
   /**
+   * The active changes a session is involved in at one close: its tracked
+   * writes, the persisted involvement, and the changes its observed writes
+   * name. A persisted involvement outlives the change's archive, so an archived
+   * change is not involved.
+   */
+  const involvedChangesOf = async (
+    workspace: string,
+    session: string,
+    turn: number,
+  ): Promise<Set<string>> => {
+    const changes = new Set<string>(involvedChangesBySession.get(`${workspace}\0${session}`) ?? [])
+    for (const change of await readInvolvement(workspace, session)) changes.add(change)
+    for (const change of attributedChangeNames(
+      workspace,
+      sessionToolCalls.get(session) ?? [],
+      turn,
+    )) {
+      changes.add(change)
+    }
+    const active = await activeChangeNames(workspace)
+    for (const change of [...changes]) if (!active.has(change)) changes.delete(change)
+    return changes
+  }
+
+  /**
    * The engine-owned gate refusals for one turn close. Both gates are owned by
    * the engine; only the checkpoint and verification definitions keep a legacy
    * source.
@@ -4140,14 +4166,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   ): Promise<string | undefined> => {
     const calls = sessionToolCalls.get(session) ?? []
     const metrics = turnMetrics.get(session)
-    const changes = new Set<string>(involvedChangesBySession.get(`${workspace}\0${session}`) ?? [])
-    for (const change of await readInvolvement(workspace, session)) changes.add(change)
-    for (const change of attributedChangeNames(workspace, calls, turn)) changes.add(change)
-    if (changes.size === 0) return undefined
-    // A persisted involvement outlives the change's archive: its tasks.md is
-    // gone, so neither a reviewed tick nor a note could ever satisfy the gate.
-    const active = await activeChangeNames(workspace)
-    for (const change of [...changes]) if (!active.has(change)) changes.delete(change)
+    const changes = await involvedChangesOf(workspace, session, turn)
     if (changes.size === 0) return undefined
     // An owned gate acts only when the tracked report certifies its replayed
     // cases; an uncertified gate refuses the close instead of passing silently.
@@ -4376,6 +4395,89 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           return Number.isSafeInteger(turn) ? turn : undefined
         }
         let refusedThisClose = false
+        // The engine dispatches every due lane unit itself: a code fix leaves
+        // tasks.md unchanged, so no fs.change creates a run and a due unit must
+        // not wait for a tick. Each start uses the trigger's own start path with
+        // a synthetic turn event, so neither the trigger's dedupe key nor its
+        // per-turn suppression blocks or consumes the start.
+        const dispatchDueUnits = async (): Promise<void> => {
+          const taskReview = definitions.find((entry) => entry.id === 'task-review')
+          if (taskReview === undefined) return
+          const taskIdsOf = (values: Readonly<Record<string, unknown>>): string[] =>
+            Array.isArray(values.taskIds)
+              ? values.taskIds.filter((id): id is string => typeof id === 'string')
+              : typeof values.taskId === 'string'
+                ? [values.taskId]
+                : []
+          const liveRuns = (change: string): WorkflowRun[] =>
+            runs.filter(
+              (run) =>
+                run.definition.id === 'task-review' &&
+                run.context.name === change &&
+                (run.status === 'running' || run.status === 'blocked') &&
+                services.agents.get(run.session) !== undefined,
+            )
+          const dispatched: WorkflowRun[] = []
+          const startedCovered = new Set<string>()
+          const event: DefinitionEvent = {
+            kind: 'turn.stopping',
+            subject: 'turn-close',
+            session: sessionId,
+            turn: payload.turn,
+          }
+          for (const change of [
+            ...(await involvedChangesOf(workspace, sessionId, payload.turn)),
+          ].sort()) {
+            const units = (await reviewUnits(workspace, change)) ?? []
+            for (const unit of units) {
+              // Task identity hashes only the text, so a task a unit started in
+              // this pass already covers (a second section with the same text)
+              // must not start a second run.
+              if (unit.covered.some((task) => startedCovered.has(task.id))) continue
+              const covered = liveRuns(change).some((run) => {
+                const ids = taskIdsOf(run.context)
+                return unit.covered.some((task) => ids.includes(task.id))
+              })
+              if (covered) continue
+              const section = unit.section
+              const contexts: Readonly<Record<string, unknown>>[] = []
+              if (section === undefined) {
+                for (const task of unit.missing) contexts.push({ name: change, taskId: task.id })
+              } else {
+                const identity = {
+                  name: change,
+                  taskId: sectionRecordId(section.key),
+                  section: section.key,
+                  sectionTitle: section.title,
+                  taskIds: unit.covered.map((task) => task.id),
+                }
+                // An over-limit section identity falls back to its per-task
+                // starts, exactly as the trigger's own unit start does.
+                if (Buffer.byteLength(JSON.stringify(identity), 'utf8') <= MAX_CONTEXT_BYTES) {
+                  contexts.push(identity)
+                } else {
+                  for (const task of unit.missing) contexts.push({ name: change, taskId: task.id })
+                }
+              }
+              let started = false
+              for (const context of contexts) {
+                const outcome = startDefinitionRun(workspace, taskReview, event, false, context)
+                if (!outcome.ok || outcome.runId === undefined) continue
+                const created = await readAuthenticatedRun(workspace, outcome.runId, auth)
+                if (created === undefined) continue
+                dispatched.push(created)
+                started = true
+              }
+              if (started) for (const task of unit.covered) startedCovered.add(task.id)
+            }
+          }
+          if (dispatched.length === 0) return
+          // The gate's own decision and steer read the same run list; the new
+          // units must be advanced by this close, not only by the next one.
+          runs.push(...dispatched)
+          ordered.push(...dispatched)
+        }
+        await dispatchDueUnits()
         // Advance every run first: an owned tool step (the review start) must
         // dispatch for every newly checked task before one close is refused.
         const advanced = new Map<string, WorkflowRun>()
@@ -5127,7 +5229,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     )
   }
 
-  /** The outstanding review units of one workspace, with their open runs. */
+  /**
+   * The outstanding review units of one workspace, with their open runs. Every
+   * due lane of one change is listed on that change's line, so the status shows
+   * the parallel units instead of one unit per line without a change.
+   */
   const reviewUnitLines = async (
     workspace: string,
     runs: readonly WorkflowRun[],
@@ -5137,13 +5243,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const changes = [
       ...new Set([...(await activeChangeNames(workspace)), ...openRuns.map((run) => run.change)]),
     ].sort()
-    const units: string[] = []
+    const lines: string[] = []
     for (const name of changes) {
-      for (const unit of (await reviewUnits(workspace, name)) ?? []) {
-        units.push(reviewUnitText(name, unit, { openRuns }))
-      }
+      const units = (await reviewUnits(workspace, name)) ?? []
+      if (units.length === 0) continue
+      lines.push(
+        `change "${name}" (${String(units.length)} due): ${units
+          .map((unit) => reviewUnitText(name, unit, { openRuns }))
+          .join('; ')}`,
+      )
     }
-    return units
+    return lines
   }
 
   // The user-started `/workflows` command.

@@ -1645,14 +1645,14 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(created[0]?.context.taskIds).toHaveLength(2)
   })
 
-  it('names the review units in the native status summary', async () => {
+  it('names every due lane unit of a change in the native status summary', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
     await mkdir(changeDir, { recursive: true })
     await writeFile(
       join(changeDir, 'tasks.md'),
-      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n',
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n\n## 2. Docs\n\n- [x] 2.1 Third task\n',
       'utf8',
     )
     const host = fakeHost(workspace)
@@ -1673,10 +1673,16 @@ describe('task-review runtime from a tasks.md change', () => {
         })
       )?.text ?? ''
     const text = await status()
+    // Every due lane of the change is listed together with its covered and
+    // missing tasks, not one anonymous unit per line.
     expect(text).toContain('review units:')
-    expect(text).toContain('section "1"')
-    expect(text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2')
-    // A pending section run is pointed at instead of a new start.
+    expect(text).toContain('change "auth" (2 due):')
+    expect(text).toContain('section "1" (1. Engine)')
+    expect(text).toContain('covered checked tasks 1.1, 1.2')
+    expect(text).toContain('missing a task-review PASS: 1.1, 1.2')
+    expect(text).toContain('section "2" (2. Docs)')
+    // A live section run is pointed at instead of a new start; the other lane
+    // still carries its own start action.
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
@@ -1698,7 +1704,11 @@ describe('task-review runtime from a tasks.md change', () => {
     })
     await runs.writeRun(workspace, pending, auth)
     const pendingText = await status()
-    expect(pendingText).toContain('the open review run')
+    expect(pendingText).toContain('the live review run')
+    expect(pendingText).toContain('instead of a new start')
+    expect(pendingText).toContain(
+      'workflows(action: "start", definitionId: "task-review", change: "auth", section: "2")',
+    )
     expect(pendingText).not.toContain('delegate(')
   })
 
@@ -2077,14 +2087,17 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(runA?.status).toBe('completed')
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 A\n- [x] 1.2 B\n', 'utf8')
     host.fireFs()
-    // The cleared key and baseline start a fresh run for the restored task;
-    // A already has a matching ERROR record, so it needs no second run.
-    await waitFor(async () => (await reviewRuns()).length === 3)
+    // The cleared key and baseline start a fresh run for the restored task.
+    // A's ERROR record is not coverage either, so the same restore starts its
+    // next round too; only a PASS clears a task.
+    await waitFor(async () => (await reviewRuns()).length === 4)
     const restored = (await reviewRuns()).filter(
-      (entry) => entry.id !== runB?.id && entry.context.taskId === taskIdOf('B'),
+      (entry) => entry.id !== runA?.id && entry.id !== runB?.id,
     )
-    expect(restored).toHaveLength(1)
-    expect(restored[0]?.status).toBe('running')
+    expect(restored.map((entry) => entry.context.taskId).sort()).toEqual(
+      [taskIdOf('A'), taskIdOf('B')].sort(),
+    )
+    expect(restored.every((entry) => entry.status === 'running')).toBe(true)
   })
 
   // A tool step that waits in the advance before any run write: the disposal
@@ -2355,6 +2368,181 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(settledB?.status).toBe('running')
     expect(settledB?.steps.find((entry) => entry.id === 'review')?.state).toBe('open')
   }, 90000)
+})
+
+describe('turn-close lane dispatch', () => {
+  /** Two lane sections whose checked tasks have no current PASS. */
+  const LANE_PLAN = `# Tasks
+
+## 1. Engine (lane 1, owns \`src/**\`)
+
+- [x] 1.1 First engine task
+- [x] 1.2 Second engine task
+
+## 2. Docs (lane 2, owns \`docs/**\`)
+
+- [x] 2.1 Doc task
+`
+
+  async function laneWorkspace(): Promise<string> {
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(change, { recursive: true })
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(change, 'tasks.md'), LANE_PLAN, 'utf8')
+    return workspace
+  }
+
+  /** A successful change-artifact write; the close gates attribute the change. */
+  async function establishInvolvement(host: ReturnType<typeof fakeHost>): Promise<void> {
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'involved-write',
+        name: 'write',
+        arguments: { file_path: 'openspec/changes/auth/design.md' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+  }
+
+  async function taskRuns(
+    workspace: string,
+  ): Promise<
+    Array<{ id: string; status: string; dedupeKey?: string; context: Record<string, unknown> }>
+  > {
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    return (await runs.listAuthenticatedRuns(workspace, auth))
+      .filter((entry) => entry.definition.id === 'task-review')
+      .map((entry) => ({
+        id: entry.id,
+        status: entry.status,
+        ...(entry.dedupeKey === undefined ? {} : { dedupeKey: entry.dedupeKey }),
+        context: entry.context,
+      }))
+  }
+
+  it('starts every due lane unit in one close without a tasks.md change', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await establishInvolvement(host)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    // No fs.change ever fired: the gate itself starts both lanes in one pass.
+    await waitFor(async () => (await taskRuns(workspace)).length === 2)
+    const created = await taskRuns(workspace)
+    expect(created.map((run) => run.context.section).sort()).toEqual(['1', '2'])
+    const engine = created.find((run) => run.context.section === '1')
+    expect(engine?.context.taskIds).toEqual([
+      taskIdOf('First engine task'),
+      taskIdOf('Second engine task'),
+    ])
+    // A gate start bypasses the trigger's dedupe key instead of consuming it.
+    expect(created.every((run) => run.dedupeKey === undefined)).toBe(true)
+  })
+
+  it('suppresses a unit a live run already covers', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const pending = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: sectionRecordId('1'),
+        section: '1',
+        sectionTitle: '1. Engine (lane 1, owns `src/**`)',
+        taskIds: [taskIdOf('First engine task'), taskIdOf('Second engine task')],
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, pending, auth)
+    await establishInvolvement(host)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(async () => (await taskRuns(workspace)).length === 2)
+    const created = (await taskRuns(workspace)).filter((run) => run.id !== pending.id)
+    expect(created).toHaveLength(1)
+    expect(created[0]?.context.section).toBe('2')
+  })
+
+  it('starts the next round for a unit a code fix left due', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(change, { recursive: true })
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(
+      join(change, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine (lane 1, owns `src/**`)\n\n- [x] 1.1 First engine task\n',
+      'utf8',
+    )
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // A transport failure exhausted the previous round: the unit stays due, the
+    // run is terminal and not live, and no tasks.md change marks the next round.
+    let failed = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: sectionRecordId('1'),
+        section: '1',
+        sectionTitle: '1. Engine (lane 1, owns `src/**`)',
+        taskIds: [taskIdOf('First engine task')],
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    failed = runs.settleStep(failed, 'review', 'failed', {
+      at: 1_001,
+      reason: 'the review dispatch failed 3 time(s)',
+      attempts: 3,
+    })
+    failed = runs.setRunStatus(failed, 'failed', 1_002, 'the review dispatch failed 3 time(s)')
+    await runs.writeRun(workspace, failed, auth)
+    await establishInvolvement(host)
+    // The next turn only edits implementation files, never tasks.md; the due
+    // lane must still start its round at that close.
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'code-fix',
+        name: 'write',
+        arguments: { file_path: 'src/engine.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await waitFor(async () => (await taskRuns(workspace)).length === 2)
+    const created = (await taskRuns(workspace)).filter((run) => run.id !== failed.id)
+    expect(created).toHaveLength(1)
+    expect(created[0]?.context.section).toBe('1')
+    expect(created[0]?.status).toBe('running')
+  })
 })
 
 describe('pre-execute trigger gates', () => {
