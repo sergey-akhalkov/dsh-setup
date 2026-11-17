@@ -279,11 +279,15 @@ export async function executeWorkflowsTool(
       if (definition.settings.risk === 'high' && !(await confirmHighRisk(host, definition.name))) {
         fail(`the high-risk start of "${definition.id}" needs a direct user yes; nothing started`)
       }
-      const started = await host.startRun(definition, at, {
-        ...(request.change === undefined ? {} : { change: request.change }),
-        ...(request.task === undefined ? {} : { task: request.task }),
-        ...(request.section === undefined ? {} : { section: request.section }),
-      })
+      const selection =
+        request.change === undefined && request.task === undefined && request.section === undefined
+          ? undefined
+          : {
+              ...(request.change === undefined ? {} : { change: request.change }),
+              ...(request.task === undefined ? {} : { task: request.task }),
+              ...(request.section === undefined ? {} : { section: request.section }),
+            }
+      const started = await host.startRun(definition, at, selection)
       return `run ${started.run.id} started at step "${started.firstStep}"`
     }
     case 'resume': {

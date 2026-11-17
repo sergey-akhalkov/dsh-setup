@@ -128,6 +128,24 @@ describe('workflows tool', () => {
     expect(calls.starts).toBe(1)
   })
 
+  it('passes no review selection to a generic model start', async () => {
+    const calls: Calls = { starts: 0, resumes: 0, cancels: 0 }
+    const entry = definition('model-start')
+    const target = host([entry], [], calls)
+    const selections: Array<unknown> = []
+    const start = target.startRun
+    target.startRun = async (definitionEntry, at, selection) => {
+      selections.push(selection)
+      return start(definitionEntry, at, selection)
+    }
+    const started = await executeWorkflowsTool(
+      { action: 'start', definitionId: 'model-start' },
+      target,
+    )
+    expect(started).toContain('started at step "requirements"')
+    expect(selections).toEqual([undefined])
+  })
+
   it('refuses a definition that disallows a model start and a high-risk start without yes', async () => {
     const noStart = definition('no-start', {
       settings: {

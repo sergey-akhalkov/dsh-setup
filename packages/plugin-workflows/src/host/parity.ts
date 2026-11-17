@@ -883,7 +883,7 @@ export interface TaskReviewCoverage {
 export function taskReviewCoverage(
   workspace: string,
   change: string,
-  rule = 'task-review',
+  rule?: string,
   options: ReviewUnitTextOptions = {},
 ): TaskReviewCoverage {
   let markdown: string
@@ -902,6 +902,7 @@ export function taskReviewCoverage(
       gaps: [`${reviewer.invalid}; fix openspec/review-approval.json before completing`],
     }
   }
+  const effectiveRule = rule ?? reviewer?.taskRule ?? 'task-review'
   const gaps: string[] = []
   // A checked line the task parser cannot read is an unapproved checked task,
   // not an absent one; refuse the completion instead of silently skipping it.
@@ -920,7 +921,7 @@ export function taskReviewCoverage(
     const mismatch: string[] = []
     if (record === undefined) mismatch.push('no portable PASS record')
     else {
-      if (record.rule !== rule) mismatch.push(`rule "${String(record.rule)}"`)
+      if (record.rule !== effectiveRule) mismatch.push(`rule "${String(record.rule)}"`)
       if (record.change !== change) mismatch.push(`change "${String(record.change)}"`)
       if (record.taskId !== task.id) mismatch.push(`task id "${String(record.taskId)}"`)
       if (record.verdict !== 'PASS') mismatch.push(`verdict ${String(record.verdict)}`)
@@ -941,9 +942,9 @@ export function taskReviewCoverage(
     )
     const action =
       pending.length === 0
-        ? `run workflows(action: "start", definitionId: "${rule}", change: "${change}", task: "${task.id}")`
+        ? `run workflows(action: "start", definitionId: "${effectiveRule}", change: "${change}", task: "${task.id}")`
         : `the open review run${pending.length === 1 ? '' : 's'} ${pending.map((run) => `"${run.id}"`).join(', ')} cover${pending.length === 1 ? 's' : ''} it, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`
-    return `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); ${action}`
+    return `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${effectiveRule} PASS (${mismatch.join(', ')}); ${action}`
   }
   const taskGaps = checkedTaskLines(markdown).map((task) => ({ task, gap: taskGap(task) }))
   const missing = new Set(taskGaps.filter((entry) => entry.gap !== undefined).map((e) => e.task.id))
@@ -966,7 +967,7 @@ export function taskReviewCoverage(
           covered: section.covered,
           missing: absent,
         },
-        { rule, ...(options.openRuns === undefined ? {} : { openRuns: options.openRuns }) },
+        { rule: effectiveRule, ...(options.openRuns === undefined ? {} : { openRuns: options.openRuns }) },
       ),
     )
     for (const task of absent) grouped.add(task.id)
@@ -1316,13 +1317,14 @@ export function taskReviewCompletion(
     return undefined
   }
   if (/^\s*-\s*\[ \]\s+\d+(?:\.\d+)*\s+\S/mu.test(markdown)) return undefined
-  const coverage = taskReviewCoverage(workspace, change, 'task-review', options)
+  const rule = reviewerBinding(workspace)?.taskRule ?? 'task-review'
+  const coverage = taskReviewCoverage(workspace, change, rule, options)
   return {
     ok: coverage.ok,
     ...(coverage.gaps.length === 0
       ? {}
       : {
-          text: `completion of change "${change}" requires a portable task-review PASS for every checked task: ${coverage.gaps.join('; ')}`,
+          text: `completion of change "${change}" requires a portable ${rule} PASS for every checked task: ${coverage.gaps.join('; ')}`,
         }),
   }
 }

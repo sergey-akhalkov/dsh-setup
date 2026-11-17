@@ -4699,6 +4699,20 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
 
   const normalizedTaskText = (text: string): string => text.replace(/\s+/gu, ' ').trim()
 
+  /** Whether a checked task already has its portable PASS approval. */
+  const taskPassApproved = (workspace: string, change: string, taskId: string): boolean => {
+    try {
+      const raw = readFileSync(
+        join(workspace, 'openspec', 'changes', change, 'reviews', `${taskId}.json`),
+        'utf8',
+      )
+      const value: unknown = JSON.parse(raw)
+      return isRecord(value) && value.verdict === 'PASS'
+    } catch {
+      return false
+    }
+  }
+
   /**
    * Resolve a model start's explicit selector to the run context: the change
    * name, and for a task-scoped review exactly one checked task or one section.
@@ -4722,7 +4736,27 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       throw new Error(`definition "${definition.id}" is not a review`)
     }
     const context: Record<string, unknown> = { name: change }
-    if (selection.task === undefined && selection.section === undefined) return context
+    if (selection.task === undefined && selection.section === undefined) {
+      if (step.review?.scope !== 'task') return context
+      // Preserve the legacy next-checked-task selection: the first checked task
+      // that still lacks its portable PASS, in plan order.
+      const checked = numberedTasks(await readTasksPlan(workspace, change)).filter(
+        (task) => task.checked,
+      )
+      if (checked.length === 0) {
+        throw new Error(
+          `change "${change}" has no checked task; tick the completed task in tasks.md, then start its review`,
+        )
+      }
+      const next = checked.find((task) => !taskPassApproved(workspace, change, task.id))
+      if (next === undefined) {
+        throw new Error(
+          `every checked task of change "${change}" already has a PASS; pass a task or section to re-review, or archive the change`,
+        )
+      }
+      context.taskId = next.id
+      return context
+    }
     if (step.review?.scope !== 'task') {
       throw new Error(
         `definition "${definition.id}" reviews the whole scope; omit task and section`,
@@ -4824,13 +4858,73 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       startRun: async (definition, _at, selection) => {
         await recoverIfNeeded(workspace)
         const sessionId = String(agent.session.id)
-        const context =
-          selection === undefined ? {} : await reviewStartContext(workspace, definition, selection)
+        const reviewStep = definition.steps.find((step) => step.executor === 'review')
+        let context: Readonly<Record<string, unknown>> = {}
+        if (reviewStep === undefined) {
+          if (
+            selection !== undefined &&
+            (selection.change !== undefined ||
+              selection.task !== undefined ||
+              selection.section !== undefined)
+          ) {
+            throw new Error(
+              `definition "${definition.id}" has no review step; omit change, task, and section`,
+            )
+          }
+        } else {
+          if (selection?.change === undefined) {
+            throw new Error(
+              `definition "${definition.id}" is a review; pass change and optionally task or section`,
+            )
+          }
+          context = await reviewStartContext(workspace, definition, selection)
+        }
         if (typeof context.name === 'string') {
           await rememberInvolvement(workspace, sessionId, context.name)
         }
-        const run = await startRunFor(workspace, sessionId, auth, definition, context)
-        return { run, firstStep: definition.steps[0]?.id ?? 'end' }
+        // Reuse a live run that already covers the selected unit: a repeated
+        // model start must not create a second open run for the same task.
+        const covers = (candidate: Readonly<Record<string, unknown>>): boolean => {
+          if (context.taskId !== undefined) {
+            return (
+              candidate.taskId === context.taskId ||
+              (Array.isArray(candidate.taskIds) && candidate.taskIds.includes(context.taskId))
+            )
+          }
+          if (context.section !== undefined) return candidate.section === context.section
+          return true
+        }
+        let run: WorkflowRun
+        const release = await acquireAdmission(workspace)
+        try {
+          const existing = (await listAuthenticatedRuns(workspace, auth)).find(
+            (candidate) =>
+              candidate.definition.id === definition.id &&
+              candidate.status === 'running' &&
+              candidate.context.name === context.name &&
+              covers(candidate.context),
+          )
+          run =
+            existing ??
+            (await startRunForUnlocked(workspace, sessionId, auth, definition, context))
+        } finally {
+          release()
+        }
+        // A model start executes its first step now: a review dispatch admits the
+        // reviewer before the tool returns, so the gate waits on a live review
+        // instead of a run that only starts when the turn closes.
+        const legacyState = legacySignalState()
+        const current = await advanceRun(
+          workspace,
+          run,
+          definition,
+          agent,
+          auth,
+          legacyState.installed,
+          legacyState.enabled,
+          turnMetrics.get(sessionId)?.turn ?? 1,
+        )
+        return { run: current, firstStep: definition.steps[0]?.id ?? 'end' }
       },
       resumeRun: async (runId) => {
         await recoverIfNeeded(workspace)
