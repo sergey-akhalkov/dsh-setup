@@ -2636,6 +2636,68 @@ describe('turn-close lane dispatch', () => {
     expect(started?.status).toBe('running')
   })
 
+  it('starts the full section run when a live run covers only a missing task', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const first = taskIdOf('First engine task')
+    const second = taskIdOf('Second engine task')
+    // 1.1 is approved; 1.2 is missing. The live run names only 1.2, so it does
+    // not cover the section unit, whose single run must cover both tasks.
+    await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'task-review',
+        'auth',
+        'tasks',
+        `${first}.json`,
+      ),
+      `${JSON.stringify({ rule: 'task-review', change: 'auth', phase: 'task', scope: 'task', taskId: first, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    const partial = runs.setRunStatus(
+      runs.createRun({
+        definition: 'task-review',
+        trigger: 'fs.change',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth', taskId: second },
+        steps: ['review', 'complete-review'],
+        now: 1_000,
+      }),
+      'running',
+      1_001,
+    )
+    await runs.writeRun(workspace, partial, auth)
+    await establishInvolvement(host)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(
+      async () =>
+        (await taskRuns(workspace)).some(
+          (run) => run.id !== partial.id && run.context.section === '1',
+        ),
+      5_000,
+    )
+    const started = (await taskRuns(workspace)).find(
+      (run) => run.id !== partial.id && run.context.section === '1',
+    )
+    expect((started?.context.taskIds as string[] | undefined)?.sort()).toEqual(
+      [first, second].sort(),
+    )
+  })
+
   it('abandons an aborted close without a steer or a review start', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await laneWorkspace()

@@ -423,20 +423,26 @@ function coveredTaskIds(context) {
     return covered;
 }
 /**
- * The live task-review runs whose union covers every missing task of a unit as
- * it is now: one section run, or the per-task fallback runs an oversized section
- * identity starts. Already-approved tasks need no live run, and duplicate task
- * rows share one id.
+ * The live task-review runs that cover a unit as it is now. A normal section
+ * identity dispatches one run over every checked task, so only a run covering
+ * all of them (approved included) covers the lane. The oversized fallback and a
+ * per-task unit dispatch per missing task, so the union of their runs over the
+ * missing tasks is coverage. Partial coverage is not coverage.
  */
 function liveUnitRuns(change, unit, openRuns) {
+    const runs = openRuns.filter((run) => run.change === change);
+    const all = new Set(unit.covered.map((task) => task.id));
+    for (const run of runs) {
+        const ids = coveredTaskIds(run.context);
+        if ([...all].every((id) => ids.includes(id)))
+            return [run];
+    }
     const required = new Set(unit.missing.map((task) => task.id));
     if (required.size === 0)
         return [];
     const covering = [];
     const seen = new Set();
-    for (const run of openRuns) {
-        if (run.change !== change)
-            continue;
+    for (const run of runs) {
         const ids = coveredTaskIds(run.context);
         const fresh = [...required].filter((id) => ids.includes(id) && !seen.has(id));
         if (fresh.length === 0)
@@ -4089,36 +4095,39 @@ export function apply(ctx, config = {}) {
                             return;
                         if (unit.covered.some((task) => startedCovered.has(task.id)))
                             continue;
-                        // Coverage is the union of the live runs' ids over the unit's
-                        // missing tasks: one full section run, or the per-task runs an
-                        // oversized section starts. Approved tasks need no live run.
+                        // A normal section identity dispatches one run over every checked
+                        // task, so it is covered only by a run naming all of them. The
+                        // oversized fallback and per-task units dispatch the missing tasks
+                        // alone; their union over those ids is coverage.
                         const liveIds = new Set(liveRuns(change).flatMap((run) => taskIdsOf(run.context)));
-                        const covered = unit.missing.every((task) => liveIds.has(task.id));
-                        if (covered)
-                            continue;
                         const section = unit.section;
-                        const contexts = [];
-                        if (section === undefined) {
-                            for (const task of unit.missing)
-                                contexts.push({ name: change, taskId: task.id });
-                        }
-                        else {
-                            const identity = {
+                        const identity = section === undefined
+                            ? undefined
+                            : {
                                 name: change,
                                 taskId: sectionRecordId(section.key),
                                 section: section.key,
                                 sectionTitle: section.title,
                                 taskIds: unit.covered.map((task) => task.id),
                             };
-                            // An over-limit section identity falls back to its per-task
-                            // starts, exactly as the trigger's own unit start does.
-                            if (Buffer.byteLength(JSON.stringify(identity), 'utf8') <= MAX_CONTEXT_BYTES) {
-                                contexts.push(identity);
-                            }
-                            else {
-                                for (const task of unit.missing)
-                                    contexts.push({ name: change, taskId: task.id });
-                            }
+                        const oversized = identity !== undefined &&
+                            Buffer.byteLength(JSON.stringify(identity), 'utf8') > MAX_CONTEXT_BYTES;
+                        const covered = identity !== undefined && !oversized
+                            ? unit.covered.every((task) => liveIds.has(task.id))
+                            : unit.missing.every((task) => liveIds.has(task.id));
+                        if (covered)
+                            continue;
+                        const contexts = [];
+                        if (identity === undefined) {
+                            for (const task of unit.missing)
+                                contexts.push({ name: change, taskId: task.id });
+                        }
+                        else if (!oversized) {
+                            contexts.push(identity);
+                        }
+                        else {
+                            for (const task of unit.missing)
+                                contexts.push({ name: change, taskId: task.id });
                         }
                         let started = false;
                         for (const context of contexts) {
