@@ -9066,6 +9066,73 @@ describe('public review start through the workflows tool', () => {
     expect(record.failureClass).toBe('child-limit')
   })
 
+  it('clears the retry failure class and keeps the count when the retry passes', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const { dir, taskId } = await reviewWorkspace()
+    let calls = 0
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async (spec: { prompt: Array<{ text: string }> }) => {
+        calls += 1
+        if (calls === 1) throw new Error('the provider active child limit is reached')
+        const instruction = spec.prompt.map((block) => block.text).join('\n')
+        const digest = /- Digest: ([a-f0-9]{64})/u.exec(instruction)?.[1] ?? ''
+        return {
+          childId: 'child-2',
+          result: Promise.resolve({
+            output: [
+              {
+                type: 'text',
+                text: `\`\`\`json\n${JSON.stringify({ digest, verdict: 'PASS', findings: [] })}\n\`\`\``,
+              },
+            ],
+            stopReason: 'completed',
+          }),
+          dispose: async () => undefined,
+        }
+      },
+    }
+    const host = fakeHost(dir, { subagents: runtime })
+    apply(host.ctx as never, {
+      reviewers: { codex: { provider: 'codex-subagent' } },
+      reviewQueue: { enabled: true, maxAttempts: 2, baseDelayMs: 100, maxDelayMs: 100 },
+    })
+    await start(host, 'task-review', taskId)
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const runId = (await runs.listAuthenticatedRuns(dir, auth)).find(
+      (entry) => entry.definition.id === 'task-review',
+    )?.id
+    if (runId === undefined) throw new Error('the review run is missing')
+    const recordPath = join(
+      dir,
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      'auth',
+      'tasks',
+      `${taskId}.json`,
+    )
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(dir, runId, auth))?.steps.find(
+          (step) => step.id === 'review',
+        )?.state === 'done',
+      10_000,
+    )
+    const stored = await runs.readAuthenticatedRun(dir, runId, auth)
+    const step = stored?.steps.find((entry) => entry.id === 'review')
+    // The successful settlement keeps the final attempt count and must not
+    // restore the earlier retry's failure class.
+    expect(step?.attempts).toBe(2)
+    expect(step?.failureClass).toBeUndefined()
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
+    expect(record.verdict).toBe('PASS')
+    expect(record.failureClass).toBeUndefined()
+  })
+
   it('fails a review loud and discards its snapshot when the review queue is off', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const dir = await sectionWorkspace('- [x] 1.1 Task\n')

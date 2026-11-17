@@ -71,7 +71,10 @@ async function preserveReviewThreads(
   } catch {
     return
   }
-  const own = unitKey === undefined ? incoming : incoming.filter((entry) => entry.key === unitKey)
+  // Without an owning unit key no entry may be merged: sweeping one lane's stale
+  // checkout must never overwrite another lane's newer thread.
+  if (unitKey === undefined) return
+  const own = incoming.filter((entry) => entry.key === unitKey)
   if (own.length === 0) return
   const path = resolve(cwd, REVIEW_THREADS_STATE)
   await withThreadStateLock(path, async () => {

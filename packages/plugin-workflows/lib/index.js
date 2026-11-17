@@ -2479,9 +2479,13 @@ export function apply(ctx, config = {}) {
                     return step;
                 const incoming = step.attempts ?? 0;
                 const attempts = Math.max(incoming, stored.attempts);
-                const keepClass = stored.failureClass !== undefined &&
-                    incoming < stored.attempts &&
-                    step.failureClass === undefined;
+                const settled = step.state === 'done' || step.state === 'cancelled';
+                // A failed attempt keeps its class; a stale in-flight commit keeps it
+                // too. A successful settlement must never inherit an old retry class.
+                const keepClass = !settled &&
+                    stored.failureClass !== undefined &&
+                    step.failureClass === undefined &&
+                    (step.state === 'failed' || incoming < stored.attempts);
                 if (attempts === step.attempts && !keepClass)
                     return step;
                 changed = true;
