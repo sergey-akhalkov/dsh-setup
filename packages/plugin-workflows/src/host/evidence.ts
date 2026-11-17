@@ -103,6 +103,8 @@ export interface HumanAnswerObservation {
 export interface EvidenceContext {
   /** The session workspace root. */
   readonly workspace: string
+  /** The run whose step is being evaluated, when one exists. */
+  readonly runId?: string
   /** The run context; only validated identifiers are interpolated. */
   readonly values: Readonly<Record<string, unknown>>
   /** The session's observed tool calls; absent means none is available. */
@@ -723,7 +725,11 @@ async function recordCheck(
   }
   // An explicit review start reopens an earlier ERROR so a retry can dispatch a
   // new reviewer; an automatic close may still reuse the ERROR as evidence.
-  if (record.verdict === 'ERROR' && context.values.explicitReview === true) {
+  if (
+    record.verdict === 'ERROR' &&
+    context.values.explicitReview === true &&
+    record.runId !== context.runId
+  ) {
     return mismatch(
       'an explicit review start reopens this ERROR; dispatch a new review instead of reusing the record',
       path.text,

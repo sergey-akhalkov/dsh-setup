@@ -3024,6 +3024,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       values: run.context,
       evidenceContext: {
         workspace,
+        runId: run.id,
         values: run.context,
         toolCalls,
         shellResults,
@@ -4923,7 +4924,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 return false
               }
               // A review admitted while the queue waits is blocked, not running,
-              // and still holds live coverage.
+              // and still holds live coverage. A run whose review step already
+              // settled is only waiting for completion coverage, so a retry
+              // must not reuse that stale handle.
+              const step = candidate.steps.find((entry) => entry.id === reviewStep.id)
+              if (step === undefined || (step.state !== 'open' && step.state !== 'blocked')) {
+                return false
+              }
               return candidate.status === 'running' || candidate.status === 'blocked'
             })
             const covered = (candidate: WorkflowRun): string[] => idsOf(candidate.context)
