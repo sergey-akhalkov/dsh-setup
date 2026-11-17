@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -166,6 +167,39 @@ describe('reviews:check --change', () => {
     expect(config).toContain('archive:')
     expect(config).toContain('pnpm reviews:check --change')
     expect(config).toContain('pnpm reviews:check --all')
+  })
+
+  it('ignores a legacy-only local task PASS and leaves no approval', async () => {
+    const { root, changeDir, taskId } = await fixture()
+    const legacy = join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks')
+    await mkdir(legacy, { recursive: true })
+    await writeFile(
+      join(legacy, `${taskId}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'change-a',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        digest: DIGEST_A,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        session: 'session-1',
+        runId: 'run-legacy',
+        time: '2026-11-08T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    const legacyOnly = await auditActive(root, 'change-a')
+    expect(legacyOnly.ok).toBe(false)
+    expect(legacyOnly.lines.join('\n')).toContain(`missing 1.1 "${TASK_TEXT}"`)
+    expect(legacyOnly.lines.join('\n')).toContain('workflows(action: "start"')
+    expect(existsSync(join(changeDir, 'reviews', `${taskId}.json`))).toBe(false)
+    const packageJson = JSON.parse(
+      await readFile(join(import.meta.dirname, '..', '..', 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> }
+    expect(packageJson.scripts?.['reviews:export']).toBeUndefined()
   })
 
   it('fails an unreviewed checked task and passes an approved one', async () => {

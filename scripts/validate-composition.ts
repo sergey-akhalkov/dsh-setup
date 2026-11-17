@@ -239,6 +239,22 @@ function main(): number {
         if (dump.stdout.includes('@deepseek-ai/dsh-mcp-client')) {
           throw new Error('the setup composed a static MCP adapter row')
         }
+        if (dump.stdout.includes('dsh-setup-delegation-rules')) {
+          throw new Error('the composed dump still carries the removed delegation row')
+        }
+      })
+
+      step('ignore an orphaned removed-row override without mounting it', () => {
+        writeFileSync(
+          join(profileDir, 'cordis.patch.yml'),
+          '- id: dsh-setup-delegation-rules\n  config: {}\n',
+          'utf8',
+        )
+        const loaded = run(base, ['--profile', 'ci', '--dump-config'], env)
+        if (loaded.status !== 0) throw failure(loaded)
+        if (loaded.stdout.includes('dsh-setup-delegation-rules')) {
+          throw new Error('the removed delegation row was mounted')
+        }
       })
 
       const goalContinuityDefaults = [
