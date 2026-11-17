@@ -953,6 +953,21 @@ describe('the section-first review units', () => {
     ])
   })
 
+  it('keeps per-task units when a bare title collides with a numbered heading', async () => {
+    // "Setup" matches the bare title of "1. Setup" case-insensitively, so the
+    // resolver rejects the bare key; a section unit must not name it.
+    const root = await workspace(
+      '# Tasks\n\n## 1. Setup\n\n- [x] 1.1 First task\n\n## Setup\n\n- [x] 1.2 Second task\n- [x] 1.3 Third task\n',
+    )
+    const units = await reviewUnits(root, 'change-a', 'workflows')
+    expect(units?.every((unit) => unit.section === undefined)).toBe(true)
+    expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([
+      ['1.1'],
+      ['1.2'],
+      ['1.3'],
+    ])
+  })
+
   it('keeps the per-task unit for a single missing task', async () => {
     const root = await workspace(SECTIONED_PLAN)
     await writeTaskPass(root, taskIdOf('Engine task'))

@@ -6,7 +6,7 @@ import { evaluateLaneParity, evaluateProgressParity } from './gates.js';
 import { defaultGit, legacyWorktreeDigest, worktreeDigest } from './git.js';
 import { notePathFor, readProgressNote } from './notes.js';
 import { reviewerBinding, reviewUnitText, taskReviewCoverage, } from './parity.js';
-import { checkedTaskIds, numberedTasks, taskLanes, taskSections } from './tasks.js';
+import { checkedTaskIds, numberedTasks, sectionSelectable, taskLanes, taskSections, } from './tasks.js';
 import { normalizedWorkspacePath } from './write-attribution.js';
 export { reviewUnitText };
 const WORKER_LANE_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
@@ -181,16 +181,13 @@ export async function reviewUnits(workspace, change, owner) {
     // The section parser is the one `resolveTaskSection` and the start path use;
     // `taskLanes` reads only `## ` headings and would miss a tab-separated one.
     const sections = taskSections(plan);
-    const keyCounts = new Map();
-    for (const section of sections)
-        keyCounts.set(section.key, (keyCounts.get(section.key) ?? 0) + 1);
     for (const section of sections) {
         // Tasks before the first heading are outside every section: per-task units.
         if (section.title === '')
             continue;
-        // A key shared by two headings cannot resolve to one section run, so its
-        // tasks keep the per-task unit instead of a unit the start rejects.
-        if ((keyCounts.get(section.key) ?? 0) > 1)
+        // The key must resolve to this one section through the resolver the review
+        // start uses, or the unit's selector would be rejected there.
+        if (!sectionSelectable(plan, section.key))
             continue;
         for (const task of section.covered)
             sectioned.add(task.id);

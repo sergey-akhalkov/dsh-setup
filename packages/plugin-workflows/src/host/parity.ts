@@ -9,7 +9,7 @@ import {
   resolveOwnership,
   SWITCH_BY_SIGNAL,
 } from './definitions.js'
-import { type NumberedTaskLine, taskSections } from './tasks.js'
+import { type NumberedTaskLine, sectionSelectable, taskSections } from './tasks.js'
 
 /**
  * The release-bound retirement parity: the tracked report, its template
@@ -944,14 +944,11 @@ export function taskReviewCoverage(
   // The section parser is the one resolution and the start path use, so a
   // tab-separated heading groups here too.
   const sections = taskSections(markdown)
-  const keyCounts = new Map<string, number>()
-  for (const section of sections) keyCounts.set(section.key, (keyCounts.get(section.key) ?? 0) + 1)
   for (const section of sections) {
     // Tasks before the first heading are outside every section.
     if (section.title === '') continue
-    // A key shared by two headings cannot resolve to one section run, so its
-    // tasks keep the per-task gap lines below.
-    if ((keyCounts.get(section.key) ?? 0) > 1) continue
+    // Only a key the review start can resolve names a section gap line.
+    if (!sectionSelectable(markdown, section.key)) continue
     const absent = section.covered.filter((task) => missing.has(task.id))
     if (absent.length < 2) continue
     gaps.push(

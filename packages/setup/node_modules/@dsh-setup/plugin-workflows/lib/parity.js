@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveOwnership, SWITCH_BY_SIGNAL, } from './definitions.js';
-import { taskSections } from './tasks.js';
+import { sectionSelectable, taskSections } from './tasks.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -720,16 +720,12 @@ export function taskReviewCoverage(workspace, change, rule = 'task-review', opti
     // The section parser is the one resolution and the start path use, so a
     // tab-separated heading groups here too.
     const sections = taskSections(markdown);
-    const keyCounts = new Map();
-    for (const section of sections)
-        keyCounts.set(section.key, (keyCounts.get(section.key) ?? 0) + 1);
     for (const section of sections) {
         // Tasks before the first heading are outside every section.
         if (section.title === '')
             continue;
-        // A key shared by two headings cannot resolve to one section run, so its
-        // tasks keep the per-task gap lines below.
-        if ((keyCounts.get(section.key) ?? 0) > 1)
+        // Only a key the review start can resolve names a section gap line.
+        if (!sectionSelectable(markdown, section.key))
             continue;
         const absent = section.covered.filter((task) => missing.has(task.id));
         if (absent.length < 2)

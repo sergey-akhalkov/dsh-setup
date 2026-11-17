@@ -179,6 +179,25 @@ function sectionLabel(section) {
  * number (`1`), its wildcard form (`1.x`), the normalized or bare title, or
  * `untitled`. Every rejection names the available sections.
  */
+/**
+ * Whether a section key selects exactly one section through the resolver the
+ * review start uses. A key can be unique as a string yet ambiguous to the
+ * resolver: its bare title collides case-insensitively with another heading.
+ */
+export function sectionSelectable(markdown, key) {
+    const counts = new Map();
+    for (const section of taskSections(markdown)) {
+        counts.set(section.key, (counts.get(section.key) ?? 0) + 1);
+    }
+    if ((counts.get(key) ?? 0) > 1)
+        return false;
+    try {
+        return resolveTaskSection(markdown, key, '').key === key;
+    }
+    catch {
+        return false;
+    }
+}
 export function resolveTaskSection(markdown, wanted, change) {
     const sections = taskSections(markdown);
     const needle = normalizeText(wanted);

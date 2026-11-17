@@ -63,6 +63,12 @@ export declare function taskSections(markdown: string): TaskSection[];
  * number (`1`), its wildcard form (`1.x`), the normalized or bare title, or
  * `untitled`. Every rejection names the available sections.
  */
+/**
+ * Whether a section key selects exactly one section through the resolver the
+ * review start uses. A key can be unique as a string yet ambiguous to the
+ * resolver: its bare title collides case-insensitively with another heading.
+ */
+export declare function sectionSelectable(markdown: string, key: string): boolean;
 export declare function resolveTaskSection(markdown: string, wanted: string, change: string): TaskSection;
 /**
  * Re-resolve one section by key and prove its submitted covered ids are still
