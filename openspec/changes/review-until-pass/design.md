@@ -90,16 +90,19 @@ keeping `maxBlocks` (the observed "three tries and a violation"). The transport 
 retryable: a permanent start failure is refused and named, and the user's only escape is cancel or a
 fix — the cost of "no limits".
 
-**D4 — Whole-scope reviews use the snapshot.** `spec-review` and `integration-review` build the same
-detached snapshot as a task review (the repository tree plus the frozen change directory) and bind
-the snapshot tree and the frozen spec digest into the record. A write during the run no longer
-discards the verdict; the record is written but its digest no longer matches the current inputs, so
-the step stays open and the next close runs a full review in the same thread. The live mutation guard
-remains only for the fallback when a snapshot cannot be built. Rejected: keep the live guard (the
-`reviewed-inputs-changed` storm); start whole-scope reviews only when the tree is quiet (the engine
-cannot know, and the agent keeps writing); accept the discard and retry (wasted paid runs). Tradeoff:
-a write during a whole-scope review still costs one more round, but it no longer costs a paid run that
-publishes nothing, and the reviewer keeps its context.
+**D4 — Whole-scope reviews use the snapshot; a reviewed spec stays reviewed.** A spec review
+snapshots and binds only the change artifacts it read (proposal, design, delta specs, task text with
+checkbox state normalized); the worktree is context, not a reviewed input, so parallel worktree work,
+task ticks, and task approvals neither discard its verdict nor stale its record. An integration review
+is the final worktree check: it snapshots the worktree and binds the worktree digest captured at
+snapshot time, so a later worktree write makes its record stale. A write during either run no longer
+discards the verdict as an input-change `ERROR`; the live mutation guard remains only for the fallback
+when a snapshot cannot be built. The owner's rule is explicit: reviewed means reviewed for the reviewed
+scope, and work outside that scope must not invalidate the verdict. Rejected: keep the live guard (the
+`reviewed-inputs-changed` storm the owner hit in session `a3f3e385` while another change wrote the
+worktree); start whole-scope reviews only when the tree is quiet (the engine cannot know, and the agent
+keeps writing); accept the discard and retry (wasted paid runs). Tradeoff: a spec review still goes
+stale when the plan artifacts themselves change, because that is the thing being reviewed.
 
 **D5 — Parallel admission, no artificial queue.** Every distinct review is admitted immediately. The
 queue keeps identity dedupe, per-run records, backoff/retry, and the off switch, but no longer counts
@@ -197,5 +200,9 @@ exists.
   scripted reviewer provider; both lanes start together, each keeps one key across a `FINDINGS` and a
   `PASS` round, the waiting close is allowed, no `VIOLATION` is recorded, approvals are written, and
   the integration review is required before archive.
+- Spec-review durability: a concurrent worktree write during or after a spec review publishes and
+  keeps the `PASS`; a task tick and a portable approval leave the normalized artifact digest
+  unchanged; an edit to `proposal.md`, `design.md`, or `specs/**` stales it; the archive after all
+  ticks accepts the creation `PASS`.
 - Live Codex check (manual, read-only): a second round of one unit shows `threadReuse=resumed` in the
   provider's run metadata.

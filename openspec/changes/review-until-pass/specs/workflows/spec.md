@@ -116,26 +116,36 @@ no review is live.
 
 ### Requirement: Whole-scope review snapshot
 
-A `spec-review` and `integration-review` SHALL review a frozen snapshot of their inputs, built from
-the same review input set as a task review, with the frozen change artifacts and the snapshot tree
-bound into the record digest. A write during the run MUST NOT discard the verdict as an input-change
-`ERROR`; the record SHALL be stale against the current digest instead, and the next round SHALL review
-the current snapshot in the same thread.
+A `spec-review` and `integration-review` SHALL review a frozen snapshot of their inputs. A spec review
+SHALL bind only the change artifacts it read, with `tasks.md` checkbox state normalized, and MUST NOT
+bind the worktree; an integration review SHALL bind the worktree digest captured at snapshot time.
+Work outside the reviewed scope MUST NOT discard the verdict or invalidate the record; only a changed
+reviewed plan SHALL require a new round in the same thread.
 
 #### Scenario: Write during a whole-spec review
 
-- **WHEN** the agent edits a change artifact while a whole-spec review runs
+- **WHEN** the agent edits a reviewed change artifact while a whole-spec review runs
 - **THEN** the review publishes its verdict for the snapshot, writes no input-change `ERROR`, and its record is stale against the edited artifacts
+
+#### Scenario: Parallel worktree work does not invalidate the spec review
+
+- **WHEN** another worktree path is written during or after a whole-spec review
+- **THEN** the verdict is published and the spec `PASS` stays current, with no input-change `ERROR` and no new round
 
 #### Scenario: Stale record needs a new round
 
-- **WHEN** a whole-scope record's digest no longer matches the current inputs
+- **WHEN** the reviewed plan artifacts change after a whole-spec `PASS`
 - **THEN** the step stays open, the unit is due, and the next close starts a round on the same thread
+
+#### Scenario: Task ticks do not invalidate
+
+- **WHEN** tasks are ticked after a whole-spec `PASS`
+- **THEN** the normalized artifact digest is unchanged and the `PASS` stays current for the archive
 
 #### Scenario: Integration review uses the snapshot
 
 - **WHEN** an integration review starts after the task list is complete
-- **THEN** it reads the frozen worktree snapshot and its digest binds that snapshot tree
+- **THEN** it reads the frozen worktree snapshot and its digest binds the worktree digest captured at snapshot time
 
 ### Requirement: Required integration review
 

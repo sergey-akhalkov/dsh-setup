@@ -36,10 +36,12 @@ is possible.
   waiting-list limits, review starts are exempt from the generic open-run limit, and the gate starts
   every due unit in one pass. The only serialization left is the shared reviewer thread of one unit,
   which is a real provider constraint, not a queue.
-- **Whole-scope reviews on a snapshot.** `spec-review` and `integration-review` use the same frozen
-  snapshot mechanism as task reviews, so a write during a run no longer discards the verdict as an
-  `ERROR`. The record becomes stale instead, and the next round re-reviews the current tree on the
-  same thread, focused with the prior findings and diff.
+- **Whole-scope reviews on a snapshot; a reviewed spec stays reviewed.** `spec-review` and
+  `integration-review` use a frozen snapshot. A spec review binds only the change artifacts it read
+  (`tasks.md` checkbox state normalized), so parallel worktree work, task ticks, and task approvals
+  never invalidate its `PASS`; only an edit to the reviewed plan artifacts does. An integration review
+  remains the final worktree check and binds the worktree digest captured at snapshot time. A write
+  during either run no longer discards the verdict as an `ERROR`.
 - **Required integration review.** `integration-review` loses `nonCritical` and the soft settlement
   and iterates until `PASS` like the other reviews. The legacy soft rule is retired from the parity
   report as a declared, documented difference.
