@@ -660,7 +660,7 @@ While an installed legacy plugin owns a behavior, a step that covers it SHALL de
 #### Scenario: Shipped intake composes with the strict review rule
 
 - **WHEN** the shipped `change-intake` loads with the installed strict `spec-review` rule
-- **THEN** it loads with only the `spec-review` step deferred, the legacy gate is the only steer for that review, the engine dispatches no executor for that step, and the other intake steps remain owned
+- **THEN** it loads with its `spec-review` step owned, the engine dispatches the native review executor for it, and no legacy gate steers that review
 
 #### Scenario: No double steer
 

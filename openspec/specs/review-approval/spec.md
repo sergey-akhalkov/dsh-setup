@@ -138,7 +138,7 @@ contributor documentation MUST point at the audit before an archive.
 
 ### Requirement: Reviewer identity binding
 
-When `openspec/review-approval.json` declares `reviewerProvider`, every portable task-review PASS MUST name a matching `target.provider`; a declared `reviewerModel` MUST also match. The live archive gate, live task gate, `delegation_status`, and `pnpm reviews:check` SHALL apply the same binding. An absent declaration preserves provider-agnostic behavior; a mismatch is unapproved.
+When `openspec/review-approval.json` declares `reviewerProvider`, every portable task-review PASS MUST name a matching `target.provider`; a declared `reviewerModel` MUST also match. The live archive gate, live task gate, the `workflows` status evidence, and `pnpm reviews:check` SHALL apply the same binding. An absent declaration preserves provider-agnostic behavior; a mismatch is unapproved.
 
 #### Scenario: Matching provider
 
