@@ -316,6 +316,11 @@ export class ReviewScheduler {
             return;
         entry.started = true;
         const attempt = await beginReviewAttempt(entry.request);
+        // Disposal can land while the asynchronous preparation reads its inputs.
+        if (this.disposed || !this.queue.owns(entry.file.id)) {
+            void attempt.result.catch(() => undefined);
+            return;
+        }
         let timer;
         try {
             // The acceptance deadline is cleared only by this success, after the
@@ -706,7 +711,7 @@ export class ReviewScheduler {
             ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
             request: {
                 ...input.request,
-                cancelled: () => this.fenced.has(input.run.id),
+                cancelled: () => this.disposed || this.fenced.has(input.run.id),
             },
             ...(input.phase === undefined ? {} : { phase: input.phase }),
             liveKey: key,
