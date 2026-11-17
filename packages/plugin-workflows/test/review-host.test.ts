@@ -8,10 +8,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { validateDefinition } from '../src/host/definitions.ts'
 import { currentSpecDigest, reviewDigest } from '../src/host/evidence.ts'
 import { SOFT_SETTLEMENT } from '../src/host/gates.ts'
+import { defaultGit } from '../src/host/git.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
-import { readReceipt } from '../src/host/receipts.ts'
+import { issueAdoptionReceipt, readReceipt } from '../src/host/receipts.ts'
 import { definitionsRegistry } from '../src/host/registry.ts'
+import { reviewInputTree } from '../src/host/review-snapshot.ts'
 import { createRun, readAuthenticatedRun, settleStep, writeRun } from '../src/host/runs.ts'
 import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
 
@@ -624,6 +626,74 @@ describe('native review host admission', () => {
     // A reviewed plan artifact does move the digest.
     await writeFile(join(changeDir, 'design.md'), '# Design\n\nA new decision.\n', 'utf8')
     expect(await currentSpecDigest(workspace, 'auth')).not.toBe(before)
+  })
+
+  it('accepts the creation spec PASS after later task ticks without refreshing it', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const creationDigest = await currentSpecDigest(workspace, 'auth')
+    if (creationDigest === undefined) throw new Error('the creation digest is missing')
+    // The whole-spec review passed while the task was unchecked, and the owner
+    // adoption receipt was issued at that creation digest.
+    const specRecordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(specRecordDir, { recursive: true })
+    await writeFile(
+      join(specRecordDir, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest: creationDigest, findings: [], time: '2026-11-17T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    await issueAdoptionReceipt(workspace, 'auth', creationDigest, auth, 3_000)
+    // Later work ticks the task and writes its portable approval.
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(creationDigest)
+    const taskId = taskIdOf('Task')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(
+      join(changeDir, 'reviews', `${taskId}.json`),
+      `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], target: { provider: 'codex-subagent' }, time: '2026-11-17T00:01:00.000Z' })}\n`,
+      'utf8',
+    )
+    // A current integration PASS over the ticked worktree binds the content tree.
+    const tree = await reviewInputTree(
+      workspace,
+      { dir: changeDir },
+      defaultGit,
+      AbortSignal.timeout(10_000),
+    )
+    const integrationRecordDir = join(
+      workspace,
+      '.dsh',
+      'workflows',
+      'records',
+      'integration-review',
+      'auth',
+    )
+    await mkdir(integrationRecordDir, { recursive: true })
+    await writeFile(
+      join(integrationRecordDir, 'integration.json'),
+      `${JSON.stringify({ rule: 'integration-review', change: 'auth', phase: 'integration', scope: 'whole', verdict: 'PASS', digest: reviewDigest({ scope: 'whole', specDigest: creationDigest, tree }), findings: [], time: '2026-11-17T00:02:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    // The archive accepts the creation PASS: no spec re-review, no new receipt.
+    const host = delayedReviewHost(workspace, 'PASS')
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    const decision = (await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'archive-after-ticks',
+        name: 'pwsh',
+        arguments: { command: 'openspec archive auth' },
+      },
+      async () => ({ kind: 'continue' }),
+    )) as { kind?: string; reason?: string } | undefined
+    if (decision?.kind === 'deny') {
+      throw new Error(`the creation PASS was not durable: ${decision.reason ?? ''}`)
+    }
+    expect(decision?.kind).not.toBe('deny')
+    expect(await readReceipt(workspace, 'auth', auth)).toMatchObject({ kind: 'adoption' })
   })
 
   it.each(['FINDINGS', 'PASS'] as const)(

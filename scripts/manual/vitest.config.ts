@@ -9,7 +9,10 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   root: fileURLToPath(new URL('../..', import.meta.url)),
   test: {
-    include: ['packages/plugin-codex-subagent/test/live-acceptance.manual.ts'],
+    include: [
+      'packages/plugin-codex-subagent/test/live-acceptance.manual.ts',
+      'packages/plugin-workflows/test/live-review.manual.ts',
+    ],
     environment: 'node',
     testTimeout: 180_000,
     hookTimeout: 180_000,

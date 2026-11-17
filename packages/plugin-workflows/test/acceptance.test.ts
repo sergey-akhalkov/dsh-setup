@@ -86,6 +86,8 @@ interface Activation {
 /** One scripted reviewer: lane 1 is FINDINGS then PASS, every other unit PASSes. */
 interface ScriptedReviewer {
   readonly activations: Activation[]
+  /** When set, a start for this review key fails as an unavailable provider. */
+  failKey?: string
   start(spec: { prompt: { type: string; text: string }[] }): Promise<unknown>
 }
 
@@ -93,11 +95,16 @@ function scriptedReviewer(): ScriptedReviewer {
   const activations: Activation[] = []
   const releases: Array<() => void> = []
   const counts = new Map<string, number>()
-  return {
+  const reviewer: ScriptedReviewer = {
     activations,
     start: async (spec) => {
       const instruction = spec.prompt.map((block) => block.text).join('\n')
       const key = /- Review key: (.+)$/mu.exec(instruction)?.[1]?.trim() ?? ''
+      if (reviewer.failKey !== undefined && key === reviewer.failKey) {
+        throw Object.assign(new Error('the reviewer provider is unavailable'), {
+          name: 'ConfigError',
+        })
+      }
       const digest = /- Digest: ([a-f0-9]{64})/u.exec(instruction)?.[1] ?? ''
       const round = (counts.get(key) ?? 0) + 1
       counts.set(key, round)
@@ -142,6 +149,7 @@ function scriptedReviewer(): ScriptedReviewer {
       }
     },
   }
+  return reviewer
 }
 
 interface FakeHost {
@@ -153,7 +161,7 @@ interface FakeHost {
   emit(name: string, ...args: unknown[]): Promise<unknown>
 }
 
-function fakeHost(workspace: string, reviewer: ScriptedReviewer): FakeHost {
+function fakeHost(workspace: string, reviewer: ScriptedReviewer, withReviewer = true): FakeHost {
   const listeners = new Map<string, Listener[]>()
   const steers: Array<{ content?: Array<{ text?: string }> }> = []
   const removed: string[] = []
@@ -191,7 +199,7 @@ function fakeHost(workspace: string, reviewer: ScriptedReviewer): FakeHost {
       }
       if (name === 'commands') return { register: () => () => {} }
       if (name === 'systemPrompt') return { context: () => () => {} }
-      if (name === 'subagents') {
+      if (name === 'subagents' && withReviewer) {
         return {
           getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
           startActivation: (spec: { prompt: { type: string; text: string }[] }) =>
@@ -431,7 +439,6 @@ describe('local acceptance: the lane review loop', () => {
     expect(reviewer.activations).toHaveLength(beforeStop)
     expect(host.steers).toHaveLength(0)
     expect(host.injected).toHaveLength(0)
-
     report.scenarios.push({
       scenario: 'lane review loop',
       change: CHANGE,
@@ -447,5 +454,53 @@ describe('local acceptance: the lane review loop', () => {
       waitingClose: 'no steer, no injection, no violation',
       stop: 'no review start, no steer, no injection',
     })
-  })
+  }, 120_000)
+
+  it('aborts an in-progress refused close and revokes its queued gate message', async () => {
+    const workspace = await acceptanceWorkspace()
+    const reviewer = scriptedReviewer()
+    // No reviewer service: every review start fails synchronously, so the gate
+    // submits its refusal steer and the close is in progress when the stop lands.
+    const host = fakeHost(workspace, reviewer, false)
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'stop-involved',
+        name: 'write',
+        arguments: { file_path: `openspec/changes/${CHANGE}/design.md` },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    const controller = new AbortController()
+    const closing = host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    await waitFor(() => host.steers.length > 0)
+    const submitted = host.steers.length
+    expect(submitted).toBeGreaterThan(0)
+    controller.abort()
+    await closing
+    // Every submitted gate message is revoked from the inbox and no turn starts.
+    expect(host.removed).toHaveLength(submitted)
+    expect(host.injected).toHaveLength(0)
+    expect(reviewer.activations).toHaveLength(0)
+    const runs = await listAuthenticatedRuns(workspace, auth)
+    // No review run completed from the stopped close.
+    expect(
+      runs.some((run) => run.definition.id === 'task-review' && run.status === 'completed'),
+    ).toBe(false)
+    report.scenarios.push({
+      scenario: 'aborted refused close',
+      change: CHANGE,
+      gateMessages: submitted,
+      revoked: host.removed.length,
+      injected: host.injected.length,
+    })
+  }, 120_000)
 })
