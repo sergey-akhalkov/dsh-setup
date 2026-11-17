@@ -32,6 +32,7 @@ import {
   writeLocalReviewRecord,
   writePortableApproval,
 } from '../src/host/review.ts'
+import { createReviewSnapshot, discardReviewSnapshot } from '../src/host/review-snapshot.ts'
 import { createRun } from '../src/host/runs.ts'
 import { taskIdOf } from '../src/host/tasks.ts'
 
@@ -952,6 +953,116 @@ describe('focused re-review', () => {
     expect(prompt).not.toContain('also return `previous`')
   })
 
+  it('renders the section inventory and diff and keeps the section key on a focused re-review', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const changeDir = join(root, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First covered\n- [x] 1.2 Second covered\n',
+      'utf8',
+    )
+    const first = taskIdOf('First covered')
+    const second = taskIdOf('Second covered')
+    const section: SectionReview = {
+      key: '1',
+      title: '1. Engine',
+      recordId: 'fedcba9876543210',
+      covered: [
+        { id: first, number: '1.1', text: 'First covered' },
+        { id: second, number: '1.2', text: 'Second covered' },
+      ],
+      unchecked: [],
+    }
+    const recordPath = localReviewRecordPath({
+      definition: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId: section.recordId,
+    })
+    await mkdir(join(root, recordPath, '..'), { recursive: true })
+    await writeFile(
+      join(root, recordPath),
+      `${JSON.stringify(
+        {
+          definition: 'task-review',
+          rule: 'task-review',
+          change: 'auth',
+          phase: 'task',
+          scope: 'task',
+          taskId: section.recordId,
+          section: section.key,
+          sectionTitle: section.title,
+          taskIds: [first, second],
+          digest: sectionReviewDigest(section, DIGEST),
+          verdict: 'FINDINGS',
+          findings: [testFinding({ title: 'Section failure' })],
+          reviewedTree: TREE_BEFORE,
+          target: { provider: 'codex-subagent' },
+          time: '2026-11-14T00:00:00.000Z',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    )
+    const digest = sectionReviewDigest(section, DIGEST, TREE_AFTER)
+    let prompt = ''
+    const definition = taskDefinition()
+    const result = await runReviewStep({
+      run: createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace: '/workspace',
+        context: {
+          name: 'auth',
+          taskId: section.recordId,
+          section: section.key,
+          taskIds: [first, second],
+        },
+        steps: ['review'],
+        now: 1_000,
+      }),
+      definition,
+      step: definition.steps[0] as Definition['steps'][number],
+      reviewer: reviewer(),
+      runner: {
+        run: async (request) => {
+          prompt = request.prompt
+          return {
+            childId: 'child-1',
+            completed: true,
+            text: fenced({
+              digest,
+              verdict: 'PASS',
+              previous: [{ id: 'f1', status: 'closed' }],
+              findings: [],
+            }),
+          }
+        },
+      },
+      context: {
+        workspace: root,
+        values: { name: 'auth', taskId: section.recordId, taskIds: [first, second] },
+      },
+      change: 'auth',
+      prepared: { specDigest: DIGEST, tree: TREE_AFTER, section },
+      timeoutMs: 5_000,
+      session: 'session-1',
+      now: 2_000,
+      runGit: fakeGit().runGit,
+      renderPrompt: renderReviewPrompt,
+    })
+    expect(result.run.steps[0]?.state).toBe('done')
+    expect(prompt).toContain(`- Review key: review:auth:section:${section.key}`)
+    expect(prompt).toContain('Section failure')
+    expect(prompt).toContain('## Previous findings')
+    expect(prompt).toContain('## Changes since the last review')
+    expect(prompt).toContain('also return `previous`')
+  })
+
   it('keeps the full prompt when no prior FINDINGS moved', async () => {
     const root = await workspace()
     roots.push(root)
@@ -1389,6 +1500,91 @@ describe('review record store', () => {
     expect(prompt).toContain('1.1 Do the thing')
     expect(prompt).toContain(TASK_ID)
     expect(prompt).toContain(TASK_DIGEST)
+  })
+
+  it('renders the stable unit key for a task, a section, and a whole-scope prompt', () => {
+    const common = {
+      instruction: 'review-task',
+      rule: 'task-review',
+      change: 'auth',
+      digest: TASK_DIGEST,
+      snapshot: true,
+    }
+    const task = renderReviewPrompt({
+      ...common,
+      scope: 'task',
+      task: { id: TASK_ID, number: '1.1', text: 'Do the thing' },
+      extra: 'Read the change artifacts.',
+    })
+    expect(task).toContain(`- Review key: review:auth:task:${TASK_ID}`)
+    expect(task).toContain(`- Digest: ${TASK_DIGEST}`)
+    // The provider requires both lines before the prompt's context section.
+    expect(task.indexOf('- Review key:')).toBeGreaterThan(task.indexOf('- Digest:'))
+    expect(task.indexOf('- Review key:')).toBeLessThan(task.indexOf('## Context'))
+    const sectionValue: SectionReview = {
+      key: '1 Engine setup',
+      title: '1. Engine setup',
+      recordId: 'fedcba9876543210',
+      covered: [],
+      unchecked: [],
+    }
+    const section = renderReviewPrompt({ ...common, scope: 'task', section: sectionValue })
+    expect(section).toContain('- Review key: review:auth:section:1 Engine setup')
+    // A heading line break cannot split the parsed review-key line.
+    const multiline = renderReviewPrompt({
+      ...common,
+      scope: 'task',
+      section: { ...sectionValue, key: '1\nEngine' },
+    })
+    expect(multiline).toContain('- Review key: review:auth:section:1 Engine')
+    expect(multiline).not.toContain('review:auth:section:1\nEngine')
+    const integration = renderReviewPrompt({
+      ...common,
+      instruction: 'review-integration',
+      rule: 'integration-review',
+      scope: 'whole',
+      phase: 'integration',
+    })
+    expect(integration).toContain('- Review key: review:auth:whole:integration')
+    const spec = renderReviewPrompt({
+      ...common,
+      instruction: 'review-spec',
+      rule: 'spec-review',
+      scope: 'whole',
+    })
+    expect(spec).toContain('- Review key: review:auth:whole:spec')
+  })
+
+  it('keeps the same unit key across two rounds at different digests', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const prompts: string[] = []
+    const runner: SubagentRunner = {
+      run: async (request) => {
+        prompts.push(request.prompt)
+        const digest = /^- Digest: ([a-f0-9]{64})$/mu.exec(request.prompt)?.[1] ?? ''
+        return {
+          childId: 'child-1',
+          completed: true,
+          text: fenced({ digest, verdict: 'PASS', findings: [] }),
+        }
+      },
+    }
+    const first = await invoke(root, runner, {
+      prepared: { specDigest: DIGEST },
+      renderPrompt: renderReviewPrompt,
+    })
+    expect(first.run.steps[0]?.state).toBe('done')
+    // The second round reviews the moved tree: same unit, new digest.
+    const second = await invoke(root, runner, {
+      prepared: { specDigest: DIGEST, tree: TREE_AFTER },
+      renderPrompt: renderReviewPrompt,
+    })
+    expect(second.run.steps[0]?.state).toBe('done')
+    const keyOf = (prompt: string): string | undefined =>
+      /^- Review key: (review:[^\r\n]+)$/mu.exec(prompt)?.[1]
+    expect(keyOf(prompts[0] ?? '')).toBe(`review:auth:task:${TASK_ID}`)
+    expect(keyOf(prompts[1] ?? '')).toBe(keyOf(prompts[0] ?? ''))
   })
 
   it('names the missing reviewer and its config remedy', () => {
@@ -1872,6 +2068,230 @@ describe('integration review worktree binding', () => {
     const stale = await invokeIntegration(root, specDigest, treeBefore)
     expect(stale.run.steps[0]?.state).toBe('blocked')
     expect(stale.run.steps[0]?.reason).toContain('stale')
+  })
+})
+
+describe('whole-scope snapshot review', () => {
+  function wholeSnapshotDefinition(): Definition {
+    return validateDefinition({
+      v: 1,
+      id: 'whole-snapshot-review',
+      name: 'Whole snapshot review',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: true,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        gate: 'review',
+        gateIdentity: 'whole-snapshot-review',
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Review the whole scope',
+          executor: 'review',
+          review: { target: 'codex', instruction: 'review-spec', scope: 'whole', phase: 'spec' },
+          evidence: {
+            kind: 'record',
+            rule: 'whole-snapshot-review',
+            change: '{name}',
+            scope: 'whole',
+            phase: 'spec',
+            verdicts: ['PASS', 'ERROR'],
+            digest: 'current-worktree',
+            path: '.dsh/workflows/records/whole-snapshot-review/{name}/spec.json',
+          },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    })
+  }
+
+  async function snapshotWorkspace(): Promise<{ root: string; changeDir: string }> {
+    const root = await workspace()
+    roots.push(root)
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'export const engine = 1\n', 'utf8')
+    await writeFile(join(root, '.gitignore'), '.dsh/\n', 'utf8')
+    const changeDir = join(root, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review-test')
+    git('config', 'user.email', 'review-test@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    return { root, changeDir }
+  }
+
+  it('publishes the frozen snapshot verdict and leaves it stale when the live inputs move', async () => {
+    const { root, changeDir } = await snapshotWorkspace()
+    const key = 'review:auth:whole:spec'
+    const snapshot = await createReviewSnapshot(
+      root,
+      { dir: changeDir },
+      key,
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (snapshot === undefined) throw new Error('expected a whole-scope review snapshot')
+    const digest = reviewDigest({
+      scope: 'whole',
+      specDigest: snapshot.specDigest,
+      tree: snapshot.tree,
+    })
+    const definition = wholeSnapshotDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const result = await runReviewStep({
+      run: createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace: root,
+        context: { name: 'auth' },
+        steps: ['review'],
+        now: 1_000,
+      }),
+      definition,
+      step,
+      reviewer: reviewer(),
+      runner: {
+        run: async () => {
+          // The agent writes both a code file and a change artifact while the
+          // review runs; neither is in the frozen snapshot.
+          await writeFile(join(root, 'src', 'live.ts'), 'export const live = 1\n', 'utf8')
+          await writeFile(join(changeDir, 'proposal.md'), '# Proposal edited\n', 'utf8')
+          return {
+            childId: 'child-1',
+            completed: true,
+            text: fenced({ digest, verdict: 'PASS', findings: [] }),
+          }
+        },
+      },
+      context: { workspace: root, values: { name: 'auth' }, runGit: defaultGit },
+      change: 'auth',
+      prepared: {
+        specDigest: snapshot.specDigest,
+        tree: snapshot.tree,
+        reviewCwd: snapshot.worktree,
+        // A snapshot is authoritative: the live guard must not discard this verdict.
+        liveGuard: async () => '1 changed: src/live.ts',
+      },
+      timeoutMs: 5_000,
+      session: 'session-1',
+      now: 2_000,
+      renderPrompt: renderReviewPrompt,
+    })
+    // The verdict publishes for the frozen snapshot; the record is stale
+    // against the live edit, so the step stays open for the next round.
+    expect(result.error).toBeUndefined()
+    expect(result.record?.verdict).toBe('PASS')
+    expect(result.record?.digest).toBe(digest)
+    expect(result.record?.reviewedTree).toBe(snapshot.tree)
+    expect(result.record?.worktreeDigest).toBeDefined()
+    expect(result.run.steps[0]?.state).toBe('blocked')
+    expect(result.run.steps[0]?.reason).toContain('stale')
+    await discardReviewSnapshot(root, key, defaultGit)
+  })
+
+  it('keeps a whole-scope round a full review in the same thread after FINDINGS', async () => {
+    const { root, changeDir } = await snapshotWorkspace()
+    const definition = wholeSnapshotDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const priorPath = localReviewRecordPath({
+      definition: definition.id,
+      change: 'auth',
+      scope: 'whole',
+      phase: 'spec',
+    })
+    await mkdir(join(root, priorPath, '..'), { recursive: true })
+    await writeFile(
+      join(root, priorPath),
+      `${JSON.stringify(
+        {
+          definition: definition.id,
+          rule: definition.id,
+          change: 'auth',
+          phase: 'spec',
+          scope: 'whole',
+          digest: 'b'.repeat(64),
+          verdict: 'FINDINGS',
+          findings: [testFinding({ title: 'Prior whole-scope failure' })],
+          target: { provider: 'codex-subagent' },
+          time: '2026-11-14T00:00:00.000Z',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    )
+    const key = 'review:auth:whole:spec'
+    const snapshot = await createReviewSnapshot(
+      root,
+      { dir: changeDir },
+      key,
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (snapshot === undefined) throw new Error('expected a whole-scope review snapshot')
+    const digest = reviewDigest({
+      scope: 'whole',
+      specDigest: snapshot.specDigest,
+      tree: snapshot.tree,
+    })
+    let prompt = ''
+    const result = await runReviewStep({
+      run: createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace: root,
+        context: { name: 'auth' },
+        steps: ['review'],
+        now: 1_000,
+      }),
+      definition,
+      step,
+      reviewer: reviewer(),
+      runner: {
+        run: async (request) => {
+          prompt = request.prompt
+          return {
+            childId: 'child-1',
+            completed: true,
+            text: fenced({ digest, verdict: 'PASS', findings: [] }),
+          }
+        },
+      },
+      context: { workspace: root, values: { name: 'auth' }, runGit: defaultGit },
+      change: 'auth',
+      prepared: {
+        specDigest: snapshot.specDigest,
+        tree: snapshot.tree,
+        reviewCwd: snapshot.worktree,
+      },
+      timeoutMs: 5_000,
+      session: 'session-1',
+      now: 2_000,
+      renderPrompt: renderReviewPrompt,
+    })
+    // The same unit key resumes the thread; a whole-scope round is never a
+    // focused diff round, even after a prior FINDINGS.
+    expect(prompt).toContain(`- Review key: ${key}`)
+    expect(prompt).not.toContain('## Previous findings')
+    expect(prompt).not.toContain('also return `previous`')
+    expect(result.record?.verdict).toBe('PASS')
+    await discardReviewSnapshot(root, key, defaultGit)
   })
 })
 

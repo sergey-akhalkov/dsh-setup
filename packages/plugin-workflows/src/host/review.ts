@@ -738,6 +738,40 @@ export interface ReviewPromptInput {
   readonly focused?: FocusedReviewContext
 }
 
+/** One-line prompt token: the review-key line must never be split by its unit. */
+function promptKeyToken(value: string): string {
+  const token = value
+    .replace(/\p{Cc}+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  return token === '' ? 'untitled' : token.slice(0, 120)
+}
+
+/**
+ * The stable review key: `review:<change>:section:<key>` for a section unit,
+ * `:task:<id>` for a per-task unit, or `:whole:<phase>` for a whole-scope
+ * review. The prompt line is the Codex provider's thread key, so the same unit
+ * resumes the same reviewer conversation and a different unit never does.
+ */
+export function reviewUnitKey(input: {
+  readonly change: string
+  readonly scope: 'whole' | 'task'
+  readonly phase?: string
+  readonly task?: { readonly id: string }
+  readonly section?: { readonly key: string }
+}): string {
+  if (input.scope !== 'task') {
+    return `review:${input.change}:whole:${promptKeyToken(reviewPhase('whole', input.phase))}`
+  }
+  if (input.section !== undefined) {
+    return `review:${input.change}:section:${promptKeyToken(input.section.key)}`
+  }
+  if (input.task !== undefined) {
+    return `review:${input.change}:task:${input.task.id}`
+  }
+  throw new Error('a task review prompt needs a task id or a section unit')
+}
+
 /** Bounds for the focused diff; only the diff is bounded, never the prior inventory. */
 const MAX_CHANGED_PATHS = 200
 const MAX_DIFF_LINES = 400
@@ -828,6 +862,7 @@ export function renderReviewPrompt(input: ReviewPromptInput): string {
     )
   }
   lines.push(`- Digest: ${input.digest}`)
+  lines.push(`- Review key: ${reviewUnitKey(input)}`)
   lines.push(
     input.snapshot
       ? '- Reviewed state: a frozen worktree snapshot taken when the review started; later writes are not in it.'
@@ -1781,7 +1816,10 @@ async function executeAttempt(
       },
     }
   }
-  if (input.prepared.liveGuard !== undefined) {
+  // A frozen snapshot is authoritative: a write during the run belongs to the
+  // next round and makes the record stale, never discards this verdict. The
+  // mutation guard applies only to the live-worktree fallback.
+  if (input.prepared.liveGuard !== undefined && input.prepared.reviewCwd === undefined) {
     const changed = await input.prepared
       .liveGuard()
       .catch((error: unknown) =>

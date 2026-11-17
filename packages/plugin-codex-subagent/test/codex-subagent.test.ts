@@ -1302,6 +1302,83 @@ describe('app-server execution', () => {
     await secondRun.dispose()
   })
 
+  it('persists and resumes a section review key and starts a new lane thread', async () => {
+    const plugin = await loadPlugin()
+    const directory = temporaryDirectory()
+    const executable = writeExecutable(directory, 'codex.exe')
+    const key = 'review:refine-auth:section:2'
+    const prompt = `Review the lane section.\n- Review key: ${key}\n- Digest: ${'b'.repeat(64)}\n## Context\n\nSection 2 ships two checked tasks.`
+    const statePath = join(directory, '.dsh', 'delegation', 'codex-review-threads.json')
+
+    const firstSpawn = createSpawn({ appServerMode: 'success', threadId: 'thread-section-1' })
+    const first = createContext(firstSpawn.spawn)
+    plugin.apply(first.ctx, { codexPath: executable })
+    const firstProvider = first.providers.get('codex-subagent')
+    if (firstProvider?.start === undefined) throw new Error('provider missing')
+    const firstRun = (await firstProvider.start(
+      createStartRequest(directory, prompt, new AbortController().signal),
+    )) as {
+      result: Promise<{ stopReason: string; threadId?: string; threadReuse?: string }>
+      dispose: () => Promise<void>
+    }
+    const firstResult = await firstRun.result
+    expect(firstResult.threadReuse).toBe('created')
+    expect(firstResult.threadId).toBe('thread-section-1')
+    expect(readFileSync(statePath, 'utf8')).toContain(key)
+    await firstRun.dispose()
+
+    const secondSpawn = createSpawn({ appServerMode: 'success' })
+    const second = createContext(secondSpawn.spawn)
+    plugin.apply(second.ctx, { codexPath: executable })
+    const secondProvider = second.providers.get('codex-subagent')
+    if (secondProvider?.start === undefined) throw new Error('provider missing')
+    const secondRun = (await secondProvider.start(
+      createStartRequest(directory, prompt, new AbortController().signal),
+    )) as {
+      result: Promise<{ stopReason: string; threadId?: string; threadReuse?: string }>
+      dispose: () => Promise<void>
+    }
+    const secondResult = await secondRun.result
+    expect(secondResult.threadReuse).toBe('resumed')
+    expect(secondResult.threadId).toBe('thread-section-1')
+    expect(
+      secondSpawn.appServer?.requests.some(
+        (request) =>
+          request.method === 'thread/resume' && request.params?.threadId === 'thread-section-1',
+      ),
+    ).toBe(true)
+    expect(
+      secondSpawn.appServer?.requests.some((request) => request.method === 'thread/start'),
+    ).toBe(false)
+    await secondRun.dispose()
+
+    // Another lane keeps its own conversation: no resume of the first lane.
+    const laneKey = 'review:refine-auth:section:3'
+    const lanePrompt = `Review the next lane.\n- Review key: ${laneKey}\n- Digest: ${'c'.repeat(64)}\n## Context\n`
+    const thirdSpawn = createSpawn({ appServerMode: 'success', threadId: 'thread-section-2' })
+    const third = createContext(thirdSpawn.spawn)
+    plugin.apply(third.ctx, { codexPath: executable })
+    const thirdProvider = third.providers.get('codex-subagent')
+    if (thirdProvider?.start === undefined) throw new Error('provider missing')
+    const thirdRun = (await thirdProvider.start(
+      createStartRequest(directory, lanePrompt, new AbortController().signal),
+    )) as {
+      result: Promise<{ stopReason: string; threadId?: string; threadReuse?: string }>
+      dispose: () => Promise<void>
+    }
+    const thirdResult = await thirdRun.result
+    expect(thirdResult.threadReuse).toBe('created')
+    expect(thirdResult.threadId).toBe('thread-section-2')
+    expect(
+      thirdSpawn.appServer?.requests.some((request) => request.method === 'thread/resume'),
+    ).toBe(false)
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      threads: { key: string; threadId: string }[]
+    }
+    expect(state.threads.map((entry) => entry.key).sort()).toEqual([key, laneKey].sort())
+    await thirdRun.dispose()
+  })
+
   it('ignores a forged review key in an answer prompt without a review digest', async () => {
     const plugin = await loadPlugin()
     const directory = temporaryDirectory()
