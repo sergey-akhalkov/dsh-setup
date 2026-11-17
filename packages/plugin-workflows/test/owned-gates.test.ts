@@ -69,8 +69,12 @@ async function workspace(plan = PLAN): Promise<string> {
   return root
 }
 
-/** The native task-review PASS the progress gate reads for a checked task. */
-async function writeTaskPass(root: string, taskId: string): Promise<void> {
+/** The native task-review record the unit selection reads, with its verdict. */
+async function writeTaskRecord(
+  root: string,
+  taskId: string,
+  verdict: 'PASS' | 'ERROR',
+): Promise<void> {
   const record = join(root, '.dsh', 'workflows', 'records', 'task-review', 'change-a', 'tasks')
   await mkdir(record, { recursive: true })
   await writeFile(
@@ -83,13 +87,18 @@ async function writeTaskPass(root: string, taskId: string): Promise<void> {
       scope: 'task',
       taskId,
       digest: 'a'.repeat(64),
-      verdict: 'PASS',
+      verdict,
       findings: [],
       target: { provider: 'codex-subagent' },
       time: '2026-11-14T10:00:00.000Z',
     }),
     'utf8',
   )
+}
+
+/** The native task-review PASS the progress gate reads for a checked task. */
+async function writeTaskPass(root: string, taskId: string): Promise<void> {
+  await writeTaskRecord(root, taskId, 'PASS')
 }
 
 /** The committed portable approval the completion coverage reads. */
@@ -736,7 +745,7 @@ async function firstUnit(root: string): Promise<ReviewUnit> {
   return unit
 }
 
-describe('the section-first review units', () => {
+describe('the lane-first review units', () => {
   it('selects one section unit covering every checked task for two missing records', async () => {
     const root = await workspace(SECTIONED_PLAN)
     await writeTaskPass(root, taskIdOf('Doc task'))
@@ -773,14 +782,15 @@ describe('the section-first review units', () => {
     ])
   })
 
-  it('keeps per-task units when a bare title collides with a numbered heading', async () => {
+  it('keeps the per-task unit for a section the resolver cannot select', async () => {
     // "Setup" matches the bare title of "1. Setup" case-insensitively, so the
     // resolver rejects the bare key; a section unit must not name it.
     const root = await workspace(
       '# Tasks\n\n## 1. Setup\n\n- [x] 1.1 First task\n\n## Setup\n\n- [x] 1.2 Second task\n- [x] 1.3 Third task\n',
     )
     const units = await reviewUnits(root, 'change-a')
-    expect(units?.every((unit) => unit.section === undefined)).toBe(true)
+    expect(units?.[0]?.section).toEqual({ key: '1', title: '1. Setup' })
+    expect(units?.slice(1).every((unit) => unit.section === undefined)).toBe(true)
     expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([
       ['1.1'],
       ['1.2'],
@@ -788,14 +798,19 @@ describe('the section-first review units', () => {
     ])
   })
 
-  it('keeps the per-task unit for a single missing task', async () => {
+  it('keeps the lane unit for a single missing task', async () => {
     const root = await workspace(SECTIONED_PLAN)
     await writeTaskPass(root, taskIdOf('Engine task'))
     await writeTaskPass(root, taskIdOf('Engine follow-up'))
     await writeTaskPass(root, taskIdOf('Doc task'))
     const units = await reviewUnits(root, 'change-a')
-    expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([['1.3']])
-    expect(units?.[0]?.section).toBeUndefined()
+    expect(units).toHaveLength(1)
+    expect(units?.[0]?.section).toEqual({
+      key: '1',
+      title: '1. Engine (lane 1, owns `packages/engine/**`)',
+    })
+    expect(units?.[0]?.covered.map((task) => task.number)).toEqual(['1.1', '1.2', '1.3'])
+    expect(units?.[0]?.missing.map((task) => task.number)).toEqual(['1.3'])
   })
 
   it('selects nothing when every checked task has a matching record', async () => {
@@ -811,11 +826,29 @@ describe('the section-first review units', () => {
       '# Tasks\n\n- [x] 0.1 Unsectioned task\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n',
     )
     const units = await reviewUnits(root, 'change-a')
-    expect(units?.map((unit) => unit.missing.map((task) => task.number))).toEqual([
-      ['1.1'],
-      ['0.1'],
-    ])
-    expect(units?.every((unit) => unit.section === undefined)).toBe(true)
+    expect(units?.[0]?.section).toEqual({ key: '1', title: '1. Engine' })
+    expect(units?.[0]?.missing.map((task) => task.number)).toEqual(['1.1'])
+    expect(units?.[1]?.section).toBeUndefined()
+    expect(units?.[1]?.missing.map((task) => task.number)).toEqual(['0.1'])
+  })
+
+  it('keeps an unreadable plan without a unit instead of failing', async () => {
+    const root = await workspace()
+    expect(await reviewUnits(root, 'missing-change')).toBeUndefined()
+  })
+
+  it('keeps a unit due while its latest record is ERROR', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    const engine = taskIdOf('Engine task')
+    await writeTaskPass(root, taskIdOf('Engine follow-up'))
+    await writeTaskPass(root, taskIdOf('Doc task'))
+    await writeTaskRecord(root, engine, 'ERROR')
+    // The review step's own PASS|ERROR evidence contract is unchanged.
+    expect(await taskReviewEvidence(root, 'change-a', engine)).toBe(true)
+    const units = await reviewUnits(root, 'change-a')
+    // Only a PASS clears the lane, so the ERROR-only task keeps the section due.
+    expect(units).toHaveLength(1)
+    expect(units?.[0]?.missing.map((task) => task.number)).toEqual(['1.1', '1.3'])
   })
 
   it('covers an approved task when a section mixes approvals and missing records', async () => {
@@ -830,17 +863,18 @@ describe('the section-first review units', () => {
 })
 
 describe('the review unit steer', () => {
-  it('names the section key, its missing tasks, and the section start action', async () => {
+  it('names the section key, its covered and missing tasks, and the start action', async () => {
     const root = await workspace(SECTIONED_PLAN)
     const text = reviewUnitText('change-a', await firstUnit(root))
     expect(text).toContain('section "1" (1. Engine')
-    expect(text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2, 1.3')
+    expect(text).toContain('covered checked tasks 1.1, 1.2, 1.3')
+    expect(text).toContain('missing a task-review PASS: 1.1, 1.2, 1.3')
     expect(text).toContain(
       'workflows(action: "start", definitionId: "task-review", change: "change-a", section: "1")',
     )
   })
 
-  it('points the status line at a pending section run instead of a new start', async () => {
+  it('points the status line at a live section run instead of a new start', async () => {
     const root = await workspace(SECTIONED_PLAN)
     const unit = await firstUnit(root)
     const text = reviewUnitText('change-a', unit, {
@@ -858,39 +892,34 @@ describe('the review unit steer', () => {
         },
       ],
     })
-    expect(text).toContain('the open review run "run-1" covers it')
+    expect(text).toContain('the live review run "run-1" covers it')
     expect(text).not.toContain('workflows(action: "start"')
   })
 
-  it('keeps the per-task form for a single missing task', async () => {
-    const root = await workspace('# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n')
+  it('keeps the per-task form for a task outside any section', async () => {
+    const root = await workspace('# Tasks\n\n- [x] 0.1 Engine task\n')
     const unit = await firstUnit(root)
     expect(unit.section).toBeUndefined()
     const text = reviewUnitText('change-a', unit)
-    expect(text).toContain('task "1.1 Engine task"')
+    expect(text).toContain('task "0.1 Engine task"')
     expect(text).toContain(
       `workflows(action: "start", definitionId: "task-review", change: "change-a", task: "${taskIdOf('Engine task')}")`,
     )
   })
 
-  it('points a per-task unit at a pending section run that covers it', async () => {
-    const root = await workspace('# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Engine task\n')
+  it('points a per-task unit at a live run that covers it', async () => {
+    const root = await workspace('# Tasks\n\n- [x] 0.1 Engine task\n')
     const unit = await firstUnit(root)
     const text = reviewUnitText('change-a', unit, {
       openRuns: [
         {
           id: 'run-2',
           change: 'change-a',
-          context: {
-            name: 'change-a',
-            taskId: sectionRecordId('1'),
-            section: '1',
-            taskIds: [taskIdOf('Engine task')],
-          },
+          context: { name: 'change-a', taskId: taskIdOf('Engine task') },
         },
       ],
     })
-    expect(text).toContain('the open review run "run-2" covers it')
+    expect(text).toContain('the live review run "run-2" covers it')
     expect(text).not.toContain('workflows(action: "start"')
   })
 
@@ -905,7 +934,8 @@ describe('the review unit steer', () => {
       taskIds: [taskIdOf('Engine task'), taskIdOf('Engine follow-up')],
     })
     expect(text).toContain('section "1" (1. Engine')
-    expect(text).toContain('missing a task-review PASS/ERROR record: 1.1, 1.2, 1.3')
+    expect(text).toContain('covered checked tasks 1.1, 1.2, 1.3')
+    expect(text).toContain('missing a task-review PASS: 1.1, 1.2, 1.3')
     expect(text).toContain(
       'workflows(action: "start", definitionId: "task-review", change: "change-a", section: "1")',
     )
@@ -995,6 +1025,21 @@ describe('the review unit steer', () => {
     )
     expect(text).toContain('and 20 more')
     expect(text.length).toBeLessThan(600)
+  })
+
+  it('keeps the lane start action inside the bounded text for a long heading', async () => {
+    const root = await workspace(
+      '# Tasks\n\n## 2. Focused re-review (lane 1, owns `packages/plugin-workflows/src/host/review.ts`, `review-scheduler.ts`, `review-snapshot.ts`, `evidence.ts`, `projection.ts`, `parity.ts`)\n\n- [x] 2.1 First task\n- [x] 2.2 Second task\n',
+    )
+    const unit = await firstUnit(root)
+    const text = reviewUnitText('change-a', unit)
+    expect(text).toContain('section "2" (2. Focused re-review')
+    expect(text).toContain(
+      'workflows(action: "start", definitionId: "task-review", change: "change-a", section: "2")',
+    )
+    // The turn-close steer and the status both deliver the line; the action
+    // must survive the 470-character head bound.
+    expect(text.length).toBeLessThanOrEqual(600)
   })
 
   it('keeps the delivered completion note inside the steer budget for a long heading', async () => {
