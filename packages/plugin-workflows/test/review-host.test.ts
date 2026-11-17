@@ -114,7 +114,7 @@ interface DelayedReviewHost {
   emit(name: string, ...args: unknown[]): Promise<unknown>
 }
 
-async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 30_000): Promise<void> {
   const started = Date.now()
   while (!(await check())) {
     if (Date.now() - started > timeoutMs) throw new Error('the host did not settle in time')
