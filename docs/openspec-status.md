@@ -900,13 +900,16 @@ successful release workflow; the published index lists 0.41.1. The native whole-
 receipt and archive for `focused-rereview-and-section-steer` are still pending the owner's install of
 0.41.1.
 
-A second engine defect blocks the same archive on the installed 0.41.1: the native `spec-review`
-trigger never matches in this workspace. Every turn close evaluates `definition:spec-review` as
-`condition-false` although the session's involvement record exists at
-`.dsh/workflows/involvement/<session>.json` and reads correctly, and no `spec-review` run has ever been
-created natively here (the existing whole-spec PASS is the pre-Release-A legacy record). Without a
-native whole-spec PASS the archive gate cannot authorize the archive, so `focused-rereview-and-section-steer`
-was moved into `openspec/changes/archive/` by the owner from an external PowerShell
-(`Move-Item openspec\changes\focused-rereview-and-section-steer openspec\changes\archive\2026-11-17-focused-rereview-and-section-steer`)
-after the delta was synced. Owner follow-up: reproduce and fix the trigger condition (involvement is
-present yet the condition is false) before the next release that expects a native whole-spec review.
+A second engine defect blocked the same archive on the installed 0.41.1: the native `spec-review`
+trigger never matched in this workspace. Every turn close evaluated `definition:spec-review` as
+`condition-false` although the session's involvement record existed and read correctly. Root cause:
+the condition context builder's traversal guard treated any two dots as a filesystem path, and task
+2.3 of this change names the prior-finding ids as `f1`..`fn`; the context build threw, and the caller
+turned the failure into a false condition. Fixed in 0.41.2: `..` counts as a traversal only as a path
+segment (`../x`, `x/..`, a leading or trailing segment), and a context build failure is published as a
+listener error instead of a false condition. The native whole-spec review, adoption receipt and archive
+for `focused-rereview-and-section-steer` are still pending the owner's install of 0.41.2; once the
+trigger fires, the spec review, `/workflows adopt` and the archive move complete the flow. Owner
+follow-up: the composed review-host and delegation queue tests still show real-timer flakes on the
+4-core Windows runner (a release rerun was needed for 0.41.2), so a stable retry or harness bound is
+worth a follow-up.
