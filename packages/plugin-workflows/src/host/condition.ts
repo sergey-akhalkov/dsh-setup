@@ -247,7 +247,12 @@ export async function buildConditionContext(
         const close = closingQuote(value, index + 1, char)
         if (close !== -1) {
           const inner = value.slice(index + 1, close)
-          output += char + inner.replace(quotedUrl, maskUrl) + char
+          // A quoted URL argument is one token; quoted script text keeps the
+          // shell operator boundaries so a redirection inside it stays visible.
+          const span = /^(?:--?[A-Za-z-]+=)?[A-Za-z][A-Za-z0-9+.-]+:\/\/\S*$/u.test(inner.trim())
+            ? quotedUrl
+            : shellUrl
+          output += char + inner.replace(span, maskUrl) + char
           index = close + 1
           continue
         }
@@ -278,13 +283,13 @@ export async function buildConditionContext(
     let quote: '"' | "'" | undefined
     while (index < command.length) {
       const char = command[index] ?? ''
-      if (char === '\\') {
-        index += 2
-        continue
-      }
       if (quote === "'") {
         if (char === "'") quote = undefined
         index += 1
+        continue
+      }
+      if (char === '\\') {
+        index += 2
         continue
       }
       if (char === "'" && quote === undefined) {
@@ -314,13 +319,13 @@ export async function buildConditionContext(
     let quote: '"' | "'" | undefined
     while (index < command.length) {
       const char = command[index] ?? ''
-      if (char === '\\') {
-        index += 2
-        continue
-      }
       if (quote === "'") {
         if (char === "'") quote = undefined
         index += 1
+        continue
+      }
+      if (char === '\\') {
+        index += 2
         continue
       }
       if (char === "'" && quote === undefined) {

@@ -751,6 +751,18 @@ describe('condition context path boundary', () => {
       'a literal backslash in a single-quoted URL',
       "echo 'https://example.invalid/\\' >/etc/private/token.txt; echo 'done'",
     ],
+    [
+      'a single-quoted backslash before an active substitution',
+      'echo \'literal\\\' "https://example.invalid/$(cat</etc/private/token.txt)"',
+    ],
+    [
+      'a single-quoted backslash before an active backtick substitution',
+      'echo \'literal\\\' "https://example.invalid/`cat</etc/private/token.txt`"',
+    ],
+    [
+      'a compact redirection in a quoted script',
+      'sh -c "curl https://example.invalid>/etc/private/token.txt"',
+    ],
   ] as const)('refuses %s in event.command', async (_name, command) => {
     const root = await workspace()
     await expect(
