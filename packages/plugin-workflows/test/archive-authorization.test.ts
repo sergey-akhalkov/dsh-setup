@@ -62,6 +62,31 @@ async function writableChange(workspace: string): Promise<string> {
   return digest
 }
 
+/** A spec-less change whose marker and whole-spec PASS record are current. */
+async function specLessChange(workspace: string): Promise<string> {
+  await writeArtifact(workspace, 'openspec/changes/auth/proposal.md', '# Proposal\n')
+  await writeArtifact(workspace, 'openspec/changes/auth/design.md', '# Design\n')
+  await writeArtifact(workspace, 'openspec/changes/auth/tasks.md', '- [x] 1.1 Task\n')
+  await writeArtifact(
+    workspace,
+    'openspec/changes/auth/.openspec.yaml',
+    'schema: spec-driven\nskip_specs: true\n',
+  )
+  const digest = (await currentSpecDigest(workspace, 'auth')) as string
+  await writeJson(workspace, '.dsh/workflows/records/spec-review/auth/spec.json', {
+    rule: 'spec-review',
+    change: 'auth',
+    phase: 'spec',
+    scope: 'whole',
+    verdict: 'PASS',
+    digest,
+    findings: [],
+    time: '2026-01-01T00:00:00.000Z',
+    target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
+  })
+  return digest
+}
+
 function intakeReceipt(): WorkflowReceipt {
   return {
     v: 1,
@@ -119,6 +144,57 @@ describe('integration review archive requirement', () => {
     // An incomplete task list omits the requirement entirely.
     const incomplete = evaluateArchiveGate({ ...base })
     expect(incomplete.kind).toBe('allow')
+  })
+})
+
+describe('spec-less archive eligibility', () => {
+  it('denies a click through the archive gate for a change with neither spec nor marker', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, 'openspec/changes/auth/proposal.md', '# Proposal\n')
+    await writeArtifact(workspace, 'openspec/changes/auth/design.md', '# Design\n')
+    await writeArtifact(workspace, 'openspec/changes/auth/tasks.md', '- [x] 1.1 Task\n')
+    const digest = (await currentSpecDigest(workspace, 'auth')) as string
+    await writeJson(workspace, '.dsh/workflows/records/spec-review/auth/spec.json', {
+      rule: 'spec-review',
+      change: 'auth',
+      phase: 'spec',
+      scope: 'whole',
+      verdict: 'PASS',
+      digest,
+      findings: [],
+      time: '2026-01-01T00:00:00.000Z',
+      target: { provider: 'codex-subagent' },
+    })
+    const { verifySpecEligibility } = await import('../src/host/adoption.ts')
+    const eligibility = await verifySpecEligibility(workspace, 'auth')
+    expect(eligibility).toMatchObject({ ok: false })
+
+    const decision = evaluateArchiveGate({
+      change: 'auth',
+      runs: [],
+      receipts: [intakeReceipt()],
+      specRecord: currentSpec(),
+      specEligibility: eligibility,
+    })
+    expect(decision.kind).toBe('deny')
+    if (decision.kind === 'deny') {
+      expect(decision.reason).toContain('specs/**/spec.md')
+      expect(decision.reason).toContain('skip_specs: true')
+    }
+  })
+
+  it('authorizes a spec-less click and refuses it after the marker is removed', async () => {
+    const workspace = await tempWorkspace()
+    await specLessChange(workspace)
+    const auth = HostAuth.fromKey('test-archive-host-key-0123456789')
+    expect(await authorizeUserArchive(workspace, 'auth', auth)).toEqual({ ok: true })
+
+    const removed = await tempWorkspace()
+    await specLessChange(removed)
+    await rm(join(removed, 'openspec', 'changes', 'auth', '.openspec.yaml'))
+    const refused = await authorizeUserArchive(removed, 'auth', auth)
+    expect(refused.ok).toBe(false)
+    if (!refused.ok) expect(refused.reason).toContain('skip_specs: true')
   })
 })
 

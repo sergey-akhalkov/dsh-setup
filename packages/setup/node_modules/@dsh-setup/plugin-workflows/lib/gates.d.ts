@@ -203,6 +203,11 @@ export interface ArchiveGateInput {
     readonly receipts: readonly WorkflowReceipt[];
     /** The whole-spec `PASS` record, already verified against the current digest. */
     readonly specRecord: EvidenceCheck;
+    /**
+     * The change artifact eligibility — a delta spec or `skip_specs: true` —
+     * rechecked after the record. A change with neither is never archivable.
+     */
+    readonly specEligibility?: EvidenceCheck;
     /** The owned per-task portable PASS coverage, computed from the workspace. */
     readonly taskReview?: {
         readonly ok: boolean;

@@ -127,7 +127,7 @@ describe('workflow definition schema', () => {
     const spec = definition.steps.find((step) => step.id === 'spec')
     const specItems = spec?.evidence?.kind === 'all' ? spec.evidence.items : []
     expect(specItems).toHaveLength(5)
-    expect(specItems.map((item) => item.kind)).toEqual(['file', 'file', 'file', 'file', 'check'])
+    expect(specItems.map((item) => item.kind)).toEqual(['file', 'file', 'file', 'spec', 'check'])
     const review = definition.steps.find((step) => step.id === 'spec-review')
     expect(review?.executor).toBe('review')
     expect(review?.ownership).toBeUndefined()

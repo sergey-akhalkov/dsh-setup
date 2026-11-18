@@ -871,6 +871,11 @@ export interface ArchiveGateInput {
   readonly receipts: readonly WorkflowReceipt[]
   /** The whole-spec `PASS` record, already verified against the current digest. */
   readonly specRecord: EvidenceCheck
+  /**
+   * The change artifact eligibility — a delta spec or `skip_specs: true` —
+   * rechecked after the record. A change with neither is never archivable.
+   */
+  readonly specEligibility?: EvidenceCheck
   /** The owned per-task portable PASS coverage, computed from the workspace. */
   readonly taskReview?: { readonly ok: boolean; readonly text?: string }
   /**
@@ -929,12 +934,23 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
       reason: `the archive of "${input.change}" is refused: no authenticated completed change-intake run and no authenticated receipt exists; complete the intake or run /workflows adopt ${input.change}`,
     }
   }
-  if (!input.specRecord.ok) {
+  if (!input.specRecord.ok || (input.specEligibility !== undefined && !input.specEligibility.ok)) {
+    const parts: string[] = []
+    if (!input.specRecord.ok) {
+      parts.push(
+        `the current whole-spec PASS record is ${
+          input.specRecord.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid'
+        } (${input.specRecord.failure.detail.slice(0, 200)})`,
+      )
+    }
+    if (input.specEligibility !== undefined && !input.specEligibility.ok) {
+      parts.push(
+        `the change artifact set is not eligible (${input.specEligibility.failure.detail.slice(0, 200)})`,
+      )
+    }
     return {
       kind: 'deny',
-      reason: `the archive of "${input.change}" is refused: the current whole-spec PASS record is ${
-        input.specRecord.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid'
-      } (${input.specRecord.failure.detail.slice(0, 200)})`,
+      reason: `the archive of "${input.change}" is refused: ${parts.join('; ')}`,
     }
   }
   if (input.taskReview !== undefined && !input.taskReview.ok) {

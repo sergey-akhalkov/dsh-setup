@@ -1,4 +1,4 @@
-import { verifyAdoptionEvidence, verifyWholeSpecRecord } from './adoption.js';
+import { verifyAdoptionEvidence, verifySpecEligibility, verifyWholeSpecRecord } from './adoption.js';
 import { evaluateArchiveGate } from './gates.js';
 import { taskReviewCoverage } from './parity.js';
 import { issueAdoptionReceipt, listReceipts } from './receipts.js';
@@ -6,6 +6,9 @@ import { hasTamperedRuns, listAuthenticatedRuns } from './runs.js';
 /** The archive gate's decision with the evidence already read. */
 export async function decideArchiveAuthorization(workspace, change, deps) {
     const specRecord = await verifyWholeSpecRecord(workspace, change);
+    // A spec-less change is eligible only while its marker (or a delta spec)
+    // exists; the marker removal after PASS names it in the refusal.
+    const specEligibility = await verifySpecEligibility(workspace, change);
     const taskReviewOwned = deps.definitions.some((definition) => definition.id === 'task-review' && definition.settings.gateOwnership === 'own');
     const coverage = taskReviewOwned ? taskReviewCoverage(workspace, change) : undefined;
     return evaluateArchiveGate({
@@ -14,6 +17,7 @@ export async function decideArchiveAuthorization(workspace, change, deps) {
         runs: deps.auth === undefined ? [] : await listAuthenticatedRuns(workspace, deps.auth),
         receipts: deps.auth === undefined ? [] : await listReceipts(workspace, deps.auth),
         specRecord,
+        specEligibility,
         ...(coverage === undefined
             ? {}
             : {

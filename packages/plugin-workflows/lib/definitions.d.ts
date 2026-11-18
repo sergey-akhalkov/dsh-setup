@@ -85,7 +85,7 @@ export interface DefinitionSettings {
     /** A stable gate identity a local copy may not remove or narrow. */
     readonly gateIdentity?: string;
 }
-export declare const EVIDENCE_KINDS: readonly ["file", "record", "tool", "check", "human", "all", "declaration"];
+export declare const EVIDENCE_KINDS: readonly ["file", "spec", "record", "tool", "check", "human", "all", "declaration"];
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 export interface FileEvidence {
     readonly kind: 'file';
@@ -93,6 +93,10 @@ export interface FileEvidence {
     readonly path: string;
     readonly minBytes?: number;
     readonly glob?: boolean;
+}
+/** A change carries a delta spec under `specs/` or declares `skip_specs: true`. */
+export interface SpecEvidence {
+    readonly kind: 'spec';
 }
 export interface AllEvidence {
     readonly kind: 'all';
@@ -140,7 +144,7 @@ export interface HumanEvidence {
 export interface DeclarationEvidence {
     readonly kind: 'declaration';
 }
-export type Evidence = FileEvidence | AllEvidence | RecordEvidence | ToolCallEvidence | CheckEvidence | HumanEvidence | DeclarationEvidence;
+export type Evidence = FileEvidence | SpecEvidence | AllEvidence | RecordEvidence | ToolCallEvidence | CheckEvidence | HumanEvidence | DeclarationEvidence;
 /** A fixed tool call; `{name}` is the only interpolation and is validated. */
 export interface ToolSpec {
     readonly name: string;

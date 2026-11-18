@@ -41,6 +41,20 @@ describe('bundled review instructions', () => {
     }
   })
 
+  it('documents the spec-less and finding-record scope in the whole-spec review', () => {
+    const text = readFileSync(join(SHIPPED, 'review-spec.md'), 'utf8')
+    for (const phrase of [
+      'findings/**/*.md',
+      'findings',
+      'skip_specs: true',
+      'proposal.md',
+      'design.md',
+      'tasks.md',
+    ]) {
+      expect(text, phrase).toContain(phrase)
+    }
+  })
+
   it('resolves the shipped instructions through their reader', () => {
     for (const id of IDS) {
       const text = readReviewInstruction(id)

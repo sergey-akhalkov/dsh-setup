@@ -12,7 +12,16 @@ import { TRIGGER_NODE } from './graph.ts'
  */
 
 const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
-const EVIDENCE_KINDS = ['file', 'record', 'tool', 'check', 'human', 'all', 'declaration'] as const
+const EVIDENCE_KINDS = [
+  'file',
+  'spec',
+  'record',
+  'tool',
+  'check',
+  'human',
+  'all',
+  'declaration',
+] as const
 
 export interface ListEditorProps {
   readonly state: EditorState

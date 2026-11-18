@@ -115,10 +115,13 @@ export interface GlobExpansion {
  * partial result it happened to see.
  */
 export declare function expandGlob(root: string, pattern: string): Promise<GlobExpansion>;
+/** Whether the change's `.openspec.yaml` declares `skip_specs: true`. */
+export declare function declaresSkipSpecs(changeDir: string): Promise<boolean>;
 /**
  * The change artifact digest: it hashes every file under the change directory
- * (except `.openspec.yaml` and the portable `reviews/` directory), normalizing
- * `tasks.md` checkbox state.
+ * (except the portable `reviews/` directory), normalizing `tasks.md` checkbox
+ * state and binding the effective `skip_specs` declaration, so adding, changing,
+ * or removing the marker invalidates a review record.
  */
 export declare function specDigest(changeDir: string): Promise<string>;
 /** The current digest of one change, or undefined when it does not exist. */

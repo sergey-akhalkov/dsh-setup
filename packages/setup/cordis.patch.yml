@@ -12,6 +12,8 @@
       name: "@dsh-setup/plugin-answer-page"
     - id: dsh-setup-codex-subagent
       name: "@dsh-setup/plugin-codex-subagent"
+    - id: dsh-setup-exploratory-testing
+      name: "@dsh-setup/plugin-exploratory-testing"
     - id: dsh-setup-goal-continuity
       name: "@dsh-setup/plugin-goal-continuity"
       config:

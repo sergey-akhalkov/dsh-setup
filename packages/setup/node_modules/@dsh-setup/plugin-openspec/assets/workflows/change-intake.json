@@ -76,14 +76,14 @@
       "id": "spec",
       "title": "Write the spec set",
       "executor": "main",
-      "prompt": "Write proposal.md, design.md, tasks.md, and at least one specs/<capability>/spec.md for the change, then run openspec validate {name} --strict.",
+      "prompt": "Write proposal.md, design.md, and tasks.md for the change. Either write at least one specs/<capability>/spec.md delta, or, when the change changes no specified behavior, set skip_specs: true in .openspec.yaml and write no spec files. Then run openspec validate {name} --strict.",
       "evidence": {
         "kind": "all",
         "items": [
           { "kind": "file", "path": "openspec/changes/{name}/proposal.md" },
           { "kind": "file", "path": "openspec/changes/{name}/design.md" },
           { "kind": "file", "path": "openspec/changes/{name}/tasks.md" },
-          { "kind": "file", "path": "openspec/changes/{name}/specs/**/spec.md", "glob": true },
+          { "kind": "spec" },
           { "kind": "check", "command": "openspec validate {name} --strict" }
         ]
       },

@@ -11039,7 +11039,16 @@ window.__ModuleLoader__.load({
     var import_dsh_client_ui_primitives3 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime4 = require("react/jsx-runtime");
     var EXECUTORS = ["main", "subagent", "tool", "branch", "loop", "human"];
-    var EVIDENCE_KINDS = ["file", "record", "tool", "check", "human", "all", "declaration"];
+    var EVIDENCE_KINDS = [
+      "file",
+      "spec",
+      "record",
+      "tool",
+      "check",
+      "human",
+      "all",
+      "declaration"
+    ];
     function outputsFor(step) {
       if (step.branch !== void 0) return ["true", "false"];
       if (step.loop !== void 0) return ["exit"];
@@ -11767,7 +11776,16 @@ window.__ModuleLoader__.load({
       ] });
     }
     var EXECUTORS2 = ["main", "subagent", "tool", "branch", "loop", "human"];
-    var EVIDENCE_KINDS2 = ["file", "record", "tool", "check", "human", "all", "declaration"];
+    var EVIDENCE_KINDS2 = [
+      "file",
+      "spec",
+      "record",
+      "tool",
+      "check",
+      "human",
+      "all",
+      "declaration"
+    ];
     function executorOptions(current) {
       return EXECUTORS2.includes(current) ? EXECUTORS2 : [...EXECUTORS2, current];
     }

@@ -187,6 +187,41 @@ async function fileCheck(evidence, context, item) {
     }
     return { ok: true, evidence: { kind: 'file', path, bytes: info.size } };
 }
+const SPEC_DELTA = 'openspec/changes/{name}/specs/**/spec.md';
+const SPEC_MARKER = 'openspec/changes/{name}/.openspec.yaml';
+/**
+ * A change is eligible when it ships a delta spec or declares `skip_specs: true`;
+ * a refusal names both, so a spec-less change without the marker is actionable.
+ */
+async function specCheck(_evidence, context, item) {
+    const delta = await fileCheck({ kind: 'file', path: SPEC_DELTA, glob: true }, context, item);
+    if (delta.ok)
+        return delta;
+    // Only a missing delta falls through to the marker; an unsafe or unreadable
+    // glob stays the failure instead of being masked as a spec-less change.
+    if (delta.failure.reason !== 'no-match')
+        return delta;
+    const markerPath = await resolveEvidenceText(SPEC_MARKER, context, item);
+    if (!markerPath.ok)
+        return markerPath;
+    const root = await realpath(context.workspace).catch(() => undefined);
+    if (root === undefined) {
+        return failure('path-escape', 'the workspace is not readable', markerPath.text, item);
+    }
+    const text = await readFile(join(root, markerPath.text), 'utf8').catch(() => undefined);
+    if (text !== undefined && SKIP_SPECS.test(text)) {
+        return {
+            ok: true,
+            evidence: {
+                kind: 'file',
+                path: markerPath.text,
+                bytes: text.length,
+                detail: 'skip_specs: true',
+            },
+        };
+    }
+    return failure('no-match', 'the change has neither a specs/**/spec.md file nor a top-level skip_specs: true in .openspec.yaml', markerPath.text, item);
+}
 /**
  * Expand a segment glob under the workspace. A traversal that hits the depth or
  * entry limit, or meets an escaping symlink, fails instead of approving the
@@ -345,9 +380,23 @@ function hashParts(parts) {
     return hash.digest('hex');
 }
 /**
+ * The normalized `skip_specs: true` declaration OpenSpec honors for a change
+ * without delta specs. A top-level boolean line is enough for the digest and
+ * the eligibility check.
+ * shortcut: line-level read, not a YAML parse; upgrade with the CLI's own reader
+ * if OpenSpec starts accepting other spellings.
+ */
+const SKIP_SPECS = /^skip_specs[ \t]*:[ \t]*(?:true|True|TRUE)[ \t]*(?:#.*)?\r?$/mu;
+/** Whether the change's `.openspec.yaml` declares `skip_specs: true`. */
+export async function declaresSkipSpecs(changeDir) {
+    const text = await readFile(join(changeDir, '.openspec.yaml'), 'utf8').catch(() => undefined);
+    return text !== undefined && SKIP_SPECS.test(text);
+}
+/**
  * The change artifact digest: it hashes every file under the change directory
- * (except `.openspec.yaml` and the portable `reviews/` directory), normalizing
- * `tasks.md` checkbox state.
+ * (except the portable `reviews/` directory), normalizing `tasks.md` checkbox
+ * state and binding the effective `skip_specs` declaration, so adding, changing,
+ * or removing the marker invalidates a review record.
  */
 export async function specDigest(changeDir) {
     const files = [];
@@ -377,6 +426,8 @@ export async function specDigest(changeDir) {
             content = content.replace(/^(\s*-\s*)\[[xX]\]/gm, '$1[ ]');
         parts.push(name, content);
     }
+    if (await declaresSkipSpecs(changeDir))
+        parts.push('skip_specs: true');
     return hashParts(parts);
 }
 /** The current digest of one change, or undefined when it does not exist. */
@@ -914,6 +965,14 @@ export function collectEvidencePaths(value, context, item) {
             const resolved = interpolate(value.path, context, item);
             return resolved.ok ? [resolved.evidence.path ?? value.path] : [value.path];
         }
+        case 'spec': {
+            const paths = [];
+            for (const pattern of [SPEC_DELTA, SPEC_MARKER]) {
+                const resolved = interpolate(pattern, context, item);
+                paths.push(resolved.ok ? (resolved.evidence.path ?? pattern) : pattern);
+            }
+            return paths;
+        }
         case 'all':
             return value.items.flatMap((child, index) => collectEvidencePaths(child, context, item === undefined ? `items[${String(index)}]` : `${item}.items[${String(index)}]`));
         case 'record': {
@@ -961,6 +1020,10 @@ export function describeEvidence(value, context) {
                 .join(', ');
             return `file ${path ?? value.path}${suffix === '' ? '' : ` (${suffix})`}`;
         }
+        case 'spec': {
+            const [delta, marker] = collectEvidencePaths(value, context);
+            return `a specs/**/spec.md delta at ${delta ?? 'openspec/changes/{name}/specs/**/spec.md'} or skip_specs: true in ${marker ?? 'openspec/changes/{name}/.openspec.yaml'}`;
+        }
         case 'all':
             return `all of: ${value.items.map((item) => describeEvidence(item, context)).join('; ')}`;
         case 'record': {
@@ -1007,6 +1070,8 @@ export async function verifyEvidence(value, context, item) {
     switch (value.kind) {
         case 'file':
             return fileCheck(value, context, item);
+        case 'spec':
+            return specCheck(value, context, item);
         case 'record':
             return recordCheck(value, context, item);
         case 'tool':

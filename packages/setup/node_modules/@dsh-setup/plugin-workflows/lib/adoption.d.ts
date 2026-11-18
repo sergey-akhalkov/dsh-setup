@@ -31,8 +31,16 @@ export type AdoptionResult = {
  */
 export declare function verifyWholeSpecRecord(workspace: string, change: string): Promise<EvidenceCheck>;
 /**
- * Verify the four change artifacts and the current whole-spec `PASS` record.
- * Returns the verified spec digest when the change is adoptable.
+ * The change artifact eligibility: a delta spec under `specs/` or the
+ * `skip_specs: true` marker. Archive authorization and adoption run it after
+ * the whole-spec record check, so a marker removed after PASS is named.
+ */
+export declare function verifySpecEligibility(workspace: string, change: string): Promise<EvidenceCheck>;
+/**
+ * Verify the change artifacts — proposal/design/tasks plus a spec delta or the
+ * `skip_specs` marker — and the current whole-spec `PASS` record. Returns the
+ * verified spec digest when the change is adoptable. A spec-less change without
+ * the marker is refused by name even when its PASS record is also stale.
  */
 export declare function verifyAdoptionEvidence(workspace: string, change: string): Promise<{
     readonly ok: true;

@@ -160,6 +160,88 @@ describe('all and glob evidence', () => {
   })
 })
 
+describe('spec eligibility evidence', () => {
+  const spec: Evidence = { kind: 'spec' }
+
+  it('accepts a delta spec and a spec-less change with the marker', async () => {
+    const marked = await tempWorkspace()
+    await writeArtifact(marked, 'openspec/changes/auth/proposal.md', '# Proposal\n')
+    await writeArtifact(
+      marked,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true\n',
+    )
+    const viaMarker = await verifyEvidence(spec, { workspace: marked, values })
+    expect(viaMarker.ok).toBe(true)
+    if (viaMarker.ok) expect(viaMarker.evidence).toMatchObject({ detail: 'skip_specs: true' })
+
+    const withDelta = await tempWorkspace()
+    await writeArtifact(withDelta, 'openspec/changes/auth/specs/x/spec.md', '# Spec\n')
+    expect(await verifyEvidence(spec, { workspace: withDelta, values })).toMatchObject({ ok: true })
+  })
+
+  it('refuses neither and names both, and ignores non-marker metadata', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, 'openspec/changes/auth/proposal.md', '# Proposal\n')
+    const missing = await verifyEvidence(spec, { workspace, values })
+    expect(missing).toMatchObject({ ok: false, failure: { reason: 'no-match' } })
+    if (!missing.ok) {
+      expect(missing.failure.detail).toContain('specs/**/spec.md')
+      expect(missing.failure.detail).toContain('skip_specs: true')
+    }
+
+    for (const metadata of [
+      'schema: spec-driven\ncreated: 2026-01-01\n',
+      'schema: spec-driven\n# skip_specs: true is not set here\n',
+      'schema: spec-driven\nskip_specs: false\n',
+      'schema: spec-driven\nnested:\n  skip_specs: true\n',
+    ]) {
+      await writeArtifact(workspace, 'openspec/changes/auth/.openspec.yaml', metadata)
+      expect(await verifyEvidence(spec, { workspace, values }), metadata).toMatchObject({
+        ok: false,
+      })
+    }
+  })
+
+  it('binds the marker into the change digest', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, 'openspec/changes/auth/proposal.md', '# Proposal\n')
+    await writeArtifact(workspace, 'openspec/changes/auth/tasks.md', '- [ ] 1.1 Task\n')
+    await writeArtifact(workspace, 'openspec/changes/auth/.openspec.yaml', 'schema: spec-driven\n')
+    const base = await currentSpecDigest(workspace, 'auth')
+    expect(base).toBeDefined()
+
+    // Ordinary metadata is not part of the digest.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\ncreated: 2026-01-01\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
+
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\ncreated: 2026-01-01\nskip_specs: true\n',
+    )
+    const marked = await currentSpecDigest(workspace, 'auth')
+    expect(marked).not.toBe(base)
+
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\ncreated: 2026-01-01\nskip_specs: false\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
+
+    await writeArtifact(workspace, 'openspec/changes/auth/.openspec.yaml', 'schema: spec-driven\n')
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
+
+    await writeArtifact(workspace, 'openspec/changes/auth/.openspec.yaml', '')
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
+  })
+})
+
 async function writeJson(workspace: string, path: string, value: unknown): Promise<void> {
   const file = join(workspace, path)
   await mkdir(join(file, '..'), { recursive: true })
@@ -854,6 +936,7 @@ describe('resolved evidence descriptions', () => {
     expect(taskRecord).toContain('phase=task')
     expect(taskRecord).toContain('task=0123456789abcdef')
     expect(taskRecord).not.toContain('{taskId}')
+    expect(describeEvidence({ kind: 'spec' }, context)).toContain('skip_specs: true')
   })
 })
 

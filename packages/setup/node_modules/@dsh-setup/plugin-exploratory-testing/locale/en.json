@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Exploratory testing",
+    "description": "On-demand exploratory testing method: a state-driven focus register, one read-only cycle change that drives timeboxed sessions, and an outcome change carrying classified findings, regression tests, spec corrections, and knowledge capture. No always-on prompt."
+  }
+}

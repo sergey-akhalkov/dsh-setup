@@ -92,6 +92,8 @@ async function gitWorkspace(): Promise<string> {
   await mkdir(changeDir, { recursive: true })
   await writeFile(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8')
   await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+  await mkdir(join(changeDir, 'specs', 'auth'), { recursive: true })
+  await writeFile(join(changeDir, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
   const git = (...args: string[]): void => {
     execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
   }

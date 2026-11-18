@@ -82,7 +82,16 @@ function JsonField(props: {
 }
 
 const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
-const EVIDENCE_KINDS = ['file', 'record', 'tool', 'check', 'human', 'all', 'declaration'] as const
+const EVIDENCE_KINDS = [
+  'file',
+  'spec',
+  'record',
+  'tool',
+  'check',
+  'human',
+  'all',
+  'declaration',
+] as const
 
 /** The executor choices; a newer executor such as `review` keeps its own value. */
 function executorOptions(current: string): readonly string[] {

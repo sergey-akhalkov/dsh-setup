@@ -1,0 +1,46 @@
+{
+  "name": "@dsh-setup/plugin-exploratory-testing",
+  "version": "0.45.2",
+  "description": "Opt-in exploratory testing: state-driven focus selection, a read-only cycle change, and an outcome change for classified findings, regression tests, spec corrections, and knowledge capture",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./cordis.fragment.yml": "./cordis.fragment.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.svg",
+    "locale/*.json",
+    "lib/index.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml",
+    "cordis.fragment.yml",
+    "assets/exploratory-testing/SKILL.md",
+    "assets/exploratory-testing/templates.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

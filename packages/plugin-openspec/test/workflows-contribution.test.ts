@@ -15,9 +15,18 @@ interface AssetDefinition {
     id: string
     executor?: string
     ownership?: string
+    prompt?: string
     legacy?: { plugin?: string; signal?: string }
     review?: Record<string, string>
-    evidence?: { kind?: string; rule?: string; path?: string; digest?: string }
+    evidence?: {
+      kind?: string
+      rule?: string
+      path?: string
+      digest?: string
+      command?: string
+      glob?: boolean
+      items?: Array<{ kind?: string; path?: string; glob?: boolean; command?: string }>
+    }
   }>
 }
 
@@ -113,6 +122,22 @@ describe('OpenSpec workflow contribution', () => {
       rule: 'spec-review',
       path: '.dsh/workflows/records/spec-review/{name}/spec.json',
       digest: 'current',
+    })
+    // The spec step accepts a delta spec or the skip_specs marker, and still
+    // requires the CLI's strict validation.
+    const specStep = definition.steps.find((entry) => entry.id === 'spec')
+    expect(specStep?.prompt).toContain('skip_specs: true')
+    expect(specStep?.evidence?.items?.map((item) => item.kind)).toEqual([
+      'file',
+      'file',
+      'file',
+      'spec',
+      'check',
+    ])
+    expect(specStep?.evidence?.items?.[3]).toEqual({ kind: 'spec' })
+    expect(specStep?.evidence?.items?.[4]).toEqual({
+      kind: 'check',
+      command: 'openspec validate {name} --strict',
     })
     expect(definition.trigger.match).toEqual({
       tool: 'shell',

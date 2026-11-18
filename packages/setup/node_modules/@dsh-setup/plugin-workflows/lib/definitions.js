@@ -48,6 +48,7 @@ export const GATE_OWNERSHIP = ['own', 'defer'];
 export const DEFINITION_GATES = ['intake', 'review'];
 export const EVIDENCE_KINDS = [
     'file',
+    'spec',
     'record',
     'tool',
     'check',
@@ -119,6 +120,7 @@ const STEP_KEYS = new Set([
     'review',
 ]);
 const FILE_KEYS = new Set(['kind', 'path', 'minBytes', 'glob']);
+const SPEC_KEYS = new Set(['kind']);
 const ALL_KEYS = new Set(['kind', 'items']);
 const RECORD_KEYS = new Set([
     'kind',
@@ -368,6 +370,9 @@ function evidence(raw, definition, field) {
                 ...(glob === undefined ? {} : { glob }),
             };
         }
+        case 'spec':
+            assertKnown(raw, SPEC_KEYS, definition, field);
+            return { kind: 'spec' };
         case 'all': {
             assertKnown(raw, ALL_KEYS, definition, field);
             if (!Array.isArray(raw.items) || raw.items.length === 0) {

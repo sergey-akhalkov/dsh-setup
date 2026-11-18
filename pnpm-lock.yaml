@@ -124,6 +124,15 @@ importers:
         specifier: 0.2.2-rc.2
         version: 0.2.2-rc.2(4a47301486be4030ed2aab48370c5b35)
 
+  packages/plugin-exploratory-testing:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.1.0
+        version: 4.1.0
+      '@deepseek-ai/dsh-skill':
+        specifier: 0.2.2-rc.2
+        version: 0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-llm@0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-error@0.2.2-rc.2(@deepseek-ai/cordis@4.1.0)))
+
   packages/plugin-goal-continuity:
     devDependencies:
       '@deepseek-ai/cordis':

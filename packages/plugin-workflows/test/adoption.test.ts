@@ -67,13 +67,8 @@ async function writeArtifact(
   await writeFile(file, content, 'utf8')
 }
 
-/** Write the four artifacts and a current whole-spec PASS record. */
-async function adoptable(workspace: string, change = 'auth'): Promise<string> {
-  await writeArtifact(workspace, `openspec/changes/${change}/proposal.md`)
-  await writeArtifact(workspace, `openspec/changes/${change}/design.md`)
-  await writeArtifact(workspace, `openspec/changes/${change}/tasks.md`)
-  await writeArtifact(workspace, `openspec/changes/${change}/specs/${change}/spec.md`)
-  const digest = (await currentSpecDigest(workspace, change)) as string
+/** Write a current whole-spec PASS record for the change's present digest. */
+async function writePassRecord(workspace: string, change: string, digest: string): Promise<void> {
   const directory = `.dsh/workflows/records/spec-review/${change}`
   await writeArtifact(
     workspace,
@@ -94,6 +89,31 @@ async function adoptable(workspace: string, change = 'auth'): Promise<string> {
       2,
     )}\n`,
   )
+}
+
+/** Write the four artifacts and a current whole-spec PASS record. */
+async function adoptable(workspace: string, change = 'auth'): Promise<string> {
+  await writeArtifact(workspace, `openspec/changes/${change}/proposal.md`)
+  await writeArtifact(workspace, `openspec/changes/${change}/design.md`)
+  await writeArtifact(workspace, `openspec/changes/${change}/tasks.md`)
+  await writeArtifact(workspace, `openspec/changes/${change}/specs/${change}/spec.md`)
+  const digest = (await currentSpecDigest(workspace, change)) as string
+  await writePassRecord(workspace, change, digest)
+  return digest
+}
+
+/** Write a spec-less change with the marker and a current whole-spec PASS record. */
+async function adoptableSpecLess(workspace: string, change = 'auth'): Promise<string> {
+  await writeArtifact(workspace, `openspec/changes/${change}/proposal.md`)
+  await writeArtifact(workspace, `openspec/changes/${change}/design.md`)
+  await writeArtifact(workspace, `openspec/changes/${change}/tasks.md`)
+  await writeArtifact(
+    workspace,
+    `openspec/changes/${change}/.openspec.yaml`,
+    'schema: spec-driven\nskip_specs: true\n',
+  )
+  const digest = (await currentSpecDigest(workspace, change)) as string
+  await writePassRecord(workspace, change, digest)
   return digest
 }
 
@@ -151,6 +171,70 @@ describe('adoption of existing changes', () => {
     if (result.ok) {
       expect(result.receipt).toMatchObject({ kind: 'adoption', change: 'auth', digest })
     }
+  })
+
+  it('adopts a spec-less change with skip_specs and a current PASS', async () => {
+    const workspace = await tempWorkspace()
+    const digest = await adoptableSpecLess(workspace)
+    const result = await adoptChange({
+      workspace,
+      change: 'auth',
+      auth: auth(),
+      questions: answers('yes'),
+      now: 2_050,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.receipt).toMatchObject({ kind: 'adoption', change: 'auth', digest })
+    }
+    expect(await readReceipt(workspace, 'auth', auth())).toMatchObject({ change: 'auth' })
+  })
+
+  it('refuses a spec-less change whose marker was removed after PASS and names it', async () => {
+    const workspace = await tempWorkspace()
+    await adoptableSpecLess(workspace)
+    await rm(join(workspace, 'openspec', 'changes', 'auth', '.openspec.yaml'))
+    const refused = await verifyAdoptionEvidence(workspace, 'auth')
+    expect(refused).toMatchObject({ ok: false })
+    if (!refused.ok) expect(refused.reason).toContain('specs/**/spec.md')
+    if (!refused.ok) expect(refused.reason).toContain('skip_specs: true')
+    const result = await adoptChange({
+      workspace,
+      change: 'auth',
+      auth: auth(),
+      questions: answers('yes'),
+    })
+    expect(result).toMatchObject({ ok: false })
+    await expect(readFile(receiptPath(workspace, 'auth'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+
+    // Changing the effective declaration invalidates the current PASS too.
+    const changed = await tempWorkspace()
+    await adoptableSpecLess(changed)
+    await writeArtifact(
+      changed,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: false\n',
+    )
+    expect((await verifyWholeSpecRecord(changed, 'auth')).ok).toBe(false)
+    const changedRefused = await verifyAdoptionEvidence(changed, 'auth')
+    expect(changedRefused).toMatchObject({ ok: false })
+    if (!changedRefused.ok) expect(changedRefused.reason).toContain('skip_specs: true')
+  })
+
+  it('refuses a change with neither a spec file nor the marker despite a current PASS', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, 'openspec/changes/auth/proposal.md')
+    await writeArtifact(workspace, 'openspec/changes/auth/design.md')
+    await writeArtifact(workspace, 'openspec/changes/auth/tasks.md')
+    const digest = (await currentSpecDigest(workspace, 'auth')) as string
+    // The record is current; only the artifact eligibility forces the refusal.
+    await writePassRecord(workspace, 'auth', digest)
+    expect((await verifyWholeSpecRecord(workspace, 'auth')).ok).toBe(true)
+    const refused = await verifyAdoptionEvidence(workspace, 'auth')
+    expect(refused).toMatchObject({ ok: false })
+    if (!refused.ok) expect(refused.reason).toContain('skip_specs: true')
   })
 
   it('names a stale record instead of a missing one', async () => {

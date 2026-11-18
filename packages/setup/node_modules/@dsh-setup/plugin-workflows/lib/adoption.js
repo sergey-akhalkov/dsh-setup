@@ -75,8 +75,18 @@ export async function verifyWholeSpecRecord(workspace, change) {
     return failureRecord;
 }
 /**
- * Verify the four change artifacts and the current whole-spec `PASS` record.
- * Returns the verified spec digest when the change is adoptable.
+ * The change artifact eligibility: a delta spec under `specs/` or the
+ * `skip_specs: true` marker. Archive authorization and adoption run it after
+ * the whole-spec record check, so a marker removed after PASS is named.
+ */
+export function verifySpecEligibility(workspace, change) {
+    return verifyEvidence({ kind: 'spec' }, evidenceContext(workspace, change));
+}
+/**
+ * Verify the change artifacts — proposal/design/tasks plus a spec delta or the
+ * `skip_specs` marker — and the current whole-spec `PASS` record. Returns the
+ * verified spec digest when the change is adoptable. A spec-less change without
+ * the marker is refused by name even when its PASS record is also stale.
  */
 export async function verifyAdoptionEvidence(workspace, change) {
     if (!CHANGE_NAME.test(change)) {
@@ -96,7 +106,6 @@ export async function verifyAdoptionEvidence(workspace, change) {
             { kind: 'file', path: 'openspec/changes/{name}/proposal.md' },
             { kind: 'file', path: 'openspec/changes/{name}/design.md' },
             { kind: 'file', path: 'openspec/changes/{name}/tasks.md' },
-            { kind: 'file', path: 'openspec/changes/{name}/specs/**/spec.md', glob: true },
         ],
     }, context);
     if (!files.ok) {
@@ -106,6 +115,13 @@ export async function verifyAdoptionEvidence(workspace, change) {
         };
     }
     const record = await verifyWholeSpecRecord(workspace, change);
+    const eligibility = await verifySpecEligibility(workspace, change);
+    if (!eligibility.ok) {
+        return {
+            ok: false,
+            reason: `the change cannot be adopted: ${eligibility.failure.reason} at ${eligibility.failure.path ?? 'the artifacts'} (${eligibility.failure.detail})`,
+        };
+    }
     if (!record.ok) {
         return {
             ok: false,

@@ -131,6 +131,7 @@ export interface DefinitionSettings {
 
 export const EVIDENCE_KINDS = [
   'file',
+  'spec',
   'record',
   'tool',
   'check',
@@ -146,6 +147,11 @@ export interface FileEvidence {
   readonly path: string
   readonly minBytes?: number
   readonly glob?: boolean
+}
+
+/** A change carries a delta spec under `specs/` or declares `skip_specs: true`. */
+export interface SpecEvidence {
+  readonly kind: 'spec'
 }
 
 export interface AllEvidence {
@@ -202,6 +208,7 @@ export interface DeclarationEvidence {
 
 export type Evidence =
   | FileEvidence
+  | SpecEvidence
   | AllEvidence
   | RecordEvidence
   | ToolCallEvidence
@@ -353,6 +360,7 @@ const STEP_KEYS = new Set([
   'review',
 ])
 const FILE_KEYS = new Set(['kind', 'path', 'minBytes', 'glob'])
+const SPEC_KEYS = new Set(['kind'])
 const ALL_KEYS = new Set(['kind', 'items'])
 const RECORD_KEYS = new Set([
   'kind',
@@ -634,6 +642,9 @@ function evidence(raw: unknown, definition: string, field: string): Evidence {
         ...(glob === undefined ? {} : { glob }),
       }
     }
+    case 'spec':
+      assertKnown(raw, SPEC_KEYS, definition, field)
+      return { kind: 'spec' }
     case 'all': {
       assertKnown(raw, ALL_KEYS, definition, field)
       if (!Array.isArray(raw.items) || raw.items.length === 0) {

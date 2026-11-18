@@ -8201,6 +8201,121 @@ describe('user-clicked archive authorization', () => {
     await writeFile(join(malformed, 'openspec', 'review-approval.json'), '{ not json', 'utf8')
     expect(await authorizeUserArchive(malformed, 'auth', auth)).toEqual({ ok: true })
   })
+  /** A spec-less change with the marker and a current whole-spec PASS record. */
+  async function specLessChange(workspace: string): Promise<void> {
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(change, { recursive: true })
+    for (const file of ['proposal.md', 'design.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'tasks.md'), '- [ ] 1.1 Open work\n', 'utf8')
+    await writeFile(
+      join(change, '.openspec.yaml'),
+      'schema: spec-driven\nskip_specs: true\n',
+      'utf8',
+    )
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const digest = await currentSpecDigest(workspace, 'auth')
+    const record = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(record, { recursive: true })
+    await writeFile(
+      join(record, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+  }
+
+  it('writes the host-signed receipt for a spec-less click with the marker', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    await specLessChange(workspace)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    expect(await serviceOf(host).authorizeAndCheck(workspace, 'auth')).toEqual({ ok: true })
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
+      kind: 'adoption',
+      change: 'auth',
+    })
+  })
+
+  it('refuses a spec-less click whose marker is missing and names the marker', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    await specLessChange(workspace)
+    await rm(join(workspace, 'openspec', 'changes', 'auth', '.openspec.yaml'))
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    const result = await serviceOf(host).authorizeAndCheck(workspace, 'auth')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain('skip_specs: true')
+  })
+})
+
+describe('spec-less archive move', () => {
+  it('allows a Move-Item archive with the marker and refuses it after removal', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(change, { recursive: true })
+    for (const file of ['proposal.md', 'design.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'tasks.md'), '- [ ] 1.1 Open work\n', 'utf8')
+    await writeFile(
+      join(change, '.openspec.yaml'),
+      'schema: spec-driven\nskip_specs: true\n',
+      'utf8',
+    )
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const digest = (await currentSpecDigest(workspace, 'auth')) as string
+    const record = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(record, { recursive: true })
+    await writeFile(
+      join(record, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await receipts.issueAdoptionReceipt(workspace, 'auth', digest, auth, 3_000)
+
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const archive = async (
+      callId: string,
+      command: string,
+    ): Promise<{ kind?: string; reason?: string } | undefined> => {
+      return (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId,
+          name: 'pwsh',
+          arguments: { command },
+        },
+        async () => ({ kind: 'continue' }),
+      )) as { kind?: string; reason?: string } | undefined
+    }
+
+    const allowed = await archive(
+      'spec-less-move',
+      'Move-Item openspec/changes/auth openspec/changes/archive',
+    )
+    expect(allowed?.kind).not.toBe('deny')
+
+    await rm(join(change, '.openspec.yaml'))
+    const denied = await archive(
+      'spec-less-move-removed',
+      'mv openspec/changes/auth openspec/changes/archive',
+    )
+    expect(denied?.kind).toBe('deny')
+    expect(denied?.reason).toContain('skip_specs: true')
+  })
 })
 
 describe('workflows start action selectors', () => {

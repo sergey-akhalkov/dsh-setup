@@ -659,10 +659,17 @@ export function evaluateArchiveGate(input) {
             reason: `the archive of "${input.change}" is refused: no authenticated completed change-intake run and no authenticated receipt exists; complete the intake or run /workflows adopt ${input.change}`,
         };
     }
-    if (!input.specRecord.ok) {
+    if (!input.specRecord.ok || (input.specEligibility !== undefined && !input.specEligibility.ok)) {
+        const parts = [];
+        if (!input.specRecord.ok) {
+            parts.push(`the current whole-spec PASS record is ${input.specRecord.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid'} (${input.specRecord.failure.detail.slice(0, 200)})`);
+        }
+        if (input.specEligibility !== undefined && !input.specEligibility.ok) {
+            parts.push(`the change artifact set is not eligible (${input.specEligibility.failure.detail.slice(0, 200)})`);
+        }
         return {
             kind: 'deny',
-            reason: `the archive of "${input.change}" is refused: the current whole-spec PASS record is ${input.specRecord.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid'} (${input.specRecord.failure.detail.slice(0, 200)})`,
+            reason: `the archive of "${input.change}" is refused: ${parts.join('; ')}`,
         };
     }
     if (input.taskReview !== undefined && !input.taskReview.ok) {
