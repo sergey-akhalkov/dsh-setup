@@ -114,19 +114,56 @@ export async function buildConditionContext(input) {
     // stays content), and an unquoted one ends at a shell operator so a
     // redirection keeps its path operand visible. `file:` URLs always stay
     // visible, and a scheme needs two or more characters so `C://x` is not one.
-    const doubleQuotedUrl = /"[A-Za-z][A-Za-z0-9+.-]+:\/\/[^"\s]*"/gu;
-    const singleQuotedUrl = /'[A-Za-z][A-Za-z0-9+.-]+:\/\/[^'\s]*'/gu;
     const literalUrl = /[A-Za-z][A-Za-z0-9+.-]+:\/\/[^\s<>]+/gu;
     const shellUrl = /[A-Za-z][A-Za-z0-9+.-]+:\/\/[^\s<>|&;'"`()]+/gu;
+    const anyUrl = /[A-Za-z][A-Za-z0-9+.-]+:\/\//u;
     const maskUrl = (match) => (/^file:/iu.test(match) ? match : ' ');
-    const maskQuotedUrl = (match) => /^file:/iu.test(match.slice(1, -1)) ? match : ' ';
+    const closingQuote = (value, from, quote) => {
+        let index = from;
+        while (index < value.length) {
+            const char = value[index] ?? '';
+            if (char === '\\') {
+                index += 2;
+                continue;
+            }
+            if (char === quote)
+                return index;
+            index += 1;
+        }
+        return -1;
+    };
+    // A quoted argument is one shell token: escape-aware scanning keeps an escaped
+    // quote from opening a span, and a span that contains a URL is masked whole
+    // unless it names a file URL, which must stay visible.
+    const maskQuotedArguments = (value) => {
+        let output = '';
+        let index = 0;
+        while (index < value.length) {
+            const char = value[index] ?? '';
+            if (char === '\\') {
+                output += char + (value[index + 1] ?? '');
+                index += 2;
+                continue;
+            }
+            if (char === '"' || char === "'") {
+                const close = closingQuote(value, index + 1, char);
+                if (close !== -1) {
+                    const inner = value.slice(index + 1, close);
+                    const masked = anyUrl.test(inner) && !/^file:/iu.test(inner.trim()) ? ' ' : inner;
+                    output += char + masked + char;
+                    index = close + 1;
+                    continue;
+                }
+            }
+            output += char;
+            index += 1;
+        }
+        return output;
+    };
     const withoutUrls = (value, shell) => {
         if (!shell)
             return value.replace(literalUrl, maskUrl);
-        return value
-            .replace(doubleQuotedUrl, maskQuotedUrl)
-            .replace(singleQuotedUrl, maskQuotedUrl)
-            .replace(shellUrl, maskUrl);
+        return maskQuotedArguments(value).replace(shellUrl, maskUrl);
     };
     const violates = (text, redirection) => startsPath.test(text) ||
         drivePath.test(text) ||
