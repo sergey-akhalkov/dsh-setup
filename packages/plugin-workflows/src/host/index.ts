@@ -5118,7 +5118,30 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           if (definition === undefined) continue
           const generation = runGenerationsAtRead.get(run.id) ?? runGeneration(run.id)
           if (archivedReviewRun(run, definition)) {
-            advanced.set(run.id, run)
+            // The review can never run for an archived change: settle the run
+            // cancelled once so it stops holding the close (and a maxRuns slot)
+            // and keeps its failed attempt out of the history.
+            const settled =
+              run.status === 'cancelled'
+                ? run
+                : {
+                    ...run,
+                    status: 'cancelled' as const,
+                    updatedAt: journal.time(),
+                    reason: 'the change was archived; the review no longer runs',
+                  }
+            if (settled !== run) {
+              await persistRun(
+                workspace,
+                settled,
+                auth,
+                generation,
+                sessionGenerationAtRead,
+                run.updatedAt,
+                stopped,
+              )
+            }
+            advanced.set(run.id, settled)
             advancedGenerations.set(run.id, generation)
             definitionOf.set(run.id, definition)
             continue

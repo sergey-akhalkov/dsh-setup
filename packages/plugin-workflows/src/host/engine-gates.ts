@@ -81,7 +81,7 @@ export async function activeChangeNames(workspace: string): Promise<Set<string>>
   return new Set(names.filter((name) => CHANGE_NAME.test(name) && name !== 'archive'))
 }
 
-/** The archived change names, from `openspec/changes/archive/<date>-<name>`. */
+/** The archived change names. `openspec archive` writes `<date>-<name>`, a supported manual move `<name>`. */
 export async function archivedChangeNames(workspace: string): Promise<Set<string>> {
   let names: string[]
   try {
@@ -91,8 +91,8 @@ export async function archivedChangeNames(workspace: string): Promise<Set<string
   }
   const archived = new Set<string>()
   for (const entry of names) {
-    const name = /^\d{4}-\d{2}-\d{2}-(.+)$/u.exec(entry)?.[1]
-    if (name !== undefined && CHANGE_NAME.test(name)) archived.add(name)
+    const name = /^\d{4}-\d{2}-\d{2}-(.+)$/u.exec(entry)?.[1] ?? entry
+    if (CHANGE_NAME.test(name)) archived.add(name)
   }
   return archived
 }

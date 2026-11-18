@@ -5,12 +5,12 @@ One work lane plus the serial tail: both source edits live in the same hot file
 output is generated `lib/**` behind one repository gate, so splitting the fix from its tests would
 only add handoff.
 
-## 1. Involvement and close-gate fix (owns `packages/plugin-workflows/src/host/index.ts`, `packages/plugin-workflows/test/host-wiring.test.ts`, `docs/**`)
+## 1. Involvement and close-gate fix (owns `packages/plugin-workflows/src/host/index.ts`, `packages/plugin-workflows/src/host/engine-gates.ts`, `packages/plugin-workflows/test/host-wiring.test.ts`, `docs/**`)
 
 - [x] 1.1 Filter the trigger-path involvement union with `activeChangeNames` and verify host test (a): a stored involvement naming an archived change starts no whole-spec run and refuses nothing.
-- [x] 1.2 Skip a review run whose recorded change is archived, before automatic advancement and before gate evaluation, and verify host tests (b) and (d): the next close neither refuses nor starts a round, and the stored run stays byte-identical.
+- [x] 1.2 Settle a review run whose recorded change is archived cancelled once, before automatic advancement and before gate evaluation, and verify host tests (b), (d) and (e): the next close neither refuses nor starts a round, the run is cancelled with a reason, and it stays unchanged afterwards, for both the dated and the undated archive layout.
 - [x] 1.3 Add the anti-overfilter host test (c) and verify an active involved change still starts its whole-spec round and refuses the close; the missing-change regression (`blocks the close when a failed review leaves no record to read`) keeps passing.
-- [x] 1.4 Mutation-check the regressions: revert the source edits, confirm (a), (b) and (d) fail and (c) passes; widen the filter to drop active names, confirm (c) fails; restore the fix.
+- [x] 1.4 Mutation-check the regressions: revert the source edits, confirm (a), (b), (d) and (e) fail and (c) passes; widen the filter to drop active names, confirm (c) fails; restore the fix.
 - [x] 1.5 Document the behavior in `docs/workflows.md` and add the change section to `docs/openspec-status.md`; verify `pnpm lint` reports no Markdown problem.
 
 ## 2. serial tail: generated output and the repository gate

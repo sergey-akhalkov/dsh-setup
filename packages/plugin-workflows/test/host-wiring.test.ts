@@ -9635,6 +9635,13 @@ describe('archived change involvement', () => {
     await rename(join(workspace, 'openspec', 'changes', 'auth'), join(directory, '2026-11-18-auth'))
   }
 
+  /** The undated archive layout a supported `git mv` produces. */
+  async function archiveFixtureUndated(workspace: string): Promise<void> {
+    const directory = join(workspace, 'openspec', 'changes', 'archive')
+    await mkdir(directory, { recursive: true })
+    await rename(join(workspace, 'openspec', 'changes', 'auth'), join(directory, 'auth'))
+  }
+
   /** A host whose close starts the whole-spec round: no seeded PASS record. */
   async function reviewGateHost(workspace: string): Promise<ReturnType<typeof fakeHost>> {
     const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
@@ -9679,12 +9686,65 @@ describe('archived change involvement', () => {
     expect((await specReviewRuns(workspace)).length).toBe(rounds)
   })
 
-  it('leaves an archived change review run untouched across closes', async () => {
+  for (const [layout, move] of [
+    ['dated', archiveFixture],
+    ['undated', archiveFixtureUndated],
+  ] as const) {
+    it(`settles an archived change review run cancelled (${layout} archive)`, async () => {
+      const workspace = await gitGateWorkspace()
+      const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+      const runs = await import('../src/host/runs.ts')
+      const { HostAuth } = await import('../src/host/host-auth.ts')
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const definition = definitionsRegistry.installed('spec-review')?.definition
+      expect(definition).toBeDefined()
+      if (definition === undefined) return
+      const run = runs.createRun({
+        definition: 'spec-review',
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: definition.steps.map((step) => step.id),
+        id: `run-archived-review-${layout}`,
+        now: 1_000,
+      })
+      await runs.writeRun(workspace, run, auth)
+      await move(workspace)
+      const stored = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'runs',
+        `run-archived-review-${layout}.json`,
+      )
+      const steers = host.steers.length
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      // The archived run is settled cancelled once instead of being reviewed:
+      // no failed attempt, no refusal, no second round, and no rewrite later.
+      const settled = JSON.parse(await readFile(stored, 'utf8')) as {
+        status: string
+        reason?: string
+      }
+      expect(settled.status).toBe('cancelled')
+      expect(settled.reason).toContain('archived')
+      expect(host.steers.length).toBe(steers)
+      expect((await specReviewRuns(workspace)).length).toBe(1)
+      const after = await readFile(stored, 'utf8')
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      expect(await readFile(stored, 'utf8')).toBe(after)
+    })
+  }
+
+  it('releases the admission slot of a settled archived review', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await gitGateWorkspace()
-    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { maxRuns: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
     const definition = definitionsRegistry.installed('spec-review')?.definition
     expect(definition).toBeDefined()
     if (definition === undefined) return
@@ -9695,17 +9755,30 @@ describe('archived change involvement', () => {
       workspace,
       context: { name: 'auth' },
       steps: definition.steps.map((step) => step.id),
-      id: 'run-archived-review',
+      id: 'run-archived-slot',
       now: 1_000,
     })
     await runs.writeRun(workspace, run, auth)
     await archiveFixture(workspace)
-    const stored = join(workspace, '.dsh', 'workflows', 'runs', 'run-archived-review.json')
-    const before = await readFile(stored, 'utf8')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    // The archived run is neither advanced nor gated: its history is not
-    // rewritten with a failed attempt and the file is byte-identical.
-    expect(await readFile(stored, 'utf8')).toBe(before)
+    // The settled run no longer occupies the single slot: the unrelated intake
+    // starts instead of being refused by the run limit.
+    const decision = (await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'intake-beta',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change beta' },
+      },
+      async () => ({ kind: 'continue' }),
+    )) as { kind?: string; reason?: string }
+    expect(decision.kind).toBe('deny')
+    expect(decision.reason ?? '').not.toContain('run limit')
+    const started = (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+      (entry) => entry.definition.id === 'change-intake' && entry.context.name === 'beta',
+    )
+    expect(started).toHaveLength(1)
   })
 
   it('keeps starting the round for an active involved change', async () => {

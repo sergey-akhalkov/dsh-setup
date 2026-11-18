@@ -40,17 +40,21 @@ reader and mirrors the existing gate-path filter. Alternative rejected: change `
 contract so every caller filters at once - it would couple a leaf utility to change-activity and
 still miss the in-memory names.
 
-**D2 - Exclude the archived review run before both the advance and the gate.**
+**D2 - Settle the archived review run cancelled once, before the advance and the gate.**
 The close advances every open run before it gates any, and an advance of an archived change's
-review step settles the unreadable-artifact failure and persists the rewritten run. A user-clicked
-archive may leave a live review run behind, so the exclusion is applied to the advance pass as well
-as to the gate pass; the run is carried through both maps untouched. Alternative rejected: gate-only
-exclusion - it passes the tests on refusals but silently rewrites the run's history.
+review step settles the unreadable-artifact failure and persists the rewritten run. The exclusion is
+applied to the advance pass as well as to the gate pass, and the run is settled `cancelled` once with
+a reason: a run preserved as `running` would keep occupying a `maxRuns` slot forever (capacity counts
+only `running`/`blocked`), so an unrelated intake would eventually be refused. Alternatives
+rejected: gate-only exclusion (rewrites the history with a failed attempt); capacity exclusion
+(touches every admission path and leaves unrecoverable runs open forever).
 
 **D3 - Skip only an archived change's review run.**
 `retro`, `verify`, and other runs keep today's semantics; only a review run is unrecoverable for an
-archived change, because its evidence and artifacts are gone. A *missing* change (never created, or
-deleted) keeps refusing: the existing recordless-failure regression requires its failed review to
+archived change, because its evidence and artifacts are gone. Archived detection covers both
+supported layouts - `archive/<date>-<name>` written by `openspec archive`, and `archive/<name>` from
+a supported manual move - so an undated archive is not mistaken for a missing change. A *missing*
+change keeps refusing: the existing recordless-failure regression requires its failed review to
 steer the cause instead of passing silently, and a deleted change is an error worth surfacing. This
 is the narrowest rule that closes the reported storm. Alternative rejected: skip every non-active
 change - it drops that real failure.
