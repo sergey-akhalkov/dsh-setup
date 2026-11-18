@@ -3063,6 +3063,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     lifecycleEpoch += 1
   }
   /** Persist an advance unless the run's snapshot, session or state moved. */
+  /** A bounded snapshot-fallback cause per run id, kept until the step settles. */
+  const fallbackReasons = new Map<string, string>()
   const persistRun = async (
     workspace: string,
     run: WorkflowRun,
@@ -3124,8 +3126,23 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       )
       const withAttempts = (): WorkflowRun => {
         const storedSteps = new Map(current.steps.map((step) => [step.id, step]))
-        let changed = false
-        const steps = run.steps.map((step) => {
+        const fallback = fallbackReasons.get(run.id)
+        const source =
+          fallback === undefined
+            ? run
+            : {
+                ...run,
+                steps: run.steps.map((step) =>
+                  reviewStepIds.has(step.id) &&
+                  step.state === 'done' &&
+                  step.fallbackReason === undefined
+                    ? { ...step, fallbackReason: fallback.slice(0, 200) }
+                    : step,
+                ),
+              }
+        if (fallback !== undefined) fallbackReasons.delete(run.id)
+        let changed = source !== run
+        const steps = source.steps.map((step) => {
           // Only a review step carries retry facts across a stale lifecycle
           // write; a non-review step keeps the gate's own counts and resets.
           if (!reviewStepIds.has(step.id)) return step
@@ -3151,7 +3168,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(keepClass ? { failureClass: stored.failureClass } : {}),
           }
         })
-        return changed ? { ...run, steps } : run
+        return changed ? { ...source, steps } : source
       }
       const merged = withAttempts()
       if (merged !== current) await writeCommit(workspace, merged, auth)
@@ -3643,9 +3660,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 defaultGit,
                 AbortSignal.timeout(reviewTimeoutMs),
                 undefined,
-                undefined,
+                (reason: string) => fallbackReasons.set(reviewRun.id, reason.slice(0, 200)),
                 reviewRun.id,
-              ).catch(() => undefined)
+              ).catch(() => {
+                fallbackReasons.set(reviewRun.id, 'the snapshot could not be built')
+                return undefined
+              })
               if (snapshot !== undefined) {
                 // The record binds the frozen content tree, so a write between the
                 // live hash and the snapshot cannot leave a PASS for code the
@@ -3713,9 +3733,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               defaultGit,
               AbortSignal.timeout(reviewTimeoutMs),
               undefined,
-              undefined,
+              (reason: string) => fallbackReasons.set(reviewRun.id, reason.slice(0, 200)),
               reviewRun.id,
-            ).catch(() => undefined)
+            ).catch(() => {
+              fallbackReasons.set(reviewRun.id, 'the snapshot could not be built')
+              return undefined
+            })
             const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
             // Re-resolve the section from the live plan: the submitted covered set
             // never widens, and a changed checkbox needs a fresh review.

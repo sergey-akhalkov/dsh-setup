@@ -66,6 +66,8 @@ export interface RunStep {
   readonly lastTurn?: number
   readonly evidence?: RunEvidence
   readonly reason?: string
+  /** A bounded snapshot-fallback cause kept across settlement. */
+  readonly fallbackReason?: string
   /** The producer-owned failure class of a blocked or failed step. */
   readonly failureClass?: string
 }

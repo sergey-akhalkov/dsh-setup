@@ -2508,6 +2508,8 @@ export function apply(ctx, config = {}) {
         lifecycleEpoch += 1;
     };
     /** Persist an advance unless the run's snapshot, session or state moved. */
+    /** A bounded snapshot-fallback cause per run id, kept until the step settles. */
+    const fallbackReasons = new Map();
     const persistRun = async (workspace, run, auth, generation, capturedSessionGeneration, expectedUpdatedAt) => withRunLock(run.id, async () => {
         const current = await readAuthenticatedRun(workspace, run.id, auth);
         if (current === undefined)
@@ -2557,8 +2559,21 @@ export function apply(ctx, config = {}) {
             .map((entry) => entry.id));
         const withAttempts = () => {
             const storedSteps = new Map(current.steps.map((step) => [step.id, step]));
-            let changed = false;
-            const steps = run.steps.map((step) => {
+            const fallback = fallbackReasons.get(run.id);
+            const source = fallback === undefined
+                ? run
+                : {
+                    ...run,
+                    steps: run.steps.map((step) => reviewStepIds.has(step.id) &&
+                        step.state === 'done' &&
+                        step.fallbackReason === undefined
+                        ? { ...step, fallbackReason: fallback.slice(0, 200) }
+                        : step),
+                };
+            if (fallback !== undefined)
+                fallbackReasons.delete(run.id);
+            let changed = source !== run;
+            const steps = source.steps.map((step) => {
                 // Only a review step carries retry facts across a stale lifecycle
                 // write; a non-review step keeps the gate's own counts and resets.
                 if (!reviewStepIds.has(step.id))
@@ -2585,7 +2600,7 @@ export function apply(ctx, config = {}) {
                     ...(keepClass ? { failureClass: stored.failureClass } : {}),
                 };
             });
-            return changed ? { ...run, steps } : run;
+            return changed ? { ...source, steps } : source;
         };
         const merged = withAttempts();
         if (merged !== current)
@@ -3020,7 +3035,10 @@ export function apply(ctx, config = {}) {
                                 specDigest,
                                 ...(liveTree === undefined ? {} : { tree: liveTree }),
                             });
-                            const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs), undefined, undefined, reviewRun.id).catch(() => undefined);
+                            const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs), undefined, (reason) => fallbackReasons.set(reviewRun.id, reason.slice(0, 200)), reviewRun.id).catch(() => {
+                                fallbackReasons.set(reviewRun.id, 'the snapshot could not be built');
+                                return undefined;
+                            });
                             if (snapshot !== undefined) {
                                 // The record binds the frozen content tree, so a write between the
                                 // live hash and the snapshot cannot leave a PASS for code the
@@ -3079,7 +3097,10 @@ export function apply(ctx, config = {}) {
                         }
                         // The snapshot freezes the reviewed tree; when it cannot be built,
                         // the live worktree is reviewed under the mutation guard.
-                        const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs), undefined, undefined, reviewRun.id).catch(() => undefined);
+                        const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs), undefined, (reason) => fallbackReasons.set(reviewRun.id, reason.slice(0, 200)), reviewRun.id).catch(() => {
+                            fallbackReasons.set(reviewRun.id, 'the snapshot could not be built');
+                            return undefined;
+                        });
                         const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
                         // Re-resolve the section from the live plan: the submitted covered set
                         // never widens, and a changed checkbox needs a fresh review.
