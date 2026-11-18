@@ -38,6 +38,7 @@ import {
 } from './editor-api.js'
 import {
   activeChangeNames,
+  archivedChangeNames,
   codeChangedThisTurn,
   evaluateOwnedLaneGate,
   evaluateOwnedProgressGate,
@@ -1765,7 +1766,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         specWritesBySession.set(sessionKey, writes)
         await writeInvolvement(workspace, input.session, [...involvedSet])
       }
-      const involvedChanges = [...involvedSet]
+      // A persisted involvement outlives the change's archive: an archived or
+      // deleted change is not involved, so no conditional definition (the
+      // whole-spec review) starts a round for it.
+      const activeChanges = involvedSet.size === 0 ? undefined : await activeChangeNames(workspace)
+      const involvedChanges =
+        activeChanges === undefined
+          ? []
+          : [...involvedSet].filter((change) => activeChanges.has(change))
       const specWrites = specWritesBySession.get(sessionKey)
       const changedSpecFor = (change: string | undefined): boolean =>
         change !== undefined &&
@@ -1775,7 +1783,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const conditionsFor = async (
         definitionEvent: DefinitionEvent,
         change: string | undefined,
-      ): Promise<ReadonlyMap<string, boolean> | undefined> => {
+      ): Promise<
+        | { readonly conditions: ReadonlyMap<string, boolean> }
+        | { readonly conditionError: string }
+        | undefined
+      > => {
         if (conditionalDefinitions.length === 0) return undefined
         const conditionChange = definitionEvent.name ?? change
         // The worktree digest runs git on every close; only a predicate that
@@ -1803,13 +1815,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             changedSpec: changedSpecFor(change),
           })
         } catch (error) {
-          // A malformed context only disables the conditional definitions; an
-          // unconditional one must still be evaluated for this event. The cause
-          // stays visible instead of looking like a false condition.
+          // A malformed context is an error state, not a false condition: the
+          // cause stays in health and every condition-bearing definition reports
+          // error instead of a predicate that simply did not hold. An
+          // unconditional definition must still be evaluated for this event.
           publishListenerError(workspace, error)
-          return new Map(conditionalDefinitions.map((definition) => [definition.id, false]))
+          return { conditionError: 'the condition context could not be built' }
         }
-        return evaluateConditions(conditionalDefinitions, conditionContext)
+        return { conditions: evaluateConditions(conditionalDefinitions, conditionContext) }
       }
       const evaluationChanges = involvedChanges.length === 0 ? [undefined] : involvedChanges
       const workspaceDefinitions = definitionsByWorkspace.get(workspace) ?? []
@@ -1820,7 +1833,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       )
       for (const definitionEvent of definitionEventsOf(input, event, workspace)) {
         for (const [changeIndex, currentChange] of evaluationChanges.entries()) {
-          const conditions = await conditionsFor(definitionEvent, currentChange)
+          const conditionDecision = await conditionsFor(definitionEvent, currentChange)
           const rows = evaluateDefinitions(
             changeIndex === 0 ? workspaceDefinitions : conditionalOnlyDefinitions,
             definitionEvent,
@@ -1828,7 +1841,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               // A newly checked task must reach the per-task live-run guard even
               // when the whole-file content key was already seen for another
               // task's run; the guard below still prevents duplicates.
-              ...(conditions === undefined ? {} : { conditions }),
+              ...(conditionDecision === undefined ? {} : conditionDecision),
               isDuplicate: (key, definition) =>
                 definition?.id === 'task-review' && taskReviewTaskIds.length > 0
                   ? false
@@ -5154,6 +5167,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             }
           }
         }
+        // The change names, read once for the gate walk below: a review run
+        // bound to an archived change owes nothing, because its artifacts are gone.
+        const activeChanges = await activeChangeNames(workspace)
+        const archivedChanges = await archivedChangeNames(workspace)
         for (const run of ordered) {
           if (stopped()) break
           const current = advanced.get(run.id)
@@ -5212,6 +5229,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // while every due unit has a live review the close waits instead of
           // refusing, and no refusal budget ever releases it (design D3/D9).
           const reviewStep = definition.steps.find((step) => step.executor === 'review')
+          // A run bound to an archived change owes nothing at the close: its
+          // artifacts are unreadable, so its failed or blocked review would
+          // refuse every close with no way to recover. A missing change keeps
+          // the refusal: that failure is real and must stay visible.
+          if (
+            reviewStep !== undefined &&
+            typeof current.context.name === 'string' &&
+            !activeChanges.has(current.context.name) &&
+            archivedChanges.has(current.context.name)
+          ) {
+            continue
+          }
           const reviewOwned =
             reviewStep !== undefined &&
             resolveOwnership(definition, legacy.installed, legacy.enabled).steps.some(

@@ -2,8 +2,10 @@ import { type GitRunner } from './git.js';
 /**
  * The trigger condition's bounded context. It carries the event, the change's
  * tasks and lanes, the current whole-spec and task records with their digests,
- * the current spec and worktree digests, and the session's involvement — no
- * prose, no run state, and no machine path. The predicate itself is JSONLogic.
+ * the current spec and worktree digests, and the session's involvement. It
+ * carries no run state; the event's path and command and a lane's owned globs
+ * are refused when they name a filesystem path. The predicate itself is
+ * JSONLogic.
  */
 export interface ConditionEvent {
     readonly kind: string;

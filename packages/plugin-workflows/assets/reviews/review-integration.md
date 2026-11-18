@@ -23,6 +23,14 @@ review covers the current combined worktree against the change's spec, design, a
 Do not re-report a finding that a task record already covers and the code now fixes. A
 finding must be true of the current worktree.
 
+## Review posture
+
+You decide this review. Do not ask the user, propose a plan, or wait for confirmation: the run is
+headless and a question stalls it. Make the smallest reasonable assumption from the repository and
+the named artifacts when a detail of the reviewed input is unclear, and finish with the single
+fenced JSON block in `## Output`. Report incomplete input only as a P0/P1 finding under the rubric;
+otherwise return `PASS`.
+
 ## Blocking rubric (P0/P1)
 
 - **P0** — the delivered change is broken, unsafe, or does not satisfy a spec requirement.

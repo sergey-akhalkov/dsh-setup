@@ -277,7 +277,7 @@ function discoverCodexPath(codexPath, env, platform = process.platform, bundled 
 	};
 }
 /**
-* Extract the CLI version from `codex --version` (`codex-cli 0.169.0`).
+* Extract the CLI version from `codex --version` (`codex-cli 0.170.0`).
 * @param output - combined command output.
 * @returns the semantic version token, or undefined when none is present.
 */
@@ -626,7 +626,7 @@ function renderCodexSubagentStatus(report) {
 //#region lib/types/wire.js
 /**
 * Minimal Codex app-server protocol adapter, retained from upstream (written
-* against 0.153.4 and verified against the installed 0.169.0). The shared
+* against 0.153.4 and verified against the installed 0.170.0). The shared
 * JSON-RPC transport owns framing and request correlation; this module owns
 * only the product methods, current thread/turn association, unattended
 * approval responses, and terminal-answer selection.

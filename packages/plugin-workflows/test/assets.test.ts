@@ -18,6 +18,15 @@ describe('bundled review instructions', () => {
     }
   })
 
+  it('ships the review posture in every instruction', () => {
+    for (const id of IDS) {
+      const text = readFileSync(join(SHIPPED, `${id}.md`), 'utf8')
+      expect(text, id).toContain('## Review posture')
+      expect(text, id).toContain('Do not ask the user')
+      expect(text.replace(/\s+/gu, ' '), id).toContain('single fenced JSON block')
+    }
+  })
+
   it('documents the focused re-review confirmation contract', () => {
     const text = readFileSync(join(SHIPPED, 'review-task.md'), 'utf8')
     for (const phrase of [

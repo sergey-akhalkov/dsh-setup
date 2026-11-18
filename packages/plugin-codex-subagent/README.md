@@ -1,7 +1,7 @@
 # @dsh-setup/plugin-codex-subagent
 
 A DeepSeek Harness Host bundle that adds a Codex subagent target running a
-**bundled, pinned Codex CLI**: `@openai/codex` `0.169.0`. It is an
+**bundled, pinned Codex CLI**: `@openai/codex` `0.170.0`. It is an
 MIT-attributed fork of the official `@deepseek-ai/dsh-subagent-codex`
 0.2.1-rc.3 provider; the difference is bundled/installed binary resolution,
 target options, provider/status wiring, and the visible `codex_subagent` tool,
@@ -132,7 +132,7 @@ Example with explicit defaults:
 ```yaml
 - id: dsh-setup-codex-subagent
   config:
-    model: gpt-6-astra
+    model: gpt-6.2-astra
     reasoningEffort: xhigh
 ```
 
@@ -156,7 +156,7 @@ Spawn argv is fixed; prompt text only travels over stdin.
 ## App-server compatibility
 
 The retained adapter was written against Codex app-server 0.153.4 and was
-verified against the bundled `@openai/codex` 0.169.0, including a completed
+verified against the bundled `@openai/codex` 0.170.0, including a completed
 authenticated turn on the owner's `~/.codex` login: `initialize`/`initialized`,
 `thread/start` with an ephemeral thread, sandbox, approval policy, target model
 and effort, `turn/start` with text input, the `agentMessage` `final_answer`
@@ -172,7 +172,7 @@ tests plus the live acceptance.
 - Upstream provider: `@deepseek-ai/dsh-subagent-codex` version `0.2.1-rc.3`, MIT,
   Copyright (c) 2026 DeepSeek, from the DeepSeek Harness repository
   (`packages/subagent/subagent-codex`).
-- Bundled CLI: `@openai/codex` `0.169.0`, Apache-2.0, Copyright OpenAI, installed
+- Bundled CLI: `@openai/codex` `0.170.0`, Apache-2.0, Copyright OpenAI, installed
   from npm with its platform optional dependency. No binary is committed.
 - `LICENSE` is the upstream MIT text; `NOTICE` records the fork, the bundled
   dependency, and every local change.

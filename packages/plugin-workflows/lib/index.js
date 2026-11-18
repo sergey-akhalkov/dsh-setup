@@ -11,7 +11,7 @@ import { runWorkflowCommand } from './commands.js';
 import { buildConditionContext, conditionNeedsWorktree, evaluateConditions } from './condition.js';
 import { KNOWN_LEGACY_SOURCES, resolveOwnership, reviewIdentityOf, workspaceDefinitionsDirectory, } from './definitions.js';
 import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
-import { activeChangeNames, codeChangedThisTurn, evaluateOwnedLaneGate, evaluateOwnedProgressGate, goalCompletionRefusal, pruneLaneDecisions, reviewRunSteer, reviewUnitSummary, reviewUnits, reviewUnitText, taskTicksOf, workerLaneTag, } from './engine-gates.js';
+import { activeChangeNames, archivedChangeNames, codeChangedThisTurn, evaluateOwnedLaneGate, evaluateOwnedProgressGate, goalCompletionRefusal, pruneLaneDecisions, reviewRunSteer, reviewUnitSummary, reviewUnits, reviewUnitText, taskTicksOf, workerLaneTag, } from './engine-gates.js';
 import { evaluateEvent } from './evaluate.js';
 import { commandMatches, currentSpecDigest, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
@@ -1342,7 +1342,13 @@ export function apply(ctx, config = {}) {
                 specWritesBySession.set(sessionKey, writes);
                 await writeInvolvement(workspace, input.session, [...involvedSet]);
             }
-            const involvedChanges = [...involvedSet];
+            // A persisted involvement outlives the change's archive: an archived or
+            // deleted change is not involved, so no conditional definition (the
+            // whole-spec review) starts a round for it.
+            const activeChanges = involvedSet.size === 0 ? undefined : await activeChangeNames(workspace);
+            const involvedChanges = activeChanges === undefined
+                ? []
+                : [...involvedSet].filter((change) => activeChanges.has(change));
             const specWrites = specWritesBySession.get(sessionKey);
             const changedSpecFor = (change) => change !== undefined &&
                 specWrites !== undefined &&
@@ -1376,13 +1382,14 @@ export function apply(ctx, config = {}) {
                     });
                 }
                 catch (error) {
-                    // A malformed context only disables the conditional definitions; an
-                    // unconditional one must still be evaluated for this event. The cause
-                    // stays visible instead of looking like a false condition.
+                    // A malformed context is an error state, not a false condition: the
+                    // cause stays in health and every condition-bearing definition reports
+                    // error instead of a predicate that simply did not hold. An
+                    // unconditional definition must still be evaluated for this event.
                     publishListenerError(workspace, error);
-                    return new Map(conditionalDefinitions.map((definition) => [definition.id, false]));
+                    return { conditionError: 'the condition context could not be built' };
                 }
-                return evaluateConditions(conditionalDefinitions, conditionContext);
+                return { conditions: evaluateConditions(conditionalDefinitions, conditionContext) };
             };
             const evaluationChanges = involvedChanges.length === 0 ? [undefined] : involvedChanges;
             const workspaceDefinitions = definitionsByWorkspace.get(workspace) ?? [];
@@ -1391,12 +1398,12 @@ export function apply(ctx, config = {}) {
             const conditionalOnlyDefinitions = workspaceDefinitions.filter((definition) => definition.trigger.condition !== undefined);
             for (const definitionEvent of definitionEventsOf(input, event, workspace)) {
                 for (const [changeIndex, currentChange] of evaluationChanges.entries()) {
-                    const conditions = await conditionsFor(definitionEvent, currentChange);
+                    const conditionDecision = await conditionsFor(definitionEvent, currentChange);
                     const rows = evaluateDefinitions(changeIndex === 0 ? workspaceDefinitions : conditionalOnlyDefinitions, definitionEvent, {
                         // A newly checked task must reach the per-task live-run guard even
                         // when the whole-file content key was already seen for another
                         // task's run; the guard below still prevents duplicates.
-                        ...(conditions === undefined ? {} : { conditions }),
+                        ...(conditionDecision === undefined ? {} : conditionDecision),
                         isDuplicate: (key, definition) => definition?.id === 'task-review' && taskReviewTaskIds.length > 0
                             ? false
                             : sessionSeen.has(definition?.trigger.condition !== undefined && currentChange !== undefined
@@ -4342,6 +4349,10 @@ export function apply(ctx, config = {}) {
                     }
                 }
             }
+            // The change names, read once for the gate walk below: a review run
+            // bound to an archived change owes nothing, because its artifacts are gone.
+            const activeChanges = await activeChangeNames(workspace);
+            const archivedChanges = await archivedChangeNames(workspace);
             for (const run of ordered) {
                 if (stopped())
                     break;
@@ -4390,6 +4401,16 @@ export function apply(ctx, config = {}) {
                 // while every due unit has a live review the close waits instead of
                 // refusing, and no refusal budget ever releases it (design D3/D9).
                 const reviewStep = definition.steps.find((step) => step.executor === 'review');
+                // A run bound to an archived change owes nothing at the close: its
+                // artifacts are unreadable, so its failed or blocked review would
+                // refuse every close with no way to recover. A missing change keeps
+                // the refusal: that failure is real and must stay visible.
+                if (reviewStep !== undefined &&
+                    typeof current.context.name === 'string' &&
+                    !activeChanges.has(current.context.name) &&
+                    archivedChanges.has(current.context.name)) {
+                    continue;
+                }
                 const reviewOwned = reviewStep !== undefined &&
                     resolveOwnership(definition, legacy.installed, legacy.enabled).steps.some((entry) => entry.id === reviewStep.id && entry.ownership === 'own');
                 const review = reviewOwned && reviewStep !== undefined && typeof current.context.name === 'string'

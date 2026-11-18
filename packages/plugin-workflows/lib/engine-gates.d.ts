@@ -30,6 +30,8 @@ export interface GateDecision {
 }
 /** The active change names; the archive collection is not an active change. */
 export declare function activeChangeNames(workspace: string): Promise<Set<string>>;
+/** The archived change names, from `openspec/changes/archive/<date>-<name>`. */
+export declare function archivedChangeNames(workspace: string): Promise<Set<string>>;
 /** Whether the turn wrote a non-documentation file. */
 export declare function codeChangedThisTurn(calls: readonly ToolCallObservation[], workspace: string, turn: number | undefined): boolean;
 /**

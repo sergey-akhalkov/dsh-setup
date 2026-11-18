@@ -429,7 +429,7 @@ function createSpawn(options: {
       if (isVersionProbe) {
         const custom = options.versionFor?.(spec.argv)
         return versionHandle(
-          custom?.text ?? options.versionText ?? 'codex-cli 0.169.0\n',
+          custom?.text ?? options.versionText ?? 'codex-cli 0.170.0\n',
           custom?.exitCode ?? options.versionExit ?? 0,
           custom?.stderr ?? options.versionStderr ?? '',
         )
@@ -558,14 +558,14 @@ describe('Codex discovery', () => {
       env: { PATH: '' },
       cwd: directory,
       spawn: spawn.spawn,
-      bundled: { path: bundledExecutable, version: '0.169.0' },
+      bundled: { path: bundledExecutable, version: '0.170.0' },
     })
 
     expect(resolved).toMatchObject({
       path: executable,
-      version: '0.169.0',
+      version: '0.170.0',
       source: 'config',
-      bundledVersion: '0.169.0',
+      bundledVersion: '0.170.0',
     })
     expect(spawn.argv[0]?.at(-1)).toBe('--version')
   })
@@ -598,14 +598,14 @@ describe('Codex discovery', () => {
       env: { PATH: pathDirectory },
       cwd: directory,
       spawn: spawn.spawn,
-      bundled: { path: bundledExecutable, version: '0.169.0' },
+      bundled: { path: bundledExecutable, version: '0.170.0' },
     })
 
     expect(resolved).toMatchObject({
       path: bundledExecutable,
-      version: '0.169.0',
+      version: '0.170.0',
       source: 'bundled',
-      bundledVersion: '0.169.0',
+      bundledVersion: '0.170.0',
     })
     expect(spawn.argv[0]).toContain(bundledExecutable)
   })
@@ -623,7 +623,7 @@ describe('Codex discovery', () => {
     })
 
     expect(resolved.source).toBe('PATH')
-    expect(resolved.version).toBe('0.169.0')
+    expect(resolved.version).toBe('0.170.0')
     if (process.platform === 'win32') {
       const wrapper = spawn.specs[0]?.env[SHIM_WRAPPER_ENV]?.replace(/^"|"$/gu, '')
       if (wrapper !== undefined) expect(existsSync(wrapper)).toBe(false)
@@ -706,7 +706,7 @@ describe('Codex discovery', () => {
       versionFor: (argv) =>
         argv.includes(configured)
           ? { exitCode: 1, stderr: 'configured shim exploded' }
-          : { text: 'codex-cli 0.169.0\n' },
+          : { text: 'codex-cli 0.170.0\n' },
     })
 
     await expect(
@@ -736,7 +736,7 @@ describe('Codex discovery', () => {
       versionFor: (argv) =>
         argv.includes(bundled)
           ? { exitCode: 1, stderr: 'bundled binary failed' }
-          : { text: 'codex-cli 0.169.0\n' },
+          : { text: 'codex-cli 0.170.0\n' },
     })
 
     await expect(
@@ -744,7 +744,7 @@ describe('Codex discovery', () => {
         env: { PATH: pathDirectory },
         cwd: directory,
         spawn: spawn.spawn,
-        bundled: { path: bundled, version: '0.169.0' },
+        bundled: { path: bundled, version: '0.170.0' },
       }),
     ).rejects.toThrow(/failed `--version`[\s\S]*bundled binary failed/u)
     expect(spawn.argv).toHaveLength(1)
@@ -755,7 +755,7 @@ describe('Codex discovery', () => {
   it('resolves the installed bundled @openai/codex platform binary', async () => {
     const plugin = await loadPlugin()
     const info = plugin.bundledCodexInfo()
-    expect(info.version).toBe('0.169.0')
+    expect(info.version).toBe('0.170.0')
     expect(info.path).toBeDefined()
     if (info.path !== undefined) expect(statSync(info.path).isFile()).toBe(true)
   })
@@ -1616,7 +1616,7 @@ describe('app-server execution', () => {
       provider.start(
         createStartRequest(directory, 'Review the task.', new AbortController().signal),
       ),
-    ).rejects.toThrow(/codex: 0\.169\.0[\s\S]*thread-start/u)
+    ).rejects.toThrow(/codex: 0\.170\.0[\s\S]*thread-start/u)
   })
 
   it('reports a non-completed turn with the HTTP status and version', async () => {
@@ -1638,7 +1638,7 @@ describe('app-server execution', () => {
     const result = await run.result
     expect(result.stopReason).toBe('error')
     expect(result.diagnostic).toContain('HTTP status: 401')
-    expect(result.diagnostic).toContain('codex: 0.169.0')
+    expect(result.diagnostic).toContain('codex: 0.170.0')
     expect(result.diagnostic).toMatch(/not authenticated[\s\S]*login[\s\S]*~\/\.codex/u)
     await run.dispose()
   })
@@ -1694,7 +1694,7 @@ describe('app-server execution', () => {
     }
     const result = await run.result
     expect(result.stopReason).toBe('error')
-    expect(result.diagnostic).toContain('codex: 0.169.0')
+    expect(result.diagnostic).toContain('codex: 0.170.0')
     await run.dispose()
   })
 })
@@ -1729,7 +1729,7 @@ describe('codex_subagent_status', () => {
   it('reports a config-sourced CLI, bundled version, and login command', async () => {
     const directory = temporaryDirectory()
     const executable = writeExecutable(directory, 'codex.exe')
-    const spawn = createSpawn({ versionText: 'codex-cli 0.169.0\n' })
+    const spawn = createSpawn({ versionText: 'codex-cli 0.170.0\n' })
     const tool = await statusTool(spawn.spawn, { codexPath: executable })
 
     const report = (await tool.execute(
@@ -1739,9 +1739,9 @@ describe('codex_subagent_status', () => {
     expect(report).toMatchObject({
       found: true,
       path: executable,
-      version: '0.169.0',
+      version: '0.170.0',
       source: 'config',
-      bundledVersion: '0.169.0',
+      bundledVersion: '0.170.0',
       codexHome: '~/.codex',
     })
     expect(report.loginCommand).toContain('login')
@@ -1766,9 +1766,9 @@ describe('codex_subagent_status', () => {
     expect(report).toMatchObject({
       found: true,
       path: info.path,
-      version: '0.169.0',
+      version: '0.170.0',
       source: 'bundled',
-      bundledVersion: '0.169.0',
+      bundledVersion: '0.170.0',
     })
   })
 
@@ -1902,7 +1902,7 @@ describe('package provenance and bundled Codex', () => {
       unknown
     >
     const dependencies = manifest.dependencies as Record<string, string>
-    expect(dependencies['@openai/codex']).toBe('0.169.0')
+    expect(dependencies['@openai/codex']).toBe('0.170.0')
     expect(
       (manifest.peerDependencies as Record<string, string>)['@deepseek-ai/dsh-subagent-codex'],
     ).toBeUndefined()

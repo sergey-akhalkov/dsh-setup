@@ -10,8 +10,10 @@ import { numberedTasks, taskLanes } from './tasks.js'
 /**
  * The trigger condition's bounded context. It carries the event, the change's
  * tasks and lanes, the current whole-spec and task records with their digests,
- * the current spec and worktree digests, and the session's involvement — no
- * prose, no run state, and no machine path. The predicate itself is JSONLogic.
+ * the current spec and worktree digests, and the session's involvement. It
+ * carries no run state; the event's path and command and a lane's owned globs
+ * are refused when they name a filesystem path. The predicate itself is
+ * JSONLogic.
  */
 
 export interface ConditionEvent {
@@ -185,16 +187,13 @@ export async function buildConditionContext(
       ]),
     )
   }
-  // A condition may not read a filesystem path out of the workspace: an
-  // absolute or traversing lane/path value would leak it into a predicate.
-  // shortcut: a POSIX path wrapped in Markdown emphasis (**/etc/x**) is
-  // indistinguishable from a legitimate glob (**/spec.md), so it is treated as
-  // a glob; upgrade if task prose becomes untrusted input instead of an
-  // owner-authored plan. Drive, traversal, UNC, and delimiter-adjacent absolute
-  // paths are always rejected.
+  // The event's own path and command and a lane's owned globs are the context
+  // values that name a path input, and an absolute or traversing one must not
+  // reach a predicate. Task text and lane titles are owner-authored plan prose:
+  // a predicate returns a boolean and this context is never persisted, so prose
+  // is carried as written.
   const startsPath = /^(?:[A-Za-z]:[\\/]|[\\/])/u
-  // A drive path needs a separator or a non-space right after the colon, so
-  // prose labels such as "release A: migration" stay readable.
+  // A drive path needs a separator or a non-space right after the colon.
   const drivePath = /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/]|[^\s])/u
   const absolutePath = /(?:^|[\s"'`=([[{(<:;,]|[|?&!])\/[^\s'"`*]/u
   const uncPath = /(?:^|[^A-Za-z0-9])\\\\(?:[^\\/\s]+[\\/]|\?[\\/]UNC[\\/])/u
@@ -205,15 +204,24 @@ export async function buildConditionContext(
   const traverses = /\.\.[\\/]|(?:^|[\\/])\.\.(?:[\\/]|$)|[\\/]\.\.(?:[^A-Za-z0-9._-]|$)/u
   // In a shell command a redirection operator can touch an absolute path.
   const redirectedPath = />{1,2}\/[^\s'"`*]/u
+  // A URL is a reference, not a machine path. The scheme needs two or more
+  // characters so a bare drive (`C://x`) is not taken for one, and a `file:` URL
+  // still names a machine-local path. The body stops at whitespace, quotes,
+  // brackets, and shell operators, so a redirection or a path written
+  // immediately after a URL is still checked.
+  const urlSpan = /[A-Za-z][A-Za-z0-9+.-]+:\/\/[^\s<>|&;'"`()]+/gu
+  const withoutUrls = (value: string): string =>
+    value.replace(urlSpan, (match) => (/^file:/iu.test(match) ? match : ' '))
   const assertNoPath = (value: string | undefined, redirection = false): void => {
+    const text = value === undefined ? undefined : withoutUrls(value)
     if (
-      value !== undefined &&
-      (startsPath.test(value) ||
-        drivePath.test(value) ||
-        absolutePath.test(value) ||
-        (redirection && redirectedPath.test(value)) ||
-        uncPath.test(value) ||
-        traverses.test(value))
+      text !== undefined &&
+      (startsPath.test(text) ||
+        drivePath.test(text) ||
+        absolutePath.test(text) ||
+        (redirection && redirectedPath.test(text)) ||
+        uncPath.test(text) ||
+        traverses.test(text))
     ) {
       throw new Error('condition context contains a filesystem path')
     }
@@ -221,10 +229,8 @@ export async function buildConditionContext(
   assertNoPath(input.event.path)
   assertNoPath(input.event.command, true)
   for (const lane of lanes) {
-    assertNoPath(lane.title)
     for (const owned of lane.owned) assertNoPath(owned)
   }
-  for (const task of tasks) assertNoPath(task.text)
   return {
     event: input.event,
     change: {

@@ -14,6 +14,14 @@ this revision. The prompt names a frozen snapshot of the worktree and the change
 during the run belongs to the next round, not this verdict. A re-review on a new snapshot is a full
 review in the same reviewer conversation; this instruction has no focused mode.
 
+## Review posture
+
+You decide this review. Do not ask the user, propose a plan, or wait for confirmation: the run is
+headless and a question stalls it. Make the smallest reasonable assumption from the repository and
+the named artifacts when a detail of the reviewed input is unclear, and finish with the single
+fenced JSON block in `## Output`. Report incomplete input only as a P0/P1 finding under the rubric;
+otherwise return `PASS`.
+
 ## Blocking rubric (P0/P1)
 
 Report a finding only when it breaks the change or would cost real work to discover later:

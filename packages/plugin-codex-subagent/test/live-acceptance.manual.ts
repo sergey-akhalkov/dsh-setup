@@ -158,7 +158,7 @@ function startRequest(cwd: string, text: string, signal: AbortSignal) {
     prompt: [{ type: 'text', text }],
     cwd,
     signal,
-    agentOptions: { model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
+    agentOptions: { model: 'gpt-6.2-astra', reasoningEffort: 'xhigh' },
   }
 }
 
@@ -173,9 +173,9 @@ describe('live provider acceptance (manual)', () => {
     })
     console.log('STATUS', JSON.stringify(report, null, 2))
     expect(report.found).toBe(true)
-    expect(report.version).toBe('0.169.0')
+    expect(report.version).toBe('0.170.0')
     expect(report.source).toBe('bundled')
-    expect(report.bundledVersion).toBe('0.169.0')
+    expect(report.bundledVersion).toBe('0.170.0')
     expect(report.loginCommand).toContain('login')
 
     const { ctx, providers } = createContext()
@@ -185,7 +185,7 @@ describe('live provider acceptance (manual)', () => {
     const run = (await provider.start(
       startRequest(
         repoRoot,
-        'Reply with exactly the token PROVIDER-0.169.0 and nothing else.',
+        'Reply with exactly the token PROVIDER-0.170.0 and nothing else.',
         new AbortController().signal,
       ),
     )) as {

@@ -73,6 +73,34 @@ function definition(condition: Readonly<Record<string, unknown>>): Definition {
   })
 }
 
+/** A trigger with no condition: a context-build failure must not affect it. */
+function plainDefinition(): Definition {
+  return validateDefinition({
+    v: 1,
+    id: 'plain-check',
+    name: 'Plain check',
+    version: 1,
+    trigger: { kind: 'turn.stopping', match: {}, mode: 'active', dedupe: 'turn' },
+    settings: {
+      allowModelStart: false,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+    },
+    steps: [
+      {
+        id: 'check',
+        title: 'Check',
+        executor: 'main',
+        prompt: 'Check the spec.',
+        evidence: { kind: 'file', path: 'openspec/changes/{name}/tasks.md' },
+        next: 'end',
+      },
+    ],
+  })
+}
+
 describe('condition schema', () => {
   it('accepts the bounded context roots', () => {
     expect(() =>
@@ -562,40 +590,139 @@ describe('condition size bound', () => {
 })
 
 describe('condition context path boundary', () => {
-  // Compose drive-path fixtures at runtime so the repository machine-path scan never finds them.
+  // Compose drive and UNC fixtures at runtime so the repository machine-path scan never finds them.
   const DRIVE = ['C', ':'].join('')
-  it('refuses a drive-relative owner and a path in task text', async () => {
-    for (const content of [
+  const UNC = ['\\', '\\', 'server', '\\', 'share', '\\', 'token.txt'].join('')
+  it('refuses a drive-relative lane owner', async () => {
+    const root = await workspace()
+    await writeFile(
+      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
       '# Tasks\n\n## 1. Lane (lane 1, owns `C:private/**`)\n\n- [ ] 1.1 Do it\n',
-      `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 Read ${DRIVE}/private/token.txt\n`,
-    ]) {
-      const root = await workspace()
-      await writeFile(join(root, 'openspec', 'changes', 'auth', 'tasks.md'), content, 'utf8')
-      await expect(
-        buildConditionContext({
-          workspace: root,
-          change: 'auth',
-          event: { kind: 'turn.stopping' },
-        }),
-      ).rejects.toThrow(/filesystem path/u)
-    }
+      'utf8',
+    )
+    await expect(
+      buildConditionContext({
+        workspace: root,
+        change: 'auth',
+        event: { kind: 'turn.stopping' },
+      }),
+    ).rejects.toThrow(/filesystem path/u)
   })
 
-  it('refuses a path after punctuation or a traversing token in prose', async () => {
-    for (const text of [`Read path=${DRIVE}/private/token.txt`, 'Read ../private/token.txt']) {
+  it('builds a context for prose that names URLs and paths', async () => {
+    for (const text of [
+      'Deploy to https://example.invalid',
+      'Open `sidebar://worktrees` in the right pane',
+      'Reject `mv`/archive and adoption after PASS',
+      'Fetch https://example.invalid/a/../b',
+      'Read `safe/..`',
+      'Read </etc/private/token.txt>',
+      'Read </данные/private/token.txt>',
+      'Read /usr/local/lib/example',
+      'Read path:/etc/private/token.txt',
+      `Read ${DRIVE}/private/token.txt`,
+      `Read ${UNC}`,
+      `Read **${DRIVE}/private/token.txt**`,
+      `Read [${DRIVE}/private/token.txt]`,
+      'Read **../private/token.txt**',
+    ]) {
       const root = await workspace()
       await writeFile(
         join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
         `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 ${text}\n`,
         'utf8',
       )
+      const context = await buildConditionContext({
+        workspace: root,
+        change: 'auth',
+        event: { kind: 'turn.stopping' },
+      })
+      expect(context.change.tasks.items[0]?.text).toBe(text)
+    }
+  })
+
+  it('builds a context for prose in a lane title', async () => {
+    for (const title of [
+      'Deploy to https://example.invalid',
+      'Open `sidebar://worktrees`',
+      'Reject `mv`/archive',
+      'Read /etc/private/token.txt',
+      `Read ${DRIVE}/private/token.txt`,
+    ]) {
+      const root = await workspace()
+      await writeFile(
+        join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
+        `# Tasks\n\n## 1. ${title} (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 Do it\n`,
+        'utf8',
+      )
+      const context = await buildConditionContext({
+        workspace: root,
+        change: 'auth',
+        event: { kind: 'turn.stopping' },
+      })
+      expect(context.change.lanes[0]?.title).toContain(title)
+    }
+  })
+
+  it('refuses an absolute, UNC, or traversing path in event.path', async () => {
+    const root = await workspace()
+    for (const path of [
+      '/etc/private/token.txt',
+      `${DRIVE}/private/token.txt`,
+      '../private/token.txt',
+      '..\\private\\token.txt',
+      UNC,
+    ]) {
       await expect(
         buildConditionContext({
           workspace: root,
           change: 'auth',
-          event: { kind: 'turn.stopping' },
+          event: { kind: 'fs.change', path },
         }),
       ).rejects.toThrow(/filesystem path/u)
+    }
+  })
+
+  it('refuses an absolute path, file URL, or redirection in event.command', async () => {
+    const root = await workspace()
+    for (const command of [
+      'cat /etc/private/token.txt',
+      'cat path:/etc/private/token.txt',
+      'cat </etc/private/token.txt>',
+      `cat ${UNC}`,
+      'cat file:///etc/private/token.txt',
+      'cat ..\\private\\token.txt',
+      'echo x>/etc/private/token.txt',
+      'echo x>>/etc/private/token.txt',
+      'curl https://example.invalid -o /etc/private/token.txt',
+      'curl https://example.invalid>/etc/private/token.txt',
+      'curl https://example.invalid>>/etc/private/token.txt',
+      'curl https://example.invalid</etc/private/token.txt',
+      'curl "https://example.invalid>/etc/private/token.txt"',
+    ]) {
+      await expect(
+        buildConditionContext({
+          workspace: root,
+          change: 'auth',
+          event: { kind: 'tool.pre-execute', command },
+        }),
+      ).rejects.toThrow(/filesystem path/u)
+    }
+  })
+
+  it('builds a context for a non-file URL in event.command', async () => {
+    const root = await workspace()
+    for (const command of [
+      'git clone https://example.invalid/repo',
+      'curl sidebar://worktrees',
+      'git fetch ssh://git@example.invalid/repo',
+    ]) {
+      const context = await buildConditionContext({
+        workspace: root,
+        change: 'auth',
+        event: { kind: 'tool.pre-execute', command },
+      })
+      expect(context.event.command).toBe(command)
     }
   })
 
@@ -639,48 +766,6 @@ describe('condition context path boundary', () => {
     expect(context.change.tasks.items).toHaveLength(1)
   })
 
-  it('refuses delimiter-adjacent paths and a terminal traversal', async () => {
-    for (const text of [
-      'Read </etc/private/token.txt>',
-      'Read path:/etc/private/token.txt',
-      'Read `safe/..`',
-      'Read </данные/private/token.txt>',
-      'Read \\\\сервер\\share\\token.txt',
-      'Read \\\\?\\UNC\\server\\share\\token.txt',
-    ]) {
-      const root = await workspace()
-      await writeFile(
-        join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
-        `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 ${text}\n`,
-        'utf8',
-      )
-      await expect(
-        buildConditionContext({
-          workspace: root,
-          change: 'auth',
-          event: { kind: 'turn.stopping' },
-        }),
-      ).rejects.toThrow(/filesystem path/u)
-    }
-  })
-  it('refuses an embedded UNC path', async () => {
-    const root = await workspace()
-    // Composed at runtime so the repository machine-path scan never finds it.
-    const unc = ['\\', '\\', 'server', '\\', 'share', '\\', 'token.txt'].join('')
-    await writeFile(
-      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
-      `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 Read ${unc}\n`,
-      'utf8',
-    )
-    await expect(
-      buildConditionContext({
-        workspace: root,
-        change: 'auth',
-        event: { kind: 'turn.stopping' },
-      }),
-    ).rejects.toThrow(/filesystem path/u)
-  })
-
   it('refuses an absolute path after a redirection in event.command', async () => {
     const root = await workspace()
     for (const command of ['echo x>/etc/private/token.txt', 'echo x>>/etc/private/token.txt']) {
@@ -703,43 +788,6 @@ describe('condition context path boundary', () => {
       }),
     ).rejects.toThrow(/filesystem path/u)
   })
-  it('refuses an embedded absolute POSIX path', async () => {
-    const root = await workspace()
-    await writeFile(
-      join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
-      '# Tasks\n\n## 1. Lane (lane 1, owns `packages/**`)\n\n- [ ] 1.1 Read /etc/private/token.txt\n',
-      'utf8',
-    )
-    await expect(
-      buildConditionContext({
-        workspace: root,
-        change: 'auth',
-        event: { kind: 'turn.stopping' },
-      }),
-    ).rejects.toThrow(/filesystem path/u)
-  })
-  it('refuses Markdown-wrapped and punctuation-adjacent paths', async () => {
-    for (const text of [
-      `Read **${DRIVE}/private/token.txt**`,
-      `Read [${DRIVE}/private/token.txt]`,
-      'Read **../private/token.txt**',
-    ]) {
-      const root = await workspace()
-      await writeFile(
-        join(root, 'openspec', 'changes', 'auth', 'tasks.md'),
-        `# Tasks\n\n## 1. Lane (lane 1, owns \`packages/**\`)\n\n- [ ] 1.1 ${text}\n`,
-        'utf8',
-      )
-      await expect(
-        buildConditionContext({
-          workspace: root,
-          change: 'auth',
-          event: { kind: 'turn.stopping' },
-        }),
-      ).rejects.toThrow(/filesystem path/u)
-    }
-  })
-
   it('bounds implicit coercion in a comparison', () => {
     const context = {
       change: { tasks: { items: [{ text: 'x'.repeat(1001) }] } },
@@ -806,5 +854,39 @@ describe('condition context path boundary', () => {
         event: { kind: 'turn.stopping' },
       }),
     ).rejects.toThrow(/filesystem path/u)
+  })
+})
+
+describe('condition context failure', () => {
+  const stopEvent = { kind: 'turn.stopping', subject: 'stop-attempt' } as const
+
+  it('records an error instead of a false condition', () => {
+    const gated = definition({ var: 'session.involved' })
+    const row = evaluateDefinitionTrigger(gated, stopEvent, {
+      conditionError: 'the condition context could not be built',
+      isDuplicate: () => false,
+    })
+    expect(row).toMatchObject({
+      matched: false,
+      reason: 'error',
+      detail: 'the condition context could not be built',
+    })
+  })
+
+  it('still evaluates an unconditional definition', () => {
+    const row = evaluateDefinitionTrigger(plainDefinition(), stopEvent, {
+      conditionError: 'the condition context could not be built',
+      isDuplicate: () => false,
+    })
+    expect(row).toMatchObject({ matched: true, reason: 'would-fire' })
+  })
+
+  it('keeps condition-false for a built context', () => {
+    const gated = definition({ var: 'session.involved' })
+    const row = evaluateDefinitionTrigger(gated, stopEvent, {
+      conditions: new Map([[gated.id, false]]),
+      isDuplicate: () => false,
+    })
+    expect(row).toMatchObject({ matched: false, reason: 'condition-false' })
   })
 })

@@ -45,7 +45,7 @@ describe('setup release composition', () => {
     expect(workflows.reviewers).toMatchObject({
       codex: {
         provider: 'codex-subagent',
-        model: 'gpt-6-astra',
+        model: 'gpt-6.2-astra',
         reasoningEffort: 'xhigh',
       },
     })

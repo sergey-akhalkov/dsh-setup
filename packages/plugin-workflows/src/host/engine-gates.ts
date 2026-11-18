@@ -81,6 +81,22 @@ export async function activeChangeNames(workspace: string): Promise<Set<string>>
   return new Set(names.filter((name) => CHANGE_NAME.test(name) && name !== 'archive'))
 }
 
+/** The archived change names, from `openspec/changes/archive/<date>-<name>`. */
+export async function archivedChangeNames(workspace: string): Promise<Set<string>> {
+  let names: string[]
+  try {
+    names = await readdir(join(workspace, 'openspec', 'changes', 'archive'))
+  } catch {
+    return new Set()
+  }
+  const archived = new Set<string>()
+  for (const entry of names) {
+    const name = /^\d{4}-\d{2}-\d{2}-(.+)$/u.exec(entry)?.[1]
+    if (name !== undefined && CHANGE_NAME.test(name)) archived.add(name)
+  }
+  return archived
+}
+
 /** Whether the turn wrote a non-documentation file. */
 export function codeChangedThisTurn(
   calls: readonly ToolCallObservation[],

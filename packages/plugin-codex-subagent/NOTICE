@@ -10,7 +10,7 @@ upstream license text is the `LICENSE` file beside this notice.
 
 ## Bundled Codex dependency
 
-The package declares the pinned npm release `@openai/codex` `0.169.0`
+The package declares the pinned npm release `@openai/codex` `0.170.0`
 (Apache-2.0, Copyright OpenAI) as a runtime dependency. A profile install
 fetches that package and its platform-specific optional dependency, whose
 `vendor/<target-triple>/bin/codex` executable the fork runs. The repository

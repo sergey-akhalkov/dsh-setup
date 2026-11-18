@@ -233,6 +233,12 @@ export interface DefinitionEvaluationContext {
    * run, because the predicate is never assumed true.
    */
   readonly conditions?: ReadonlyMap<string, boolean>
+  /**
+   * A condition context build failure for this event. A condition-bearing
+   * definition records `error` with this bounded detail instead of a false
+   * predicate, so a broken context never looks like a failed condition.
+   */
+  readonly conditionError?: string
   readonly isDuplicate: (key: string, definition?: Definition) => boolean
 }
 
@@ -357,6 +363,9 @@ export function evaluateDefinitionTrigger(
       }
     }
     if (trigger.condition !== undefined) {
+      if (context.conditionError !== undefined) {
+        return { ...base, matched: false, reason: 'error', detail: context.conditionError }
+      }
       if (context.conditions === undefined) {
         return {
           ...base,
@@ -436,6 +445,7 @@ export function evaluateDefinitions(
       ...(context.ready === undefined ? {} : { ready: context.ready }),
       ...(applicability === undefined ? {} : { applicability }),
       ...(context.conditions === undefined ? {} : { conditions: context.conditions }),
+      ...(context.conditionError === undefined ? {} : { conditionError: context.conditionError }),
       isDuplicate: context.isDuplicate,
     })
     if (!row.matched) {

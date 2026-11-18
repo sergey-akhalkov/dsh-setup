@@ -2,7 +2,7 @@
 
 `@dsh-setup/plugin-codex-subagent` adds Codex as a DeepSeek Harness subagent
 target backed by a **pinned bundled Codex CLI**: the npm dependency
-`@openai/codex` `0.169.0` and its platform binary. The repository commits no
+`@openai/codex` `0.170.0` and its platform binary. The repository commits no
 binary; the profile's package install fetches it. `codexPath` and `PATH` remain
 overrides. The provider is an MIT-attributed fork of the official
 `@deepseek-ai/dsh-subagent-codex` provider with its app-server protocol adapter
@@ -131,7 +131,7 @@ The providers declare `agentOptions` support and accept a reviewer's `model` and
 reviewers:
   codex:
     provider: codex-subagent
-    model: gpt-6-astra
+    model: gpt-6.2-astra
     reasoningEffort: xhigh
 ```
 
@@ -142,7 +142,7 @@ reviewers:
 - Any other `agentOptions` entry is rejected before a process starts with a
   `subagent-codex:` diagnostic naming the unsupported option.
 
-The setup's workflows `reviewers.codex` entry uses `gpt-6-astra` at `xhigh` by default. Override it
+The setup's workflows `reviewers.codex` entry uses `gpt-6.2-astra` at `xhigh` by default. Override it
 in the workflows config (not the provider row) to change a review's model or effort; a reviewer that
 sets neither falls back to the provider row's `model`/`reasoningEffort` or the user's Codex route.
 
@@ -171,7 +171,7 @@ Example:
 ```yaml
 - id: dsh-setup-codex-subagent
   config:
-    model: gpt-6-astra
+    model: gpt-6.2-astra
     reasoningEffort: xhigh
 ```
 
@@ -181,7 +181,7 @@ bundled CLI and the user's Codex home.
 ## App-server compatibility
 
 The retained adapter was written against Codex app-server 0.153.4 and was
-verified against the bundled `@openai/codex` 0.169.0, including a completed
+verified against the bundled `@openai/codex` 0.170.0, including a completed
 authenticated turn on the owner's `~/.codex` login:
 
 - `initialize`/`initialized` and `thread/start` (ephemeral thread, approval
@@ -209,7 +209,7 @@ Every delegation starts one app-server and runs one turn on a fresh ephemeral
 thread, or resumes the persisted thread when a review key is reused; it costs a
 Codex request and tokens, and reviews
 are slow by nature. Per-task reviews multiply the runs. The shipped workflow
-reviewer selects `gpt-6-astra` at `xhigh`, so every default Codex review pays the
+reviewer selects `gpt-6.2-astra` at `xhigh`, so every default Codex review pays the
 strong-model rate; override `codex` for routine reviews. The workflows `note`
 action runs no model and is the cheap way to close a turn while a task is still in
 progress.
@@ -219,7 +219,7 @@ progress.
 The package vendors MIT-licensed `@deepseek-ai/dsh-subagent-codex` 0.2.1-rc.3
 code (Copyright (c) 2026 DeepSeek). The complete MIT text is the package
 `LICENSE`; `NOTICE` records the upstream version, the local patch, and the
-bundled `@openai/codex` 0.169.0 dependency (Apache-2.0, Copyright OpenAI). The
+bundled `@openai/codex` 0.170.0 dependency (Apache-2.0, Copyright OpenAI). The
 package [README](../packages/plugin-codex-subagent/README.md) records the rebase
 procedure.
 

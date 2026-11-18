@@ -246,6 +246,9 @@ export function evaluateDefinitionTrigger(definition, event, context) {
             };
         }
         if (trigger.condition !== undefined) {
+            if (context.conditionError !== undefined) {
+                return { ...base, matched: false, reason: 'error', detail: context.conditionError };
+            }
             if (context.conditions === undefined) {
                 return {
                     ...base,
@@ -302,6 +305,7 @@ export function evaluateDefinitions(definitions, event, context) {
             ...(context.ready === undefined ? {} : { ready: context.ready }),
             ...(applicability === undefined ? {} : { applicability }),
             ...(context.conditions === undefined ? {} : { conditions: context.conditions }),
+            ...(context.conditionError === undefined ? {} : { conditionError: context.conditionError }),
             isDuplicate: context.isDuplicate,
         });
         if (!row.matched) {

@@ -8720,6 +8720,72 @@ it('denies casing and tab variants of the archive command without evidence', asy
   }
 })
 
+/** The conditional and unconditional definitions the turn-close wiring tests register. */
+const CONDITION_WIRING_DEFINITIONS: readonly unknown[] = [
+  {
+    v: 1,
+    id: 'conditional-review',
+    name: 'Conditional review',
+    version: 1,
+    trigger: {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'active',
+      dedupe: 'turn',
+      condition: { '==': [{ var: 'session.involved' }, true] },
+    },
+    settings: {
+      allowModelStart: true,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+    },
+    steps: [
+      {
+        id: 'confirm',
+        title: 'Confirm the change',
+        executor: 'main',
+        prompt: 'Confirm the change artifacts.',
+        evidence: {
+          kind: 'file',
+          path: 'openspec/changes/{name}/proposal.md',
+        },
+        next: 'end',
+        blockTurnClose: true,
+      },
+    ],
+  },
+  {
+    v: 1,
+    id: 'unconditional-review',
+    name: 'Unconditional review',
+    version: 1,
+    trigger: { kind: 'turn.stopping', match: {}, mode: 'active', dedupe: 'none' },
+    settings: {
+      allowModelStart: true,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+    },
+    steps: [
+      {
+        id: 'confirm',
+        title: 'Confirm the change',
+        executor: 'main',
+        prompt: 'Confirm the change artifacts.',
+        evidence: {
+          kind: 'file',
+          path: 'openspec/changes/{name}/proposal.md',
+        },
+        next: 'end',
+        blockTurnClose: true,
+      },
+    ],
+  },
+]
+
 describe('turn-close condition wiring', () => {
   async function conditionRows(
     workspace: string,
@@ -8752,70 +8818,7 @@ describe('turn-close condition wiring', () => {
     )
     const dispose = definitionsRegistry.register({
       source: '@acme/conditional',
-      definitions: [
-        {
-          v: 1,
-          id: 'conditional-review',
-          name: 'Conditional review',
-          version: 1,
-          trigger: {
-            kind: 'turn.stopping',
-            match: {},
-            mode: 'active',
-            dedupe: 'turn',
-            condition: { '==': [{ var: 'session.involved' }, true] },
-          },
-          settings: {
-            allowModelStart: true,
-            risk: 'low',
-            gateOwnership: 'own',
-            maxBlocks: 3,
-            allowIntent: false,
-          },
-          steps: [
-            {
-              id: 'confirm',
-              title: 'Confirm the change',
-              executor: 'main',
-              prompt: 'Confirm the change artifacts.',
-              evidence: {
-                kind: 'file',
-                path: 'openspec/changes/{name}/proposal.md',
-              },
-              next: 'end',
-              blockTurnClose: true,
-            },
-          ],
-        },
-        {
-          v: 1,
-          id: 'unconditional-review',
-          name: 'Unconditional review',
-          version: 1,
-          trigger: { kind: 'turn.stopping', match: {}, mode: 'active', dedupe: 'none' },
-          settings: {
-            allowModelStart: true,
-            risk: 'low',
-            gateOwnership: 'own',
-            maxBlocks: 3,
-            allowIntent: false,
-          },
-          steps: [
-            {
-              id: 'confirm',
-              title: 'Confirm the change',
-              executor: 'main',
-              prompt: 'Confirm the change artifacts.',
-              evidence: {
-                kind: 'file',
-                path: 'openspec/changes/{name}/proposal.md',
-              },
-              next: 'end',
-              blockTurnClose: true,
-            },
-          ],
-        },
-      ],
+      definitions: CONDITION_WIRING_DEFINITIONS,
       triggers: [],
     })
     try {
@@ -8878,6 +8881,75 @@ describe('turn-close condition wiring', () => {
     } finally {
       dispose?.()
     }
+  })
+
+  it('records error rows for the shipped conditional definitions when a lane owner is a path input', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const DRIVE = ['C', ':'].join('')
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      `# Tasks\n\n## 1. Lane (lane 1, owns \`${DRIVE}/private/**\`)\n\n- [ ] 1.1 Do it\n`,
+      'utf8',
+    )
+    const lastTurnStopping = async (): Promise<Array<Record<string, unknown>>> => {
+      const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+      const lines = (await readFile(file, 'utf8').catch(() => '')).trim().split('\n')
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const line = lines[index]
+        if (line === undefined) continue
+        try {
+          const entry = JSON.parse(line) as {
+            kind?: string
+            triggers?: Array<Record<string, unknown>>
+          }
+          if (entry.kind === 'agent/turn-stopping') return entry.triggers ?? []
+        } catch {
+          // A partial line is not the entry this helper looks for.
+        }
+      }
+      return []
+    }
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'lane-owner-write',
+        name: 'write',
+        arguments: { file_path: 'openspec/changes/auth/design.md' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(async () =>
+      (await lastTurnStopping()).some(
+        (row) => row.id === 'definition:spec-review' && row.reason === 'error',
+      ),
+    )
+    const rows = await lastTurnStopping()
+    for (const id of ['definition:spec-review', 'definition:integration-review']) {
+      const matches = rows.filter((row) => row.id === id)
+      expect(
+        matches.some((row) => row.reason === 'error'),
+        id,
+      ).toBe(true)
+      expect(
+        matches.some((row) => row.reason === 'run-created'),
+        id,
+      ).toBe(false)
+    }
+    // The unconditional definition is still evaluated in the same turn-close entry.
+    expect(rows.filter((row) => row.id === 'definition:task-review')).toHaveLength(1)
+    const health = JSON.parse(
+      await readFile(join(workspace, '.dsh', 'workflows', 'health.json'), 'utf8'),
+    ) as { lastError?: string }
+    expect(health.lastError).toContain('condition context contains a filesystem path')
   })
 })
 
@@ -9533,6 +9605,88 @@ describe('engine-owned gates', () => {
     const allowed = await complete()
     expect(allowed.nextCalled).toBe(true)
     expect(allowed.decision?.kind).toBe('continue')
+  })
+})
+
+describe('archived change involvement', () => {
+  interface RecordedRun {
+    readonly id: string
+    readonly definition: { readonly id: string }
+  }
+
+  /** The whole-spec review rounds the host recorded, archived ones included. */
+  async function specReviewRuns(workspace: string): Promise<RecordedRun[]> {
+    const directory = join(workspace, '.dsh', 'workflows', 'runs')
+    const files = (await readdir(directory).catch(() => [])).filter((name) =>
+      name.endsWith('.json'),
+    )
+    const runs = await Promise.all(
+      files.map(
+        async (name) => JSON.parse(await readFile(join(directory, name), 'utf8')) as RecordedRun,
+      ),
+    )
+    return runs.filter((run) => run.definition.id === 'spec-review')
+  }
+
+  /** Move the fixture change out of the active tree the way an archive does. */
+  async function archiveFixture(workspace: string): Promise<void> {
+    const directory = join(workspace, 'openspec', 'changes', 'archive')
+    await mkdir(directory, { recursive: true })
+    await rename(join(workspace, 'openspec', 'changes', 'auth'), join(directory, '2026-11-18-auth'))
+  }
+
+  /** A host whose close starts the whole-spec round: no seeded PASS record. */
+  async function reviewGateHost(workspace: string): Promise<ReturnType<typeof fakeHost>> {
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+    await rm(join(workspace, '.dsh', 'workflows', 'records', 'spec-review'), {
+      recursive: true,
+      force: true,
+    })
+    return host
+  }
+
+  it('starts no review round for a stored involvement that names an archived change', async () => {
+    const workspace = await gitGateWorkspace()
+    // A durable record from an earlier host still names the change.
+    await mkdir(join(workspace, '.dsh', 'workflows', 'involvement'), { recursive: true })
+    await writeFile(
+      join(workspace, '.dsh', 'workflows', 'involvement', 'session-1.json'),
+      `${JSON.stringify({ changes: ['auth'], at: 1 })}\n`,
+      'utf8',
+    )
+    await archiveFixture(workspace)
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+    const steers = host.steers.length
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(await specReviewRuns(workspace)).toEqual([])
+    expect(host.steers.length).toBe(steers)
+  })
+
+  it('does not hold the close for a failed review run of a change archived after its round', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await reviewGateHost(workspace)
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(async () => (await specReviewRuns(workspace)).length === 1)
+    // The failed round holds the close while the change is still active.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(steered(host)).toContain('due review unit(s) have no live review')
+    const rounds = (await specReviewRuns(workspace)).length
+    await archiveFixture(workspace)
+    const steers = host.steers.length
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+    expect(host.steers.length).toBe(steers)
+    expect((await specReviewRuns(workspace)).length).toBe(rounds)
+  })
+
+  it('keeps starting the round for an active involved change', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await reviewGateHost(workspace)
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(async () => (await specReviewRuns(workspace)).length === 1)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(steered(host)).toContain('due review unit(s) have no live review')
   })
 })
 

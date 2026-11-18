@@ -19,6 +19,14 @@ Do not review later tasks, unchecked tasks, unrelated files, style, or wording. 
 review, check each listed checked task and name its number (or text) in every finding; never
 review an unchecked task as if it were done.
 
+## Review posture
+
+You decide this review. Do not ask the user, propose a plan, or wait for confirmation: the run is
+headless and a question stalls it. Make the smallest reasonable assumption from the repository and
+the named artifacts when a detail of the reviewed input is unclear, and finish with the single
+fenced JSON block in `## Output`. Report incomplete input only as a P0/P1 finding under the rubric;
+otherwise return `PASS`.
+
 ## Focused re-review
 
 When the prompt carries `## Previous findings` and `## Changes since the last review`, this is a
