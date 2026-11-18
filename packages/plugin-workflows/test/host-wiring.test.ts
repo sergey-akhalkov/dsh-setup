@@ -3150,6 +3150,217 @@ describe('turn-close lane dispatch', () => {
     expect(host.steers).toHaveLength(0)
   })
 
+  it('leaves a pending run open when the stop lands inside the advance-run not-applicable write', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // The close's queued stop-attempt record completes every deferred run its own
+    // store snapshot lists. Seeding the run only after that snapshot, while the
+    // record is paused on its involvement read, leaves the run to the close's
+    // advance, whose not-applicable branch re-reads it inside persistRun.
+    let releaseRecord: () => void = () => undefined
+    const recordGate = new Promise<void>((resolve) => {
+      releaseRecord = resolve
+    })
+    let recordPaused = (): void => undefined
+    const recordPausedGate = new Promise<void>((resolve) => {
+      recordPaused = resolve
+    })
+    runStoreFaults.pauseNextRead = recordGate
+    runStoreFaults.onReadPaused = () => recordPaused()
+    runStoreFaults.pauseReadFor = (path) => path.includes('/.dsh/workflows/involvement/')
+    let releaseAdvance: () => void = () => undefined
+    const advanceGate = new Promise<void>((resolve) => {
+      releaseAdvance = resolve
+    })
+    let advancePaused = (): void => undefined
+    const advancePausedGate = new Promise<void>((resolve) => {
+      advancePaused = resolve
+    })
+    const controller = new AbortController()
+    const closing = host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    await recordPausedGate
+    const seeded = runs.createRun({
+      definition: 'verify',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['check'],
+      id: 'run-advance-cancel',
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, seeded, auth)
+    // The close's snapshot is the first read of the seeded file; the advance's
+    // persistRun re-read after the code-write applicability branch is the second.
+    let seededReads = 0
+    let pausedPath: string | undefined
+    runStoreFaults.pauseNextRead = advanceGate
+    runStoreFaults.onReadPaused = () => advancePaused()
+    runStoreFaults.pauseReadFor = (path) => {
+      if (!path.endsWith('/runs/run-advance-cancel.json')) return false
+      seededReads += 1
+      if (seededReads !== 2) return false
+      pausedPath = path
+      return true
+    }
+    releaseRecord()
+    await advancePausedGate
+    expect(pausedPath).toContain('/.dsh/workflows/runs/run-advance-cancel.json')
+    // The stop lands after persistRun entered the run lock and issued its read.
+    controller.abort()
+    releaseAdvance()
+    await closing
+    // Give a stray completion write the chance to appear before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const persisted = await runs.readAuthenticatedRun(workspace, seeded.id, auth)
+    expect(persisted?.status).toBe('running')
+    expect(persisted?.updatedAt).toBe(1_000)
+    expect(persisted?.steps.map((step) => step.state)).toEqual(['open'])
+    expect(persisted?.steps.some((step) => step.reason === 'not-applicable')).toBe(false)
+    expect(persisted?.violations).toEqual([])
+    const persistedRuns = await runs.listAuthenticatedRuns(workspace, auth)
+    expect(persistedRuns.map((run) => run.id)).toEqual([seeded.id])
+  })
+
+  it('leaves a completed verify run closed when the stop lands inside the turn-close reopen write', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { verify: { commands: ['pnpm check'] } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const step = (): Promise<unknown> =>
+      host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn: 1,
+          step: 1,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    const write = (callId: string): Promise<unknown> =>
+      host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId,
+          name: 'write',
+          arguments: { file_path: 'src/app.ts' },
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    const shell = (callId: string): Promise<unknown> =>
+      host.emit(
+        'tools/result',
+        { agent: host.agent, callId, name: 'pwsh', arguments: { command: 'pnpm check' } },
+        {
+          isError: false,
+          content: [{ type: 'text', text: 'ok' }],
+          value: {
+            kind: 'foreground',
+            cwd: workspace,
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            aborted: false,
+            timeoutMs: 120_000,
+            stdout: { text: '', truncated: false },
+            stderr: { text: '', truncated: false },
+          },
+        },
+      )
+    await step()
+    await write('write-1')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await shell('check-1')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let verifyId: string | undefined
+    await waitFor(async () => {
+      verifyId = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition.id === 'verify',
+      )?.id
+      return verifyId !== undefined
+    })
+    await waitFor(async () => {
+      const stored = await runs.readAuthenticatedRun(workspace, verifyId ?? '', auth)
+      return stored?.status === 'completed'
+    })
+    const runId = String(verifyId ?? '')
+    const before = await runs.readAuthenticatedRun(workspace, runId, auth)
+    expect(before?.status).toBe('completed')
+    // Let the first close's refresh and every asynchronous start settle, then
+    // write code again so the next close reopens this completed verification.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await write('write-2')
+    // The tool result queues its own observation record, which reads every run
+    // once its evaluation starts; wait for its journal row so only the next
+    // close's reads are counted below.
+    const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () =>
+      (await readFile(journalFile, 'utf8').catch(() => '')).includes('"callId":"write-2"'),
+    )
+    // The reopen's persistRun re-read is the third read of the completed run:
+    // the stop-attempt record's snapshot, the close's snapshot, then the write.
+    let runReads = 0
+    let pausedPath: string | undefined
+    let releaseRead: () => void = () => undefined
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    let paused = (): void => undefined
+    const pausedGate = new Promise<void>((resolve) => {
+      paused = resolve
+    })
+    runStoreFaults.pauseNextRead = readGate
+    runStoreFaults.onReadPaused = () => paused()
+    runStoreFaults.pauseReadFor = (path) => {
+      if (!path.endsWith(`/runs/${runId}.json`)) return false
+      runReads += 1
+      if (runReads !== 3) return false
+      pausedPath = path
+      return true
+    }
+    const controller = new AbortController()
+    const closing = host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    await pausedGate
+    expect(runReads).toBe(3)
+    expect(pausedPath).toContain('/.dsh/workflows/runs/')
+    // The stop lands after the reopen's persistRun entered the run lock and
+    // issued its read.
+    controller.abort()
+    releaseRead()
+    await closing
+    // Give a stray reopen write the chance to appear before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const persisted = await runs.readAuthenticatedRun(workspace, runId, auth)
+    expect(persisted?.status).toBe('completed')
+    expect(persisted?.updatedAt).toBe(before?.updatedAt)
+    expect(persisted?.steps).toEqual(before?.steps)
+    expect(persisted?.turnBlocks).toBeUndefined()
+    expect(persisted?.violations).toEqual([])
+    const persistedRuns = await runs.listAuthenticatedRuns(workspace, auth)
+    expect(persistedRuns.map((run) => run.id)).toEqual([runId])
+  })
+
   it('names a failed lane start in the whole-scope refusal and starts the lane on the next close', async () => {
     const workspace = await gitGateWorkspace(`# Tasks
 

@@ -271,6 +271,8 @@ export function writeRunSync(
 
 export interface WriteRunAsyncOptions {
   readonly rename?: typeof rename
+  /** Checked immediately before the run file is published. */
+  readonly cancelled?: () => boolean
 }
 
 export async function writeRun(

@@ -115,6 +115,8 @@ export interface WriteRunOptions {
 export declare function writeRunSync(workspace: string, run: WorkflowRun, auth: HostAuth, options?: WriteRunOptions): void;
 export interface WriteRunAsyncOptions {
     readonly rename?: typeof rename;
+    /** Checked immediately before the run file is published. */
+    readonly cancelled?: () => boolean;
 }
 export declare function writeRun(workspace: string, run: WorkflowRun, auth: HostAuth, options?: WriteRunAsyncOptions): Promise<void>;
 /**
