@@ -911,6 +911,16 @@ export function errorContractOf(evidence) {
     return { ...rest, verdict: 'ERROR' };
 }
 /**
+ * The step's record contract narrowed to PASS. A contract that also accepts
+ * ERROR must never complete a step from an ERROR: only a PASS does.
+ */
+export function passContractOf(evidence) {
+    if (evidence.kind !== 'record')
+        return undefined;
+    const { verdict: _verdict, verdicts: _verdicts, ...rest } = evidence;
+    return { ...rest, verdict: 'PASS' };
+}
+/**
  * The failed review steps whose current record is a contract-matching ERROR.
  * Only those failures are provisional turn-close evidence: a recordless failure
  * (unreadable artifacts, an unpublished ERROR) or a record that no longer
@@ -948,7 +958,11 @@ async function settleFromRecord(input, record, recordPath, now) {
         persisted.runId === input.run.id &&
         persisted.verdict === record.verdict &&
         persisted.digest === record.digest;
-    const bound = check.ok &&
+    const bound = 
+    // Only a PASS completes a review step: a contract that also accepts ERROR
+    // must not let an ERROR record settle it as done.
+    record.verdict === 'PASS' &&
+        check.ok &&
         check.evidence.path === recordPath &&
         check.evidence.digest === record.digest &&
         samePublication;
@@ -960,9 +974,7 @@ async function settleFromRecord(input, record, recordPath, now) {
     // allowed with the failure visible, approval and completion stay unavailable,
     // and the next advance retries the review. FINDINGS and a stale or foreign
     // record stay blocked.
-    const errorContract = !check.ok && samePublication && record.verdict === 'ERROR'
-        ? errorContractOf(declared)
-        : undefined;
+    const errorContract = record.verdict === 'ERROR' && samePublication ? errorContractOf(declared) : undefined;
     const provisional = errorContract === undefined ? undefined : await verifyEvidence(errorContract, input.context);
     if (provisional?.ok === true) {
         const detail = record.error ?? (check.ok ? '' : check.failure.detail);

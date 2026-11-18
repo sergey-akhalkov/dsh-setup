@@ -19,7 +19,7 @@ import {
 import { runDeferredStep } from './gates.js'
 import type { HostAuth } from './host-auth.js'
 import { issueCompletionReceipt } from './receipts.js'
-import { errorContractOf } from './review.js'
+import { errorContractOf, passContractOf } from './review.js'
 import {
   MAX_TOOL_STEP_ATTEMPTS,
   setRunStatus,
@@ -448,7 +448,9 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
       const stepContext: EvidenceContext = { ...input.evidenceContext }
       // A matching current PASS or ERROR record settles the step without
       // starting a second review.
-      const existing = await verifyEvidence(step.evidence ?? { kind: 'declaration' }, stepContext)
+      const declared = step.evidence ?? { kind: 'declaration' }
+      const passContract = passContractOf(declared) ?? declared
+      const existing = await verifyEvidence(passContract, stepContext)
       if (existing.ok) {
         run = settleStep(run, step.id, 'done', { at, evidence: existing.evidence })
         continue

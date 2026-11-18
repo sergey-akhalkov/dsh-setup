@@ -696,6 +696,39 @@ describe('native review host admission', () => {
     expect(await readReceipt(workspace, 'auth', auth)).toMatchObject({ kind: 'adoption' })
   })
 
+  it('does not complete a shipped review step from an ERROR record', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const digest = await currentSpecDigest(workspace, 'auth')
+    if (digest === undefined) throw new Error('the change digest is missing')
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(recordDir, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'ERROR', digest: reviewDigest({ scope: 'whole', specDigest: digest }), findings: [], failureClass: 'timeout', error: 'the reviewer timed out', time: '2026-11-17T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    const host = delayedReviewHost(workspace, 'PASS')
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    const run = createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 1_000,
+    })
+    await writeRun(workspace, run, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const settled = await readAuthenticatedRun(workspace, run.id, auth)
+    // The contract accepts ERROR, but only a PASS may complete the step: the
+    // ERROR stays a retryable failure instead of approving the change.
+    expect(settled?.steps[0]?.state).toBe('failed')
+    expect(settled?.steps[0]?.reason).toContain('ERROR')
+  })
+
   it.each(['FINDINGS', 'PASS'] as const)(
     'keeps a nonCritical review required past the old soft budget and publishes the late %s verdict',
     async (verdict) => {

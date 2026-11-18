@@ -427,7 +427,8 @@ describe('runReviewStep', () => {
     roots.push(root)
     const result = await invoke(root, runnerFor('Prose only; no fenced block.'))
     expect(result.error).toContain('fenced JSON verdict')
-    expect(result.run.steps[0]?.state).toBe('done')
+    // Only a PASS completes the step; this ERROR stays a retryable failure.
+    expect(result.run.steps[0]?.state).toBe('failed')
     const record = JSON.parse(
       await readFile(
         join(
@@ -452,7 +453,8 @@ describe('runReviewStep', () => {
     const text = fenced({ digest: 'b'.repeat(64), verdict: 'PASS', findings: [] })
     const result = await invoke(root, runnerFor(text))
     expect(result.error).toContain('digest does not match')
-    expect(result.run.steps[0]?.state).toBe('done')
+    // Only a PASS completes the step; this ERROR stays a retryable failure.
+    expect(result.run.steps[0]?.state).toBe('failed')
   })
 
   it('writes an ERROR when the provider cannot start', async () => {
@@ -465,7 +467,8 @@ describe('runReviewStep', () => {
       }),
     )
     expect(result.error).toContain('not registered')
-    expect(result.run.steps[0]?.state).toBe('done')
+    // Only a PASS completes the step; this ERROR stays a retryable failure.
+    expect(result.run.steps[0]?.state).toBe('failed')
     const record = JSON.parse(
       await readFile(
         join(
@@ -494,7 +497,8 @@ describe('runReviewStep', () => {
       { timeoutMs: 10 },
     )
     expect(result.error).toContain('timed out')
-    expect(result.run.steps[0]?.state).toBe('done')
+    // Only a PASS completes the step; this ERROR stays a retryable failure.
+    expect(result.run.steps[0]?.state).toBe('failed')
     const record = JSON.parse(
       await readFile(
         join(
@@ -554,7 +558,8 @@ describe('runReviewStep', () => {
       writePortable: async () => ({ ok: false, error: 'disk full' }),
     })
     expect(result.error).toContain('disk full')
-    expect(result.run.steps[0]?.state).toBe('done')
+    // Only a PASS completes the step; this ERROR stays a retryable failure.
+    expect(result.run.steps[0]?.state).toBe('failed')
     const local = JSON.parse(
       await readFile(
         join(

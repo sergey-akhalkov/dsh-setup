@@ -1996,7 +1996,8 @@ describe('task-review runtime from a tasks.md change', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(host.toolExecutions.filter((entry) => entry.name === 'delegate').length).toBe(0)
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
-    expect(settled?.steps.find((entry) => entry.id === 'review')?.state).toBe('done')
+    // An ERROR never completes the review step: it stays a retryable failure.
+    expect(settled?.steps.find((entry) => entry.id === 'review')?.state).toBe('failed')
     // The missing reviewer is an ERROR record, recorded at the native store and
     // never a PASS; the run then waits on the portable coverage step.
     const record = JSON.parse(
@@ -2127,7 +2128,8 @@ describe('task-review runtime from a tasks.md change', () => {
           ?.status === 'cancelled',
     )
     const runA = (await reviewRuns()).find((entry) => entry.context.taskId === taskIdOf('A'))
-    expect(runA?.status).toBe('completed')
+    // Its ERROR record leaves the step failed and retryable, not completed.
+    expect(runA?.status).toBe('running')
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 A\n- [x] 1.2 B\n', 'utf8')
     host.fireFs()
     // The cleared key and baseline start a fresh run for the restored task.
@@ -8175,6 +8177,20 @@ async function gitGateWorkspace(plan = GATE_PLAN): Promise<string> {
   return directory
 }
 
+/** A current whole-spec PASS record for the `auth` fixture change. */
+async function seedSpecPass(workspace: string): Promise<void> {
+  const { currentSpecDigest, reviewDigest } = await import('../src/host/evidence.ts')
+  const specDigest = await currentSpecDigest(workspace, 'auth')
+  if (specDigest === undefined) return
+  const dir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, 'spec.json'),
+    `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest: reviewDigest({ scope: 'whole', specDigest }), findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+    'utf8',
+  )
+}
+
 async function engineGateHost(
   workspace: string,
   options: Parameters<typeof fakeHost>[1] = {},
@@ -8184,6 +8200,10 @@ async function engineGateHost(
   const host = fakeHost(workspace, options)
   apply(host.ctx as never, config)
   await new Promise((resolve) => setTimeout(resolve, 100))
+  // A current whole-spec PASS keeps the spec-review trigger out of these gate
+  // fixtures: a reviewer-less host would settle it as a config ERROR and the
+  // failed review step would refuse the close before the lane gate steers.
+  await seedSpecPass(workspace)
   await host.emit(
     'agent/pre-step',
     {
@@ -8572,6 +8592,7 @@ describe('engine-owned gates', () => {
       GATE_PLAN.replace('1. Engine', '1. Runtime').replace('1.1 Engine task', '1.1 Runtime task'),
       'utf8',
     )
+    await seedSpecPass(workspace)
     await gateWrite(host, 'src/app.ts')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const text = steered(host)
@@ -8611,6 +8632,7 @@ describe('engine-owned gates', () => {
       ].join('\n'),
       'utf8',
     )
+    await seedSpecPass(workspace)
     await gateWrite(host, 'src/app.ts')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const text = steered(host)
