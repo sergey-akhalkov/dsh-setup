@@ -245,7 +245,14 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
                     continue;
                 }
             }
-            await discardSnapshotByName(cwd, name, await readSnapshotLeaseKey(snapshotLeasePath(cwd, name)), runGit);
+            await withPathLock(snapshotChains, snapshotKey(cwd, name), async () => {
+                // The staleness decision above was made before the path lock: a rebuild
+                // that installed a fresh lease meanwhile owns the checkout now.
+                const fresh = await readSnapshotLease(snapshotLeasePath(cwd, name));
+                if (fresh !== undefined && fresh > now)
+                    return;
+                await discardSnapshotUnlocked(cwd, name, await readSnapshotLeaseKey(snapshotLeasePath(cwd, name)), runGit);
+            });
             continue;
         }
         if (entry.name.endsWith('.tmp') && entry.name.includes('.lease.')) {
