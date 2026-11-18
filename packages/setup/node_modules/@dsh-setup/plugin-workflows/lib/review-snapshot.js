@@ -154,12 +154,23 @@ async function readSnapshotLease(path) {
         return undefined;
     }
 }
-async function writeSnapshotLease(cwd, name, key) {
+async function writeSnapshotLease(cwd, name, key, owner) {
     await writeJsonAtomic(snapshotLeasePath(cwd, name), {
         runId: name,
         ...(key === undefined ? {} : { key }),
+        ...(owner === undefined ? {} : { owner }),
         expiresAt: Date.now() + SNAPSHOT_LEASE_MS,
     });
+}
+/** The run that prepared the checkout; a lease without one has no known owner. */
+async function readSnapshotLeaseOwner(path) {
+    try {
+        const value = JSON.parse(await readFile(path, 'utf8'));
+        return typeof value.owner === 'string' ? value.owner : undefined;
+    }
+    catch {
+        return undefined;
+    }
 }
 /** The unit key a lease belongs to; a lease without one owns no thread entry. */
 async function readSnapshotLeaseKey(path) {
@@ -171,16 +182,16 @@ async function readSnapshotLeaseKey(path) {
         return undefined;
     }
 }
-export async function startSnapshotLease(cwd, key, refreshMs = SNAPSHOT_REFRESH_MS) {
-    await startSnapshotLeaseByName(cwd, reviewSnapshotName(key), key, refreshMs);
+export async function startSnapshotLease(cwd, key, refreshMs = SNAPSHOT_REFRESH_MS, owner) {
+    await startSnapshotLeaseByName(cwd, reviewSnapshotName(key), key, refreshMs, owner);
 }
-async function startSnapshotLeaseByName(cwd, name, key, refreshMs = SNAPSHOT_REFRESH_MS) {
-    const state = { stopped: false, writes: writeSnapshotLease(cwd, name, key) };
+async function startSnapshotLeaseByName(cwd, name, key, refreshMs = SNAPSHOT_REFRESH_MS, owner) {
+    const state = { stopped: false, writes: writeSnapshotLease(cwd, name, key, owner) };
     const timer = setInterval(() => {
         if (state.stopped)
             return;
         state.writes = state.writes
-            .then(() => writeSnapshotLease(cwd, name, key))
+            .then(() => writeSnapshotLease(cwd, name, key, owner))
             .catch(() => undefined);
     }, refreshMs);
     timer.unref();
@@ -291,10 +302,17 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
     }
 }
 /** Remove one unit's snapshot checkout, its lease, and its scratch index; best effort. */
-export async function discardReviewSnapshot(cwd, key, runGit, remove) {
-    await discardSnapshotByName(cwd, reviewSnapshotName(key), key, runGit, remove);
+export async function discardReviewSnapshot(cwd, key, runGit, remove, owner) {
+    await discardSnapshotByName(cwd, reviewSnapshotName(key), key, runGit, remove, owner);
 }
-async function discardSnapshotByName(cwd, name, unitKey, runGit, remove = (path) => rm(path, { recursive: true, force: true })) {
+async function discardSnapshotByName(cwd, name, unitKey, runGit, remove = (path) => rm(path, { recursive: true, force: true }), owner) {
+    if (owner !== undefined) {
+        const leaseOwner = await readSnapshotLeaseOwner(snapshotLeasePath(cwd, name));
+        // A different owner means a successor already prepared this stable path; the
+        // predecessor's delayed cleanup must never delete that checkout.
+        if (leaseOwner !== undefined && leaseOwner !== owner)
+            return;
+    }
     await stopSnapshotLeaseByName(cwd, name);
     const worktree = resolve(cwd, SNAPSHOT_DIR, name);
     await preserveReviewThreads(cwd, worktree, unitKey).catch(() => undefined);
@@ -367,7 +385,7 @@ export async function specInputs(changeDir) {
  * when it cannot be built safely; the caller reviews the live worktree with the
  * mutation guard instead and gets the cause through `onUnavailable`.
  */
-export async function createReviewSnapshot(cwd, change, key, runGit, signal, afterCopy, onUnavailable) {
+export async function createReviewSnapshot(cwd, change, key, runGit, signal, afterCopy, onUnavailable, owner) {
     await sweepReviewSnapshots(cwd, runGit);
     const name = reviewSnapshotName(key);
     const root = await repositoryRoot(cwd, runGit, signal);
@@ -443,7 +461,7 @@ export async function createReviewSnapshot(cwd, change, key, runGit, signal, aft
         ], root, signal))
             .toString('utf8')
             .trim();
-        await startSnapshotLeaseByName(cwd, name, key);
+        await startSnapshotLeaseByName(cwd, name, key, undefined, owner);
         await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal);
         await restoreReviewThreads(cwd, worktree);
         const frozenChange = resolve(worktree, relChange);

@@ -210,12 +210,28 @@ async function readSnapshotLease(path: string): Promise<number | undefined> {
   }
 }
 
-async function writeSnapshotLease(cwd: string, name: string, key?: string): Promise<void> {
+async function writeSnapshotLease(
+  cwd: string,
+  name: string,
+  key?: string,
+  owner?: string,
+): Promise<void> {
   await writeJsonAtomic(snapshotLeasePath(cwd, name), {
     runId: name,
     ...(key === undefined ? {} : { key }),
+    ...(owner === undefined ? {} : { owner }),
     expiresAt: Date.now() + SNAPSHOT_LEASE_MS,
   })
+}
+
+/** The run that prepared the checkout; a lease without one has no known owner. */
+async function readSnapshotLeaseOwner(path: string): Promise<string | undefined> {
+  try {
+    const value = JSON.parse(await readFile(path, 'utf8')) as { owner?: unknown }
+    return typeof value.owner === 'string' ? value.owner : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** The unit key a lease belongs to; a lease without one owns no thread entry. */
@@ -232,8 +248,9 @@ export async function startSnapshotLease(
   cwd: string,
   key: string,
   refreshMs = SNAPSHOT_REFRESH_MS,
+  owner?: string,
 ): Promise<void> {
-  await startSnapshotLeaseByName(cwd, reviewSnapshotName(key), key, refreshMs)
+  await startSnapshotLeaseByName(cwd, reviewSnapshotName(key), key, refreshMs, owner)
 }
 
 async function startSnapshotLeaseByName(
@@ -241,12 +258,13 @@ async function startSnapshotLeaseByName(
   name: string,
   key: string,
   refreshMs = SNAPSHOT_REFRESH_MS,
+  owner?: string,
 ): Promise<void> {
-  const state: SnapshotLease = { stopped: false, writes: writeSnapshotLease(cwd, name, key) }
+  const state: SnapshotLease = { stopped: false, writes: writeSnapshotLease(cwd, name, key, owner) }
   const timer = setInterval(() => {
     if (state.stopped) return
     state.writes = state.writes
-      .then(() => writeSnapshotLease(cwd, name, key))
+      .then(() => writeSnapshotLease(cwd, name, key, owner))
       .catch(() => undefined)
   }, refreshMs)
   timer.unref()
@@ -357,8 +375,9 @@ export async function discardReviewSnapshot(
   key: string,
   runGit: GitRunner,
   remove?: (path: string) => Promise<void>,
+  owner?: string,
 ): Promise<void> {
-  await discardSnapshotByName(cwd, reviewSnapshotName(key), key, runGit, remove)
+  await discardSnapshotByName(cwd, reviewSnapshotName(key), key, runGit, remove, owner)
 }
 
 async function discardSnapshotByName(
@@ -367,7 +386,14 @@ async function discardSnapshotByName(
   unitKey: string | undefined,
   runGit: GitRunner,
   remove: (path: string) => Promise<void> = (path) => rm(path, { recursive: true, force: true }),
+  owner?: string,
 ): Promise<void> {
+  if (owner !== undefined) {
+    const leaseOwner = await readSnapshotLeaseOwner(snapshotLeasePath(cwd, name))
+    // A different owner means a successor already prepared this stable path; the
+    // predecessor's delayed cleanup must never delete that checkout.
+    if (leaseOwner !== undefined && leaseOwner !== owner) return
+  }
   await stopSnapshotLeaseByName(cwd, name)
   const worktree = resolve(cwd, SNAPSHOT_DIR, name)
   await preserveReviewThreads(cwd, worktree, unitKey).catch(() => undefined)
@@ -470,6 +496,7 @@ export async function createReviewSnapshot(
   signal: AbortSignal,
   afterCopy?: () => Promise<void> | void,
   onUnavailable?: (reason: string) => void,
+  owner?: string,
 ): Promise<ReviewSnapshot | undefined> {
   await sweepReviewSnapshots(cwd, runGit)
   const name = reviewSnapshotName(key)
@@ -553,7 +580,7 @@ export async function createReviewSnapshot(
     )
       .toString('utf8')
       .trim()
-    await startSnapshotLeaseByName(cwd, name, key)
+    await startSnapshotLeaseByName(cwd, name, key, undefined, owner)
     await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal)
     await restoreReviewThreads(cwd, worktree)
     const frozenChange = resolve(worktree, relChange)

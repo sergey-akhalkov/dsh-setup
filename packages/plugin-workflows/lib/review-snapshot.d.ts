@@ -27,12 +27,12 @@ export interface ReviewSnapshot {
  * a snapshot an interrupted upgrade left behind stays discardable.
  */
 export declare function reviewSnapshotName(key: string): string;
-export declare function startSnapshotLease(cwd: string, key: string, refreshMs?: number): Promise<void>;
+export declare function startSnapshotLease(cwd: string, key: string, refreshMs?: number, owner?: string): Promise<void>;
 export declare function stopSnapshotLease(cwd: string, key: string): Promise<void>;
 /** Remove snapshots no live run owns; ownership is the lease, never age. */
 export declare function sweepReviewSnapshots(cwd: string, runGit: GitRunner, now?: number): Promise<void>;
 /** Remove one unit's snapshot checkout, its lease, and its scratch index; best effort. */
-export declare function discardReviewSnapshot(cwd: string, key: string, runGit: GitRunner, remove?: (path: string) => Promise<void>): Promise<void>;
+export declare function discardReviewSnapshot(cwd: string, key: string, runGit: GitRunner, remove?: (path: string) => Promise<void>, owner?: string): Promise<void>;
 /**
  * The current content tree of the reviewed input set. A whole-worktree review
  * record binds this, and the evidence check recomputes it for the live tree, so
@@ -52,7 +52,7 @@ export declare function specInputs(changeDir: string): Promise<InputSignature>;
  */
 export declare function createReviewSnapshot(cwd: string, change: {
     readonly dir: string;
-}, key: string, runGit: GitRunner, signal: AbortSignal, afterCopy?: () => Promise<void> | void, onUnavailable?: (reason: string) => void): Promise<ReviewSnapshot | undefined>;
+}, key: string, runGit: GitRunner, signal: AbortSignal, afterCopy?: () => Promise<void> | void, onUnavailable?: (reason: string) => void, owner?: string): Promise<ReviewSnapshot | undefined>;
 /**
  * The reviewed input set of a review: every file the reviewer can read, with a
  * stat signature that survives an edit-read-restore (content digests do not).

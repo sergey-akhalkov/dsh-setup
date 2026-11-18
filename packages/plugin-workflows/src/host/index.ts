@@ -3172,8 +3172,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         forgetSettledTriggerKey(seen, settledRun)
         return persisted
       },
-      discardSnapshot: (targetWorkspace, key) =>
-        discardReviewSnapshot(targetWorkspace, key, defaultGit),
+      discardSnapshot: (targetWorkspace, key, owner) =>
+        // A successor that already prepared this stable path owns the checkout;
+        // the predecessor's delayed cleanup leaves it alone (lease guard).
+        discardReviewSnapshot(targetWorkspace, key, defaultGit, undefined, owner),
       persistReviewAttempts: async (targetWorkspace, runId, stepId, attempts, failureClass) => {
         const auth = storedAuth
         if (auth === undefined) return
@@ -3598,6 +3600,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 unitKey,
                 defaultGit,
                 AbortSignal.timeout(reviewTimeoutMs),
+                undefined,
+                undefined,
+                reviewRun.id,
               ).catch(() => undefined)
               if (snapshot !== undefined) {
                 // The record binds the frozen content tree, so a write between the
@@ -3665,6 +3670,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               unitKey,
               defaultGit,
               AbortSignal.timeout(reviewTimeoutMs),
+              undefined,
+              undefined,
+              reviewRun.id,
             ).catch(() => undefined)
             const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
             // Re-resolve the section from the live plan: the submitted covered set

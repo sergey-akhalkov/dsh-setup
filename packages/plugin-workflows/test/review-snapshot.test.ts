@@ -449,6 +449,46 @@ describe('snapshot lifecycle', () => {
     expect(reviewSnapshotName('review:change-a:section:2')).not.toBe(name)
   })
 
+  it('never deletes a checkout a newer owner prepared', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    await writeFile(join(dir, 'a.txt'), 'a\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    const signal = new AbortController().signal
+    const key = 'review:change-a:task:t1'
+    const first = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      key,
+      defaultGit,
+      signal,
+      undefined,
+      undefined,
+      'run-owner-1',
+    )
+    if (first === undefined) throw new Error('expected a snapshot')
+    // A successor rebuilds the same stable path and owns the fresh lease.
+    const second = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      key,
+      defaultGit,
+      signal,
+      undefined,
+      undefined,
+      'run-owner-2',
+    )
+    if (second === undefined) throw new Error('expected the rebuilt snapshot')
+    // The predecessor's delayed cleanup must not delete the successor's
+    // checkout: its lease names a different owner.
+    await discardReviewSnapshot(dir, key, defaultGit, undefined, 'run-owner-1')
+    expect(await readFile(join(second.worktree, 'a.txt'), 'utf8')).toBe('a\n')
+    await discardReviewSnapshot(dir, key, defaultGit, undefined, 'run-owner-2')
+    await expect(readFile(join(second.worktree, 'a.txt'))).rejects.toThrow()
+  })
+
   it('keeps both lanes when two unit cleanups settle at once and never overwrites a newer thread', async () => {
     const dir = await repository()
     await writeFile(join(dir, '.gitignore'), '.dsh/\n')

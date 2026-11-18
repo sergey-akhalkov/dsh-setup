@@ -95,7 +95,8 @@ interface ScheduledEntry extends QueueRun {
 /** The host-owned operations the scheduler cannot perform alone. */
 export interface ReviewSchedulerHost {
   persistRun: (workspace: string, run: WorkflowRun) => Promise<WorkflowRun>
-  discardSnapshot: (workspace: string, key: string) => Promise<void>
+  /** Remove one unit checkout; a different owner in its lease is left alone. */
+  discardSnapshot: (workspace: string, key: string, owner?: string) => Promise<void>
   /** Persist the bounded attempt facts on the stored review step of a run. */
   persistReviewAttempts?: (
     workspace: string,
@@ -449,7 +450,7 @@ export class ReviewScheduler {
           // must not prepare the stable unit path while this cleanup can still
           // delete it.
           void this.host
-            .discardSnapshot(entry.workspace, entry.snapshotKey)
+            .discardSnapshot(entry.workspace, entry.snapshotKey, entry.run.id)
             .catch(() => undefined)
             .finally(() => {
               this.forgetLive(entry.run.id)
@@ -536,7 +537,9 @@ export class ReviewScheduler {
     const outcome = await entry.reprepare(entry.reprepared)
     if (this.disposed || !this.queue.owns(entry.file.id)) {
       // A replacement snapshot may have been built after disposal; release it.
-      await this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined)
+      await this.host
+        .discardSnapshot(entry.workspace, entry.snapshotKey, entry.run.id)
+        .catch(() => undefined)
       return
     }
     if (outcome.kind === 'unchanged') return
@@ -786,7 +789,7 @@ export class ReviewScheduler {
         await this.waitForTeardown(entry)
         // Discard the predecessor's checkout before releasing its live slot: a
         // successor that prepared in between would otherwise lose its snapshot.
-        await this.host.discardSnapshot(entry.workspace, entry.snapshotKey)
+        await this.host.discardSnapshot(entry.workspace, entry.snapshotKey, entry.run.id)
         this.forgetLive(entry.run.id)
         this.admitted.delete(entry.run.id)
       },
@@ -865,7 +868,9 @@ export class ReviewScheduler {
     for (const entry of admitted) {
       if (!entry.started) {
         // No child ever read this checkout: release it and its lease now.
-        void this.host.discardSnapshot(entry.workspace, entry.snapshotKey).catch(() => undefined)
+        void this.host
+          .discardSnapshot(entry.workspace, entry.snapshotKey, entry.run.id)
+          .catch(() => undefined)
         continue
       }
       // A live reviewer may still be reading its checkout; keep the lease
@@ -904,7 +909,7 @@ export class ReviewScheduler {
   ): void {
     const incumbent = this.admitted.get(incumbentRunId)
     if (incumbent !== undefined && incumbent.snapshotKey === snapshotKey) return
-    void this.host.discardSnapshot(workspace, snapshotKey).catch(() => undefined)
+    void this.host.discardSnapshot(workspace, snapshotKey, incumbentRunId).catch(() => undefined)
   }
 
   async enqueue(input: ScheduledReview): Promise<ReviewAdmission> {

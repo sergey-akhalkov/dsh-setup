@@ -44,7 +44,8 @@ export interface ScheduledReview {
 /** The host-owned operations the scheduler cannot perform alone. */
 export interface ReviewSchedulerHost {
     persistRun: (workspace: string, run: WorkflowRun) => Promise<WorkflowRun>;
-    discardSnapshot: (workspace: string, key: string) => Promise<void>;
+    /** Remove one unit checkout; a different owner in its lease is left alone. */
+    discardSnapshot: (workspace: string, key: string, owner?: string) => Promise<void>;
     /** Persist the bounded attempt facts on the stored review step of a run. */
     persistReviewAttempts?: (workspace: string, runId: string, stepId: string, attempts: number, failureClass?: FailureClass) => Promise<void>;
     onSettled?: (status: {

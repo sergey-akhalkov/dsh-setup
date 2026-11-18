@@ -2603,7 +2603,10 @@ export function apply(ctx, config = {}) {
             forgetSettledTriggerKey(seen, settledRun);
             return persisted;
         },
-        discardSnapshot: (targetWorkspace, key) => discardReviewSnapshot(targetWorkspace, key, defaultGit),
+        discardSnapshot: (targetWorkspace, key, owner) => 
+        // A successor that already prepared this stable path owns the checkout;
+        // the predecessor's delayed cleanup leaves it alone (lease guard).
+        discardReviewSnapshot(targetWorkspace, key, defaultGit, undefined, owner),
         persistReviewAttempts: async (targetWorkspace, runId, stepId, attempts, failureClass) => {
             const auth = storedAuth;
             if (auth === undefined)
@@ -2982,7 +2985,7 @@ export function apply(ctx, config = {}) {
                                 specDigest,
                                 ...(liveTree === undefined ? {} : { tree: liveTree }),
                             });
-                            const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined);
+                            const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs), undefined, undefined, reviewRun.id).catch(() => undefined);
                             if (snapshot !== undefined) {
                                 // The record binds the frozen content tree, so a write between the
                                 // live hash and the snapshot cannot leave a PASS for code the
@@ -3041,7 +3044,7 @@ export function apply(ctx, config = {}) {
                         }
                         // The snapshot freezes the reviewed tree; when it cannot be built,
                         // the live worktree is reviewed under the mutation guard.
-                        const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined);
+                        const snapshot = await createReviewSnapshot(workspace, { dir: changeDir }, unitKey, defaultGit, AbortSignal.timeout(reviewTimeoutMs), undefined, undefined, reviewRun.id).catch(() => undefined);
                         const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
                         // Re-resolve the section from the live plan: the submitted covered set
                         // never widens, and a changed checkbox needs a fresh review.
