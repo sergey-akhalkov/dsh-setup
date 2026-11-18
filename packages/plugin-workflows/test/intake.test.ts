@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildConditionContext } from '../src/host/condition.ts'
-import { type Definition, validateDefinition } from '../src/host/definitions.ts'
+import {
+  type Definition,
+  loadShippedDefinitions,
+  validateDefinition,
+} from '../src/host/definitions.ts'
 import {
   DRAFTS_ROOT,
   draftDirectory,
@@ -154,6 +158,13 @@ describe('intake drafts', () => {
 describe('change-intake engine', () => {
   function intakeDefinition(): Definition {
     return contributedIntake()
+  }
+
+  /** One engine-shipped definition, validated exactly as the registry loads it. */
+  function shipped(id: string): Definition {
+    const definition = loadShippedDefinitions().find((entry) => entry.id === id)
+    if (definition === undefined) throw new Error(`the ${id} definition is not shipped`)
+    return definition
   }
 
   function newRun(definition: Definition, workspace: string): WorkflowRun {
@@ -386,7 +397,7 @@ describe('change-intake engine', () => {
     })
   })
 
-  it('keeps an ERROR review provisional through an approval answer and re-arms it on the retry', async () => {
+  it('reopens a done whole-spec step from its ERROR and starts the review on the retry', async () => {
     const workspace = await tempWorkspace()
     const definition = intakeDefinition()
     await writeChangeArtifacts(workspace)
@@ -416,17 +427,12 @@ describe('change-intake engine', () => {
       questions: { ask: async () => ({ answer: 'yes' }) },
     })
     // The affirmative answer cannot carry the run past a non-PASS review: the
-    // current ERROR is consumed provisionally, never completed or approved.
+    // current ERROR reopens the step and never completes or approves it.
     expect(answered.completed).toBe(false)
     expect(answered.run.steps.find((step) => step.id === 'approval')?.state).toBe('done')
     const reopened = answered.run.steps.find((step) => step.id === 'spec-review')
-    expect(reopened?.state).toBe('failed')
-    expect(reopened?.reason).toContain('ERROR')
-    expect(reopened?.reason).toContain('retries the review')
-    expect(reopened?.evidence).toMatchObject({
-      path: '.dsh/workflows/records/spec-review/auth/spec.json',
-      digest,
-    })
+    expect(reopened?.state).toBe('open')
+    expect(reopened?.evidence).toBeUndefined()
     expect(answered.waiting?.stepId).toBe('spec-review')
 
     // The retry starts the review again and only its current PASS completes.
@@ -458,19 +464,19 @@ describe('change-intake engine', () => {
     expect(retried.run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
   })
 
-  it('consumes a shared whole-spec ERROR provisionally and completes on the later PASS', async () => {
+  it('starts a new round from a shared whole-spec ERROR and completes on the later PASS', async () => {
     const workspace = await tempWorkspace()
     const definition = intakeDefinition()
     await writeChangeArtifacts(workspace)
     // The built-in `spec-review` definition wrote this ERROR for the same shared
     // whole-spec identity the intake step reads.
-    const digest = await writeSpecReviewRecord(workspace, 'ERROR')
+    await writeSpecReviewRecord(workspace, 'ERROR')
     let run = newRun(definition, workspace)
     for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
       run = settleStep(run, step, 'done', { at: 1_500 })
     }
     let reviewStarts = 0
-    // The existing ERROR is consumed, not replaced by a second review.
+    // The existing ERROR is not reused: the intake starts its own review round.
     const first = await advanceIntake({
       run,
       definition,
@@ -486,16 +492,11 @@ describe('change-intake engine', () => {
         return undefined
       },
     })
-    expect(reviewStarts).toBe(0)
+    expect(reviewStarts).toBe(1)
     expect(first.completed).toBe(false)
-    const provisional = first.run.steps.find((step) => step.id === 'spec-review')
-    expect(provisional?.state).toBe('failed')
-    expect(provisional?.reason).toContain('ERROR')
-    expect(provisional?.reason).toContain('retries the review')
-    expect(provisional?.evidence).toMatchObject({
-      path: '.dsh/workflows/records/spec-review/auth/spec.json',
-      digest,
-    })
+    const pending = first.run.steps.find((step) => step.id === 'spec-review')
+    expect(pending?.state).toBe('open')
+    expect(pending?.evidence).toBeUndefined()
     // No approval was requested and completion stays unavailable.
     expect(first.run.steps.find((step) => step.id === 'approval')?.state).toBe('open')
     const steered: string[] = []
@@ -511,13 +512,14 @@ describe('change-intake engine', () => {
       enabledLegacy: new Set(),
       provisionalReviews: await provisionalReviewSteps(first.run, definition, closeContext),
     })
-    // An ERROR is not coverage: the owned review step refuses the close until
-    // the next round is live, with no refusal budget release and no VIOLATION.
+    // An ERROR is not coverage: until the started round is live the owned
+    // review step refuses the close, with no refusal budget release and no
+    // VIOLATION.
     expect(close.kind).toBe('refuse')
     expect(close.run.violations).toHaveLength(0)
     expect(steered).toHaveLength(1)
     expect(steered[0]).toContain('spec-review')
-    // While the retried review is live the close is the silent waiting close.
+    // While the started review is live the close is the silent waiting close.
     const waiting = evaluateTurnClose({
       run: first.run,
       definition,
@@ -533,8 +535,8 @@ describe('change-intake engine', () => {
     expect(waiting.kind).toBe('allow')
     expect(steered).toHaveLength(1)
 
-    // A stale ERROR record is not provisional evidence: the step's own current
-    // record is the only failure the close may allow through.
+    // A stale ERROR record is not evidence either: with the step open and no
+    // live review the close is still refused.
     await writeFile(
       join(workspace, '.dsh/workflows/records/spec-review/auth/spec.json'),
       `${JSON.stringify({
@@ -568,7 +570,7 @@ describe('change-intake engine', () => {
     expect(staleSteers[0]).toContain('spec-review')
 
     // The shared built-in review later publishes a current PASS; the next close
-    // completes the intake from it without dispatching or re-running a review.
+    // completes the intake from it without starting a second review.
     const passDigest = await writeSpecReviewRecord(workspace)
     const retried = await advanceIntake({
       run: first.run,
@@ -585,7 +587,7 @@ describe('change-intake engine', () => {
         return undefined
       },
     })
-    expect(reviewStarts).toBe(0)
+    expect(reviewStarts).toBe(1)
     expect(retried.completed).toBe(true)
     const done = retried.run.steps.find((step) => step.id === 'spec-review')
     expect(done?.state).toBe('done')
@@ -594,6 +596,101 @@ describe('change-intake engine', () => {
       digest: passDigest,
     })
     expect(retried.run.steps.find((step) => step.id === 'approval')?.state).toBe('done')
+  })
+
+  it('starts a new round instead of settling a whole-scope step from a predecessor ERROR', async () => {
+    const workspace = await tempWorkspace()
+    await writeChangeArtifacts(workspace)
+    const definition = shipped('spec-review')
+    // A predecessor's current ERROR matches the shipped step's declared
+    // PASS|ERROR contract, but only a PASS may settle a new run's step.
+    await writeSpecReviewRecord(workspace, 'ERROR')
+    const run = createRun({
+      definition: definition.id,
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: definition.steps.map((step) => step.id),
+      now: 1_000,
+    })
+    let reviewStarts = 0
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth' },
+      evidenceContext: { workspace, values: { name: 'auth' } },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(),
+      now: 2_000,
+      reviewStep: async () => {
+        reviewStarts += 1
+        return undefined
+      },
+    })
+    expect(reviewStarts).toBe(1)
+    expect(result.completed).toBe(false)
+    const review = result.run.steps.find((step) => step.id === 'review')
+    expect(review?.state).not.toBe('done')
+  })
+
+  it('keeps the declared ERROR settlement for a task-scope review step', async () => {
+    const workspace = await tempWorkspace()
+    await writeChangeArtifacts(workspace)
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'tasks.md'),
+      '- [x] 1.1 Task\n',
+      'utf8',
+    )
+    const definition = shipped('task-review')
+    const taskId = taskIdOf('Task')
+    const recordDirectory = '.dsh/workflows/records/task-review/auth/tasks'
+    await mkdir(join(workspace, recordDirectory), { recursive: true })
+    await writeFile(
+      join(workspace, recordDirectory, `${taskId}.json`),
+      `${JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        digest: 'a'.repeat(64),
+        verdict: 'ERROR',
+        findings: [],
+        time: '2026-11-08T00:00:00.000Z',
+        target: { provider: 'codex-subagent' },
+      })}\n`,
+      'utf8',
+    )
+    const run = createRun({
+      definition: definition.id,
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', taskId },
+      steps: definition.steps.map((step) => step.id),
+      now: 1_000,
+    })
+    let reviewStarts = 0
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth', taskId },
+      evidenceContext: { workspace, values: { name: 'auth', taskId } },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(),
+      now: 2_000,
+      reviewStep: async () => {
+        reviewStarts += 1
+        return undefined
+      },
+    })
+    // The declared PASS|ERROR contract settles the attempt without a reviewer;
+    // an ERROR is not a PASS, so completion coverage still keeps the run open.
+    expect(reviewStarts).toBe(0)
+    expect(result.run.steps.find((step) => step.id === 'review')?.state).toBe('done')
+    expect(result.completed).toBe(false)
+    expect(result.waiting?.stepId).toBe('complete-review')
   })
 
   it('keeps create-change open until .openspec.yaml exists without re-dispatching', async () => {

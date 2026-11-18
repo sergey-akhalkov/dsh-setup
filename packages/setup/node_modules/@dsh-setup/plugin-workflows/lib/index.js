@@ -2670,6 +2670,12 @@ export function apply(ctx, config = {}) {
         const stepId = definition?.steps.find((step) => step.executor === 'review')?.id;
         return stepId !== undefined && run.steps.find((step) => step.id === stepId)?.state === 'open';
     };
+    /** A review step still due to advance: open or blocked, not settled. */
+    const reviewStepPending = (run, definition) => {
+        const stepId = definition?.steps.find((step) => step.executor === 'review')?.id;
+        const state = stepId === undefined ? undefined : run.steps.find((step) => step.id === stepId)?.state;
+        return state === 'open' || state === 'blocked';
+    };
     const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration, capturedSessionGeneration, stop) => {
         // A user stop wins over this advance: an abort that lands during any await
         // below keeps the run as it is and dispatches/persists nothing.
@@ -4140,9 +4146,10 @@ export function apply(ctx, config = {}) {
                     // This session's pending run will be advanced by this close; a
                     // foreign run covers the unit only while its reviewer is live or
                     // its start is still in flight.
-                    // A foreign run covers the unit only while its reviewer is
-                    // scheduler-live: a merely persisted open step is not evidence.
-                    (run.session === sessionId || reviewIsLive(run.id)));
+                    // This session's run covers the unit only while its review step
+                    // is still due; a foreign run only while scheduler-live.
+                    ((run.session === sessionId && reviewStepPending(run, taskReview)) ||
+                        reviewIsLive(run.id)));
                 const dispatched = [];
                 const event = {
                     kind: 'turn.stopping',
