@@ -107,24 +107,146 @@ export async function buildConditionContext(input) {
     const traverses = /\.\.[\\/]|(?:^|[\\/])\.\.(?:[\\/]|$)|[\\/]\.\.(?:[^A-Za-z0-9._-]|$)/u;
     // In a shell command a redirection operator can touch an absolute path.
     const redirectedPath = />{1,2}\/[^\s'"`*]/u;
-    // A URL is a reference, not a machine path. The scheme needs two or more
-    // characters so a bare drive (`C://x`) is not taken for one, and a `file:` URL
-    // still names a machine-local path. The body stops at whitespace, quotes,
-    // brackets, and shell operators, so a redirection or a path written
-    // immediately after a URL is still checked.
-    const urlSpan = /[A-Za-z][A-Za-z0-9+.-]+:\/\/[^\s<>|&;'"`()]+/gu;
-    const withoutUrls = (value) => value.replace(urlSpan, (match) => (/^file:/iu.test(match) ? match : ' '));
+    // A URL is a reference, not a machine path. In a literal value (an event path
+    // or a lane's owned glob) the span runs to whitespace or an angle bracket, so
+    // its query text stays inside it. In a shell command a quoted URL is one
+    // argument, the closing quote of its own kind ends it (a `'` inside `"…"`
+    // stays content), and an unquoted one ends at a shell operator so a
+    // redirection keeps its path operand visible. `file:` URLs always stay
+    // visible, and a scheme needs two or more characters so `C://x` is not one.
+    const doubleQuotedUrl = /"[A-Za-z][A-Za-z0-9+.-]+:\/\/[^"\s]*"/gu;
+    const singleQuotedUrl = /'[A-Za-z][A-Za-z0-9+.-]+:\/\/[^'\s]*'/gu;
+    const literalUrl = /[A-Za-z][A-Za-z0-9+.-]+:\/\/[^\s<>]+/gu;
+    const shellUrl = /[A-Za-z][A-Za-z0-9+.-]+:\/\/[^\s<>|&;'"`()]+/gu;
+    const maskUrl = (match) => (/^file:/iu.test(match) ? match : ' ');
+    const maskQuotedUrl = (match) => /^file:/iu.test(match.slice(1, -1)) ? match : ' ';
+    const withoutUrls = (value, shell) => {
+        if (!shell)
+            return value.replace(literalUrl, maskUrl);
+        return value
+            .replace(doubleQuotedUrl, maskQuotedUrl)
+            .replace(singleQuotedUrl, maskQuotedUrl)
+            .replace(shellUrl, maskUrl);
+    };
+    const violates = (text, redirection) => startsPath.test(text) ||
+        drivePath.test(text) ||
+        absolutePath.test(text) ||
+        (redirection && redirectedPath.test(text)) ||
+        uncPath.test(text) ||
+        traverses.test(text);
+    // shortcut: a substitution is extracted with balanced parentheses, escapes,
+    // and inner quotes; a full shell grammar is not parsed, so a form it cannot
+    // delimit leaves the remainder checked. Single-quoted and escaped text stays
+    // literal.
+    const substitutionEnd = (command, start) => {
+        let depth = 0;
+        let index = start + 1;
+        let quote;
+        while (index < command.length) {
+            const char = command[index] ?? '';
+            if (char === '\\') {
+                index += 2;
+                continue;
+            }
+            if (quote === "'") {
+                if (char === "'")
+                    quote = undefined;
+                index += 1;
+                continue;
+            }
+            if (char === "'" && quote === undefined) {
+                quote = "'";
+                index += 1;
+                continue;
+            }
+            if (char === '"') {
+                quote = quote === '"' ? undefined : '"';
+                index += 1;
+                continue;
+            }
+            if (quote === undefined) {
+                if (char === '(')
+                    depth += 1;
+                if (char === ')') {
+                    depth -= 1;
+                    if (depth === 0)
+                        return index;
+                }
+            }
+            index += 1;
+        }
+        return undefined;
+    };
+    const activeSubstitutions = (command) => {
+        const found = [];
+        let index = 0;
+        let quote;
+        while (index < command.length) {
+            const char = command[index] ?? '';
+            if (char === '\\') {
+                index += 2;
+                continue;
+            }
+            if (quote === "'") {
+                if (char === "'")
+                    quote = undefined;
+                index += 1;
+                continue;
+            }
+            if (char === "'" && quote === undefined) {
+                quote = "'";
+                index += 1;
+                continue;
+            }
+            if (char === '"') {
+                quote = quote === '"' ? undefined : '"';
+                index += 1;
+                continue;
+            }
+            if (char === '$' && command[index + 1] === '(') {
+                const end = substitutionEnd(command, index);
+                if (end === undefined) {
+                    found.push(command.slice(index + 2));
+                    break;
+                }
+                found.push(command.slice(index + 2, end));
+                index = end + 1;
+                continue;
+            }
+            if (char === '`') {
+                const end = command.indexOf('`', index + 1);
+                if (end === -1) {
+                    found.push(command.slice(index + 1));
+                    break;
+                }
+                found.push(command.slice(index + 1, end));
+                index = end + 1;
+                continue;
+            }
+            index += 1;
+        }
+        return found;
+    };
+    const assertNoSubstitutions = (command) => {
+        for (const inner of activeSubstitutions(command)) {
+            if (violates(withoutUrls(inner, true), true)) {
+                throw new Error('condition context contains a filesystem path');
+            }
+            // A substitution inside the body is checked before a quoted URL in that
+            // body could mask it.
+            assertNoSubstitutions(inner);
+        }
+    };
     const assertNoPath = (value, redirection = false) => {
-        const text = value === undefined ? undefined : withoutUrls(value);
-        if (text !== undefined &&
-            (startsPath.test(text) ||
-                drivePath.test(text) ||
-                absolutePath.test(text) ||
-                (redirection && redirectedPath.test(text)) ||
-                uncPath.test(text) ||
-                traverses.test(text))) {
+        if (value === undefined)
+            return;
+        if (violates(withoutUrls(value, redirection), redirection)) {
             throw new Error('condition context contains a filesystem path');
         }
+        // A quoted URL is masked as one argument, but an active command
+        // substitution inside it still runs: its text is checked on its own.
+        if (redirection)
+            assertNoSubstitutions(value);
     };
     assertNoPath(input.event.path);
     assertNoPath(input.event.command, true);
