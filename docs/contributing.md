@@ -2,7 +2,7 @@
 
 This page carries the repository detail that [AGENTS.md](../AGENTS.md) summarizes. The fast path is
 capped at 16,000 bytes by `scripts/lib/workspace.ts` and enforced by `pnpm validate:repo`;
-`AGENTS.md` currently measures 12,927 bytes. Put new repository-wide detail here (or in an
+`AGENTS.md` currently measures 15,904 bytes. Put new repository-wide detail here (or in an
 existing page) rather than in `AGENTS.md`.
 
 ## Repository map: handwritten vs generated
@@ -487,6 +487,61 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 - On Windows the DSH CLI is usually a `.cmd` shim; the validation scripts spawn through a shell and
   expect `DSH_CLI` to be a command line (quote paths with spaces). Package-manager prompts fail fast
   because child stdin is not interactive.
+
+## Capture out-of-scope bugs and ideas
+
+A defect or improvement idea in this setup that surfaces while the task is something else is filed as
+a GitHub issue in this repository at that moment, not carried in the session. `AGENTS.md` carries the
+trigger; this section carries the procedure. `gh` resolves the repository from the checkout, so no
+`-R` is needed and a later rename needs no edit here.
+
+File an issue when you hit a defect in a plugin, row, workflow definition, installer, spec, or doc
+page; when you invent a workaround to finish the task; when you see an improvement that would have
+prevented that workaround; or when the owner says "later" or "remember this". Do not file what is
+being fixed now, an issue that already exists, a change that already exists under
+`openspec/changes/`, or a defect in DeepSeek Harness itself, which belongs upstream and is named in
+the reply instead.
+
+1. Search first: `gh issue list --state open --search "<3-5 words from the symptom>"`. An existing
+   issue means a reply line with its number, not a duplicate.
+2. Write the body to `.tmp/issue-body.md` (create `.tmp/` when it is missing), then create the issue:
+
+   ```sh
+   gh issue create --label bug --title "<one-line symptom>" --body-file .tmp/issue-body.md
+   ```
+
+   Use `enhancement` for a missing capability; no other label is needed.
+3. Continue the task and name the issue URL once in the reply.
+
+The body holds only what a stranger needs, because the repository is public:
+
+```md
+## What happened
+
+<the symptom and where: plugin, row, command, or doc page>
+
+## Expected
+
+<what should have happened instead>
+
+## Evidence
+
+<the failing command and its error, or file:line relative to the repository root>
+
+## Environment
+
+- DSH <version>, profile <name>, setup <version>
+- Windows <build> or <OS>
+
+## Found while
+
+<one line: the task that was running>
+```
+
+Never include an absolute drive path, a home directory, a credential, a session transcript, a session
+id, or a screenshot of private content; a path relative to the repository root is enough. Filing the
+issue is the standing grant recorded in `AGENTS.md`; publishing secrets is not. When `gh` is missing
+or unauthenticated, say so once and continue the task.
 
 ## Troubleshooting
 

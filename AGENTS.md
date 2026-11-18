@@ -26,9 +26,7 @@ installing it means adding the package dependency **and** appending its name to
 owner defaults, and which vendors every plugin's publishable files under
 `packages/setup/node_modules` so one git install delivers all code. Individual
 `@dsh-setup/plugin-*` packages are ordinary bundles installable on their own. `install.ps1` performs
-the shipped-bundle selections a third-party bundle cannot do and installs the setup last. The release
-workflow generates the static format-1 market index pinned to the tagged commit and deploys it to
-GitHub Pages.
+the shipped-bundle selections a third-party bundle cannot do and installs the setup last.
 
 Supported DSH today: the `enginesDsh` range **>=0.2.2-rc.2 <0.3.0** (`dsh.json`); anything
 outside it is refused. Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
@@ -53,9 +51,8 @@ TypeScript executed directly by Node 24: relative imports must carry the `.ts` e
 
 ## 3. Repository map: handwritten vs generated
 
-- **Handwritten**: `packages/plugin-*/{src,test}/**`, `package.json`, `cordis.fragment.yml`,
-  `locale/en.json`, `icon.svg`, `tsconfig.json`; `scripts/**`; `docs/**`; `README.md`; `dsh.json`;
-  `openspec/**`; `install.ps1` (carefully).
+- **Handwritten**: plugin sources and metadata, `scripts/**`, `docs/**`, `README.md`, `dsh.json`,
+  `openspec/**`, and `install.ps1` (carefully).
 - **Generated, never hand-edited**: plugin `cordis.patch.yml` (`pnpm gen`), `lib/**` (`pnpm build`),
   `packages/setup/{package.json,cordis.patch.yml,node_modules/@dsh-setup/**}` (`pnpm gen`),
   `market/**` (CI release), vendored Ponytail/OpenSpec assets (their update scripts).
@@ -118,9 +115,6 @@ release. Install the pre-push hook once per clone with `pnpm hooks:install` (it 
 [docs/review-approval.md](docs/review-approval.md) and
 [docs/contributing.md](docs/contributing.md#review-approval-and-the-archive-gate).
 
-Change history, archived task counts, and open owner follow-ups:
-[docs/openspec-status.md](docs/openspec-status.md).
-
 ## 6. Change owner defaults
 
 Edit `packages/setup/defaults.yml`, then `pnpm gen`, commit the regenerated
@@ -156,11 +150,10 @@ Detail: [docs/contributing.md](docs/contributing.md#tests).
 ## 10. CI gate
 
 `.github/workflows/validate.yml` runs on `windows-latest` (Node 24, pnpm 11.28.5, one matrix entry
-per version the `versions` job resolves from `dsh.json` -> `enginesDsh`) in this order:
-`pnpm install --frozen-lockfile`, `pnpm build`, `git diff --exit-code`, `pnpm gen:check`,
-`pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, `pnpm validate:composition`,
-`pnpm validate:installer`. Any failing step blocks the merge; `release.yml` repeats the gate on tags.
-Detail and local reproduction: [docs/contributing.md](docs/contributing.md#ci-gate-what-blocks-a-merge).
+per version the `versions` job resolves from `dsh.json` -> `enginesDsh`) through build, generation
+drift, typecheck, lint, tests, and the three validators. Any failing step blocks the merge, and
+`release.yml` repeats the gate on tags. Step list and local reproduction:
+[docs/contributing.md](docs/contributing.md#ci-gate-what-blocks-a-merge).
 
 ## 11. Hard rules and gotchas
 
@@ -169,6 +162,10 @@ Detail and local reproduction: [docs/contributing.md](docs/contributing.md#ci-ga
   A clean-state test uses a throwaway `DSH_HOME`; touching live data needs explicit owner
   confirmation plus a completed Hindsight export or backup first. The 2026-10-29 incident wiped
   every session and the Hindsight database this way.
+- **Capture what you are not fixing now**: a bug or improvement idea in this setup that surfaces
+  mid-task is filed as an issue in this repo before the task continues (`gh issue create`,
+  `bug`/`enhancement`, no machine paths, credentials, or session dumps). Procedure and body template:
+  [docs/contributing.md](docs/contributing.md#capture-out-of-scope-bugs-and-ideas).
 - **Never hand-edit generated files** (`packages/*/cordis.patch.yml`, `packages/*/lib/**`,
   `packages/setup/{package.json,cordis.patch.yml,node_modules/**}`). Run `pnpm gen` and/or
   `pnpm build` and commit the result. `pnpm check` does not run `gen:check`. The one exception is
