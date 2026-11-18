@@ -9742,15 +9742,15 @@ describe('archived change involvement', () => {
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const definition = definitionsRegistry.installed('spec-review')?.definition
+    const definition = definitionsRegistry.installed('task-review')?.definition
     expect(definition).toBeDefined()
     if (definition === undefined) return
     const run = runs.createRun({
-      definition: 'spec-review',
-      trigger: 'turn.stopping',
+      definition: 'task-review',
+      trigger: 'fs.change',
       session: 'session-1',
       workspace,
-      context: { name: 'auth' },
+      context: { name: 'auth', taskId: '1111111111111111' },
       steps: definition.steps.map((step) => step.id),
       id: 'run-archived-terminal',
       now: 1_000,
@@ -9760,8 +9760,22 @@ describe('archived change involvement', () => {
     const stored = join(workspace, '.dsh', 'workflows', 'runs', 'run-archived-terminal.json')
     const before = await readFile(stored, 'utf8')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    // Only an unresolved run settles cancelled; a terminal run keeps its history.
+    // Only an unresolved run settles cancelled; a terminal task-review run is
+    // still eligible for the gate walk and must keep its history.
     expect(await readFile(stored, 'utf8')).toBe(before)
+  })
+
+  it('recognizes both archive layouts, including a date-prefixed change name', async () => {
+    const workspace = await gitGateWorkspace()
+    const directory = join(workspace, 'openspec', 'changes', 'archive')
+    await mkdir(join(directory, '2026-01-01-keep'), { recursive: true })
+    await mkdir(join(directory, '2026-11-18-auth'), { recursive: true })
+    const { archivedChangeNames } = await import('../src/host/engine-gates.ts')
+    const archived = await archivedChangeNames(workspace)
+    // The undated layout of a date-prefixed name and the dated layout of `auth`.
+    expect(archived.has('2026-01-01-keep')).toBe(true)
+    expect(archived.has('auth')).toBe(true)
+    expect(archived.has('keep')).toBe(true)
   })
 
   it('releases the admission slot of a settled archived review', async () => {

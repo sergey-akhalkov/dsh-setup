@@ -45,9 +45,14 @@ export async function archivedChangeNames(workspace) {
     }
     const archived = new Set();
     for (const entry of names) {
-        const name = /^\d{4}-\d{2}-\d{2}-(.+)$/u.exec(entry)?.[1] ?? entry;
-        if (CHANGE_NAME.test(name))
-            archived.add(name);
+        // A date-prefixed name is a legal change name too, so an entry such as
+        // `2026-01-01-keep` is recognized as both the dated layout of `keep` and
+        // the undated layout of `2026-01-01-keep`.
+        if (CHANGE_NAME.test(entry))
+            archived.add(entry);
+        const undated = /^\d{4}-\d{2}-\d{2}-(.+)$/u.exec(entry)?.[1];
+        if (undated !== undefined && CHANGE_NAME.test(undated))
+            archived.add(undated);
     }
     return archived;
 }

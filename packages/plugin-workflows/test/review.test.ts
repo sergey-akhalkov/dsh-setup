@@ -120,7 +120,10 @@ function baseRun(definition: Definition) {
 }
 
 async function workspace(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'workflows-review-'))
+  const root = await mkdtemp(join(tmpdir(), 'workflows-review-'))
+  // A committed approval is written only for an active change.
+  await mkdir(join(root, 'openspec', 'changes', 'auth'), { recursive: true })
+  return root
 }
 
 async function invoke(
@@ -1448,6 +1451,16 @@ describe('review record store', () => {
     ) as Record<string, unknown>
     expect(local.definition).toBe('task-review')
     expect(local.runId).toBe('run-1')
+  })
+
+  it('refuses a committed approval for a change that is no longer active', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workflows-review-'))
+    roots.push(root)
+    const written = await writePortableApproval(root, record)
+    if (written.ok) throw new Error('the late approval must not be written')
+    expect(written.error).toContain('not active')
+    // A late verdict must not recreate the archived change's directory.
+    expect(await readdir(join(root, 'openspec', 'changes')).catch(() => [])).toEqual([])
   })
 
   it('writes the reviewed tree and confirmations to the local record only', async () => {

@@ -24,6 +24,23 @@ MAY stay on disk, MUST be ignored, and MUST NOT require manual cleanup.
 - **WHEN** an archived change's name is still in the involvement record
 - **THEN** the engine ignores it without any edit to `.dsh`, and an active change named by the same record still evaluates normally
 
+### Requirement: Late review publication is discarded
+
+A committed approval MUST be written only while its change is an active change under
+`openspec/changes/`. A verdict that lands after the change left the active tree MUST be discarded: the
+engine MUST NOT write the approval and MUST NOT recreate the change directory, and the attempt is
+recorded as an error rather than a PASS.
+
+#### Scenario: A late PASS does not recreate the archived change
+
+- **WHEN** a reviewer publishes PASS after its change was archived
+- **THEN** no approval file is written and `openspec/changes/<change>/` is not recreated
+
+#### Scenario: An active change keeps publishing
+
+- **WHEN** the change is active under `openspec/changes/`
+- **THEN** the committed approval is written as before
+
 ## MODIFIED Requirements
 
 ### Requirement: Turn-close gate

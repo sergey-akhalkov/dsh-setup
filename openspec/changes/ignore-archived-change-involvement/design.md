@@ -56,11 +56,20 @@ leaves unrecoverable runs open forever).
 `retro`, `verify`, and other runs keep today's semantics; only a review run is unrecoverable for an
 archived change, because its evidence and artifacts are gone. Archived detection covers both
 supported layouts - `archive/<date>-<name>` written by `openspec archive`, and `archive/<name>` from
-a supported manual move - so an undated archive is not mistaken for a missing change. A *missing*
-change keeps refusing: the existing recordless-failure regression requires its failed review to
-steer the cause instead of passing silently, and a deleted change is an error worth surfacing. This
-is the narrowest rule that closes the reported storm. Alternative rejected: skip every non-active
-change - it drops that real failure.
+a supported manual move - and because a date-prefixed name is itself a legal change name, an entry
+such as `2026-01-01-keep` counts as both the dated layout of `keep` and the undated layout of
+`2026-01-01-keep`. A *missing* change keeps refusing: the existing recordless-failure regression
+requires its failed review to steer the cause instead of passing silently, and a deleted change is
+an error worth surfacing. This is the narrowest rule that closes the reported storm. Alternative
+rejected: skip every non-active change - it drops that real failure.
+
+**D6 - Fence the committed approval on an active change.**
+A reviewer that was already running when its change got archived can publish after the run settles
+cancelled; writing the portable approval would `mkdir` the change directory and resurrect the
+archived change as an active one. The single portable-approval writer therefore refuses when
+`openspec/changes/<change>` is absent, returning an error that the publication path records without
+a PASS. Alternative rejected: fence each caller (scheduler, task review, intake) - one choke point
+covers every publication path, including a late retry.
 
 **D4 - The stale involvement record stays on disk.**
 No pruning and no empty-list write: the record is ignored when read, so a stale file is harmless and

@@ -1049,6 +1049,18 @@ export async function writePortableApproval(
   if (record.verdict !== 'PASS') {
     return { ok: false, error: 'a committed approval requires a PASS verdict' }
   }
+  // A publication that lands after the change left the active tree must not
+  // recreate its directory: the verdict is discarded, never committed.
+  try {
+    const changeDir = await lstat(join(workspace, 'openspec', 'changes', record.change))
+    if (!changeDir.isDirectory()) throw new Error('not a directory')
+  } catch {
+    return {
+      ok: false,
+      error:
+        'the change is not active under openspec/changes; the late verdict is discarded and no directory is created',
+    }
+  }
   const target = record.target
   if (
     target.provider.trim() === '' ||
