@@ -1658,7 +1658,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     workspace: string,
     input: JournalInput,
     event: ObservedEvent,
+    cancelled?: () => boolean,
   ): Promise<void> => {
+    // A stopped turn starts no review: every asynchronous step below re-checks
+    // the caller's signal before a trigger may create or persist a run.
+    const stopped = (): boolean => cancelled?.() === true
     const health = healthFor(workspace)
     activeSession.set(workspace, input.session)
     const entrySessionGeneration = sessionGeneration(input.session)
@@ -1669,6 +1673,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     } catch {
       // A later event retries the seed; evaluation still proceeds.
     }
+    if (stopped()) return
     const sessionSeen = seen.get(input.session) ?? new Map<string, number>()
     seen.set(input.session, sessionSeen)
     if (
@@ -1870,6 +1875,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   // the pre-event live list does not see either start.
                   const startedCovered = new Set<string>()
                   const start = (context: Readonly<Record<string, unknown>>): StartRunOutcome => {
+                    if (stopped()) return { ok: false, reason: 'the turn was stopped' }
                     const outcome = startDefinitionRun(
                       workspace,
                       definition,
@@ -1985,6 +1991,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 const contextName =
                   capture ??
                   (definition.trigger.condition === undefined ? undefined : currentChange)
+                if (stopped()) return { ok: false, reason: 'the turn was stopped' }
                 const outcome = startDefinitionRun(
                   workspace,
                   definition,
@@ -2097,7 +2104,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // caller's signal before it can create a run.
       .then(async () => {
         if (cancelled?.() === true) return
-        await recordNow(workspace, input, event)
+        await recordNow(workspace, input, event, cancelled)
       })
       .catch((error: unknown) => publishListenerError(workspace, error))
     recordQueues.set(input.session, next)
