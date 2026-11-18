@@ -77,7 +77,7 @@ async function preserveReviewThreads(
   const own = incoming.filter((entry) => entry.key === unitKey)
   if (own.length === 0) return
   const path = resolve(cwd, REVIEW_THREADS_STATE)
-  await withThreadStateLock(path, async () => {
+  await withPathLock(threadStateChains, path, async () => {
     let prior: ReviewThreadEntry[] = []
     try {
       prior = parseReviewThreads(await readFile(path, 'utf8'))
@@ -105,10 +105,18 @@ async function preserveReviewThreads(
 /** One serialized chain per durable thread map: concurrent settlements never lose an entry. */
 const threadStateChains = new Map<string, Promise<void>>()
 
-function withThreadStateLock<T>(path: string, work: () => Promise<T>): Promise<T> {
-  const prior = threadStateChains.get(path) ?? Promise.resolve()
+/** One serialized chain per stable snapshot path: a cleanup and a rebuild never interleave. */
+const snapshotChains = new Map<string, Promise<void>>()
+
+/** One serialized chain per locked path; a rejected step never poisons the chain. */
+function withPathLock<T>(
+  chains: Map<string, Promise<void>>,
+  path: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const prior = chains.get(path) ?? Promise.resolve()
   const next = prior.then(work, work)
-  threadStateChains.set(
+  chains.set(
     path,
     next.then(
       () => undefined,
@@ -385,13 +393,28 @@ async function discardSnapshotByName(
   name: string,
   unitKey: string | undefined,
   runGit: GitRunner,
+  remove?: (path: string) => Promise<void>,
+  owner?: string,
+): Promise<void> {
+  await withPathLock(snapshotChains, snapshotKey(cwd, name), () =>
+    discardSnapshotUnlocked(cwd, name, unitKey, runGit, remove, owner),
+  )
+}
+
+/** The removal itself; the caller holds the snapshot path lock. */
+async function discardSnapshotUnlocked(
+  cwd: string,
+  name: string,
+  unitKey: string | undefined,
+  runGit: GitRunner,
   remove: (path: string) => Promise<void> = (path) => rm(path, { recursive: true, force: true }),
   owner?: string,
 ): Promise<void> {
   if (owner !== undefined) {
     const leaseOwner = await readSnapshotLeaseOwner(snapshotLeasePath(cwd, name))
-    // A different owner means a successor already prepared this stable path; the
-    // predecessor's delayed cleanup must never delete that checkout.
+    // Read under the path lock: a successor's rebuild cannot slip in between the
+    // check and the removal. A different owner means a successor already prepared
+    // this stable path; the predecessor's delayed cleanup must never delete it.
     if (leaseOwner !== undefined && leaseOwner !== owner) return
   }
   await stopSnapshotLeaseByName(cwd, name)
@@ -539,61 +562,67 @@ export async function createReviewSnapshot(
     return undefined
   }
 
-  // A key reused across rounds keeps its path: discard the previous round's
-  // leftover (and its lease) so the checkout can be rebuilt in place.
-  await discardSnapshotByName(cwd, name, key, runGit)
-  try {
-    await runGit(['worktree', 'prune'], cwd)
-  } catch {
-    // Pruning is best effort.
-  }
-
   const worktree = resolve(cwd, SNAPSHOT_DIR, name)
   const scratch = resolve(cwd, SCRATCH_DIR, `${name}.index`)
-  try {
-    const tree = await writeInputTree(root, relChange, runGit, signal, scratch)
-    await mkdir(dirname(worktree), { recursive: true })
-    let parent: string | undefined
+  // A key reused across rounds keeps its path: the leftover discard, the
+  // checkout, its lease and the change copy are one critical section per path,
+  // so a predecessor's delayed cleanup can never delete this rebuild. The
+  // rebuild takes the path unconditionally; a cleanup's owner guard runs under
+  // the same lock and therefore sees the lease this rebuild writes.
+  return withPathLock(snapshotChains, snapshotKey(cwd, name), async () => {
+    await discardSnapshotUnlocked(cwd, name, key, runGit)
     try {
-      parent = (await runGit(['rev-parse', '--verify', 'HEAD'], root, signal))
+      await runGit(['worktree', 'prune'], cwd)
+    } catch {
+      // Pruning is best effort.
+    }
+    try {
+      const tree = await writeInputTree(root, relChange, runGit, signal, scratch)
+      await mkdir(dirname(worktree), { recursive: true })
+      let parent: string | undefined
+      try {
+        parent = (await runGit(['rev-parse', '--verify', 'HEAD'], root, signal))
+          .toString('utf8')
+          .trim()
+      } catch {
+        parent = undefined
+      }
+      const commit = (
+        await runGit(
+          [
+            '-c',
+            'user.name=dsh-workflows',
+            '-c',
+            'user.email=workflows@localhost',
+            'commit-tree',
+            tree,
+            ...(parent === undefined ? [] : ['-p', parent]),
+            '-m',
+            'workflows: reviewed snapshot',
+          ],
+          root,
+          signal,
+        )
+      )
         .toString('utf8')
         .trim()
+      await startSnapshotLeaseByName(cwd, name, key, undefined, owner)
+      await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal)
+      await restoreReviewThreads(cwd, worktree)
+      const frozenChange = resolve(worktree, relChange)
+      await mkdir(dirname(frozenChange), { recursive: true })
+      await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true })
+      if (afterCopy !== undefined) await afterCopy()
+      const frozenSpec = await specDigest(frozenChange)
+      return { tree, commit, worktree, changeDir: frozenChange, specDigest: frozenSpec }
     } catch {
-      parent = undefined
-    }
-    const commit = (
-      await runGit(
-        [
-          '-c',
-          'user.name=dsh-workflows',
-          '-c',
-          'user.email=workflows@localhost',
-          'commit-tree',
-          tree,
-          ...(parent === undefined ? [] : ['-p', parent]),
-          '-m',
-          'workflows: reviewed snapshot',
-        ],
-        root,
-        signal,
+      await discardSnapshotUnlocked(cwd, name, key, runGit)
+      onUnavailable?.(
+        'the snapshot worktree could not be built (git error during snapshot creation)',
       )
-    )
-      .toString('utf8')
-      .trim()
-    await startSnapshotLeaseByName(cwd, name, key, undefined, owner)
-    await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal)
-    await restoreReviewThreads(cwd, worktree)
-    const frozenChange = resolve(worktree, relChange)
-    await mkdir(dirname(frozenChange), { recursive: true })
-    await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true })
-    if (afterCopy !== undefined) await afterCopy()
-    const frozenSpec = await specDigest(frozenChange)
-    return { tree, commit, worktree, changeDir: frozenChange, specDigest: frozenSpec }
-  } catch {
-    await discardSnapshotByName(cwd, name, key, runGit)
-    onUnavailable?.('the snapshot worktree could not be built (git error during snapshot creation)')
-    return undefined
-  }
+      return undefined
+    }
+  })
 }
 
 /**

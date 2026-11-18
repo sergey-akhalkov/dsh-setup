@@ -489,6 +489,73 @@ describe('snapshot lifecycle', () => {
     await expect(readFile(join(second.worktree, 'a.txt'))).rejects.toThrow()
   })
 
+  it('serializes a delayed cleanup and a successor rebuild of one stable unit path', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    await writeFile(join(dir, 'a.txt'), 'a\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    const signal = new AbortController().signal
+    const key = 'review:change-a:task:t1'
+    const first = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      key,
+      defaultGit,
+      signal,
+      undefined,
+      undefined,
+      'run-owner-1',
+    )
+    if (first === undefined) throw new Error('expected a snapshot')
+    // The predecessor's cleanup passes its lease guard and then stalls inside
+    // the removal. Its deletions run after a concurrent rebuild of the same
+    // path would have finished, which is exactly what must not delete it.
+    let paused = (): void => undefined
+    const pausedGate = new Promise<void>((resolve) => {
+      paused = resolve
+    })
+    let release = (): void => undefined
+    const releaseGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let pausedOnce = false
+    const removeHook = async (path: string): Promise<void> => {
+      if (!pausedOnce) {
+        pausedOnce = true
+        paused()
+        await releaseGate
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+      }
+      await rm(path, { recursive: true, force: true })
+    }
+    const discarding = discardReviewSnapshot(dir, key, defaultGit, removeHook, 'run-owner-1')
+    await pausedGate
+    const rebuilding = createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      key,
+      defaultGit,
+      signal,
+      undefined,
+      undefined,
+      'run-owner-2',
+    )
+    release()
+    const rebuilt = await rebuilding
+    await discarding
+    const name = reviewSnapshotName(key)
+    if (rebuilt === undefined) throw new Error('expected the rebuilt snapshot')
+    expect(rebuilt.worktree).toBe(first.worktree)
+    expect(await readFile(join(rebuilt.worktree, 'a.txt'), 'utf8')).toBe('a\n')
+    const lease = JSON.parse(await readFile(join(dir, SNAPSHOTS, `${name}.lease`), 'utf8')) as {
+      owner?: string
+    }
+    expect(lease.owner).toBe('run-owner-2')
+    await discardReviewSnapshot(dir, key, defaultGit)
+  })
+
   it('sweeps a lease-less checkout without overwriting another lane thread', async () => {
     const dir = await repository()
     await writeFile(join(dir, '.gitignore'), '.dsh/\n')

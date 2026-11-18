@@ -53,7 +53,7 @@ async function preserveReviewThreads(cwd, worktree, unitKey) {
     if (own.length === 0)
         return;
     const path = resolve(cwd, REVIEW_THREADS_STATE);
-    await withThreadStateLock(path, async () => {
+    await withPathLock(threadStateChains, path, async () => {
         let prior = [];
         try {
             prior = parseReviewThreads(await readFile(path, 'utf8'));
@@ -79,10 +79,13 @@ async function preserveReviewThreads(cwd, worktree, unitKey) {
 }
 /** One serialized chain per durable thread map: concurrent settlements never lose an entry. */
 const threadStateChains = new Map();
-function withThreadStateLock(path, work) {
-    const prior = threadStateChains.get(path) ?? Promise.resolve();
+/** One serialized chain per stable snapshot path: a cleanup and a rebuild never interleave. */
+const snapshotChains = new Map();
+/** One serialized chain per locked path; a rejected step never poisons the chain. */
+function withPathLock(chains, path, work) {
+    const prior = chains.get(path) ?? Promise.resolve();
     const next = prior.then(work, work);
-    threadStateChains.set(path, next.then(() => undefined, () => undefined));
+    chains.set(path, next.then(() => undefined, () => undefined));
     return next;
 }
 /** Put the durable thread map into a freshly built checkout before the reviewer starts. */
@@ -305,11 +308,16 @@ export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
 export async function discardReviewSnapshot(cwd, key, runGit, remove, owner) {
     await discardSnapshotByName(cwd, reviewSnapshotName(key), key, runGit, remove, owner);
 }
-async function discardSnapshotByName(cwd, name, unitKey, runGit, remove = (path) => rm(path, { recursive: true, force: true }), owner) {
+async function discardSnapshotByName(cwd, name, unitKey, runGit, remove, owner) {
+    await withPathLock(snapshotChains, snapshotKey(cwd, name), () => discardSnapshotUnlocked(cwd, name, unitKey, runGit, remove, owner));
+}
+/** The removal itself; the caller holds the snapshot path lock. */
+async function discardSnapshotUnlocked(cwd, name, unitKey, runGit, remove = (path) => rm(path, { recursive: true, force: true }), owner) {
     if (owner !== undefined) {
         const leaseOwner = await readSnapshotLeaseOwner(snapshotLeasePath(cwd, name));
-        // A different owner means a successor already prepared this stable path; the
-        // predecessor's delayed cleanup must never delete that checkout.
+        // Read under the path lock: a successor's rebuild cannot slip in between the
+        // check and the removal. A different owner means a successor already prepared
+        // this stable path; the predecessor's delayed cleanup must never delete it.
         if (leaseOwner !== undefined && leaseOwner !== owner)
             return;
     }
@@ -425,58 +433,63 @@ export async function createReviewSnapshot(cwd, change, key, runGit, signal, aft
         onUnavailable?.('the repository index could not be read for unmerged entries');
         return undefined;
     }
-    // A key reused across rounds keeps its path: discard the previous round's
-    // leftover (and its lease) so the checkout can be rebuilt in place.
-    await discardSnapshotByName(cwd, name, key, runGit);
-    try {
-        await runGit(['worktree', 'prune'], cwd);
-    }
-    catch {
-        // Pruning is best effort.
-    }
     const worktree = resolve(cwd, SNAPSHOT_DIR, name);
     const scratch = resolve(cwd, SCRATCH_DIR, `${name}.index`);
-    try {
-        const tree = await writeInputTree(root, relChange, runGit, signal, scratch);
-        await mkdir(dirname(worktree), { recursive: true });
-        let parent;
+    // A key reused across rounds keeps its path: the leftover discard, the
+    // checkout, its lease and the change copy are one critical section per path,
+    // so a predecessor's delayed cleanup can never delete this rebuild. The
+    // rebuild takes the path unconditionally; a cleanup's owner guard runs under
+    // the same lock and therefore sees the lease this rebuild writes.
+    return withPathLock(snapshotChains, snapshotKey(cwd, name), async () => {
+        await discardSnapshotUnlocked(cwd, name, key, runGit);
         try {
-            parent = (await runGit(['rev-parse', '--verify', 'HEAD'], root, signal))
-                .toString('utf8')
-                .trim();
+            await runGit(['worktree', 'prune'], cwd);
         }
         catch {
-            parent = undefined;
+            // Pruning is best effort.
         }
-        const commit = (await runGit([
-            '-c',
-            'user.name=dsh-workflows',
-            '-c',
-            'user.email=workflows@localhost',
-            'commit-tree',
-            tree,
-            ...(parent === undefined ? [] : ['-p', parent]),
-            '-m',
-            'workflows: reviewed snapshot',
-        ], root, signal))
-            .toString('utf8')
-            .trim();
-        await startSnapshotLeaseByName(cwd, name, key, undefined, owner);
-        await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal);
-        await restoreReviewThreads(cwd, worktree);
-        const frozenChange = resolve(worktree, relChange);
-        await mkdir(dirname(frozenChange), { recursive: true });
-        await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true });
-        if (afterCopy !== undefined)
-            await afterCopy();
-        const frozenSpec = await specDigest(frozenChange);
-        return { tree, commit, worktree, changeDir: frozenChange, specDigest: frozenSpec };
-    }
-    catch {
-        await discardSnapshotByName(cwd, name, key, runGit);
-        onUnavailable?.('the snapshot worktree could not be built (git error during snapshot creation)');
-        return undefined;
-    }
+        try {
+            const tree = await writeInputTree(root, relChange, runGit, signal, scratch);
+            await mkdir(dirname(worktree), { recursive: true });
+            let parent;
+            try {
+                parent = (await runGit(['rev-parse', '--verify', 'HEAD'], root, signal))
+                    .toString('utf8')
+                    .trim();
+            }
+            catch {
+                parent = undefined;
+            }
+            const commit = (await runGit([
+                '-c',
+                'user.name=dsh-workflows',
+                '-c',
+                'user.email=workflows@localhost',
+                'commit-tree',
+                tree,
+                ...(parent === undefined ? [] : ['-p', parent]),
+                '-m',
+                'workflows: reviewed snapshot',
+            ], root, signal))
+                .toString('utf8')
+                .trim();
+            await startSnapshotLeaseByName(cwd, name, key, undefined, owner);
+            await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal);
+            await restoreReviewThreads(cwd, worktree);
+            const frozenChange = resolve(worktree, relChange);
+            await mkdir(dirname(frozenChange), { recursive: true });
+            await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true });
+            if (afterCopy !== undefined)
+                await afterCopy();
+            const frozenSpec = await specDigest(frozenChange);
+            return { tree, commit, worktree, changeDir: frozenChange, specDigest: frozenSpec };
+        }
+        catch {
+            await discardSnapshotUnlocked(cwd, name, key, runGit);
+            onUnavailable?.('the snapshot worktree could not be built (git error during snapshot creation)');
+            return undefined;
+        }
+    });
 }
 /** Change-root entries that are engine output, not reviewed input. */
 const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml', 'reviews']);

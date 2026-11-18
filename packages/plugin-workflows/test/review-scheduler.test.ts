@@ -371,6 +371,7 @@ describe('review scheduler', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
+    const discards: Array<{ key: string; owner?: string }> = []
     const scheduler = new ReviewScheduler(
       {
         enabled: true,
@@ -383,7 +384,12 @@ describe('review scheduler', () => {
       },
       {
         persistRun: async (_workspace, run) => run,
-        discardSnapshot: async () => undefined,
+        // The real cleanup: an owner-bearing lease is removed only by a discard
+        // that names the lease's own run.
+        discardSnapshot: async (workspace, key, owner) => {
+          discards.push({ key, owner })
+          await discardReviewSnapshot(workspace, key, defaultGit, undefined, owner)
+        },
       },
     )
     const [firstTask, secondTask] = ['a'.repeat(16), 'b'.repeat(16)]
@@ -412,6 +418,11 @@ describe('review scheduler', () => {
       steps: ['review'],
       now: 1_000,
     })
+    const snapshotsDir = join(root, '.dsh', 'workflows', 'snapshots')
+    const sectionCheckout = join(snapshotsDir, sectionRun.id)
+    await mkdir(sectionCheckout, { recursive: true })
+    await writeFile(join(sectionCheckout, 'section.txt'), 'section\n', 'utf8')
+    await startSnapshotLease(root, sectionRun.id, 10, sectionRun.id)
     const sectionDigest = sectionReviewDigest(section, digest)
     const sectionAdmission = await scheduler.enqueue({
       workspace: root,
@@ -450,6 +461,12 @@ describe('review scheduler', () => {
       steps: ['review'],
       now: 1_100,
     })
+    // The rejected admission prepared its own checkout and owner-bearing lease
+    // at its own stable path; the incumbent's checkout is a different path.
+    const rejectedCheckout = join(snapshotsDir, taskRun.id)
+    await mkdir(rejectedCheckout, { recursive: true })
+    await writeFile(join(rejectedCheckout, 'task.txt'), 'task\n', 'utf8')
+    await startSnapshotLease(root, taskRun.id, 10, taskRun.id)
     const duplicate = await scheduler.enqueue({
       workspace: root,
       run: taskRun,
@@ -481,6 +498,17 @@ describe('review scheduler', () => {
       digest: reviewDigest({ scope: 'task', specDigest: digest }),
     })
     expect(duplicate).toEqual({ kind: 'duplicate', runId: sectionRun.id })
+    // The rejected admission's own checkout and lease are removed by a discard
+    // that names the rejected run, and its renewal stops.
+    await waitFor(
+      async () => !existsSync(rejectedCheckout) && !existsSync(`${rejectedCheckout}.lease`),
+    )
+    expect(discards).toContainEqual({ key: taskRun.id, owner: taskRun.id })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(existsSync(`${rejectedCheckout}.lease`)).toBe(false)
+    // The incumbent's checkout stays intact.
+    expect(await readFile(join(sectionCheckout, 'section.txt'), 'utf8')).toBe('section\n')
+    expect(existsSync(`${sectionCheckout}.lease`)).toBe(true)
     expect(scheduler.summary().active).toBe(1)
     release?.()
     await waitFor(async () => scheduler.summary().active === 0)

@@ -2868,8 +2868,10 @@ describe('turn-close lane dispatch', () => {
     apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
     await new Promise((resolve) => setTimeout(resolve, 200))
     await establishInvolvement(host)
-    // Hold the advance inside the change-artifact read, abort the turn there,
-    // and let it continue: the round must not record, start, or persist.
+    // Hold the advance inside a frozen-snapshot artifact read, after the
+    // checkout and its lease exist, abort the turn there, and let it continue:
+    // the round must not record, start, or persist, and the abandoned snapshot
+    // must be released instead of leaking to the stale sweep.
     let releaseRead: () => void = () => undefined
     const readGate = new Promise<void>((resolve) => {
       releaseRead = resolve
@@ -2880,7 +2882,8 @@ describe('turn-close lane dispatch', () => {
     })
     runStoreFaults.pauseNextRead = readGate
     runStoreFaults.onReadPaused = () => paused()
-    runStoreFaults.pauseReadFor = (path) => path.endsWith('openspec/changes/auth/proposal.md')
+    runStoreFaults.pauseReadFor = (path) =>
+      path.includes('/.dsh/workflows/snapshots/') && path.endsWith('/proposal.md')
     const controller = new AbortController()
     const closing = host.emit('agent/turn-stopping', {
       agent: host.agent,
@@ -2888,20 +2891,30 @@ describe('turn-close lane dispatch', () => {
       signal: controller.signal,
     })
     await pausedGate
+    const snapshots = join(workspace, '.dsh', 'workflows', 'snapshots')
+    const scratch = join(workspace, '.dsh', 'workflows', 'scratch')
+    // A frozen copy is read only after its checkout and lease were prepared.
+    const prepared = await readdir(snapshots)
+    expect(prepared.some((entry) => entry.endsWith('.lease'))).toBe(true)
+    expect(prepared.some((entry) => !entry.endsWith('.lease'))).toBe(true)
+    expect((await readdir(scratch)).length).toBeGreaterThan(0)
     controller.abort()
     releaseRead()
     await closing
     expect(activations).toHaveLength(0)
     expect(host.steers).toHaveLength(0)
-    const { readdir } = await import('node:fs/promises')
     expect(
       await readdir(join(workspace, '.dsh', 'workflows', 'records'), { recursive: true }).catch(
         () => [],
       ),
     ).toHaveLength(0)
-    expect(
-      await readdir(join(workspace, '.dsh', 'workflows', 'snapshots')).catch(() => []),
-    ).toHaveLength(0)
+    // The checkout, its scratch index, and its lease are gone; a stopped lease
+    // renewal must not recreate them afterwards.
+    expect(await readdir(snapshots).catch(() => [])).toHaveLength(0)
+    expect(await readdir(scratch).catch(() => [])).toHaveLength(0)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(await readdir(snapshots).catch(() => [])).toHaveLength(0)
+    expect(await readdir(scratch).catch(() => [])).toHaveLength(0)
   })
 })
 
