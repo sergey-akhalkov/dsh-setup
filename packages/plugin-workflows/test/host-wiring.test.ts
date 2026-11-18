@@ -72,7 +72,30 @@ const runStoreFaults = vi.hoisted(() => ({
   pauseNextRead: undefined as Promise<void> | undefined,
   pauseReadFor: undefined as ((path: string) => boolean) | undefined,
   onReadPaused: undefined as (() => void) | undefined,
+  /** The message a synchronous run-store write throws; `undefined` passes through. */
+  syncWriteFile: undefined as string | undefined,
 }))
+
+// `writeRunSync` persists a run with the synchronous fs API, so the async
+// run-store faults above cannot reach an observational start; this seam makes
+// that real failure path testable.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    writeFileSync: ((...args: Parameters<typeof actual.writeFileSync>) => {
+      const target = String(args[0]).replaceAll('\\', '/')
+      if (
+        runStoreFaults.syncWriteFile !== undefined &&
+        target.includes('/workflows/runs/') &&
+        target.endsWith('.tmp')
+      ) {
+        throw new Error(runStoreFaults.syncWriteFile)
+      }
+      return actual.writeFileSync(...args)
+    }) as typeof actual.writeFileSync,
+  }
+})
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
@@ -149,6 +172,7 @@ afterEach(async () => {
   runStoreFaults.pauseNextRead = undefined
   runStoreFaults.pauseReadFor = undefined
   runStoreFaults.onReadPaused = undefined
+  runStoreFaults.syncWriteFile = undefined
   await Promise.all(
     TEMP_DIRECTORIES.splice(0).map(async (directory) => {
       await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
@@ -2958,6 +2982,149 @@ describe('turn-close lane dispatch', () => {
     await new Promise((resolve) => setTimeout(resolve, 150))
     expect(await readdir(snapshots).catch(() => [])).toHaveLength(0)
     expect(await readdir(scratch).catch(() => [])).toHaveLength(0)
+  })
+
+  it('starts no review when the stop lands during the close condition evaluation', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await establishInvolvement(host)
+    const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    // The involvement record is queued ahead of the close and evaluates its own
+    // condition context; wait for its journal entry so the pause below lands in
+    // the close's evaluation, not in that earlier record.
+    await waitFor(async () =>
+      (await readFile(journalFile, 'utf8').catch(() => '')).includes('"tools/result"'),
+    )
+    let releaseRead: () => void = () => undefined
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    let paused = (): void => undefined
+    const pausedGate = new Promise<void>((resolve) => {
+      paused = resolve
+    })
+    let pausedPath: string | undefined
+    runStoreFaults.pauseNextRead = readGate
+    runStoreFaults.onReadPaused = () => paused()
+    // The first conditional definition evaluated for the close reads the
+    // change's tasks.md; at that point the stop signal is still live.
+    runStoreFaults.pauseReadFor = (path) => {
+      if (!path.includes('/openspec/changes/auth/tasks.md')) return false
+      pausedPath = path
+      return true
+    }
+    const controller = new AbortController()
+    const closing = host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    await pausedGate
+    // Both conditional review definitions match this involved, completed plan.
+    // Abort while their condition context is mid-read, then let evaluation run.
+    expect(pausedPath).toContain('/openspec/changes/auth/tasks.md')
+    controller.abort()
+    releaseRead()
+    await closing
+    await waitFor(async () =>
+      (await readFile(journalFile, 'utf8').catch(() => '')).includes('"agent/turn-stopping"'),
+    )
+    const stopRows = (await readFile(journalFile, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            kind?: string
+            triggers?: Array<Record<string, unknown>>
+          },
+      )
+      .filter((entry) => entry.kind === 'agent/turn-stopping')
+      .flatMap((entry) => entry.triggers ?? [])
+    for (const id of ['definition:spec-review', 'definition:integration-review']) {
+      expect(stopRows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id, reason: 'run-suppressed', detail: 'the turn was stopped' }),
+        ]),
+      )
+    }
+    // No review definition may create a run, and the abandoned close steers
+    // nothing for a review it never started.
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    expect(
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter((entry) =>
+        ['task-review', 'spec-review', 'integration-review'].includes(entry.definition.id),
+      ),
+    ).toHaveLength(0)
+    expect(host.steers).toHaveLength(0)
+  })
+
+  it('names a failed lane start in the whole-scope refusal and starts the lane on the next close', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks
+
+## 1. Engine (lane 1, owns \`src/**\`)
+
+- [x] 1.1 First engine task
+- [x] 1.2 Second engine task
+- [ ] 1.3 Later engine task
+
+## 2. Docs (lane 2, owns \`docs/**\`)
+
+- [x] 2.1 Doc task
+`)
+    const host = await engineGateHost(workspace)
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // A settled non-PASS whole-scope attempt refuses the close. The canonical
+    // current PASS keeps the spec-review trigger out of this fixture.
+    const attempted = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review'],
+      id: 'run-whole-scope-error',
+      now: 1_000,
+    })
+    await runs.writeRun(
+      workspace,
+      runs.settleStep(attempted, 'review', 'done', {
+        at: 1_100,
+        evidence: {
+          kind: 'record',
+          path: '.dsh/workflows/records/spec-review/auth/attempt.json',
+        },
+      }),
+      auth,
+    )
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(recordDir, 'attempt.json'),
+      `${JSON.stringify({ verdict: 'ERROR' })}\n`,
+      'utf8',
+    )
+    // The due lane start's own run write fails, so its start returns not-ok
+    // while the whole-scope review step is what refuses the close.
+    runStoreFaults.syncWriteFile = 'simulated run-store write failure'
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const refusal = steered(host)
+    expect(refusal).toContain('last settled on a ERROR record')
+    expect(refusal).toContain('simulated run-store write failure')
+    expect(await taskRuns(workspace)).toHaveLength(0)
+    // The next close retries the unit once the write fault is gone.
+    runStoreFaults.syncWriteFile = undefined
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await waitFor(async () => (await taskRuns(workspace)).length === 2)
+    expect((await taskRuns(workspace)).map((run) => run.context.section).sort()).toEqual(['1', '2'])
   })
 })
 

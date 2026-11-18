@@ -2050,6 +2050,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // applicable is completed so retention can prune it, never left blocked.
       // Skip it on an unstable read: a run cancelled during the final listing
       // must not be completed from the stale snapshot.
+      // A stopped turn must not change durable run state either.
+      if (stopped()) return
       if (storedAuth !== undefined && stableKnown.stable) {
         for (const row of definitionRows) {
           if (row.reason !== 'not-applicable') continue
