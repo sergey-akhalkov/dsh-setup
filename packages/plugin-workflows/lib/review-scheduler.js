@@ -718,11 +718,13 @@ export class ReviewScheduler {
      * A duplicate admission prepared the unit's stable path, which the incumbent
      * reviewer is already reading: never delete a checkout another live run owns.
      */
-    discardDuplicateSnapshot(workspace, snapshotKey, incumbentRunId) {
+    discardDuplicateSnapshot(workspace, snapshotKey, incumbentRunId, rejectedRunId) {
         const incumbent = this.admitted.get(incumbentRunId);
+        // The rejected admission owns its own checkout, so cleanup must name it; only
+        // a checkout sharing the incumbent's stable path is left for the incumbent.
         if (incumbent !== undefined && incumbent.snapshotKey === snapshotKey)
             return;
-        void this.host.discardSnapshot(workspace, snapshotKey, incumbentRunId).catch(() => undefined);
+        void this.host.discardSnapshot(workspace, snapshotKey, rejectedRunId).catch(() => undefined);
     }
     async enqueue(input) {
         if (this.disposed) {
@@ -745,7 +747,7 @@ export class ReviewScheduler {
         const existing = this.liveRuns.get(key);
         if (existing !== undefined) {
             if (existing.id !== input.run.id) {
-                this.discardDuplicateSnapshot(input.workspace, input.snapshotKey ?? input.run.id, existing.id);
+                this.discardDuplicateSnapshot(input.workspace, input.snapshotKey ?? input.run.id, existing.id, input.run.id);
             }
             return { kind: 'duplicate', runId: existing.id };
         }
@@ -775,7 +777,7 @@ export class ReviewScheduler {
         const overlapping = this.coveringEntry(entry);
         if (overlapping !== undefined) {
             this.admitted.delete(entry.run.id);
-            this.discardDuplicateSnapshot(input.workspace, input.snapshotKey ?? input.run.id, overlapping.run.id);
+            this.discardDuplicateSnapshot(input.workspace, input.snapshotKey ?? input.run.id, overlapping.run.id, input.run.id);
             return { kind: 'duplicate', runId: overlapping.run.id };
         }
         let admission;
@@ -798,7 +800,7 @@ export class ReviewScheduler {
             case 'duplicate':
                 this.admitted.delete(entry.run.id);
                 if (admission.run.run.id !== input.run.id) {
-                    this.discardDuplicateSnapshot(input.workspace, input.snapshotKey ?? input.run.id, admission.run.run.id);
+                    this.discardDuplicateSnapshot(input.workspace, input.snapshotKey ?? input.run.id, admission.run.run.id, input.run.id);
                 }
                 return { kind: 'duplicate', runId: admission.run.run.id };
             case 'settled':

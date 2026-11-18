@@ -906,10 +906,13 @@ export class ReviewScheduler {
     workspace: string,
     snapshotKey: string,
     incumbentRunId: string,
+    rejectedRunId: string,
   ): void {
     const incumbent = this.admitted.get(incumbentRunId)
+    // The rejected admission owns its own checkout, so cleanup must name it; only
+    // a checkout sharing the incumbent's stable path is left for the incumbent.
     if (incumbent !== undefined && incumbent.snapshotKey === snapshotKey) return
-    void this.host.discardSnapshot(workspace, snapshotKey, incumbentRunId).catch(() => undefined)
+    void this.host.discardSnapshot(workspace, snapshotKey, rejectedRunId).catch(() => undefined)
   }
 
   async enqueue(input: ScheduledReview): Promise<ReviewAdmission> {
@@ -937,6 +940,7 @@ export class ReviewScheduler {
           input.workspace,
           input.snapshotKey ?? input.run.id,
           existing.id,
+          input.run.id,
         )
       }
       return { kind: 'duplicate', runId: existing.id }
@@ -971,6 +975,7 @@ export class ReviewScheduler {
         input.workspace,
         input.snapshotKey ?? input.run.id,
         overlapping.run.id,
+        input.run.id,
       )
       return { kind: 'duplicate', runId: overlapping.run.id }
     }
@@ -999,6 +1004,7 @@ export class ReviewScheduler {
             input.workspace,
             input.snapshotKey ?? input.run.id,
             admission.run.run.id,
+            input.run.id,
           )
         }
         return { kind: 'duplicate', runId: admission.run.run.id }

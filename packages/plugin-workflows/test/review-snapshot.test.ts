@@ -489,6 +489,56 @@ describe('snapshot lifecycle', () => {
     await expect(readFile(join(second.worktree, 'a.txt'))).rejects.toThrow()
   })
 
+  it('sweeps a lease-less checkout without overwriting another lane thread', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    await writeFile(join(dir, 'a.txt'), 'a\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    const keyA = 'review:change-a:section:1'
+    const keyB = 'review:change-a:section:2'
+    const first = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      keyA,
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (first === undefined) throw new Error('expected a snapshot')
+    // The stale leftover carries an obsolete copy of another lane's thread.
+    const delegation = join(first.worktree, '.dsh', 'delegation')
+    await mkdir(delegation, { recursive: true })
+    await writeFile(
+      join(delegation, 'codex-review-threads.json'),
+      JSON.stringify({
+        version: 1,
+        threads: [
+          { key: keyB, threadId: 'thread-b-stale', cwd: first.worktree, sandbox: 'read-only' },
+        ],
+      }),
+    )
+    // The durable map already holds a newer thread for that lane.
+    const durable = join(dir, '.dsh', 'workflows', 'review-threads.json')
+    await mkdir(join(dir, '.dsh', 'workflows'), { recursive: true })
+    await writeFile(
+      durable,
+      JSON.stringify({ version: 1, threads: [{ key: keyB, threadId: 'thread-b-new' }] }),
+    )
+    // A lease-less leftover has no known owner, so the sweep must not merge any
+    // thread entry into the durable map.
+    await stopSnapshotLease(dir, keyA)
+    await rm(`${first.worktree}.lease`, { force: true })
+    await sweepReviewSnapshots(dir, defaultGit, Date.now() + 24 * 60 * 60_000)
+    const map = JSON.parse(await readFile(durable, 'utf8')) as {
+      threads: Array<{ key: string; threadId: string }>
+    }
+    expect(new Map(map.threads.map((entry) => [entry.key, entry.threadId])).get(keyB)).toBe(
+      'thread-b-new',
+    )
+    await expect(readFile(join(first.worktree, 'a.txt'))).rejects.toThrow()
+  })
+
   it('keeps both lanes when two unit cleanups settle at once and never overwrites a newer thread', async () => {
     const dir = await repository()
     await writeFile(join(dir, '.gitignore'), '.dsh/\n')
