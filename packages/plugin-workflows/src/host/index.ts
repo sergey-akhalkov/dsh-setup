@@ -2070,6 +2070,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             knownRunGenerations.get(existing.id),
             entrySessionGeneration,
             existing.updatedAt,
+            stopped,
           )
         }
       }
@@ -3074,10 +3075,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     generation?: number,
     capturedSessionGeneration?: number,
     expectedUpdatedAt?: number,
+    cancelled?: () => boolean,
   ): Promise<WorkflowRun> =>
     withRunLock(run.id, async () => {
       const current = await readAuthenticatedRun(workspace, run.id, auth)
       if (current === undefined) return run
+      // The stop may have landed while this read was pending: never write then.
+      if (cancelled?.() === true) return current
       const sessionStale = (): boolean =>
         capturedSessionGeneration !== undefined &&
         capturedSessionGeneration !== sessionGeneration(run.session)
@@ -3159,12 +3163,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // a successful settlement must never inherit an old retry class.
           const keepClass =
             !settled && stored.failureClass !== undefined && step.failureClass === undefined
-          if (attempts === step.attempts && !keepClass) return step
+          // A settlement write built from an earlier snapshot must not drop the
+          // fallback cause the live step already carries.
+          const keepFallback =
+            stored.fallbackReason !== undefined && step.fallbackReason === undefined
+          if (attempts === step.attempts && !keepClass && !keepFallback) return step
           changed = true
           return {
             ...step,
             attempts,
             ...(keepClass ? { failureClass: stored.failureClass } : {}),
+            ...(keepFallback ? { fallbackReason: stored.fallbackReason } : {}),
           }
         })
         return changed ? { ...source, steps } : source

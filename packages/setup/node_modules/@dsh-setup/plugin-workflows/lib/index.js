@@ -1609,7 +1609,7 @@ export function apply(ctx, config = {}) {
                         (run.status === 'running' || run.status === 'blocked'));
                     if (existing === undefined)
                         continue;
-                    await persistRun(workspace, completeNotApplicable(existing, input.at), storedAuth, knownRunGenerations.get(existing.id), entrySessionGeneration, existing.updatedAt);
+                    await persistRun(workspace, completeNotApplicable(existing, input.at), storedAuth, knownRunGenerations.get(existing.id), entrySessionGeneration, existing.updatedAt, stopped);
                 }
             }
             const { record: bounded } = journal.record({
@@ -2513,10 +2513,13 @@ export function apply(ctx, config = {}) {
     /** Persist an advance unless the run's snapshot, session or state moved. */
     /** A bounded snapshot-fallback cause per run id, kept until the step settles. */
     const fallbackReasons = new Map();
-    const persistRun = async (workspace, run, auth, generation, capturedSessionGeneration, expectedUpdatedAt) => withRunLock(run.id, async () => {
+    const persistRun = async (workspace, run, auth, generation, capturedSessionGeneration, expectedUpdatedAt, cancelled) => withRunLock(run.id, async () => {
         const current = await readAuthenticatedRun(workspace, run.id, auth);
         if (current === undefined)
             return run;
+        // The stop may have landed while this read was pending: never write then.
+        if (cancelled?.() === true)
+            return current;
         const sessionStale = () => capturedSessionGeneration !== undefined &&
             capturedSessionGeneration !== sessionGeneration(run.session);
         const ended = () => endedRunIds.has(run.id) || endedSessionIds.has(run.session) || disposalFenced.has(run.id);
@@ -2590,13 +2593,17 @@ export function apply(ctx, config = {}) {
                 // A failed attempt keeps its class visible while the unit is still due;
                 // a successful settlement must never inherit an old retry class.
                 const keepClass = !settled && stored.failureClass !== undefined && step.failureClass === undefined;
-                if (attempts === step.attempts && !keepClass)
+                // A settlement write built from an earlier snapshot must not drop the
+                // fallback cause the live step already carries.
+                const keepFallback = stored.fallbackReason !== undefined && step.fallbackReason === undefined;
+                if (attempts === step.attempts && !keepClass && !keepFallback)
                     return step;
                 changed = true;
                 return {
                     ...step,
                     attempts,
                     ...(keepClass ? { failureClass: stored.failureClass } : {}),
+                    ...(keepFallback ? { fallbackReason: stored.fallbackReason } : {}),
                 };
             });
             return changed ? { ...source, steps } : source;

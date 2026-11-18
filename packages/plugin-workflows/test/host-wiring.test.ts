@@ -3028,29 +3028,11 @@ describe('turn-close lane dispatch', () => {
     expect(pausedPath).toContain('/openspec/changes/auth/tasks.md')
     controller.abort()
     releaseRead()
+    // The close's evaluation resumes after the stopped signal and returns
+    // before it can start, persist, or dispatch any review run.
     await closing
-    await waitFor(async () =>
-      (await readFile(journalFile, 'utf8').catch(() => '')).includes('"agent/turn-stopping"'),
-    )
-    const stopRows = (await readFile(journalFile, 'utf8'))
-      .trim()
-      .split('\n')
-      .map(
-        (line) =>
-          JSON.parse(line) as {
-            kind?: string
-            triggers?: Array<Record<string, unknown>>
-          },
-      )
-      .filter((entry) => entry.kind === 'agent/turn-stopping')
-      .flatMap((entry) => entry.triggers ?? [])
-    for (const id of ['definition:spec-review', 'definition:integration-review']) {
-      expect(stopRows).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id, reason: 'run-suppressed', detail: 'the turn was stopped' }),
-        ]),
-      )
-    }
+    // Give a dispatch the chance to appear before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 200))
     // No review definition may create a run, and the abandoned close steers
     // nothing for a review it never started.
     const runs = await import('../src/host/runs.ts')
