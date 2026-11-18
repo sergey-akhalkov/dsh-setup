@@ -2085,10 +2085,20 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
 
   /** Preserve observation order per session while definitions and keys load. */
   const recordQueues = new Map<string, Promise<void>>()
-  const record = (workspace: string, input: JournalInput, event: ObservedEvent): Promise<void> => {
+  const record = (
+    workspace: string,
+    input: JournalInput,
+    event: ObservedEvent,
+    cancelled?: () => boolean,
+  ): Promise<void> => {
     const previous = recordQueues.get(input.session) ?? Promise.resolve()
     const next = previous
-      .then(async () => recordNow(workspace, input, event))
+      // A stopped turn starts no review: the queued evaluation re-checks the
+      // caller's signal before it can create a run.
+      .then(async () => {
+        if (cancelled?.() === true) return
+        await recordNow(workspace, input, event)
+      })
       .catch((error: unknown) => publishListenerError(workspace, error))
     recordQueues.set(input.session, next)
     return next
@@ -2355,6 +2365,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (workspace === undefined) return
         turns.set(String(session.id), payload.turn)
         const summary = `turn ${String(payload.turn)} stop attempt`
+        if (payload.signal?.aborted === true) return
         void record(
           workspace,
           {
@@ -2368,6 +2379,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             truncated: false,
           },
           { kind: 'agent.turn-stop', subject: 'stop-attempt' },
+          () => payload.signal?.aborted === true,
         )
       } catch (error) {
         // An observer never fails a turn, but its failure stays visible.
