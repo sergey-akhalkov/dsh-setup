@@ -888,6 +888,51 @@ describe('the lane-first review units', () => {
     expect(units?.[0]?.missing.map((task) => task.number)).toEqual(['1.1', '1.3'])
   })
 
+  /** One newer section record covering several checked tasks of the lane. */
+  async function writeSectionRecord(
+    root: string,
+    section: string,
+    taskIds: readonly string[],
+    verdict: 'PASS' | 'FINDINGS',
+    time: string,
+  ): Promise<void> {
+    const record = join(root, '.dsh', 'workflows', 'records', 'task-review', 'change-a', 'tasks')
+    await mkdir(record, { recursive: true })
+    await writeFile(
+      join(record, `${sectionRecordId(section)}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'change-a',
+        phase: 'task',
+        scope: 'task',
+        section,
+        sectionTitle: `${section}. Engine`,
+        taskIds,
+        digest: 'b'.repeat(64),
+        verdict,
+        findings:
+          verdict === 'FINDINGS'
+            ? [{ severity: 'P1', title: 'blocked', evidence: 'e', fix: 'f' }]
+            : [],
+        target: { provider: 'codex-subagent' },
+        time,
+      }),
+      'utf8',
+    )
+  }
+  it('reopens a lane when a newer section FINDINGS covers an older per-task PASS', async () => {
+    const root = await workspace(SECTIONED_PLAN)
+    const engine = taskIdOf('Engine task')
+    const followUp = taskIdOf('Engine follow-up')
+    await writeTaskPass(root, engine)
+    await writeTaskPass(root, followUp)
+    await writeTaskPass(root, taskIdOf('Engine cleanup'))
+    await writeTaskPass(root, taskIdOf('Doc task'))
+    await writeSectionRecord(root, '1', [engine, followUp], 'FINDINGS', '2026-11-17T00:00:00.000Z')
+    const units = await reviewUnits(root, 'change-a')
+    expect(units).toHaveLength(1)
+    expect(units?.[0]?.missing.map((task) => task.number)).toEqual(['1.1', '1.2'])
+  })
   it('covers an approved task when a section mixes approvals and missing records', async () => {
     const root = await workspace(SECTIONED_PLAN)
     await writeTaskPass(root, taskIdOf('Engine follow-up'))
