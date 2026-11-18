@@ -3140,9 +3140,13 @@ describe('turn-close lane dispatch', () => {
         .flatMap((run) => run?.steps ?? [])
         .some((step) => step.state === 'cancelled' || step.reason === 'not-applicable'),
     ).toBe(false)
-    expect((await runs.listAuthenticatedRuns(workspace, auth)).map((run) => run.id).sort()).toEqual(
-      [retro.id, verify.id].sort(),
-    )
+    const persistedRuns = await runs.listAuthenticatedRuns(workspace, auth)
+    expect(persistedRuns.map((run) => run.id).sort()).toEqual([retro.id, verify.id].sort())
+    expect(
+      persistedRuns.filter((run) =>
+        ['task-review', 'spec-review', 'integration-review'].includes(run.definition.id),
+      ),
+    ).toHaveLength(0)
     expect(host.steers).toHaveLength(0)
   })
 

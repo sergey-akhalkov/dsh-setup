@@ -3356,6 +3356,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           generation,
           sessionGenerationAtStart,
           run.updatedAt,
+          aborted,
         )
       }
     }
@@ -3376,6 +3377,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           generation,
           sessionGenerationAtStart,
           run.updatedAt,
+          aborted,
         )
       }
     }
@@ -4898,6 +4900,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               runGenerationsAtRead.get(completedVerify.id),
               sessionGenerationAtRead,
               completedVerify.updatedAt,
+              stopped,
             )
             runs.splice(runs.indexOf(completedVerify), 1, persisted)
           }
@@ -5167,6 +5170,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               advancedGenerations.get(current.id),
               sessionGenerationAtRead,
               current.updatedAt,
+              stopped,
             )
             ordered.splice(ordered.indexOf(run), 1, superseded)
             continue
@@ -5374,6 +5378,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 runGenerationsAtRead.get(currentRetro.id),
                 sessionGenerationAtRead,
                 currentRetro.updatedAt,
+                stopped,
               )
               steer(issue.text)
               refusedThisClose = true
@@ -5390,6 +5395,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 runGenerationsAtRead.get(currentRetro.id),
                 sessionGenerationAtRead,
                 currentRetro.updatedAt,
+                stopped,
               )
               steer(`Work checkpoint UNCHECKED: ${issue.text} This is not a pass.`)
             }

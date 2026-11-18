@@ -2749,7 +2749,7 @@ export function apply(ctx, config = {}) {
                 requireWrite: checkpointApplicability.requireWrite,
             });
             if (!applicable) {
-                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth, generation, sessionGenerationAtStart, run.updatedAt);
+                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth, generation, sessionGenerationAtStart, run.updatedAt, aborted);
             }
         }
         if (definition.trigger.applicability === 'code-write') {
@@ -2759,7 +2759,7 @@ export function apply(ctx, config = {}) {
             const writeAt = lastCodeWriteAt(calls, workspace) ??
                 (writeMetrics?.turn === turn ? writeMetrics.lastWriteAt : undefined);
             if (writeAt === undefined) {
-                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth, generation, sessionGenerationAtStart, run.updatedAt);
+                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth, generation, sessionGenerationAtStart, run.updatedAt, aborted);
             }
         }
         const pending = run.steps.find((step) => step.state === 'open' || step.state === 'blocked');
@@ -4116,7 +4116,7 @@ export function apply(ctx, config = {}) {
                             attempts: 0,
                         })),
                     };
-                    const persisted = await persistRun(workspace, reopened, auth, runGenerationsAtRead.get(completedVerify.id), sessionGenerationAtRead, completedVerify.updatedAt);
+                    const persisted = await persistRun(workspace, reopened, auth, runGenerationsAtRead.get(completedVerify.id), sessionGenerationAtRead, completedVerify.updatedAt, stopped);
                     runs.splice(runs.indexOf(completedVerify), 1, persisted);
                 }
             }
@@ -4350,7 +4350,7 @@ export function apply(ctx, config = {}) {
                         status: 'cancelled',
                         updatedAt: journal.time(),
                     };
-                    await persistRun(workspace, superseded, auth, advancedGenerations.get(current.id), sessionGenerationAtRead, current.updatedAt);
+                    await persistRun(workspace, superseded, auth, advancedGenerations.get(current.id), sessionGenerationAtRead, current.updatedAt, stopped);
                     ordered.splice(ordered.indexOf(run), 1, superseded);
                     continue;
                 }
@@ -4496,13 +4496,13 @@ export function apply(ctx, config = {}) {
                         await persistRun(workspace, {
                             ...incrementTurnBlocks(currentRetro, journal.time()),
                             turnBlocksTurn: payload.turn,
-                        }, auth, runGenerationsAtRead.get(currentRetro.id), sessionGenerationAtRead, currentRetro.updatedAt);
+                        }, auth, runGenerationsAtRead.get(currentRetro.id), sessionGenerationAtRead, currentRetro.updatedAt, stopped);
                         steer(issue.text);
                         refusedThisClose = true;
                     }
                     else if (issue !== undefined && blocks === limit) {
                         const violated = addViolation(currentRetro, `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`, { at: journal.time() });
-                        await persistRun(workspace, { ...violated, turnBlocksTurn: payload.turn, turnBlocks: limit + 1 }, auth, runGenerationsAtRead.get(currentRetro.id), sessionGenerationAtRead, currentRetro.updatedAt);
+                        await persistRun(workspace, { ...violated, turnBlocksTurn: payload.turn, turnBlocks: limit + 1 }, auth, runGenerationsAtRead.get(currentRetro.id), sessionGenerationAtRead, currentRetro.updatedAt, stopped);
                         steer(`Work checkpoint UNCHECKED: ${issue.text} This is not a pass.`);
                     }
                 }
