@@ -198,6 +198,10 @@ describe('spec eligibility evidence', () => {
       // `#` without the YAML separator leaves a string, not the boolean marker.
       'schema: spec-driven\nskip_specs: true#disabled\n',
       'schema: spec-driven\nskip_specs: "true"\n',
+      // A duplicate key is invalid YAML: fail closed instead of picking one.
+      'schema: spec-driven\nskip_specs: true\nskip_specs: false\n',
+      // The escaped spelling decodes to the same duplicate key.
+      'schema: spec-driven\nskip_specs: true\n"skip\\u005fspecs": false\n',
     ]) {
       await writeArtifact(workspace, 'openspec/changes/auth/.openspec.yaml', metadata)
       expect(await verifyEvidence(spec, { workspace, values }), metadata).toMatchObject({
@@ -210,6 +214,14 @@ describe('spec eligibility evidence', () => {
       workspace,
       'openspec/changes/auth/.openspec.yaml',
       'schema: spec-driven\nskip_specs: true # pending review\n',
+    )
+    expect(await verifyEvidence(spec, { workspace, values })).toMatchObject({ ok: true })
+
+    // A quoted key is the same YAML key and the same declaration.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\n"skip_specs": true\n',
     )
     expect(await verifyEvidence(spec, { workspace, values })).toMatchObject({ ok: true })
   })
@@ -279,6 +291,30 @@ describe('spec eligibility evidence', () => {
       workspace,
       'openspec/changes/auth/.openspec.yaml',
       'schema: spec-driven\nskip_specs: true # pending review\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(marked)
+
+    // A duplicate key is invalid YAML and contributes no marker to the digest.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true\nskip_specs: false\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
+
+    // The escaped spelling is the same duplicate key.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true\n"skip\\u005fspecs": false\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
+
+    // A quoted key is the same declaration.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\n"skip_specs": true\n',
     )
     expect(await currentSpecDigest(workspace, 'auth')).toBe(marked)
 

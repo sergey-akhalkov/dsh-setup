@@ -38,7 +38,8 @@
     "@modelcontextprotocol/client": "2.2.0",
     "@openai/codex": "0.170.0",
     "@vectorize-io/hindsight-coding-agents": "0.8.2",
-    "fflate": "0.8.3"
+    "fflate": "0.8.3",
+    "yaml": "2.9.1"
   },
   "bundleDependencies": [
     "@dsh-setup/plugin-admin-indicator",

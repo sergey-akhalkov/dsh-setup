@@ -310,6 +310,10 @@ importers:
         version: 0.2.2-rc.2(4a47301486be4030ed2aab48370c5b35)
 
   packages/plugin-workflows:
+    dependencies:
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.1.0

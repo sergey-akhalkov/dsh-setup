@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { parseDocument } from 'yaml';
 import { CHANGE_NAME } from './command-parse.js';
 import { globMatches } from './evaluate.js';
 import { isInside } from './fs-change.js';
@@ -212,7 +213,7 @@ async function specCheck(_evidence, context, item) {
         const text = root === undefined
             ? undefined
             : await readFile(join(root, markerPath), 'utf8').catch(() => undefined);
-        if (text !== undefined && SKIP_SPECS.test(text)) {
+        if (text !== undefined && declaresSkipSpecsText(text)) {
             return {
                 ok: true,
                 evidence: {
@@ -385,13 +386,23 @@ function hashParts(parts) {
     return hash.digest('hex');
 }
 /**
- * The normalized `skip_specs: true` declaration OpenSpec honors for a change
- * without delta specs. A comment needs the YAML separator (whitespace), so
- * `true#disabled` is the string it is and never counts as the boolean marker.
- * shortcut: line-level read, not a YAML parse; upgrade with the CLI's own reader
- * if OpenSpec starts accepting other spellings.
+ * Whether the metadata text declares the boolean `skip_specs: true`. The YAML
+ * document is parsed the way OpenSpec parses it: duplicate keys (including a
+ * quoted or escaped spelling of the same key) are invalid metadata and fail
+ * closed, quoted keys decode to the same field, and a string `"true"` is not
+ * the boolean.
  */
-const SKIP_SPECS = /^skip_specs[ \t]*:[ \t]*(?:true|True|TRUE)[ \t]*(?:[ \t]+#.*)?\r?$/mu;
+export function declaresSkipSpecsText(text) {
+    try {
+        const document = parseDocument(text);
+        if (document.errors.length > 0)
+            return false;
+        return document.get('skip_specs') === true;
+    }
+    catch {
+        return false;
+    }
+}
 /**
  * Whether the change's `.openspec.yaml` declares `skip_specs: true`. The marker
  * only counts while the file resolves inside the change directory; a link out of
@@ -403,7 +414,7 @@ export async function declaresSkipSpecs(changeDir) {
         const target = await realpath(join(changeDir, '.openspec.yaml'));
         if (!isInside(root, target))
             return false;
-        return SKIP_SPECS.test(await readFile(target, 'utf8'));
+        return declaresSkipSpecsText(await readFile(target, 'utf8'));
     }
     catch {
         return false;

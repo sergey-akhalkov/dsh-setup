@@ -41,6 +41,9 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0"
   },
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
     "@deepseek-ai/dsh-agent": "0.2.2-rc.2",

@@ -5,16 +5,22 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { readWorkflowContribution } from '../../plugin-openspec/src/host/workflows.ts'
 import { adoptChange } from '../../plugin-workflows/src/host/adoption.ts'
 import { authorizeUserArchive } from '../../plugin-workflows/src/host/archive-authorization.ts'
-import type { Evidence } from '../../plugin-workflows/src/host/definitions.ts'
+import type { Definition, Evidence } from '../../plugin-workflows/src/host/definitions.ts'
 import {
   currentSpecDigest,
   type EvidenceContext,
+  type ShellResultObservation,
+  type ToolCallObservation,
   verifyEvidence,
 } from '../../plugin-workflows/src/host/evidence.ts'
+import { OwnedCalls } from '../../plugin-workflows/src/host/executors.ts'
 import { HostAuth } from '../../plugin-workflows/src/host/host-auth.ts'
-import { listReceipts } from '../../plugin-workflows/src/host/receipts.ts'
+import { advanceIntake } from '../../plugin-workflows/src/host/intake.ts'
+import { listReceipts, readReceipt } from '../../plugin-workflows/src/host/receipts.ts'
+import { createRun, settleStep, type WorkflowRun } from '../../plugin-workflows/src/host/runs.ts'
 
 /**
  * Committed acceptance for the exploratory-testing method: a disposable git
@@ -472,5 +478,110 @@ The system SHALL greet a user with a single-line greeting and SHALL never render
       'utf8',
     )
     expect(withoutMarker).not.toContain('skip_specs: true')
+  })
+
+  it('drives the contributed change-intake run to completion for the spec-less change', async () => {
+    const workspace = await tempWorkspace()
+    await root(workspace)
+    await cycleChange(workspace)
+    const definition = readWorkflowContribution().definitions[0] as Definition
+    const auth = HostAuth.fromKey(KEY)
+    const runId = 'run-spec-less-intake'
+    let run: WorkflowRun = createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: A },
+      steps: definition.steps.map((step) => step.id),
+      now: 1_000,
+      id: runId,
+    })
+    const toolCalls: ToolCallObservation[] = []
+    const shellResults: ShellResultObservation[] = []
+    const owned = new OwnedCalls()
+    const context: EvidenceContext = {
+      workspace,
+      values: { name: A },
+      toolCalls,
+      shellResults,
+      stepStartedAt: 1_500,
+    }
+    const advance = (): ReturnType<typeof advanceIntake> =>
+      advanceIntake({
+        run,
+        definition,
+        values: { name: A },
+        evidenceContext: context,
+        owned,
+        installedLegacy: new Set(),
+        enabledLegacy: new Set(),
+        auth,
+        now: 2_000,
+        toolRunner: {
+          async call(request) {
+            toolCalls.push({
+              callId: request.callId,
+              name: request.name,
+              arguments: { ...request.arguments },
+              ok: true,
+              at: 2_500,
+            })
+            return { ok: true }
+          },
+        },
+        readRecord: async () => {
+          throw new Error('the owned spec review must not read a legacy record')
+        },
+        reviewStep: async ({ run: reviewRun, step }) => {
+          const digest = (await currentSpecDigest(workspace, A)) as string
+          await write(
+            workspace,
+            `.dsh/workflows/records/spec-review/${A}/spec.json`,
+            `${JSON.stringify({
+              rule: 'spec-review',
+              change: A,
+              phase: 'spec',
+              scope: 'whole',
+              verdict: 'PASS',
+              digest,
+              findings: [],
+              time: '2026-11-18T00:00:00.000Z',
+              target: { provider: 'codex-subagent' },
+            })}\n`,
+          )
+          return settleStep(reviewRun, step.id, 'done', {
+            at: 2_700,
+            evidence: {
+              kind: 'record',
+              path: `.dsh/workflows/records/spec-review/${A}/spec.json`,
+              digest,
+            },
+          })
+        },
+        questions: { ask: async () => ({ answer: 'yes' }) },
+      })
+
+    expect((await advance()).waiting?.stepId).toBe('requirements')
+    await write(workspace, `.dsh/workflows/drafts/${A}/requirements.md`, 'x'.repeat(200))
+    run = (await advance()).run
+    await write(workspace, `.dsh/workflows/drafts/${A}/architecture.md`, 'architecture\n')
+    run = (await advance()).run
+    await write(workspace, `.dsh/workflows/drafts/${A}/interface.md`, 'interface\n')
+    run = (await advance()).run
+    expect(run.steps.find((step) => step.id === 'create-change')?.state).toBe('done')
+    expect(owned.has(toolCalls[0]?.callId ?? '')).toBe(true)
+    shellResults.push({
+      callId: 'intake-validate',
+      command: `openspec validate ${A} --strict`,
+      at: 2_600,
+      exitCode: 0,
+      foreground: true,
+    })
+    const finished = await advance()
+    expect(finished.completed).toBe(true)
+    expect(finished.run.steps.every((step) => step.state === 'done')).toBe(true)
+    expect(finished.run.steps.find((step) => step.id === 'spec')?.state).toBe('done')
+    expect(await readReceipt(workspace, A, auth)).toMatchObject({ kind: 'intake', change: A })
   })
 })

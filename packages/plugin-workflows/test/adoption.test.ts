@@ -222,6 +222,32 @@ describe('adoption of existing changes', () => {
     expect(changedRefused).toMatchObject({ ok: false })
     if (!changedRefused.ok) expect(changedRefused.reason).toContain('skip_specs: true')
 
+    // A duplicate key is invalid YAML: stale PASS and no eligible declaration.
+    const duplicate = await tempWorkspace()
+    await adoptableSpecLess(duplicate)
+    await writeArtifact(
+      duplicate,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true\nskip_specs: false\n',
+    )
+    expect((await verifyWholeSpecRecord(duplicate, 'auth')).ok).toBe(false)
+    const duplicateRefused = await verifyAdoptionEvidence(duplicate, 'auth')
+    expect(duplicateRefused).toMatchObject({ ok: false })
+    if (!duplicateRefused.ok) expect(duplicateRefused.reason).toContain('skip_specs: true')
+
+    // The escaped spelling of the same duplicate key fails closed too.
+    const escaped = await tempWorkspace()
+    await adoptableSpecLess(escaped)
+    await writeArtifact(
+      escaped,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true\n"skip\\u005fspecs": false\n',
+    )
+    expect((await verifyWholeSpecRecord(escaped, 'auth')).ok).toBe(false)
+    const escapedRefused = await verifyAdoptionEvidence(escaped, 'auth')
+    expect(escapedRefused).toMatchObject({ ok: false })
+    if (!escapedRefused.ok) expect(escapedRefused.reason).toContain('skip_specs: true')
+
     // A non-boolean scalar spelling is not the marker: the PASS is stale and
     // eligibility refuses without honoring the declaration.
     const invalid = await tempWorkspace()
