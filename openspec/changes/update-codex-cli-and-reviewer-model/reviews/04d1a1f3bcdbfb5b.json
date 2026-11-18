@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "update-codex-cli-and-reviewer-model",
+  "scope": "task",
+  "taskId": "04d1a1f3bcdbfb5b",
+  "digest": "cb43b3a7be49ff67182e10e7714fa9f75d05ee23bf1443c770525f91b75db653",
+  "worktreeDigest": "6772c1d7b709ac00ead8d57e482597b32c18cc92267d1989ba738d252553cd01",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-18T15:16:59.596Z"
+}
