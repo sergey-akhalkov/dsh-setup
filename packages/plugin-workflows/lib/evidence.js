@@ -387,17 +387,21 @@ function hashParts(parts) {
 }
 /**
  * Whether the metadata text declares the boolean `skip_specs: true`. The YAML
- * document is parsed the way OpenSpec parses it: duplicate keys (including a
- * quoted or escaped spelling of the same key) are invalid metadata and fail
- * closed, quoted keys decode to the same field, and a string `"true"` is not
- * the boolean.
+ * document is parsed and resolved the way OpenSpec parses it: duplicate keys
+ * (including a quoted or escaped spelling of the same key) are invalid metadata
+ * and fail closed, quoted keys and aliases decode to the same field, and a
+ * string `"true"` is not the boolean.
  */
 export function declaresSkipSpecsText(text) {
     try {
         const document = parseDocument(text);
         if (document.errors.length > 0)
             return false;
-        return document.get('skip_specs') === true;
+        const value = document.toJS();
+        return (typeof value === 'object' &&
+            value !== null &&
+            !Array.isArray(value) &&
+            value.skip_specs === true);
     }
     catch {
         return false;

@@ -117,10 +117,10 @@ export interface GlobExpansion {
 export declare function expandGlob(root: string, pattern: string): Promise<GlobExpansion>;
 /**
  * Whether the metadata text declares the boolean `skip_specs: true`. The YAML
- * document is parsed the way OpenSpec parses it: duplicate keys (including a
- * quoted or escaped spelling of the same key) are invalid metadata and fail
- * closed, quoted keys decode to the same field, and a string `"true"` is not
- * the boolean.
+ * document is parsed and resolved the way OpenSpec parses it: duplicate keys
+ * (including a quoted or escaped spelling of the same key) are invalid metadata
+ * and fail closed, quoted keys and aliases decode to the same field, and a
+ * string `"true"` is not the boolean.
  */
 export declare function declaresSkipSpecsText(text: string): boolean;
 /**

@@ -224,6 +224,14 @@ describe('spec eligibility evidence', () => {
       'schema: spec-driven\n"skip_specs": true\n',
     )
     expect(await verifyEvidence(spec, { workspace, values })).toMatchObject({ ok: true })
+
+    // An alias resolves to the boolean value OpenSpec reads.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nx-skip: &skip true\nskip_specs: *skip\n',
+    )
+    expect(await verifyEvidence(spec, { workspace, values })).toMatchObject({ ok: true })
   })
 
   it('refuses a marker link that leaves the workspace', async () => {
@@ -317,6 +325,20 @@ describe('spec eligibility evidence', () => {
       'schema: spec-driven\n"skip_specs": true\n',
     )
     expect(await currentSpecDigest(workspace, 'auth')).toBe(marked)
+
+    // An alias resolves to the boolean, and flipping the alias moves the marker.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nx-skip: &skip true\nskip_specs: *skip\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(marked)
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nx-skip: &skip false\nskip_specs: *skip\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
 
     await writeArtifact(workspace, 'openspec/changes/auth/.openspec.yaml', 'schema: spec-driven\n')
     expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
