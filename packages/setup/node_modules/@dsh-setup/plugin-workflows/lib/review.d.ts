@@ -364,11 +364,6 @@ export declare function recordReviewFailure(input: {
  */
 export declare function errorContractOf(evidence: Evidence): RecordEvidence | undefined;
 /**
- * The step's record contract narrowed to PASS. A contract that also accepts
- * ERROR must never complete a step from an ERROR: only a PASS does.
- */
-export declare function passContractOf(evidence: Evidence): RecordEvidence | undefined;
-/**
  * The failed review steps whose current record is a contract-matching ERROR.
  * Only those failures are provisional turn-close evidence: a recordless failure
  * (unreadable artifacts, an unpublished ERROR) or a record that no longer

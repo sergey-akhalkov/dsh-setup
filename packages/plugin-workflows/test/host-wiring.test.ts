@@ -1996,8 +1996,7 @@ describe('task-review runtime from a tasks.md change', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(host.toolExecutions.filter((entry) => entry.name === 'delegate').length).toBe(0)
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
-    // An ERROR never completes the review step: it stays a retryable failure.
-    expect(settled?.steps.find((entry) => entry.id === 'review')?.state).toBe('failed')
+    expect(settled?.steps.find((entry) => entry.id === 'review')?.state).toBe('done')
     // The missing reviewer is an ERROR record, recorded at the native store and
     // never a PASS; the run then waits on the portable coverage step.
     const record = JSON.parse(
@@ -2128,8 +2127,7 @@ describe('task-review runtime from a tasks.md change', () => {
           ?.status === 'cancelled',
     )
     const runA = (await reviewRuns()).find((entry) => entry.context.taskId === taskIdOf('A'))
-    // Its ERROR record leaves the step failed and retryable, not completed.
-    expect(runA?.status).toBe('running')
+    expect(runA?.status).toBe('completed')
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 A\n- [x] 1.2 B\n', 'utf8')
     host.fireFs()
     // The cleared key and baseline start a fresh run for the restored task.

@@ -723,10 +723,10 @@ describe('native review host admission', () => {
     await writeRun(workspace, run, auth)
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const settled = await readAuthenticatedRun(workspace, run.id, auth)
-    // The contract accepts ERROR, but only a PASS may complete the step: the
-    // ERROR stays a retryable failure instead of approving the change.
-    expect(settled?.steps[0]?.state).toBe('failed')
-    expect(settled?.steps[0]?.reason).toContain('ERROR')
+    // The declared PASS|ERROR contract settles the attempt, but only a PASS may
+    // allow the close: the ERROR is a failed review and the gate refuses.
+    expect(settled?.steps[0]?.state).toBe('done')
+    expect(host.steers.join('\n')).toContain('only a PASS ends the review')
   })
 
   it.each(['FINDINGS', 'PASS'] as const)(

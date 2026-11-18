@@ -757,9 +757,45 @@ async function reviewCloseStatus(
     }
   }
   if (step.review?.scope !== 'task') {
-    const state = run.steps.find((entry) => entry.id === step.id)?.state
-    const reason = run.steps.find((entry) => entry.id === step.id)?.reason
+    const stepRun = run.steps.find((entry) => entry.id === step.id)
+    const state = stepRun?.state
+    const reason = stepRun?.reason
+    // A live successor of the same whole-scope unit is coverage even when this
+    // sibling's own attempt settled on an ERROR or failed: the close waits on
+    // the shared retry instead of refusing the scope again.
+    const successorLive = (): ReviewCloseInput =>
+      siblingLiveRunId === undefined
+        ? { uncovered: [], live: [] }
+        : { uncovered: [], live: [siblingLiveRunId] }
+    // An ERROR attempt settles its step (the declared PASS|ERROR contract), but
+    // only a PASS record may allow the close: an ERROR that settled here is a
+    // failed review of the whole scope, so the next close starts a new round.
+    if (state === 'done' && stepRun?.evidence !== undefined) {
+      const evidence = stepRun.evidence
+      let verdict: string | undefined
+      if (evidence.kind === 'record' && evidence.path !== undefined) {
+        try {
+          const record = JSON.parse(await readFile(join(workspace, evidence.path), 'utf8')) as {
+            verdict?: unknown
+          }
+          verdict = typeof record.verdict === 'string' ? record.verdict : undefined
+        } catch {
+          verdict = undefined
+        }
+      }
+      if (verdict !== undefined && verdict !== 'PASS') {
+        if (siblingLiveRunId !== undefined) return successorLive()
+        return {
+          uncovered: [
+            `the ${definition.id} review step "${step.id}" last settled on a ${verdict} record; only a PASS ends the review, so the next close starts a new round`,
+          ],
+          live: [],
+          ...(dispatchFailure === undefined ? {} : { failure: dispatchFailure }),
+        }
+      }
+    }
     if (state === 'failed') {
+      if (siblingLiveRunId !== undefined) return successorLive()
       return {
         uncovered: [
           `the ${definition.id} review step "${step.id}" failed${reason === undefined ? '' : `: ${reason.slice(0, 200)}`}; the next close starts the next round`,
