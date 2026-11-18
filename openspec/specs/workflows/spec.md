@@ -518,7 +518,7 @@ An authenticated completed `change-intake` run and a successful adoption SHALL w
 
 ### Requirement: Adoption of existing changes
 
-The `/workflows adopt <name>` command and the model-facing `workflows` tool action `adopt` SHALL verify the existing `proposal.md`, `design.md`, `tasks.md`, at least one `specs/*/spec.md`, and the current whole-spec `PASS` record, ask the user to confirm through the host user-questions service, and write a host-authenticated `.dsh/workflows/receipts/<name>.json` without calling `openspec new change`. A non-affirmative answer, a timeout, or an unavailable question service MUST NOT write the receipt. The model MAY request adoption, but it MUST NOT supply the confirmation answer; the receipt is written only after the host asks the user and the user answers yes. The change and its verified digest MUST be re-verified after the answer, and a change that moved MUST NOT write the receipt.
+The `/workflows adopt <name>` command and the model-facing `workflows` tool action `adopt` SHALL verify the existing `proposal.md`, `design.md`, `tasks.md`, at least one `specs/*/spec.md` — or, when the change's `.openspec.yaml` sets `skip_specs: true`, the three artifacts plus that marker — and the current whole-spec `PASS` record, ask the user to confirm through the host user-questions service, and write a host-authenticated `.dsh/workflows/receipts/<name>.json` without calling `openspec new change`. A non-affirmative answer, a timeout, or an unavailable question service MUST NOT write the receipt. The model MAY request adoption, but it MUST NOT supply the confirmation answer; the receipt is written only after the host asks the user and the user answers yes. The change and its verified digest MUST be re-verified after the answer, and a change that moved MUST NOT write the receipt.
 
 #### Scenario: Existing change is adopted
 
@@ -549,6 +549,16 @@ The `/workflows adopt <name>` command and the model-facing `workflows` tool acti
 
 - **WHEN** the model requests adoption and the question service is unavailable, the question times out, or the user does not answer yes
 - **THEN** no receipt is written and the tool returns the named reason
+
+#### Scenario: Spec-less change is adopted
+
+- **WHEN** the change has proposal.md, design.md, tasks.md, `skip_specs: true`, no spec file, and a current whole-spec `PASS`, and the user answers yes
+- **THEN** the host-authenticated adoption receipt is written without requiring a spec file
+
+#### Scenario: Spec-less change without the marker is refused
+
+- **WHEN** the change has no spec file and no `skip_specs: true` marker
+- **THEN** no receipt is written and the refusal names the missing spec or marker
 
 ### Requirement: Model interface
 
@@ -1777,11 +1787,16 @@ and MUST NOT require a new id-specific engine behavior.
 
 ### Requirement: User-clicked archive authorization
 
-The workflows plugin SHALL provide `workflowsArchiveGate.authorizeAndCheck(workspace, change)`. It SHALL ensure the host key, verify the change artifacts and the current whole-spec `PASS`, and write the host-signed adoption receipt. The click is the final authorization: it MUST NOT apply the agent path's run/approval/marker checks, run the archive, or accept a text claim; the agent path keeps the full gate.
+The workflows plugin SHALL provide `workflowsArchiveGate.authorizeAndCheck(workspace, change)`. It SHALL ensure the host key, verify the change artifacts — the three artifacts plus the `skip_specs` marker for a spec-less change — and the current whole-spec `PASS`, and write the host-signed adoption receipt. The click is the final authorization: it MUST NOT apply the agent path's run/approval/marker checks, run the archive, or accept a text claim; the agent path keeps the full gate.
 
 #### Scenario: Verified click is authorized
 
 - **WHEN** the click service runs for a change with all four artifacts and a current whole-spec `PASS` record
+- **THEN** the host-signed adoption receipt is written and the service returns `ok`
+
+#### Scenario: Spec-less click is authorized
+
+- **WHEN** the click service runs for a change with proposal.md, design.md, tasks.md, `skip_specs: true`, and a current whole-spec `PASS` record
 - **THEN** the host-signed adoption receipt is written and the service returns `ok`
 
 #### Scenario: Missing PASS record is refused
@@ -2416,10 +2431,12 @@ under the mutation guard, so later writes MUST NOT invalidate a snapshot review.
 ### Requirement: Reviewed change-artifact inputs
 
 A whole-scope review whose digest includes the change-artifact digest MUST freeze the reviewed
-change's artifacts in its snapshot, regardless of Git ignore rules, excluding `.openspec.yaml` and the
-`reviews/` approval directory; a whole-spec review tracks exactly those artifacts. A task-scoped review
-MUST freeze the change directory in its snapshot and compute the digest from that copy; the live
-fallback tracks the union.
+change's artifacts in its snapshot, regardless of Git ignore rules, excluding the `reviews/` approval
+directory. The live-worktree fallback MUST track the change artifacts including `.openspec.yaml`, so
+the effective `skip_specs` declaration is a reviewed input: a marker change or an edit-read-restore
+during the run MUST discard the verdict as `reviewed-inputs-changed` instead of publishing a `PASS`.
+A task-scoped review MUST freeze the change directory in its snapshot and compute the digest from that
+copy; the live fallback tracks the union including `.openspec.yaml`.
 
 #### Scenario: Change artifact changes during a whole-spec review
 
@@ -2435,6 +2452,16 @@ fallback tracks the union.
 
 - **WHEN** the snapshot was unavailable and a change artifact is edited while the fallback task review runs
 - **THEN** no `PASS` is published, because the fallback tracks the union of the Git-visible worktree and the change artifacts
+
+#### Scenario: Marker changes during a live fallback spec review
+
+- **WHEN** the snapshot was unavailable and `.openspec.yaml` changes its `skip_specs` declaration while a whole-spec fallback review runs
+- **THEN** no `PASS` is published, the record is an `ERROR` with failure class `reviewed-inputs-changed`, and the error names `.openspec.yaml`
+
+#### Scenario: Marker change-and-restore during a live fallback spec review
+
+- **WHEN** the marker is changed and restored before a live fallback review settles
+- **THEN** the changed `.openspec.yaml` stat still discards the verdict and no `PASS` is published
 
 ### Requirement: Reviewed-input change report
 
@@ -3290,3 +3317,36 @@ rubric; otherwise the reviewer returns `PASS`.
 - **WHEN** a review runs with a bundled instruction and a detail of the reviewed input is unclear
 - **THEN** the reviewer makes the smallest reasonable assumption from the repository and the named
   artifacts and returns the single JSON verdict instead of asking or stopping
+
+### Requirement: Finding records in whole-spec review
+
+The bundled whole-spec review instruction SHALL include every `findings/**/*.md` file under the change directory in its review scope when present, in addition to `proposal.md`, `design.md`, delta specs, and `tasks.md`. The review MUST assess each finding record's evidence and proposed classification, not only the proposal and design.
+
+#### Scenario: Outcome change with finding records
+
+- **WHEN** the change contains a `findings/F-001.md` record
+- **THEN** the review scope includes it and the review reports on its evidence and proposed classification
+
+#### Scenario: Change without finding records
+
+- **WHEN** the change has no findings directory
+- **THEN** the existing whole-spec review scope is unchanged
+
+### Requirement: Spec-less marker freshness
+
+The change artifact digest SHALL include the effective `skip_specs` declaration. Archive authorization and adoption SHALL recheck that the change has either a spec file or `skip_specs: true` after the whole-spec record check. Adding, changing, or removing the marker MUST make an existing whole-spec record stale and MUST refuse archive or adoption until a new PASS exists.
+
+#### Scenario: Marker removed after PASS
+
+- **WHEN** a spec-less change has a current whole-spec PASS and its `skip_specs` marker is removed
+- **THEN** the record is stale, archive is refused, and the refusal names the missing spec or marker
+
+#### Scenario: Marker changes during adoption confirmation
+
+- **WHEN** the marker changes or is removed while the adoption confirmation is open
+- **THEN** no receipt is written and the re-verification refusal names the marker
+
+#### Scenario: Spec-bearing change unchanged
+
+- **WHEN** a change has a spec file
+- **THEN** its digest and archive or adoption behavior are unchanged
