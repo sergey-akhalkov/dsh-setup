@@ -149,11 +149,8 @@ function recordApprovesTask(
     value.rule !== rule ||
     value.change !== change ||
     value.scope !== 'task' ||
-    (value.verdict !== 'PASS' && value.verdict !== 'ERROR') ||
+    (value.verdict !== 'PASS' && value.verdict !== 'ERROR' && value.verdict !== 'FINDINGS') ||
     !verdicts.includes(value.verdict) ||
-    (value.verdict === 'ERROR' &&
-      (value.failureClass === 'reviewed-inputs-changed' ||
-        value.failureClass === 'queue-internal-error')) ||
     typeof value.digest !== 'string' ||
     !/^[0-9a-f]{64}$/u.test(value.digest) ||
     !Array.isArray(value.findings) ||
@@ -163,9 +160,7 @@ function recordApprovesTask(
   ) {
     return false
   }
-  if (value.phase !== 'task') return false
-  if (value.verdict === 'PASS' && value.findings.length !== 0) return false
-  return true
+  return value.phase === 'task'
 }
 
 /** Whether one record names this task: its own id, or a section it covers. */
@@ -197,11 +192,17 @@ async function taskReviewRecord(
   } catch {
     return false
   }
-  const names = [
-    ...(entries.includes(`${taskId}.json`) ? [`${taskId}.json`] : []),
-    ...entries.filter((name) => name !== `${taskId}.json` && name.endsWith('.json')),
-  ]
-  for (const name of names) {
+  // Every well-formed record naming the task competes; the newest verdict is
+  // authoritative, so a fresh section FINDINGS reopens a task an older
+  // per-task PASS used to cover. On an equal timestamp a PASS wins to keep
+  // historical fixtures stable.
+  const matches: Array<{
+    time: string
+    verdict: string
+    findings: number
+    failureClass?: string
+  }> = []
+  for (const name of entries.filter((entry) => entry.endsWith('.json'))) {
     let value: unknown
     try {
       value = JSON.parse(await readFile(join(workspace, directory, name), 'utf8'))
@@ -209,13 +210,39 @@ async function taskReviewRecord(
       continue
     }
     if (!recordNamesTask(value, taskId)) continue
-    if (!recordApprovesTask(value, change, rule, verdicts)) continue
-    const target = (value as { target: { provider: string; model?: string } }).target
-    if (binding?.provider !== undefined && target.provider !== binding.provider) continue
-    if (binding?.model !== undefined && target.model !== binding.model) continue
-    return true
+    if (!recordApprovesTask(value, change, rule, ['PASS', 'FINDINGS', 'ERROR'])) continue
+    const record = value as {
+      time: string
+      verdict: string
+      findings: unknown[]
+      failureClass?: string
+      target: { provider: string; model?: string }
+    }
+    if (binding?.provider !== undefined && record.target.provider !== binding.provider) continue
+    if (binding?.model !== undefined && record.target.model !== binding.model) continue
+    matches.push({
+      time: record.time,
+      verdict: record.verdict,
+      findings: record.findings.length,
+      ...(record.failureClass === undefined ? {} : { failureClass: record.failureClass }),
+    })
   }
-  return false
+  if (matches.length === 0) return false
+  matches.sort((left, right) => {
+    if (left.time !== right.time) return left.time < right.time ? 1 : -1
+    return (left.verdict === 'PASS' ? 0 : 1) - (right.verdict === 'PASS' ? 0 : 1)
+  })
+  const current = matches[0] as (typeof matches)[number]
+  if (!verdicts.includes(current.verdict)) return false
+  if (current.verdict === 'PASS' && current.findings !== 0) return false
+  if (
+    current.verdict === 'ERROR' &&
+    (current.failureClass === 'reviewed-inputs-changed' ||
+      current.failureClass === 'queue-internal-error')
+  ) {
+    return false
+  }
+  return true
 }
 
 /**
