@@ -5,7 +5,7 @@ their results. They were run in the implementation checkout against the final wo
 
 | Command                                                      | Exit | Evidence                                                       |
 | ------------------------------------------------------------ | ---- | -------------------------------------------------------------- |
-| `pnpm check`                                                 | 0    | 160 test files, 2974 tests passed; typecheck, lint, build green |
+| `pnpm check`                                                 | 0    | 160 test files, 2977 tests passed; typecheck, lint, build green |
 | `pnpm validate:repo`                                         | 0    | 1093 files scanned, 17 plugin packages, no problems             |
 | `pnpm gen:check`                                             | 0    | 431 generated files match 17 plugins                            |
 | `openspec validate narrow-condition-path-guard --strict`     | 0    | the change is valid                                            |

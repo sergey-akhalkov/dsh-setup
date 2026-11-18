@@ -742,6 +742,15 @@ describe('condition context path boundary', () => {
       'an escaped quote before a URL with a redirection',
       'echo \\"https://example.invalid>/etc/private/token.txt\\"',
     ],
+    ['a quoted file URL option', 'curl "--url=file:///etc/private/token.txt"'],
+    [
+      'a quoted script with an absolute path',
+      'sh -c "curl https://example.invalid -o /etc/private/token.txt"',
+    ],
+    [
+      'a literal backslash in a single-quoted URL',
+      "echo 'https://example.invalid/\\' >/etc/private/token.txt; echo 'done'",
+    ],
   ] as const)('refuses %s in event.command', async (_name, command) => {
     const root = await workspace()
     await expect(
