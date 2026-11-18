@@ -2698,6 +2698,51 @@ describe('turn-close lane dispatch', () => {
     )
   })
 
+  it('starts the section run when only split per-task runs are live', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // Two per-task runs cover the section's tasks separately. An ordinary
+    // section dispatches one run over all of them, so neither run covers it and
+    // the union must not suppress the section start.
+    for (const [id, taskId] of [
+      ['run-split-a', taskIdOf('First engine task')],
+      ['run-split-b', taskIdOf('Second engine task')],
+    ] as const) {
+      const run = runs.setRunStatus(
+        runs.createRun({
+          definition: 'task-review',
+          trigger: 'fs.change',
+          session: 'session-1',
+          workspace,
+          context: { name: 'auth', taskId },
+          steps: ['review', 'complete-review'],
+          id,
+          now: 1_000,
+        }),
+        'running',
+        1_001,
+      )
+      await runs.writeRun(workspace, run, auth)
+    }
+    await establishInvolvement(host)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(
+      async () =>
+        (await taskRuns(workspace)).some(
+          (run) =>
+            run.id !== 'run-split-a' && run.id !== 'run-split-b' && run.context.section === '1',
+        ),
+      5_000,
+    )
+  })
+
   it('abandons an aborted close without a steer or a review start', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await laneWorkspace()

@@ -4151,13 +4151,18 @@ export function apply(ctx, config = {}) {
                         if (unit.covered.some((task) => startedCovered.has(task.id)))
                             continue;
                         // A normal section identity dispatches one run over every checked
-                        // task, so it is covered only by a run naming all of them. The
-                        // oversized fallback and per-task units dispatch the missing tasks
-                        // alone; their union over those ids is coverage.
-                        const liveIds = new Set(liveRuns(change).flatMap((run) => taskIdsOf(run.context)));
+                        // task, so it is covered only by a single run naming all of them —
+                        // the same predicate the close uses. The oversized fallback and
+                        // per-task units dispatch the missing tasks alone; their union
+                        // over those ids is coverage.
+                        const openLiveRuns = liveRuns(change);
+                        const liveIds = new Set(openLiveRuns.flatMap((run) => taskIdsOf(run.context)));
                         const identity = sectionUnitIdentity(change, unit);
                         const covered = identity !== undefined
-                            ? unit.covered.every((task) => liveIds.has(task.id))
+                            ? openLiveRuns.some((run) => {
+                                const ids = taskIdsOf(run.context);
+                                return unit.covered.every((task) => ids.includes(task.id));
+                            })
                             : unit.missing.every((task) => liveIds.has(task.id));
                         if (covered)
                             continue;
