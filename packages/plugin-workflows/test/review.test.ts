@@ -31,6 +31,7 @@ import {
   sectionReviewDigest,
   writeLocalReviewRecord,
   writePortableApproval,
+  writeReviewFileAtomic,
 } from '../src/host/review.ts'
 import {
   createReviewSnapshot,
@@ -1460,6 +1461,22 @@ describe('review record store', () => {
     if (written.ok) throw new Error('the late approval must not be written')
     expect(written.error).toContain('not active')
     // A late verdict must not recreate the archived change's directory.
+    expect(await readdir(join(root, 'openspec', 'changes')).catch(() => [])).toEqual([])
+  })
+
+  it('does not create a missing change ancestor for a late publication', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workflows-review-'))
+    roots.push(root)
+    // The change directory is gone when the write runs: the in-place writer must
+    // not recreate it, so the race in the existence check cannot resurrect it.
+    await expect(
+      writeReviewFileAtomic(
+        join(root, 'openspec', 'changes', 'auth', 'reviews', '1111111111111111.json'),
+        '{}\n',
+        undefined,
+        false,
+      ),
+    ).rejects.toThrow()
     expect(await readdir(join(root, 'openspec', 'changes')).catch(() => [])).toEqual([])
   })
 

@@ -54,22 +54,25 @@ leaves unrecoverable runs open forever).
 
 **D3 - Skip only an archived change's review run.**
 `retro`, `verify`, and other runs keep today's semantics; only a review run is unrecoverable for an
-archived change, because its evidence and artifacts are gone. Archived detection covers both
-supported layouts - `archive/<date>-<name>` written by `openspec archive`, and `archive/<name>` from
-a supported manual move - and because a date-prefixed name is itself a legal change name, an entry
-such as `2026-01-01-keep` counts as both the dated layout of `keep` and the undated layout of
-`2026-01-01-keep`. A *missing* change keeps refusing: the existing recordless-failure regression
-requires its failed review to steer the cause instead of passing silently, and a deleted change is
-an error worth surfacing. This is the narrowest rule that closes the reported storm. Alternative
-rejected: skip every non-active change - it drops that real failure.
+archived change, because its evidence and artifacts are gone. Archived detection keeps one reading
+per archive entry: `archive/<date>-<name>` is the dated layout of `<name>`, and an entry without a
+date prefix is the undated layout of its own name. A date-prefixed entry is therefore never read as
+the undated name of a change whose name merely spells that string, so a genuinely missing change
+keeps its refusal; the residual cost is a change whose own name starts with a date and was moved
+manually, whose failed review keeps refusing until its entry is dated (the safe direction). A
+*missing* change keeps refusing: the existing recordless-failure regression requires its failed
+review to steer the cause instead of passing silently. This is the narrowest rule that closes the
+reported storm. Alternative rejected: skip every non-active change - it drops that real failure.
 
 **D6 - Fence the committed approval on an active change.**
 A reviewer that was already running when its change got archived can publish after the run settles
 cancelled; writing the portable approval would `mkdir` the change directory and resurrect the
-archived change as an active one. The single portable-approval writer therefore refuses when
-`openspec/changes/<change>` is absent, returning an error that the publication path records without
-a PASS. Alternative rejected: fence each caller (scheduler, task review, intake) - one choke point
-covers every publication path, including a late retry.
+archived change as an active one. The portable-approval writer therefore creates only the `reviews`
+leaf non-recursively and writes without creating parents, so a change removed at any point makes the
+write fail instead of recreating its tree. A preliminary existence check alone would race with the
+archive between the check and the recursive mkdir. Alternative rejected: fence each caller
+(scheduler, task review, intake) - one choke point covers every publication path, including a late
+retry.
 
 **D4 - The stale involvement record stays on disk.**
 No pruning and no empty-list write: the record is ignored when read, so a stale file is harmless and

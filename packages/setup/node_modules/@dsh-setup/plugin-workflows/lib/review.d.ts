@@ -246,7 +246,7 @@ export declare function renderReviewPrompt(input: ReviewPromptInput): string;
 /** The per-scope digest lives with the evidence verifier; kept importable here. */
 export { reviewDigest } from './evidence.js';
 /** Write one file atomically: temp beside the target, then rename. */
-export declare function writeReviewFileAtomic(file: string, bytes: string, cancelled?: () => boolean): Promise<void>;
+export declare function writeReviewFileAtomic(file: string, bytes: string, cancelled?: () => boolean, createParents?: boolean): Promise<void>;
 /**
  * Resolve a workspace-relative record path and prove every existing ancestor
  * stays inside the canonical workspace. A linked store would otherwise publish

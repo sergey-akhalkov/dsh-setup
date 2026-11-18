@@ -924,8 +924,12 @@ export async function writeReviewFileAtomic(
   file: string,
   bytes: string,
   cancelled?: () => boolean,
+  createParents = true,
 ): Promise<void> {
-  await mkdir(dirname(file), { recursive: true })
+  // A portable approval is written only into an existing change directory; the
+  // caller creates the leaf itself so a late verdict cannot recreate an
+  // archived change's tree.
+  if (createParents) await mkdir(dirname(file), { recursive: true })
   const temporary = `${file}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
   await writeFile(temporary, bytes)
   try {
@@ -1050,15 +1054,18 @@ export async function writePortableApproval(
     return { ok: false, error: 'a committed approval requires a PASS verdict' }
   }
   // A publication that lands after the change left the active tree must not
-  // recreate its directory: the verdict is discarded, never committed.
+  // recreate its directory: create only the `reviews` leaf (a recursive mkdir
+  // would recreate the archived change) and write without creating parents.
+  const relative = portableApprovalPath(record.change, record.taskId)
   try {
-    const changeDir = await lstat(join(workspace, 'openspec', 'changes', record.change))
-    if (!changeDir.isDirectory()) throw new Error('not a directory')
-  } catch {
-    return {
-      ok: false,
-      error:
-        'the change is not active under openspec/changes; the late verdict is discarded and no directory is created',
+    await mkdir(join(workspace, dirname(relative)), { recursive: false })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      return {
+        ok: false,
+        error:
+          'the change is not active under openspec/changes; the late verdict is discarded and no directory is created',
+      }
     }
   }
   const target = record.target
@@ -1075,13 +1082,13 @@ export async function writePortableApproval(
     }
   }
   try {
-    const path = portableApprovalPath(record.change, record.taskId)
     await writeReviewFileAtomic(
-      await containedRecordTarget(workspace, path),
+      await containedRecordTarget(workspace, relative),
       jsonText(portableApprovalOf(record)),
       cancelled,
+      false,
     )
-    return { ok: true, path }
+    return { ok: true, path: relative }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }

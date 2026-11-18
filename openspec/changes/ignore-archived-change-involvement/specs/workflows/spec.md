@@ -28,8 +28,8 @@ MAY stay on disk, MUST be ignored, and MUST NOT require manual cleanup.
 
 A committed approval MUST be written only while its change is an active change under
 `openspec/changes/`. A verdict that lands after the change left the active tree MUST be discarded: the
-engine MUST NOT write the approval and MUST NOT recreate the change directory, and the attempt is
-recorded as an error rather than a PASS.
+engine MUST NOT write the approval and MUST NOT create the change directory or any missing ancestor,
+and the attempt is recorded as an error rather than a PASS.
 
 #### Scenario: A late PASS does not recreate the archived change
 

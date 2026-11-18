@@ -9765,17 +9765,21 @@ describe('archived change involvement', () => {
     expect(await readFile(stored, 'utf8')).toBe(before)
   })
 
-  it('recognizes both archive layouts, including a date-prefixed change name', async () => {
+  it('reads one identity per archive entry', async () => {
     const workspace = await gitGateWorkspace()
     const directory = join(workspace, 'openspec', 'changes', 'archive')
-    await mkdir(join(directory, '2026-01-01-keep'), { recursive: true })
     await mkdir(join(directory, '2026-11-18-auth'), { recursive: true })
+    await mkdir(join(directory, 'billing'), { recursive: true })
     const { archivedChangeNames } = await import('../src/host/engine-gates.ts')
     const archived = await archivedChangeNames(workspace)
-    // The undated layout of a date-prefixed name and the dated layout of `auth`.
-    expect(archived.has('2026-01-01-keep')).toBe(true)
     expect(archived.has('auth')).toBe(true)
-    expect(archived.has('keep')).toBe(true)
+    expect(archived.has('billing')).toBe(true)
+    // A date-prefixed entry is the dated layout only: a missing change whose
+    // name merely spells that string keeps its refusal.
+    await mkdir(join(directory, '2026-01-01-keep'), { recursive: true })
+    const withAmbiguous = await archivedChangeNames(workspace)
+    expect(withAmbiguous.has('keep')).toBe(true)
+    expect(withAmbiguous.has('2026-01-01-keep')).toBe(false)
   })
 
   it('releases the admission slot of a settled archived review', async () => {

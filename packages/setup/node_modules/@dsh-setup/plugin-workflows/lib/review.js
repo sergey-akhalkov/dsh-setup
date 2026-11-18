@@ -664,8 +664,12 @@ function hashParts(parts) {
 /** The per-scope digest lives with the evidence verifier; kept importable here. */
 export { reviewDigest } from './evidence.js';
 /** Write one file atomically: temp beside the target, then rename. */
-export async function writeReviewFileAtomic(file, bytes, cancelled) {
-    await mkdir(dirname(file), { recursive: true });
+export async function writeReviewFileAtomic(file, bytes, cancelled, createParents = true) {
+    // A portable approval is written only into an existing change directory; the
+    // caller creates the leaf itself so a late verdict cannot recreate an
+    // archived change's tree.
+    if (createParents)
+        await mkdir(dirname(file), { recursive: true });
     const temporary = `${file}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`;
     await writeFile(temporary, bytes);
     try {
@@ -770,17 +774,19 @@ export async function writePortableApproval(workspace, record, cancelled) {
         return { ok: false, error: 'a committed approval requires a PASS verdict' };
     }
     // A publication that lands after the change left the active tree must not
-    // recreate its directory: the verdict is discarded, never committed.
+    // recreate its directory: create only the `reviews` leaf (a recursive mkdir
+    // would recreate the archived change) and write without creating parents.
+    const relative = portableApprovalPath(record.change, record.taskId);
     try {
-        const changeDir = await lstat(join(workspace, 'openspec', 'changes', record.change));
-        if (!changeDir.isDirectory())
-            throw new Error('not a directory');
+        await mkdir(join(workspace, dirname(relative)), { recursive: false });
     }
-    catch {
-        return {
-            ok: false,
-            error: 'the change is not active under openspec/changes; the late verdict is discarded and no directory is created',
-        };
+    catch (error) {
+        if (error.code !== 'EEXIST') {
+            return {
+                ok: false,
+                error: 'the change is not active under openspec/changes; the late verdict is discarded and no directory is created',
+            };
+        }
     }
     const target = record.target;
     if (target.provider.trim() === '' ||
@@ -793,9 +799,8 @@ export async function writePortableApproval(workspace, record, cancelled) {
         };
     }
     try {
-        const path = portableApprovalPath(record.change, record.taskId);
-        await writeReviewFileAtomic(await containedRecordTarget(workspace, path), jsonText(portableApprovalOf(record)), cancelled);
-        return { ok: true, path };
+        await writeReviewFileAtomic(await containedRecordTarget(workspace, relative), jsonText(portableApprovalOf(record)), cancelled, false);
+        return { ok: true, path: relative };
     }
     catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
