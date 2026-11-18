@@ -699,14 +699,29 @@ export function isOpenRun(run: WorkflowRun): boolean {
   return run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted'
 }
 
-/** The number of open runs; terminal runs do not consume a slot. */
+/**
+ * Whether a run consumes one of the shared admission slots. Only a run that is
+ * still advancing does: an interrupted run is resumable history kept for
+ * `workflows resume`, and a dead session's leftovers must never fill the limit
+ * and refuse every new run.
+ */
+export function isLiveSlot(run: WorkflowRun): boolean {
+  return run.status === 'running' || run.status === 'blocked'
+}
+
+/** The number of runs that consume an admission slot. */
+export function liveSlotCount(runs: readonly WorkflowRun[]): number {
+  return runs.filter(isLiveSlot).length
+}
+
+/** The number of open runs, including resumable interrupted history. */
 export function openRunCount(runs: readonly WorkflowRun[]): number {
   return runs.filter(isOpenRun).length
 }
 
 /** Whether one more run would exceed the configured limit. */
 export function runLimitExceeded(runs: readonly WorkflowRun[], maxRuns: number): boolean {
-  return openRunCount(runs) >= maxRuns
+  return liveSlotCount(runs) >= maxRuns
 }
 
 /** The open runs of one session; a different session cannot satisfy them. */

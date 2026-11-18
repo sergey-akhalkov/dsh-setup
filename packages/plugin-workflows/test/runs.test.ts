@@ -40,6 +40,7 @@ import {
   interruptEndedRun,
   listAuthenticatedRuns,
   listRuns,
+  liveSlotCount,
   openRunCount,
   pruneRuns,
   readAuthenticatedRun,
@@ -442,6 +443,22 @@ describe('run limits and scoping', () => {
       /belongs to session "session-1".*cannot satisfy/u,
     )
     expect(() => assertRunSession(open, 'session-1')).not.toThrow()
+  })
+
+  it('does not let interrupted history fill the admission limit', async () => {
+    const workspace = await tempWorkspace()
+    const history = [
+      setRunStatus(intakeRun(workspace, 'old-1', 1_000), 'interrupted', 1_100),
+      setRunStatus(intakeRun(workspace, 'old-2', 1_200), 'interrupted', 1_300),
+    ]
+    const live = intakeRun(workspace, 'live', 1_400)
+    // Interrupted runs stay resumable but never consume a slot; only a live one
+    // does, so dead-session history cannot refuse a new start.
+    expect(openRunCount([...history, live])).toBe(3)
+    expect(liveSlotCount([...history, live])).toBe(1)
+    expect(runLimitExceeded(history, 1)).toBe(false)
+    expect(runLimitExceeded([...history, live], 2)).toBe(false)
+    expect(runLimitExceeded([...history, live], 1)).toBe(true)
   })
 
   it('runs one requested step at a time and bounds the context', async () => {

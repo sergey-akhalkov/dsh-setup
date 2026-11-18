@@ -32,7 +32,7 @@ import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
 import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, reviewUnitKey, sectionReviewDigest, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, reviewInputTree, signatureHash, specInputs, } from './review-snapshot.js';
-import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, MAX_CONTEXT_BYTES, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
+import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, liveSlotCount, MAX_CONTEXT_BYTES, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
@@ -423,13 +423,33 @@ function coveredTaskIds(context) {
     return covered;
 }
 /**
+ * The recorded identity of a unit that dispatches as one section run, or
+ * undefined for a per-task unit and for an oversized section that falls back to
+ * its per-task starts. Shared by the dispatch and the close so both agree.
+ */
+function sectionUnitIdentity(change, unit) {
+    const section = unit.section;
+    if (section === undefined)
+        return undefined;
+    const identity = {
+        name: change,
+        taskId: sectionRecordId(section.key),
+        section: section.key,
+        sectionTitle: section.title,
+        taskIds: unit.covered.map((task) => task.id),
+    };
+    return Buffer.byteLength(JSON.stringify(identity), 'utf8') > MAX_CONTEXT_BYTES
+        ? undefined
+        : identity;
+}
+/**
  * The live task-review runs that cover a unit as it is now. A normal section
  * identity dispatches one run over every checked task, so only a run covering
  * all of them (approved included) covers the lane. The oversized fallback and a
  * per-task unit dispatch per missing task, so the union of their runs over the
  * missing tasks is coverage. Partial coverage is not coverage.
  */
-function liveUnitRuns(change, unit, openRuns) {
+function liveUnitRuns(change, unit, openRuns, fullCoverageOnly) {
     const runs = openRuns.filter((run) => run.change === change);
     const all = new Set(unit.covered.map((task) => task.id));
     for (const run of runs) {
@@ -437,6 +457,8 @@ function liveUnitRuns(change, unit, openRuns) {
         if ([...all].every((id) => ids.includes(id)))
             return [run];
     }
+    if (fullCoverageOnly)
+        return [];
     const required = new Set(unit.missing.map((task) => task.id));
     if (required.size === 0)
         return [];
@@ -538,7 +560,7 @@ async function reviewCloseStatus(workspace, change, definition, step, run, openR
     const live = [];
     const uncovered = [];
     for (const unit of units) {
-        const covering = liveUnitRuns(change, unit, openRuns);
+        const covering = liveUnitRuns(change, unit, openRuns, sectionUnitIdentity(change, unit) !== undefined);
         if (covering.length > 0) {
             for (const entry of covering)
                 if (!live.includes(entry.id))
@@ -1380,7 +1402,7 @@ export function apply(ctx, config = {}) {
                             : key, input.at),
                         startRun: (definition, matched, capture) => {
                             const limited = () => storedAuth !== undefined &&
-                                (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns);
+                                (runLimitReached || liveSlotCount(knownRuns) + startedThisEvent >= maxRuns);
                             if (definition.id === 'task-review') {
                                 // The watcher coalesces writes, so every newly checked task
                                 // reaches one unit start; a section with two or more missing
@@ -1758,7 +1780,7 @@ export function apply(ctx, config = {}) {
                                         };
                                     }
                                     if (!isReviewDefinition(definition) &&
-                                        (intentFull || openRunCount(intentRuns) + intentStarted >= maxRuns)) {
+                                        (intentFull || liveSlotCount(intentRuns) + intentStarted >= maxRuns)) {
                                         return {
                                             ok: false,
                                             reason: `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
@@ -2202,7 +2224,7 @@ export function apply(ctx, config = {}) {
         else
             reservedStarts.set(workspace, left);
     };
-    const atRunLimit = (workspace, runs) => openRunCount(runs) + (reservedStarts.get(workspace) ?? 0) >= maxRuns;
+    const atRunLimit = (workspace, runs) => liveSlotCount(runs) + (reservedStarts.get(workspace) ?? 0) >= maxRuns;
     /** Serialize capacity read, admission, and persistence across sessions. */
     const admissionTails = new Map();
     const acquireAdmission = async (workspace) => {
@@ -2522,12 +2544,9 @@ export function apply(ctx, config = {}) {
                 const incoming = step.attempts ?? 0;
                 const attempts = Math.max(incoming, stored.attempts);
                 const settled = step.state === 'done' || step.state === 'cancelled';
-                // A failed attempt keeps its class; a stale in-flight commit keeps it
-                // too. A successful settlement must never inherit an old retry class.
-                const keepClass = !settled &&
-                    stored.failureClass !== undefined &&
-                    step.failureClass === undefined &&
-                    (step.state === 'failed' || incoming < stored.attempts);
+                // A failed attempt keeps its class visible while the unit is still due;
+                // a successful settlement must never inherit an old retry class.
+                const keepClass = !settled && stored.failureClass !== undefined && step.failureClass === undefined;
                 if (attempts === step.attempts && !keepClass)
                     return step;
                 changed = true;
@@ -3552,7 +3571,7 @@ export function apply(ctx, config = {}) {
                                     changeExists: await changeDirectoryExists(workspace, capture),
                                     startRun: async (entry, name) => {
                                         if (atRunLimit(workspace, knownRuns) ||
-                                            openRunCount(knownRuns) + startedThisEvent >= maxRuns) {
+                                            liveSlotCount(knownRuns) + startedThisEvent >= maxRuns) {
                                             throw new Error('workflows-run-limit');
                                         }
                                         const run = await startRunForUnlocked(workspace, sessionId, auth, entry, { name }, dedupeKey);
@@ -3663,7 +3682,7 @@ export function apply(ctx, config = {}) {
                         }
                         if (definition.settings.gate !== 'review' &&
                             (atRunLimit(workspace, knownRuns) ||
-                                openRunCount(knownRuns) + startedThisEvent >= maxRuns)) {
+                                liveSlotCount(knownRuns) + startedThisEvent >= maxRuns)) {
                             triggerRows.push({
                                 ...row,
                                 matched: true,
@@ -4136,35 +4155,15 @@ export function apply(ctx, config = {}) {
                         // oversized fallback and per-task units dispatch the missing tasks
                         // alone; their union over those ids is coverage.
                         const liveIds = new Set(liveRuns(change).flatMap((run) => taskIdsOf(run.context)));
-                        const section = unit.section;
-                        const identity = section === undefined
-                            ? undefined
-                            : {
-                                name: change,
-                                taskId: sectionRecordId(section.key),
-                                section: section.key,
-                                sectionTitle: section.title,
-                                taskIds: unit.covered.map((task) => task.id),
-                            };
-                        const oversized = identity !== undefined &&
-                            Buffer.byteLength(JSON.stringify(identity), 'utf8') > MAX_CONTEXT_BYTES;
-                        const covered = identity !== undefined && !oversized
+                        const identity = sectionUnitIdentity(change, unit);
+                        const covered = identity !== undefined
                             ? unit.covered.every((task) => liveIds.has(task.id))
                             : unit.missing.every((task) => liveIds.has(task.id));
                         if (covered)
                             continue;
-                        const contexts = [];
-                        if (identity === undefined) {
-                            for (const task of unit.missing)
-                                contexts.push({ name: change, taskId: task.id });
-                        }
-                        else if (!oversized) {
-                            contexts.push(identity);
-                        }
-                        else {
-                            for (const task of unit.missing)
-                                contexts.push({ name: change, taskId: task.id });
-                        }
+                        const contexts = identity === undefined
+                            ? unit.missing.map((task) => ({ name: change, taskId: task.id }))
+                            : [identity];
                         let started = false;
                         for (const context of contexts) {
                             if (stopped())

@@ -5,7 +5,7 @@ import { collectEvidencePaths, type EvidenceContext, verifyEvidence } from './ev
 import type { HumanQuestionService } from './executors.js'
 import type { HostAuth } from './host-auth.js'
 import { type NoteInput, PROGRESS_STATUSES, type ProgressStatus } from './notes.js'
-import { openRunCount, type WorkflowRun } from './runs.js'
+import { liveSlotCount, type WorkflowRun } from './runs.js'
 
 /**
  * The model-facing `workflows` tool. It is a bounded control surface: list,
@@ -273,7 +273,7 @@ export async function executeWorkflowsTool(
       }
       const runs = await host.listRuns()
       const maxRuns = host.maxRuns ?? 20
-      if (definition.settings.gate !== 'review' && openRunCount(runs) >= maxRuns) {
+      if (definition.settings.gate !== 'review' && liveSlotCount(runs) >= maxRuns) {
         fail(`the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`)
       }
       if (definition.settings.risk === 'high' && !(await confirmHighRisk(host, definition.name))) {

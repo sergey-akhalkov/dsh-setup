@@ -970,6 +970,9 @@ async function settleFromRecord(input, record, recordPath, now) {
             at: now,
             reason: `the review returned ERROR; the step stays incomplete without approval or completion, the close is allowed with the failure visible, and the next close retries the review: ${detail.slice(0, 160)}`,
             evidence: { kind: 'record', path: recordPath, digest: record.digest },
+            // The record's class is the attempt's fact: it keeps the retry budget and
+            // the refusal diagnostic consistent across the lifecycle write.
+            ...(typeof record.failureClass === 'string' ? { failureClass: record.failureClass } : {}),
         });
     }
     const reason = !check.ok
@@ -981,6 +984,7 @@ async function settleFromRecord(input, record, recordPath, now) {
         at: now,
         reason,
         evidence: { kind: 'record', path: recordPath, digest: record.digest },
+        ...(typeof record.failureClass === 'string' ? { failureClass: record.failureClass } : {}),
     });
 }
 async function writeErrorRecord(input, record, error, failureClass, now) {

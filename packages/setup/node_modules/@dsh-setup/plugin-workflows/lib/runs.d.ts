@@ -206,7 +206,16 @@ export declare const MAX_CONTEXT_BYTES = 4096;
 export declare const MAX_TOOL_STEP_ATTEMPTS = 3;
 /** A run is open while it can still be resumed or steered. */
 export declare function isOpenRun(run: WorkflowRun): boolean;
-/** The number of open runs; terminal runs do not consume a slot. */
+/**
+ * Whether a run consumes one of the shared admission slots. Only a run that is
+ * still advancing does: an interrupted run is resumable history kept for
+ * `workflows resume`, and a dead session's leftovers must never fill the limit
+ * and refuse every new run.
+ */
+export declare function isLiveSlot(run: WorkflowRun): boolean;
+/** The number of runs that consume an admission slot. */
+export declare function liveSlotCount(runs: readonly WorkflowRun[]): number;
+/** The number of open runs, including resumable interrupted history. */
 export declare function openRunCount(runs: readonly WorkflowRun[]): number;
 /** Whether one more run would exceed the configured limit. */
 export declare function runLimitExceeded(runs: readonly WorkflowRun[], maxRuns: number): boolean;

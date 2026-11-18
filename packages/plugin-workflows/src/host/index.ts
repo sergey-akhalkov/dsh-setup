@@ -149,8 +149,8 @@ import {
   interruptEndedRun,
   isOpenRun,
   listAuthenticatedRuns,
+  liveSlotCount,
   MAX_CONTEXT_BYTES,
-  openRunCount,
   pruneRuns,
   readAuthenticatedRun,
   runFailure,
@@ -700,6 +700,29 @@ function coveredTaskIds(context: Readonly<Record<string, unknown>>): string[] {
 }
 
 /**
+ * The recorded identity of a unit that dispatches as one section run, or
+ * undefined for a per-task unit and for an oversized section that falls back to
+ * its per-task starts. Shared by the dispatch and the close so both agree.
+ */
+function sectionUnitIdentity(
+  change: string,
+  unit: ReviewUnit,
+): Readonly<Record<string, unknown>> | undefined {
+  const section = unit.section
+  if (section === undefined) return undefined
+  const identity = {
+    name: change,
+    taskId: sectionRecordId(section.key),
+    section: section.key,
+    sectionTitle: section.title,
+    taskIds: unit.covered.map((task) => task.id),
+  }
+  return Buffer.byteLength(JSON.stringify(identity), 'utf8') > MAX_CONTEXT_BYTES
+    ? undefined
+    : identity
+}
+
+/**
  * The live task-review runs that cover a unit as it is now. A normal section
  * identity dispatches one run over every checked task, so only a run covering
  * all of them (approved included) covers the lane. The oversized fallback and a
@@ -710,6 +733,7 @@ function liveUnitRuns(
   change: string,
   unit: ReviewUnit,
   openRuns: readonly ReviewUnitRun[],
+  fullCoverageOnly: boolean,
 ): ReviewUnitRun[] {
   const runs = openRuns.filter((run) => run.change === change)
   const all = new Set(unit.covered.map((task) => task.id))
@@ -717,6 +741,7 @@ function liveUnitRuns(
     const ids = coveredTaskIds(run.context)
     if ([...all].every((id) => ids.includes(id))) return [run]
   }
+  if (fullCoverageOnly) return []
   const required = new Set(unit.missing.map((task) => task.id))
   if (required.size === 0) return []
   const covering: ReviewUnitRun[] = []
@@ -821,7 +846,12 @@ async function reviewCloseStatus(
   const live: string[] = []
   const uncovered: string[] = []
   for (const unit of units) {
-    const covering = liveUnitRuns(change, unit, openRuns)
+    const covering = liveUnitRuns(
+      change,
+      unit,
+      openRuns,
+      sectionUnitIdentity(change, unit) !== undefined,
+    )
     if (covering.length > 0) {
       for (const entry of covering) if (!live.includes(entry.id)) live.push(entry.id)
       continue
@@ -1812,7 +1842,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               startRun: (definition, matched, capture) => {
                 const limited = (): boolean =>
                   storedAuth !== undefined &&
-                  (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
+                  (runLimitReached || liveSlotCount(knownRuns) + startedThisEvent >= maxRuns)
                 if (definition.id === 'task-review') {
                   // The watcher coalesces writes, so every newly checked task
                   // reaches one unit start; a section with two or more missing
@@ -2224,7 +2254,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     }
                     if (
                       !isReviewDefinition(definition) &&
-                      (intentFull || openRunCount(intentRuns) + intentStarted >= maxRuns)
+                      (intentFull || liveSlotCount(intentRuns) + intentStarted >= maxRuns)
                     ) {
                       return {
                         ok: false,
@@ -2716,7 +2746,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     else reservedStarts.set(workspace, left)
   }
   const atRunLimit = (workspace: string, runs: readonly WorkflowRun[]): boolean =>
-    openRunCount(runs) + (reservedStarts.get(workspace) ?? 0) >= maxRuns
+    liveSlotCount(runs) + (reservedStarts.get(workspace) ?? 0) >= maxRuns
   /** Serialize capacity read, admission, and persistence across sessions. */
   const admissionTails = new Map<string, Promise<void>>()
   const acquireAdmission = async (workspace: string): Promise<() => void> => {
@@ -3074,13 +3104,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const incoming = step.attempts ?? 0
           const attempts = Math.max(incoming, stored.attempts)
           const settled = step.state === 'done' || step.state === 'cancelled'
-          // A failed attempt keeps its class; a stale in-flight commit keeps it
-          // too. A successful settlement must never inherit an old retry class.
+          // A failed attempt keeps its class visible while the unit is still due;
+          // a successful settlement must never inherit an old retry class.
           const keepClass =
-            !settled &&
-            stored.failureClass !== undefined &&
-            step.failureClass === undefined &&
-            (step.state === 'failed' || incoming < stored.attempts)
+            !settled && stored.failureClass !== undefined && step.failureClass === undefined
           if (attempts === step.attempts && !keepClass) return step
           changed = true
           return {
@@ -4245,7 +4272,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     startRun: async (entry, name) => {
                       if (
                         atRunLimit(workspace, knownRuns) ||
-                        openRunCount(knownRuns) + startedThisEvent >= maxRuns
+                        liveSlotCount(knownRuns) + startedThisEvent >= maxRuns
                       ) {
                         throw new Error('workflows-run-limit')
                       }
@@ -4369,7 +4396,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               if (
                 definition.settings.gate !== 'review' &&
                 (atRunLimit(workspace, knownRuns) ||
-                  openRunCount(knownRuns) + startedThisEvent >= maxRuns)
+                  liveSlotCount(knownRuns) + startedThisEvent >= maxRuns)
               ) {
                 triggerRows.push({
                   ...row,
@@ -4906,33 +4933,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               // oversized fallback and per-task units dispatch the missing tasks
               // alone; their union over those ids is coverage.
               const liveIds = new Set(liveRuns(change).flatMap((run) => taskIdsOf(run.context)))
-              const section = unit.section
-              const identity =
-                section === undefined
-                  ? undefined
-                  : {
-                      name: change,
-                      taskId: sectionRecordId(section.key),
-                      section: section.key,
-                      sectionTitle: section.title,
-                      taskIds: unit.covered.map((task) => task.id),
-                    }
-              const oversized =
-                identity !== undefined &&
-                Buffer.byteLength(JSON.stringify(identity), 'utf8') > MAX_CONTEXT_BYTES
+              const identity = sectionUnitIdentity(change, unit)
               const covered =
-                identity !== undefined && !oversized
+                identity !== undefined
                   ? unit.covered.every((task) => liveIds.has(task.id))
                   : unit.missing.every((task) => liveIds.has(task.id))
               if (covered) continue
-              const contexts: Readonly<Record<string, unknown>>[] = []
-              if (identity === undefined) {
-                for (const task of unit.missing) contexts.push({ name: change, taskId: task.id })
-              } else if (!oversized) {
-                contexts.push(identity)
-              } else {
-                for (const task of unit.missing) contexts.push({ name: change, taskId: task.id })
-              }
+              const contexts: Readonly<Record<string, unknown>>[] =
+                identity === undefined
+                  ? unit.missing.map((task) => ({ name: change, taskId: task.id }))
+                  : [identity]
               let started = false
               for (const context of contexts) {
                 if (stopped()) return

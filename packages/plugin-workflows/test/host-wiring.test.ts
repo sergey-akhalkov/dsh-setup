@@ -4257,6 +4257,12 @@ describe('run admission at capacity', () => {
     const host = fakeHost(workspace)
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
+    // The boot recovery interrupts runs a previous process left behind; the fixture needs live slots.
+    for (const entry of await runs.listAuthenticatedRuns(workspace, auth)) {
+      if (entry.status === 'interrupted') {
+        await runs.writeRun(workspace, runs.setRunStatus(entry, 'running', 2_000), auth)
+      }
+    }
     await host.emit(
       'tools/pre-execute',
       { agent: host.agent, callId: 'capacity-call', name: 'read', arguments: {} },
@@ -4392,6 +4398,12 @@ describe('configured maxRuns', () => {
     const host = fakeHost(workspace)
     apply(host.ctx as never, { maxRuns: 1 })
     await new Promise((resolve) => setTimeout(resolve, 100))
+    // The boot recovery interrupts runs a previous process left behind; the fixture needs live slots.
+    for (const entry of await runs.listAuthenticatedRuns(workspace, auth)) {
+      if (entry.status === 'interrupted') {
+        await runs.writeRun(workspace, runs.setRunStatus(entry, 'running', 2_000), auth)
+      }
+    }
     await host.emit(
       'tools/pre-execute',
       { agent: host.agent, callId: 'over-limit', name: 'read', arguments: {} },
@@ -4458,6 +4470,12 @@ describe('configured maxRuns', () => {
     const host = fakeHost(workspace)
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
+    // The boot recovery interrupts runs a previous process left behind; the fixture needs live slots.
+    for (const entry of await runs.listAuthenticatedRuns(workspace, auth)) {
+      if (entry.status === 'interrupted') {
+        await runs.writeRun(workspace, runs.setRunStatus(entry, 'running', 2_000), auth)
+      }
+    }
     // The plan change reaches the review trigger at capacity.
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
     host.fireFs()
@@ -4569,6 +4587,12 @@ describe('configured maxRuns', () => {
       reviewers: { codex: { provider: 'codex-subagent' } },
     })
     await new Promise((resolve) => setTimeout(resolve, 100))
+    // The boot recovery interrupts runs a previous process left behind; the fixture needs live slots.
+    for (const entry of await runs.listAuthenticatedRuns(workspace, auth)) {
+      if (entry.status === 'interrupted') {
+        await runs.writeRun(workspace, runs.setRunStatus(entry, 'running', 2_000), auth)
+      }
+    }
     await host.emit(
       'agent/pre-step',
       {
@@ -9142,7 +9166,10 @@ describe('public review start through the workflows tool', () => {
     const stored = await runs.readAuthenticatedRun(dir, runId, auth)
     const step = stored?.steps.find((entry) => entry.id === 'review')
     expect(step?.attempts).toBe(2)
-    expect(step?.failureClass).toBe('child-limit')
+    // A contract-settled (done) step never inherits the old retry class; a
+    // failed or blocked attempt keeps the class for its refusal diagnostic.
+    if (step?.state === 'done') expect(step.failureClass).toBeUndefined()
+    else expect(step?.failureClass).toBe('child-limit')
     const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
     expect(record.attempts).toBe(2)
     expect(record.failureClass).toBe('child-limit')

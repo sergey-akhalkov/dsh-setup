@@ -2,7 +2,7 @@ import { adoptChange } from './adoption.js';
 import { CHANGE_NAME } from './command-parse.js';
 import { collectEvidencePaths, verifyEvidence } from './evidence.js';
 import { PROGRESS_STATUSES } from './notes.js';
-import { openRunCount } from './runs.js';
+import { liveSlotCount } from './runs.js';
 /**
  * The model-facing `workflows` tool. It is a bounded control surface: list,
  * start an allowed definition, resume, status, host-verified evidence, cancel,
@@ -190,7 +190,7 @@ export async function executeWorkflowsTool(value, host) {
             }
             const runs = await host.listRuns();
             const maxRuns = host.maxRuns ?? 20;
-            if (definition.settings.gate !== 'review' && openRunCount(runs) >= maxRuns) {
+            if (definition.settings.gate !== 'review' && liveSlotCount(runs) >= maxRuns) {
                 fail(`the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`);
             }
             if (definition.settings.risk === 'high' && !(await confirmHighRisk(host, definition.name))) {
