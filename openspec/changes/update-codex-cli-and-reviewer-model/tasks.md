@@ -17,7 +17,7 @@
 ## 4. Generation, full gate, and live acceptance (serial, owns generated `packages/setup/package.json`, `packages/setup/cordis.patch.yml`, `packages/setup/node_modules/@dsh-setup/**`, the full repository gate, and the live acceptance)
 
 - [x] 4.1 Run `pnpm gen` after every source edit, including task 3.2, so the vendored tree carries the bumped metadata, the new model, and the review posture. Verify `pnpm gen:check` passes, the regenerated `packages/setup/cordis.patch.yml` carries `model: gpt-6.2-astra`, and `pnpm exec vitest run scripts/test/setup-release.test.ts` passes.
-- [ ] 4.2 Run `pnpm build && git diff --exit-code`, `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, and `pnpm validate:installer`; verify every command exits 0.
+- [x] 4.2 Run `pnpm build && git diff --exit-code`, `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, and `pnpm validate:installer`; verify every command exits 0.
 - [x] 4.3 Run the live acceptance with the owner's `~/.codex` login and the `gpt-6.2-astra` target: `codex_subagent_status` reports `0.170.0`, one authenticated delegation completes, and a signed-out run reports the login next action. Record the observed result.
 - [x] 4.4 Run `openspec validate update-codex-cli-and-reviewer-model --strict` and verify it exits 0.
 
