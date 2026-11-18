@@ -89,7 +89,7 @@ version, source (`config`, `bundled`, or `PATH`), bundled version, login command
 
 The provider SHALL start the bundled (or selected) Codex with the official `app-server --stdio`
 protocol adapter retained from upstream and MUST surface protocol startup failures, non-completed
-runs, cancellation, and timeouts as explicit errors. The bundled `0.169.0` handshake and a completed
+runs, cancellation, and timeouts as explicit errors. The bundled `0.170.0` handshake and a completed
 authenticated turn are required acceptance checks.
 
 #### Scenario: Successful run
@@ -200,7 +200,7 @@ the persisted thread id or report the missing thread and start a new one.
 
 ### Requirement: Bundled Codex binary
 
-The fork SHALL declare the current latest stable `@openai/codex` npm release (`0.169.0`) as a
+The fork SHALL declare the current latest stable `@openai/codex` npm release (`0.170.0`) as a
 runtime dependency, so a profile install fetches the platform binary. It MUST NOT commit a Codex
 binary or a platform-specific executable to the repository, and the status MUST report the bundled
 path and version.
