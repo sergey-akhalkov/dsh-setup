@@ -3060,8 +3060,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     workspace: string,
     run: WorkflowRun,
     auth: HostAuth,
+    cancelled?: () => boolean,
   ): Promise<void> => {
-    await writeRun(workspace, run, auth)
+    await writeRun(workspace, run, auth, cancelled === undefined ? {} : { cancelled })
     storeRevision += 1
     lifecycleEpoch += 1
   }

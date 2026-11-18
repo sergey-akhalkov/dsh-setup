@@ -156,6 +156,12 @@ export async function writeRun(workspace, run, auth, options = {}) {
     const target = runPath(workspace, run.id);
     const temporary = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`;
     await writeFile(temporary, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
+    // The stop can land during directory preparation or the temp write: never
+    // publish the run file after it.
+    if (options.cancelled?.() === true) {
+        await unlink(temporary).catch(() => undefined);
+        return;
+    }
     try {
         await (options.rename ?? rename)(temporary, target);
     }

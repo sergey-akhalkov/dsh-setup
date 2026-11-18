@@ -2505,8 +2505,8 @@ export function apply(ctx, config = {}) {
         }
     };
     /** Write one run without a lock/expected check; commits use the guards below. */
-    const writeCommit = async (workspace, run, auth) => {
-        await writeRun(workspace, run, auth);
+    const writeCommit = async (workspace, run, auth, cancelled) => {
+        await writeRun(workspace, run, auth, cancelled === undefined ? {} : { cancelled });
         storeRevision += 1;
         lifecycleEpoch += 1;
     };
