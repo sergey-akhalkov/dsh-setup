@@ -2564,14 +2564,10 @@ export function apply(ctx, config = {}) {
                 ? run
                 : {
                     ...run,
-                    steps: run.steps.map((step) => reviewStepIds.has(step.id) &&
-                        step.state === 'done' &&
-                        step.fallbackReason === undefined
+                    steps: run.steps.map((step) => reviewStepIds.has(step.id) && step.fallbackReason === undefined
                         ? { ...step, fallbackReason: fallback.slice(0, 200) }
                         : step),
                 };
-            if (fallback !== undefined)
-                fallbackReasons.delete(run.id);
             let changed = source !== run;
             const steps = source.steps.map((step) => {
                 // Only a review step carries retry facts across a stale lifecycle
@@ -2605,6 +2601,9 @@ export function apply(ctx, config = {}) {
         const merged = withAttempts();
         if (merged !== current)
             await writeCommit(workspace, merged, auth);
+        // The cause is durably on the step now; drop the pending copy.
+        if (merged !== current && fallbackReasons.has(run.id))
+            fallbackReasons.delete(run.id);
         // A disposal can fence the session during the write; the lock serializes
         // the writers, but the fence and the session generation are set
         // synchronously, so re-check both after the write.

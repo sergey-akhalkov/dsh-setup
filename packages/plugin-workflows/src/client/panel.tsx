@@ -79,6 +79,8 @@ export interface RunStepView {
   readonly evidenceRef?: { readonly kind: string; readonly ref?: string; readonly at?: number }
   /** The producer-owned class of a blocked or failed step. */
   readonly failureClass?: string
+  /** A bounded snapshot-fallback cause carried with the step. */
+  readonly fallbackReason?: string
   readonly reason?: string
   /** A display row synthesized for a violation, not a real step. */
   readonly synthetic?: boolean

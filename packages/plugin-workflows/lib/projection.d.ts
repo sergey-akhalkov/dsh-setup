@@ -23,6 +23,8 @@ export interface RunStep {
     };
     /** The producer-owned class of a blocked or failed step. */
     readonly failureClass?: string;
+    /** A bounded snapshot-fallback cause carried with the step. */
+    readonly fallbackReason?: string;
     /** The transport attempts a review step used, for a retrying review. */
     readonly attempts?: number;
     readonly reason?: string;

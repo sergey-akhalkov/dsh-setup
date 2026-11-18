@@ -619,6 +619,9 @@ export async function engineRuns(workspace) {
                 ...(typeof entry.failureClass === 'string'
                     ? { failureClass: safeText(entry.failureClass) }
                     : {}),
+                ...(typeof entry.fallbackReason === 'string'
+                    ? { fallbackReason: safeText(entry.fallbackReason) }
+                    : {}),
                 ...(typeof entry.attempts === 'number' && Number.isSafeInteger(entry.attempts)
                     ? { attempts: entry.attempts }
                     : {}),

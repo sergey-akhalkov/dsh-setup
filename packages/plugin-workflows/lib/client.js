@@ -14569,7 +14569,11 @@ window.__ModuleLoader__.load({
                   " ",
                   step.reason
                 ] }),
-                step.failureClass === void 0 && step.reason === void 0 ? "\u2014" : null
+                step.fallbackReason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("span", { className: "dsh-wf-error", "data-fallback-reason": step.fallbackReason, children: [
+                  " ",
+                  step.fallbackReason
+                ] }),
+                step.failureClass === void 0 && step.reason === void 0 && step.fallbackReason === void 0 ? "\u2014" : null
               ] })
             ] }, step.id)) })
           ] })

@@ -141,7 +141,17 @@ export function RunDetailPage(props: {
                   {step.reason === undefined ? null : (
                     <span className="dsh-wf-error"> {step.reason}</span>
                   )}
-                  {step.failureClass === undefined && step.reason === undefined ? '—' : null}
+                  {step.fallbackReason === undefined ? null : (
+                    <span className="dsh-wf-error" data-fallback-reason={step.fallbackReason}>
+                      {' '}
+                      {step.fallbackReason}
+                    </span>
+                  )}
+                  {step.failureClass === undefined &&
+                  step.reason === undefined &&
+                  step.fallbackReason === undefined
+                    ? '—'
+                    : null}
                 </td>
               </tr>
             ))}

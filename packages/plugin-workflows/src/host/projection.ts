@@ -55,6 +55,8 @@ export interface RunStep {
   readonly evidenceRef?: { readonly kind: string; readonly ref?: string; readonly at?: number }
   /** The producer-owned class of a blocked or failed step. */
   readonly failureClass?: string
+  /** A bounded snapshot-fallback cause carried with the step. */
+  readonly fallbackReason?: string
   /** The transport attempts a review step used, for a retrying review. */
   readonly attempts?: number
   readonly reason?: string
@@ -835,6 +837,9 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
         ...(typeof entry.reason === 'string' ? { reason: safeError(entry.reason) } : {}),
         ...(typeof entry.failureClass === 'string'
           ? { failureClass: safeText(entry.failureClass) }
+          : {}),
+        ...(typeof entry.fallbackReason === 'string'
+          ? { fallbackReason: safeText(entry.fallbackReason) }
           : {}),
         ...(typeof entry.attempts === 'number' && Number.isSafeInteger(entry.attempts)
           ? { attempts: entry.attempts }
