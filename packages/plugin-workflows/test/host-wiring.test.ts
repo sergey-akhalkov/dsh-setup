@@ -2636,6 +2636,49 @@ describe('turn-close lane dispatch', () => {
     expect(started?.status).toBe('running')
   })
 
+  it('does not let an unstarted foreign open review suppress dispatch', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await laneWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // A foreign run whose review step is merely persisted open, with no live
+    // reviewer: it must not cover the lane for this session's close.
+    const foreign = runs.setRunStatus(
+      runs.createRun({
+        definition: 'task-review',
+        trigger: 'fs.change',
+        session: 'session-2',
+        workspace,
+        context: {
+          name: 'auth',
+          taskId: sectionRecordId('1'),
+          section: '1',
+          sectionTitle: '1. Engine (lane 1, owns `src/**`)',
+          taskIds: [taskIdOf('First engine task'), taskIdOf('Second engine task')],
+        },
+        steps: ['review', 'complete-review'],
+        now: 1_000,
+      }),
+      'running',
+      1_001,
+    )
+    await runs.writeRun(workspace, foreign, auth)
+    await establishInvolvement(host)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(
+      async () =>
+        (await taskRuns(workspace)).some(
+          (run) => run.id !== foreign.id && run.context.section === '1',
+        ),
+      5_000,
+    )
+  })
+
   it('starts the full section run when a live run covers only a missing task', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await laneWorkspace()
