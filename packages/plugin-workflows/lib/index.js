@@ -3344,7 +3344,7 @@ export function apply(ctx, config = {}) {
                 // its receipt; the run stays open for the next close.
                 if (aborted())
                     return { run };
-                const persisted = await persistRun(workspace, completedRun, auth, generation, sessionGenerationAtStart, run.updatedAt);
+                const persisted = await persistRun(workspace, completedRun, auth, generation, sessionGenerationAtStart, run.updatedAt, aborted);
                 if (persisted.status !== 'completed')
                     return { run: persisted };
                 // The stop can land during the completion write: issue no receipt then.
@@ -3364,7 +3364,7 @@ export function apply(ctx, config = {}) {
             now: journal.time(),
         });
         if (result.run !== run && !aborted()) {
-            return await persistRun(workspace, result.run, auth, generation, sessionGenerationAtStart, run.updatedAt);
+            return await persistRun(workspace, result.run, auth, generation, sessionGenerationAtStart, run.updatedAt, aborted);
         }
         return result.run;
     };
@@ -4453,7 +4453,7 @@ export function apply(ctx, config = {}) {
                     // reviewer before persisting so no verdict can publish over it.
                     if (isSoftSettled(outcome.run))
                         reviewScheduler.fence(run.id);
-                    await persistRun(workspace, outcome.run, auth, advancedGenerations.get(run.id), sessionGenerationAtRead, current.updatedAt);
+                    await persistRun(workspace, outcome.run, auth, advancedGenerations.get(run.id), sessionGenerationAtRead, current.updatedAt, stopped);
                 }
                 // Keep the session's main-step owner until its step settles; a
                 // second run may take over only after that.

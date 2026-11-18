@@ -3046,6 +3046,106 @@ describe('turn-close lane dispatch', () => {
     expect(host.steers).toHaveLength(0)
   })
 
+  it('leaves deferred runs open when the stop lands during the not-applicable completion read', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // Two observational runs a reload left open. A close whose turn wrote no
+    // code and asked for no checkpoint classifies both definitions as
+    // not-applicable, so the completion loop owns them.
+    const retro = runs.createRun({
+      definition: 'retro',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['checkpoint', 'verify'],
+      id: 'run-seeded-retro',
+      now: 1_000,
+    })
+    const verify = runs.setRunStatus(
+      runs.settleStep(
+        runs.createRun({
+          definition: 'verify',
+          trigger: 'turn.stopping',
+          session: 'session-1',
+          workspace,
+          steps: ['check'],
+          id: 'run-seeded-verify',
+          now: 1_100,
+        }),
+        'check',
+        'blocked',
+        { at: 1_101, reason: 'the verification is waiting' },
+      ),
+      'blocked',
+      1_101,
+    )
+    await runs.writeRun(workspace, retro, auth)
+    await runs.writeRun(workspace, verify, auth)
+    let releaseRead: () => void = () => undefined
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+    let paused = (): void => undefined
+    const pausedGate = new Promise<void>((resolve) => {
+      paused = resolve
+    })
+    // The close's own record reads both seeded runs twice before the
+    // not-applicable completion: once to seed trigger identities and once for
+    // the stable snapshot. The fifth store read is the completion's
+    // authenticated re-read inside the run lock.
+    let storeReads = 0
+    let pausedPath: string | undefined
+    runStoreFaults.pauseNextRead = readGate
+    runStoreFaults.onReadPaused = () => paused()
+    runStoreFaults.pauseReadFor = (path) => {
+      if (!path.includes('/.dsh/workflows/runs/') || !path.endsWith('.json')) return false
+      storeReads += 1
+      if (storeReads !== 5) return false
+      pausedPath = path
+      return true
+    }
+    const controller = new AbortController()
+    const closing = host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    await pausedGate
+    expect(storeReads).toBe(5)
+    expect(pausedPath).toContain('/.dsh/workflows/runs/')
+    expect([retro.id, verify.id].some((id) => pausedPath?.endsWith(`/${id}.json`))).toBe(true)
+    // The stop lands after the completion read was issued but before it settles.
+    controller.abort()
+    releaseRead()
+    await closing
+    // Give a stray completion write the chance to appear before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const persistedRetro = await runs.readAuthenticatedRun(workspace, retro.id, auth)
+    expect(persistedRetro?.status).toBe('running')
+    expect(persistedRetro?.updatedAt).toBe(1_000)
+    expect(persistedRetro?.steps.map((step) => step.state)).toEqual(['open', 'open'])
+    const persistedVerify = await runs.readAuthenticatedRun(workspace, verify.id, auth)
+    expect(persistedVerify?.status).toBe('blocked')
+    expect(persistedVerify?.updatedAt).toBe(1_101)
+    expect(persistedVerify?.steps.map((step) => step.state)).toEqual(['blocked'])
+    // Neither run was classified not-applicable and no review started or steered.
+    expect(
+      [persistedRetro, persistedVerify]
+        .flatMap((run) => run?.steps ?? [])
+        .some((step) => step.state === 'cancelled' || step.reason === 'not-applicable'),
+    ).toBe(false)
+    expect((await runs.listAuthenticatedRuns(workspace, auth)).map((run) => run.id).sort()).toEqual(
+      [retro.id, verify.id].sort(),
+    )
+    expect(host.steers).toHaveLength(0)
+  })
+
   it('names a failed lane start in the whole-scope refusal and starts the lane on the next close', async () => {
     const workspace = await gitGateWorkspace(`# Tasks
 

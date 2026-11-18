@@ -4015,6 +4015,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           generation,
           sessionGenerationAtStart,
           run.updatedAt,
+          aborted,
         )
         if (persisted.status !== 'completed') return { run: persisted }
         // The stop can land during the completion write: issue no receipt then.
@@ -4040,6 +4041,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         generation,
         sessionGenerationAtStart,
         run.updatedAt,
+        aborted,
       )
     }
     return result.run
@@ -5304,6 +5306,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               advancedGenerations.get(run.id),
               sessionGenerationAtRead,
               current.updatedAt,
+              stopped,
             )
           }
           // Keep the session's main-step owner until its step settles; a
