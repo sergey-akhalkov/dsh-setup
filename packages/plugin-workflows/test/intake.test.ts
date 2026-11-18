@@ -634,7 +634,15 @@ describe('change-intake engine', () => {
     expect(review?.state).not.toBe('done')
   })
 
-  it('keeps the declared ERROR settlement for a task-scope review step', async () => {
+  /** A shipped task-review run over one checked task and a stored ERROR record. */
+  async function taskErrorSetup(): Promise<{
+    workspace: string
+    definition: Definition
+    taskId: string
+    recordPath: string
+    digest: string
+    run: WorkflowRun
+  }> {
     const workspace = await tempWorkspace()
     await writeChangeArtifacts(workspace)
     await writeFile(
@@ -644,17 +652,18 @@ describe('change-intake engine', () => {
     )
     const definition = shipped('task-review')
     const taskId = taskIdOf('Task')
-    const recordDirectory = '.dsh/workflows/records/task-review/auth/tasks'
-    await mkdir(join(workspace, recordDirectory), { recursive: true })
+    const recordPath = `.dsh/workflows/records/task-review/auth/tasks/${taskId}.json`
+    const digest = 'a'.repeat(64)
+    await mkdir(dirname(join(workspace, recordPath)), { recursive: true })
     await writeFile(
-      join(workspace, recordDirectory, `${taskId}.json`),
+      join(workspace, recordPath),
       `${JSON.stringify({
         rule: 'task-review',
         change: 'auth',
         phase: 'task',
         scope: 'task',
         taskId,
-        digest: 'a'.repeat(64),
+        digest,
         verdict: 'ERROR',
         findings: [],
         time: '2026-11-08T00:00:00.000Z',
@@ -671,12 +680,20 @@ describe('change-intake engine', () => {
       steps: definition.steps.map((step) => step.id),
       now: 1_000,
     })
+    return { workspace, definition, taskId, recordPath, digest, run }
+  }
+
+  it('starts a new round instead of settling a fresh task-scope step from a predecessor ERROR', async () => {
+    const setup = await taskErrorSetup()
     let reviewStarts = 0
     const result = await advanceIntake({
-      run,
-      definition,
-      values: { name: 'auth', taskId },
-      evidenceContext: { workspace, values: { name: 'auth', taskId } },
+      run: setup.run,
+      definition: setup.definition,
+      values: { name: 'auth', taskId: setup.taskId },
+      evidenceContext: {
+        workspace: setup.workspace,
+        values: { name: 'auth', taskId: setup.taskId },
+      },
       owned: new OwnedCalls(),
       installedLegacy: new Set(),
       now: 2_000,
@@ -685,12 +702,47 @@ describe('change-intake engine', () => {
         return undefined
       },
     })
-    // The declared PASS|ERROR contract settles the attempt without a reviewer;
-    // an ERROR is not a PASS, so completion coverage still keeps the run open.
-    expect(reviewStarts).toBe(0)
-    expect(result.run.steps.find((step) => step.id === 'review')?.state).toBe('done')
+    // A stored ERROR is not reused: the fresh run starts its own reviewer, and
+    // only that publication settles the attempt.
+    expect(reviewStarts).toBe(1)
     expect(result.completed).toBe(false)
-    expect(result.waiting?.stepId).toBe('complete-review')
+    const review = result.run.steps.find((step) => step.id === 'review')
+    expect(review?.state).toBe('open')
+    expect(review?.evidence).toBeUndefined()
+    expect(result.waiting?.stepId).toBe('review')
+  })
+
+  it('keeps the same-run settlement when the task-scope step already carries that ERROR', async () => {
+    const setup = await taskErrorSetup()
+    const settled = settleStep(setup.run, 'review', 'failed', {
+      at: 1_500,
+      evidence: { kind: 'record', path: setup.recordPath, digest: setup.digest },
+    })
+    let reviewStarts = 0
+    const result = await advanceIntake({
+      run: settled,
+      definition: setup.definition,
+      values: { name: 'auth', taskId: setup.taskId },
+      evidenceContext: {
+        workspace: setup.workspace,
+        values: { name: 'auth', taskId: setup.taskId },
+      },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(),
+      now: 2_000,
+      reviewStep: async () => {
+        reviewStarts += 1
+        return undefined
+      },
+    })
+    // The run already settled on this ERROR: the attempt is retried/settled in
+    // place, so one run cannot loop by starting another reviewer on it.
+    expect(reviewStarts).toBe(0)
+    expect(result.completed).toBe(false)
+    const review = result.run.steps.find((step) => step.id === 'review')
+    expect(review?.state).toBe('failed')
+    expect(review?.evidence).toMatchObject({ path: setup.recordPath, digest: setup.digest })
+    expect(result.waiting?.stepId).toBe('review')
   })
 
   it('keeps create-change open until .openspec.yaml exists without re-dispatching', async () => {
