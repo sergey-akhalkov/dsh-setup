@@ -3102,7 +3102,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const stored = storedSteps.get(step.id)
           if (stored?.attempts === undefined) return step
           const incoming = step.attempts ?? 0
-          const attempts = Math.max(incoming, stored.attempts)
+          // An explicit zero is the gate's reset for a non-review step; only a
+          // stale positive count is preserved where a review retry owns it.
+          const attempts = incoming === 0 ? 0 : Math.max(incoming, stored.attempts)
           const settled = step.state === 'done' || step.state === 'cancelled'
           // A failed attempt keeps its class visible while the unit is still due;
           // a successful settlement must never inherit an old retry class.
@@ -4913,9 +4915,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 // This session's pending run will be advanced by this close; a
                 // foreign run covers the unit only while its reviewer is live or
                 // its start is still in flight.
-                (run.session === sessionId ||
-                  reviewIsLive(run.id) ||
-                  reviewStepOpen(run, taskReview)),
+                // A foreign run covers the unit only while its reviewer is
+                // scheduler-live: a merely persisted open step is not evidence.
+                (run.session === sessionId || reviewIsLive(run.id)),
             )
           const dispatched: WorkflowRun[] = []
           const event: DefinitionEvent = {
@@ -5114,8 +5116,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // only this session's pending runs and genuinely live reviewers cover
           // a unit, so an abandoned session can never stall the loop.
           const reviewOpenRuns = pendingReviewRuns(currentRuns, definitions).filter(
-            (entry) =>
-              entry.session === sessionId || entry.state === 'open' || reviewIsLive(entry.id),
+            (entry) => entry.session === sessionId || reviewIsLive(entry.id),
           )
           // A run containing an owned review step is gated by its due units:
           // while every due unit has a live review the close waits instead of
