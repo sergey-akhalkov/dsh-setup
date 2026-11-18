@@ -16,7 +16,8 @@ storm.
   no conditional definition (the whole-spec or integration review).
 - The turn-close gate does not evaluate a run whose recorded change has been archived: an open
   failed or blocked review of an archived change neither refuses the close nor demands a recovery
-  that cannot exist. The run stays readable history; nothing is cancelled or deleted. A missing
+  that cannot exist. An unresolved run is settled cancelled once with a reason, so it releases its
+  admission slot, while a terminal run's history is left unchanged and nothing is deleted. A missing
   change keeps the refusal, so a broken intake still surfaces its cause.
 - The stored involvement file is ignored, not rewritten: a stale record is harmless, needs no manual
   `.dsh` cleanup, and is pruned only as a side effect of the next involvement write.
@@ -41,4 +42,5 @@ None.
   run evaluation; `packages/plugin-workflows/test/host-wiring.test.ts`: three host regressions;
   `docs/workflows.md` and `docs/openspec-status.md`; regenerated `packages/plugin-workflows/lib/**`.
 - No public API, definition schema, configuration, or dependency change. An archived change's runs
-  and involvement record stay on disk unchanged.
+  and involvement record stay on disk: an unresolved review run is settled cancelled once, a
+  terminal run is unchanged, and the involvement record is not rewritten.

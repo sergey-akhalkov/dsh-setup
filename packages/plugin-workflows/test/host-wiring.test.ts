@@ -9736,6 +9736,34 @@ describe('archived change involvement', () => {
     })
   }
 
+  it('leaves a terminal archived review run unchanged', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = definitionsRegistry.installed('spec-review')?.definition
+    expect(definition).toBeDefined()
+    if (definition === undefined) return
+    const run = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: definition.steps.map((step) => step.id),
+      id: 'run-archived-terminal',
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, runs.setRunStatus(run, 'failed', 2_000), auth)
+    await archiveFixture(workspace)
+    const stored = join(workspace, '.dsh', 'workflows', 'runs', 'run-archived-terminal.json')
+    const before = await readFile(stored, 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    // Only an unresolved run settles cancelled; a terminal run keeps its history.
+    expect(await readFile(stored, 'utf8')).toBe(before)
+  })
+
   it('releases the admission slot of a settled archived review', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await gitGateWorkspace()

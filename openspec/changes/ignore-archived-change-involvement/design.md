@@ -27,7 +27,8 @@ An active-change filter already exists in the gate path (`involvedChangesOf` ->
 **Non-Goals:**
 
 - Pruning involvement files, or making `writeInvolvement` persist an empty list.
-- Cancelling, deleting, or rewriting runs of archived changes; they stay readable history.
+- Deleting runs of archived changes, or rewriting a terminal run's history; only an unresolved
+  review run is settled cancelled once.
 - Changing review rules, dedupe keys, the waiting close, `maxBlocks`, or the archive gate.
 
 ## Decisions
@@ -40,14 +41,16 @@ reader and mirrors the existing gate-path filter. Alternative rejected: change `
 contract so every caller filters at once - it would couple a leaf utility to change-activity and
 still miss the in-memory names.
 
-**D2 - Settle the archived review run cancelled once, before the advance and the gate.**
+**D2 - Settle an unresolved archived review run cancelled once, before the advance and the gate.**
 The close advances every open run before it gates any, and an advance of an archived change's
 review step settles the unreadable-artifact failure and persists the rewritten run. The exclusion is
-applied to the advance pass as well as to the gate pass, and the run is settled `cancelled` once with
-a reason: a run preserved as `running` would keep occupying a `maxRuns` slot forever (capacity counts
-only `running`/`blocked`), so an unrelated intake would eventually be refused. Alternatives
-rejected: gate-only exclusion (rewrites the history with a failed attempt); capacity exclusion
-(touches every admission path and leaves unrecoverable runs open forever).
+applied to the advance pass as well as to the gate pass, and an unresolved run (`running` or
+`blocked`) is settled `cancelled` once with a reason: a run preserved as `running` would keep
+occupying a `maxRuns` slot forever (capacity counts only `running`/`blocked`), so an unrelated intake
+would eventually be refused. A terminal run (`completed`, `failed`, `cancelled`, `interrupted`) is
+still skipped and keeps its history byte-for-byte. Alternatives rejected: gate-only exclusion
+(rewrites the history with a failed attempt); capacity exclusion (touches every admission path and
+leaves unrecoverable runs open forever).
 
 **D3 - Skip only an archived change's review run.**
 `retro`, `verify`, and other runs keep today's semantics; only a review run is unrecoverable for an

@@ -28,7 +28,7 @@ MAY stay on disk, MUST be ignored, and MUST NOT require manual cleanup.
 
 ### Requirement: Turn-close gate
 
-When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION` and no message. A review run whose recorded change has been archived MUST NOT hold the close: its failed or blocked review is not a due unit, and the run MUST be settled cancelled once instead of being advanced into a review, so it releases its slot and never records a failed attempt. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
+When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION` and no message. A review run whose recorded change has been archived MUST NOT hold the close: its failed or blocked review is not a due unit. An unresolved run MUST be settled cancelled once instead of being advanced into a review, so it releases its slot without recording a failed attempt; a terminal run MUST stay unchanged. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
 
 A user stop SHALL win over the gate: when the turn's abort signal is set, the gate MUST NOT start a
 review, persist an outcome, or submit a message, and a message it already submitted SHALL be removed
@@ -56,8 +56,13 @@ from the agent inbox when that signal aborts, so no queued gate message resumes 
 
 #### Scenario: An archived review run is settled cancelled once
 
-- **WHEN** a stored review run's recorded change is archived at the turn stop
+- **WHEN** a stored unresolved review run's recorded change is archived at the turn stop
 - **THEN** no review round starts, the close is not refused for it, the run is cancelled with a reason, and a later close leaves it unchanged
+
+#### Scenario: A terminal archived review run is unchanged
+
+- **WHEN** the stored review run's recorded change is archived and the run is already terminal
+- **THEN** the run is not rewritten and its stored file stays byte-identical
 
 #### Scenario: Live review allows the waiting close
 
