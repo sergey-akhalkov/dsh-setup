@@ -1294,6 +1294,17 @@ export function errorContractOf(evidence: Evidence): RecordEvidence | undefined 
 }
 
 /**
+ * The step's record contract narrowed to the PASS verdict, when it is one.
+ * Shared with the intake: a whole-scope step's declared PASS|ERROR contract must
+ * never complete a new run's step from a predecessor's stored ERROR.
+ */
+export function passContractOf(evidence: Evidence): RecordEvidence | undefined {
+  if (evidence.kind !== 'record') return undefined
+  const { verdict: _verdict, verdicts: _verdicts, ...rest } = evidence
+  return { ...rest, verdict: 'PASS' }
+}
+
+/**
  * The failed review steps whose current record is a contract-matching ERROR.
  * Only those failures are provisional turn-close evidence: a recordless failure
  * (unreadable artifacts, an unpublished ERROR) or a record that no longer

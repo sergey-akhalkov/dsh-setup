@@ -3095,16 +3095,30 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // attempt facts a concurrent admission already stamped on the stored
       // step. Take the higher count and keep the stored failure class only
       // while it is still the newer fact; a successful settlement clears it.
+      const reviewStepIds = new Set(
+        (
+          definitionsByWorkspace.get(workspace)?.find((entry) => entry.id === run.definition.id)
+            ?.steps ?? []
+        )
+          .filter((entry) => entry.executor === 'review')
+          .map((entry) => entry.id),
+      )
       const withAttempts = (): WorkflowRun => {
         const storedSteps = new Map(current.steps.map((step) => [step.id, step]))
         let changed = false
         const steps = run.steps.map((step) => {
+          // Only a review step carries retry facts across a stale lifecycle
+          // write; a non-review step keeps the gate's own counts and resets.
+          if (!reviewStepIds.has(step.id)) return step
           const stored = storedSteps.get(step.id)
           if (stored?.attempts === undefined) return step
-          const incoming = step.attempts ?? 0
-          // An explicit zero is the gate's reset for a non-review step; only a
-          // stale positive count is preserved where a review retry owns it.
-          const attempts = incoming === 0 ? 0 : Math.max(incoming, stored.attempts)
+          const incoming = step.attempts
+          const attempts =
+            incoming === undefined
+              ? stored.attempts
+              : incoming === 0
+                ? 0
+                : Math.max(incoming, stored.attempts)
           const settled = step.state === 'done' || step.state === 'cancelled'
           // A failed attempt keeps its class visible while the unit is still due;
           // a successful settlement must never inherit an old retry class.

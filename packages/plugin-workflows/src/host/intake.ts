@@ -19,7 +19,7 @@ import {
 import { runDeferredStep } from './gates.js'
 import type { HostAuth } from './host-auth.js'
 import { issueCompletionReceipt } from './receipts.js'
-import { errorContractOf } from './review.js'
+import { errorContractOf, passContractOf } from './review.js'
 import {
   MAX_TOOL_STEP_ATTEMPTS,
   setRunStatus,
@@ -446,18 +446,22 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
     }
     if (step.executor === 'review') {
       const stepContext: EvidenceContext = { ...input.evidenceContext }
-      // A matching current PASS or ERROR record settles the step without
-      // starting a second review.
-      const existing = await verifyEvidence(step.evidence ?? { kind: 'declaration' }, stepContext)
+      const declared = step.evidence ?? { kind: 'declaration' }
+      // A whole-scope step reuses only a PASS from a stored record: its declared
+      // PASS|ERROR contract must not complete a new run's step from a
+      // predecessor's ERROR, or every run would settle without a reviewer. A
+      // task-scope step keeps its declared PASS|ERROR settlement.
+      const wholeScope = step.review?.scope !== 'task'
+      const reused = wholeScope ? (passContractOf(declared) ?? declared) : declared
+      const existing = await verifyEvidence(reused, stepContext)
       if (existing.ok) {
         run = settleStep(run, step.id, 'done', { at, evidence: existing.evidence })
         continue
       }
       // A current matching ERROR this step has not settled on yet is provisional
-      // evidence: it allows the intermediate close with the failure visible, so
-      // starting another review now would ignore the shared record. A step that
-      // already settled on this ERROR retries the review instead.
-      const errorContract = errorContractOf(step.evidence ?? { kind: 'declaration' })
+      // evidence for a task step only: a whole-scope step starts the review so
+      // the live round replaces the stored ERROR instead of stalling on it.
+      const errorContract = wholeScope ? undefined : errorContractOf(declared)
       const existingError =
         errorContract === undefined ? undefined : await verifyEvidence(errorContract, stepContext)
       const previous = run.steps.find((entry) => entry.id === step.id)?.evidence
