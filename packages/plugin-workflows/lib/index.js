@@ -2891,6 +2891,10 @@ export function apply(ctx, config = {}) {
                         failureClass: 'config',
                         now: journal.time(),
                     });
+                    // The stop can land during the record write: abandon the advance and
+                    // leave the run open; the record stays as evidence.
+                    if (aborted())
+                        return undefined;
                     return failure.run;
                 }
                 if (reviewRunner === undefined) {
@@ -2915,6 +2919,10 @@ export function apply(ctx, config = {}) {
                         failureClass: 'provider-not-started',
                         now: journal.time(),
                     });
+                    // The stop can land during the record write: abandon the advance and
+                    // leave the run open; the record stays as evidence.
+                    if (aborted())
+                        return undefined;
                     return failure.run;
                 }
                 // The admission identity is the single task id or the section record id;
