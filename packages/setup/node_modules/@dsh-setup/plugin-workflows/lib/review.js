@@ -1010,7 +1010,8 @@ async function writeErrorRecord(input, record, error, failureClass, now) {
         error: sanitizeReviewText(error),
     };
     const writeLocal = input.writeLocal ?? writeLocalReviewRecord;
-    const written = await writeLocal(input.context.workspace, failed);
+    // The stop can land while the target path is resolved: never publish then.
+    const written = await writeLocal(input.context.workspace, failed, input.cancelled);
     const reason = `${error}${written.ok ? `; an ERROR record was written at ${written.path}` : `; the ERROR record could not be written: ${written.error}`}`;
     if (!written.ok) {
         const settled = settleStep(input.run, input.step.id, 'failed', {

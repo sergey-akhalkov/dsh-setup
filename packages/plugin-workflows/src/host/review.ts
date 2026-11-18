@@ -1206,6 +1206,8 @@ export async function recordReviewFailure(input: {
   readonly writeLocal?: typeof writeLocalReviewRecord
   /** A started attempt's start baseline; a pre-start failure carries none. */
   readonly baseline?: ReviewRecordBaseline
+  /** True once the run was stopped; a cancelled publication writes no record. */
+  readonly cancelled?: () => boolean
 }): Promise<ReviewRunResult> {
   const now = input.now ?? Date.now()
   const request: ReviewRunInput = { ...input, runner: {} as SubagentRunner, timeoutMs: 0 }
@@ -1411,7 +1413,8 @@ async function writeErrorRecord(
     error: sanitizeReviewText(error),
   }
   const writeLocal = input.writeLocal ?? writeLocalReviewRecord
-  const written = await writeLocal(input.context.workspace, failed)
+  // The stop can land while the target path is resolved: never publish then.
+  const written = await writeLocal(input.context.workspace, failed, input.cancelled)
   const reason = `${error}${written.ok ? `; an ERROR record was written at ${written.path}` : `; the ERROR record could not be written: ${written.error}`}`
   if (!written.ok) {
     const settled = settleStep(input.run, input.step.id, 'failed', {

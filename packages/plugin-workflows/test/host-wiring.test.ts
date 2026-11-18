@@ -72,6 +72,10 @@ const runStoreFaults = vi.hoisted(() => ({
   pauseNextRead: undefined as Promise<void> | undefined,
   pauseReadFor: undefined as ((path: string) => boolean) | undefined,
   onReadPaused: undefined as (() => void) | undefined,
+  /** A test-only pause inside a record target's path resolution. */
+  pauseNextTarget: undefined as Promise<void> | undefined,
+  pauseTargetFor: undefined as ((path: string) => boolean) | undefined,
+  onTargetPaused: undefined as (() => void) | undefined,
   /** The message a synchronous run-store write throws; `undefined` passes through. */
   syncWriteFile: undefined as string | undefined,
 }))
@@ -115,6 +119,19 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     ...actual,
     readdir: fault(actual.readdir, () => runStoreFaults.readdir),
     stat: fault(actual.stat, () => runStoreFaults.stat),
+    lstat: (async (...args: Parameters<typeof actual.lstat>) => {
+      const target = String(args[0]).replaceAll('\\', '/')
+      if (
+        runStoreFaults.pauseNextTarget !== undefined &&
+        (runStoreFaults.pauseTargetFor === undefined || runStoreFaults.pauseTargetFor(target))
+      ) {
+        const wait = runStoreFaults.pauseNextTarget
+        runStoreFaults.pauseNextTarget = undefined
+        runStoreFaults.onTargetPaused?.()
+        await wait
+      }
+      return actual.lstat(...args)
+    }) as typeof actual.lstat,
     readFile: (async (...args: Parameters<typeof actual.readFile>) => {
       const target = String(args[0]).replaceAll('\\', '/')
       if (
@@ -172,6 +189,9 @@ afterEach(async () => {
   runStoreFaults.pauseNextRead = undefined
   runStoreFaults.pauseReadFor = undefined
   runStoreFaults.onReadPaused = undefined
+  runStoreFaults.pauseNextTarget = undefined
+  runStoreFaults.pauseTargetFor = undefined
+  runStoreFaults.onTargetPaused = undefined
   runStoreFaults.syncWriteFile = undefined
   await Promise.all(
     TEMP_DIRECTORIES.splice(0).map(async (directory) => {
@@ -3150,6 +3170,69 @@ describe('turn-close lane dispatch', () => {
     expect(host.steers).toHaveLength(0)
   })
 
+  it('keeps the durable run unchanged when the stop lands during the run-file preparation', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // Seed the observation after the close's own store snapshot, while its
+    // stop-attempt record is paused, so the close's advance owns the run and
+    // reaches persistRun's not-applicable write.
+    let releaseRecord: () => void = () => undefined
+    const recordGate = new Promise<void>((resolve) => {
+      releaseRecord = resolve
+    })
+    let recordPaused = (): void => undefined
+    const recordPausedGate = new Promise<void>((resolve) => {
+      recordPaused = resolve
+    })
+    runStoreFaults.pauseNextRead = recordGate
+    runStoreFaults.onReadPaused = () => recordPaused()
+    runStoreFaults.pauseReadFor = (path) => path.includes('/.dsh/workflows/involvement/')
+    const controller = new AbortController()
+    const closing = host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    await recordPausedGate
+    const seeded = runs.createRun({
+      definition: 'verify',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['check'],
+      id: 'run-write-cancel',
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, seeded, auth)
+    // Hold the writer after the temporary run file exists and before its rename.
+    let releaseWrite: () => void = () => undefined
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
+    runStoreFaults.pauseNextWrite = writeGate
+    runStoreFaults.pauseFor = (path) => path.includes('run-write-cancel.json')
+    releaseRecord()
+    await waitFor(() => runStoreFaults.pauseNextWrite === undefined, 90_000)
+    // The stop lands after the temporary file was written; the rename must not land.
+    controller.abort()
+    releaseWrite()
+    await closing
+    // Give a stray write the chance to appear before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const persisted = await runs.readAuthenticatedRun(workspace, seeded.id, auth)
+    expect(persisted?.status).toBe('running')
+    expect(persisted?.updatedAt).toBe(1_000)
+    expect(persisted?.steps.map((step) => step.state)).toEqual(['open'])
+    expect(persisted?.steps.some((step) => step.reason === 'not-applicable')).toBe(false)
+    expect(persisted?.violations).toEqual([])
+  })
+
   it('leaves a pending run open when the stop lands inside the advance-run not-applicable write', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
@@ -5702,6 +5785,82 @@ describe('owned review at runtime', () => {
     expect(host.steers).toHaveLength(1)
     expect(steerText()).toContain('spec-review')
     expect(steerText()).toContain('unreadable')
+  })
+
+  it('publishes no ERROR record when the stop lands during its target resolution', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { specReview: false })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = definitionsRegistry.installed('change-intake')?.definition
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    // Readable artifacts, so the review reaches the unconfigured reviewer whose
+    // ERROR record resolves a target under .dsh/workflows/records/.
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    for (const file of ['proposal.md', 'design.md', 'tasks.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-target-cancel',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    await runs.writeRun(workspace, run, auth)
+    const recordPath = join(
+      workspace,
+      '.dsh',
+      'workflows',
+      'records',
+      'spec-review',
+      'auth',
+      'spec.json',
+    )
+    let releaseTarget: () => void = () => undefined
+    const targetGate = new Promise<void>((resolve) => {
+      releaseTarget = resolve
+    })
+    let targetPaused = (): void => undefined
+    const targetPausedGate = new Promise<void>((resolve) => {
+      targetPaused = resolve
+    })
+    runStoreFaults.pauseNextTarget = targetGate
+    runStoreFaults.onTargetPaused = () => targetPaused()
+    runStoreFaults.pauseTargetFor = (path) => path.includes('/.dsh/workflows/records')
+    const controller = new AbortController()
+    const closing = host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: controller.signal,
+    })
+    await targetPausedGate
+    // The stop lands after the ERROR writer entered target resolution but before
+    // the record could be published; nothing may be written or settled.
+    controller.abort()
+    releaseTarget()
+    await closing
+    // Give a stray publication the chance to appear before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(await readFile(recordPath, 'utf8').catch(() => undefined)).toBeUndefined()
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-target-cancel', auth)
+    expect(stored?.status).toBe('running')
+    expect(stored?.updatedAt).toBe(1_100)
+    expect(stored?.steps.find((step) => step.id === 'spec-review')?.state).toBe('open')
+    expect(host.steers).toHaveLength(0)
   })
 
   it('blocks the close when the ERROR record cannot be published', async () => {

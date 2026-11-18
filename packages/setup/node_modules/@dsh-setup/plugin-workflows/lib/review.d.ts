@@ -356,6 +356,8 @@ export declare function recordReviewFailure(input: {
     readonly writeLocal?: typeof writeLocalReviewRecord;
     /** A started attempt's start baseline; a pre-start failure carries none. */
     readonly baseline?: ReviewRecordBaseline;
+    /** True once the run was stopped; a cancelled publication writes no record. */
+    readonly cancelled?: () => boolean;
 }): Promise<ReviewRunResult>;
 /**
  * The step's record contract narrowed to the ERROR verdict, when it is one.

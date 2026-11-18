@@ -2529,7 +2529,7 @@ export function apply(ctx, config = {}) {
         if (ended()) {
             const replacement = interruptedFrom();
             if (replacement !== current)
-                await writeCommit(workspace, replacement, auth);
+                await writeCommit(workspace, replacement, auth, cancelled);
             return replacement;
         }
         // A completed-soft run is terminal without its review: a late reviewer
@@ -2610,7 +2610,7 @@ export function apply(ctx, config = {}) {
         };
         const merged = withAttempts();
         if (merged !== current)
-            await writeCommit(workspace, merged, auth);
+            await writeCommit(workspace, merged, auth, cancelled);
         // The cause is durably on the step now; drop the pending copy.
         if (merged !== current && fallbackReasons.has(run.id))
             fallbackReasons.delete(run.id);
@@ -2620,7 +2620,7 @@ export function apply(ctx, config = {}) {
         if (ended() || sessionStale()) {
             const replacement = interruptedFrom();
             if (replacement !== merged)
-                await writeCommit(workspace, replacement, auth);
+                await writeCommit(workspace, replacement, auth, cancelled);
             return replacement;
         }
         return merged;
@@ -2890,6 +2890,7 @@ export function apply(ctx, config = {}) {
                         error: resolved.error,
                         failureClass: 'config',
                         now: journal.time(),
+                        cancelled: aborted,
                     });
                     // The stop can land during the record write: abandon the advance and
                     // leave the run open; the record stays as evidence.
@@ -2918,6 +2919,7 @@ export function apply(ctx, config = {}) {
                         error: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
                         failureClass: 'provider-not-started',
                         now: journal.time(),
+                        cancelled: aborted,
                     });
                     // The stop can land during the record write: abandon the advance and
                     // leave the run open; the record stays as evidence.
@@ -3305,6 +3307,7 @@ export function apply(ctx, config = {}) {
                             ...request,
                             error: 'the native review queue is disabled; Release A runs reviews only through reviewQueue — enable it in the workflows row config and re-run',
                             failureClass: 'config',
+                            cancelled: aborted,
                         }).catch(() => undefined);
                         if (current.prepared.reviewCwd !== undefined) {
                             await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined);

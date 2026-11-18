@@ -3094,7 +3094,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // keeping the prior durable pending steps so resume works.
       if (ended()) {
         const replacement = interruptedFrom()
-        if (replacement !== current) await writeCommit(workspace, replacement, auth)
+        if (replacement !== current) await writeCommit(workspace, replacement, auth, cancelled)
         return replacement
       }
       // A completed-soft run is terminal without its review: a late reviewer
@@ -3180,7 +3180,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         return changed ? { ...source, steps } : source
       }
       const merged = withAttempts()
-      if (merged !== current) await writeCommit(workspace, merged, auth)
+      if (merged !== current) await writeCommit(workspace, merged, auth, cancelled)
       // The cause is durably on the step now; drop the pending copy.
       if (merged !== current && fallbackReasons.has(run.id)) fallbackReasons.delete(run.id)
       // A disposal can fence the session during the write; the lock serializes
@@ -3188,7 +3188,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // synchronously, so re-check both after the write.
       if (ended() || sessionStale()) {
         const replacement = interruptedFrom()
-        if (replacement !== merged) await writeCommit(workspace, replacement, auth)
+        if (replacement !== merged) await writeCommit(workspace, replacement, auth, cancelled)
         return replacement
       }
       return merged
@@ -3511,6 +3511,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             error: resolved.error,
             failureClass: 'config',
             now: journal.time(),
+            cancelled: aborted,
           })
           // The stop can land during the record write: abandon the advance and
           // leave the run open; the record stays as evidence.
@@ -3536,6 +3537,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             error: `review target "${resolved.reviewer.id}" (provider "${resolved.reviewer.provider}") cannot start: the host subagent service is unavailable; register a subagent provider or restart the host with the subagent service, then re-run the review`,
             failureClass: 'provider-not-started',
             now: journal.time(),
+            cancelled: aborted,
           })
           // The stop can land during the record write: abandon the advance and
           // leave the run open; the record stays as evidence.
@@ -3972,6 +3974,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               error:
                 'the native review queue is disabled; Release A runs reviews only through reviewQueue — enable it in the workflows row config and re-run',
               failureClass: 'config',
+              cancelled: aborted,
             }).catch(() => undefined)
             if (current.prepared.reviewCwd !== undefined) {
               await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
