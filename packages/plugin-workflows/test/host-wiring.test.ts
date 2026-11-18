@@ -9679,6 +9679,35 @@ describe('archived change involvement', () => {
     expect((await specReviewRuns(workspace)).length).toBe(rounds)
   })
 
+  it('leaves an archived change review run untouched across closes', async () => {
+    const workspace = await gitGateWorkspace()
+    const host = await engineGateHost(workspace, { taskProgress: false, laneFanout: false })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = definitionsRegistry.installed('spec-review')?.definition
+    expect(definition).toBeDefined()
+    if (definition === undefined) return
+    const run = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: definition.steps.map((step) => step.id),
+      id: 'run-archived-review',
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, run, auth)
+    await archiveFixture(workspace)
+    const stored = join(workspace, '.dsh', 'workflows', 'runs', 'run-archived-review.json')
+    const before = await readFile(stored, 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    // The archived run is neither advanced nor gated: its history is not
+    // rewritten with a failed attempt and the file is byte-identical.
+    expect(await readFile(stored, 'utf8')).toBe(before)
+  })
+
   it('keeps starting the round for an active involved change', async () => {
     const workspace = await gitGateWorkspace()
     const host = await reviewGateHost(workspace)

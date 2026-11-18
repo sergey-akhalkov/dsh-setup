@@ -5100,12 +5100,29 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const advanced = new Map<string, WorkflowRun>()
         const advancedGenerations = new Map<string, number>()
         const definitionOf = new Map<string, Definition>()
+        // A review run bound to an archived change is neither advanced nor
+        // gated: its artifacts are gone, so an advance would rewrite its history
+        // with a failed attempt and the gate would refuse every close. A missing
+        // change keeps both, so its failure stays visible.
+        const activeChanges = await activeChangeNames(workspace)
+        const archivedChanges = await archivedChangeNames(workspace)
+        const archivedReviewRun = (run: WorkflowRun, definition: Definition): boolean =>
+          definition.steps.some((step) => step.executor === 'review') &&
+          typeof run.context.name === 'string' &&
+          !activeChanges.has(run.context.name) &&
+          archivedChanges.has(run.context.name)
         for (const run of ordered) {
           // A stop after the dispatch must not start or persist another advance.
           if (stopped()) break
           const definition = definitions.find((entry) => entry.id === run.definition.id)
           if (definition === undefined) continue
           const generation = runGenerationsAtRead.get(run.id) ?? runGeneration(run.id)
+          if (archivedReviewRun(run, definition)) {
+            advanced.set(run.id, run)
+            advancedGenerations.set(run.id, generation)
+            definitionOf.set(run.id, definition)
+            continue
+          }
           // A retro run must not complete on the record alone: while the host
           // checkpoint remedy/age rule fails, keep the run open and steer.
           if (
@@ -5167,15 +5184,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             }
           }
         }
-        // The change names, read once for the gate walk below: a review run
-        // bound to an archived change owes nothing, because its artifacts are gone.
-        const activeChanges = await activeChangeNames(workspace)
-        const archivedChanges = await archivedChangeNames(workspace)
         for (const run of ordered) {
           if (stopped()) break
           const current = advanced.get(run.id)
           const definition = definitionOf.get(run.id)
           if (current === undefined || definition === undefined) continue
+          // The same archived review run is skipped here as well: the advance
+          // above kept its stored state, and the close owes it nothing.
+          if (archivedReviewRun(current, definition)) continue
           // A prior turn's retro obligation is obsolete: work_checkpoint only
           // writes the current turn's record, so supersede it (keeping its
           // violation history) instead of demanding the old record forever.
@@ -5229,18 +5245,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // while every due unit has a live review the close waits instead of
           // refusing, and no refusal budget ever releases it (design D3/D9).
           const reviewStep = definition.steps.find((step) => step.executor === 'review')
-          // A run bound to an archived change owes nothing at the close: its
-          // artifacts are unreadable, so its failed or blocked review would
-          // refuse every close with no way to recover. A missing change keeps
-          // the refusal: that failure is real and must stay visible.
-          if (
-            reviewStep !== undefined &&
-            typeof current.context.name === 'string' &&
-            !activeChanges.has(current.context.name) &&
-            archivedChanges.has(current.context.name)
-          ) {
-            continue
-          }
           const reviewOwned =
             reviewStep !== undefined &&
             resolveOwnership(definition, legacy.installed, legacy.enabled).steps.some(

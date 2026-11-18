@@ -28,7 +28,7 @@ MAY stay on disk, MUST be ignored, and MUST NOT require manual cleanup.
 
 ### Requirement: Turn-close gate
 
-When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION` and no message. A run whose recorded change has been archived MUST NOT hold the close: its failed or blocked review is not a due unit. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
+When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION` and no message. A review run whose recorded change has been archived MUST NOT hold the close: its failed or blocked review is not a due unit, and the run MUST NOT be advanced or rewritten. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
 
 A user stop SHALL win over the gate: when the turn's abort signal is set, the gate MUST NOT start a
 review, persist an outcome, or submit a message, and a message it already submitted SHALL be removed
@@ -53,6 +53,11 @@ from the agent inbox when that signal aborts, so no queued gate message resumes 
 
 - **WHEN** an open review run's recorded change has been archived at the turn stop
 - **THEN** the close is evaluated without that run and is not refused for it
+
+#### Scenario: An archived review run is not rewritten
+
+- **WHEN** a stored review run's recorded change is archived at the turn stop
+- **THEN** the run is neither advanced nor rewritten and its stored file is unchanged
 
 #### Scenario: Live review allows the waiting close
 

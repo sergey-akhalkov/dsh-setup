@@ -40,12 +40,12 @@ reader and mirrors the existing gate-path filter. Alternative rejected: change `
 contract so every caller filters at once - it would couple a leaf utility to change-activity and
 still miss the in-memory names.
 
-**D2 - The close gate skips the run instead of passing no review input.**
-`evaluateTurnClose` refuses an open run that reached an owned review step in a separate branch
-(`reviewObligationReached` plus a review step) even when no resolved review input is supplied, so
-omitting the input alone would still refuse. Skipping the run before the gate evaluates it removes
-every refusal path for a change that cannot be reviewed. Alternative rejected: make the gate accept
-an "inactive" flag - a new parameter on a hot, well-tested decision function for one caller.
+**D2 - Exclude the archived review run before both the advance and the gate.**
+The close advances every open run before it gates any, and an advance of an archived change's
+review step settles the unreadable-artifact failure and persists the rewritten run. A user-clicked
+archive may leave a live review run behind, so the exclusion is applied to the advance pass as well
+as to the gate pass; the run is carried through both maps untouched. Alternative rejected: gate-only
+exclusion - it passes the tests on refusals but silently rewrites the run's history.
 
 **D3 - Skip only an archived change's review run.**
 `retro`, `verify`, and other runs keep today's semantics; only a review run is unrecoverable for an
