@@ -1053,21 +1053,6 @@ export async function writePortableApproval(
   if (record.verdict !== 'PASS') {
     return { ok: false, error: 'a committed approval requires a PASS verdict' }
   }
-  // A publication that lands after the change left the active tree must not
-  // recreate its directory: create only the `reviews` leaf (a recursive mkdir
-  // would recreate the archived change) and write without creating parents.
-  const relative = portableApprovalPath(record.change, record.taskId)
-  try {
-    await mkdir(join(workspace, dirname(relative)), { recursive: false })
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-      return {
-        ok: false,
-        error:
-          'the change is not active under openspec/changes; the late verdict is discarded and no directory is created',
-      }
-    }
-  }
   const target = record.target
   if (
     target.provider.trim() === '' ||
@@ -1081,13 +1066,29 @@ export async function writePortableApproval(
         'the approval target carries a machine path or empty provider; use a provider/model id, not a filesystem path',
     }
   }
+  // A publication that lands after the change left the active tree must not
+  // recreate its directory: validate containment first, then create only the
+  // `reviews` leaf and write without creating parents.
+  const relative = portableApprovalPath(record.change, record.taskId)
+  let resolved: string
   try {
-    await writeReviewFileAtomic(
-      await containedRecordTarget(workspace, relative),
-      jsonText(portableApprovalOf(record)),
-      cancelled,
-      false,
-    )
+    resolved = await containedRecordTarget(workspace, relative)
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  try {
+    await mkdir(dirname(resolved), { recursive: false })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      return {
+        ok: false,
+        error:
+          'the change is not active under openspec/changes; the late verdict is discarded and no directory is created',
+      }
+    }
+  }
+  try {
+    await writeReviewFileAtomic(resolved, jsonText(portableApprovalOf(record)), cancelled, false)
     return { ok: true, path: relative }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }

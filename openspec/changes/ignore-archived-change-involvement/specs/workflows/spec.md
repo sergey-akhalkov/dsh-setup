@@ -76,6 +76,11 @@ from the agent inbox when that signal aborts, so no queued gate message resumes 
 - **WHEN** a stored unresolved review run's recorded change is archived at the turn stop
 - **THEN** no review round starts, the close is not refused for it, the run is cancelled with a reason, and a later close leaves it unchanged
 
+#### Scenario: A date-prefixed entry is the dated layout
+
+- **WHEN** a change's own name starts with a date and its entry in the archive collection carries no date prefix
+- **THEN** the entry is read as the dated layout of its suffix, the original name is not treated as archived, and its review keeps refusing until the entry carries a date
+
 #### Scenario: A terminal archived review run is unchanged
 
 - **WHEN** the stored review run's recorded change is archived and the run is already terminal

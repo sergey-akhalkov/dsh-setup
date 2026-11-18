@@ -67,12 +67,13 @@ reported storm. Alternative rejected: skip every non-active change - it drops th
 **D6 - Fence the committed approval on an active change.**
 A reviewer that was already running when its change got archived can publish after the run settles
 cancelled; writing the portable approval would `mkdir` the change directory and resurrect the
-archived change as an active one. The portable-approval writer therefore creates only the `reviews`
-leaf non-recursively and writes without creating parents, so a change removed at any point makes the
-write fail instead of recreating its tree. A preliminary existence check alone would race with the
-archive between the check and the recursive mkdir. Alternative rejected: fence each caller
-(scheduler, task review, intake) - one choke point covers every publication path, including a late
-retry.
+archived change as an active one. The portable-approval writer therefore proves containment of the
+target first, then creates only the `reviews` leaf non-recursively and writes without creating
+parents, so a change removed at any point makes the write fail instead of recreating its tree, and a
+linked change directory is rejected before the leaf exists. A preliminary existence check alone
+would race with the archive between the check and the recursive mkdir. Alternative rejected: fence
+each caller (scheduler, task review, intake) - one choke point covers every publication path,
+including a late retry.
 
 **D4 - The stale involvement record stays on disk.**
 No pruning and no empty-list write: the record is ignored when read, so a stale file is harmless and

@@ -1675,6 +1675,22 @@ describe('record write boundary', () => {
     if (!written.ok) expect(written.error).toContain('link')
     expect(await readdir(outside)).toEqual([])
   })
+
+  it('refuses a linked change directory before creating its reviews leaf', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workflows-approval-ancestor-'))
+    roots.push(root)
+    const outside = await mkdtemp(join(tmpdir(), 'workflows-approval-ancestor-outside-'))
+    roots.push(outside)
+    const changes = join(root, 'openspec', 'changes')
+    await mkdir(changes, { recursive: true })
+    // A junction change directory with no reviews child: creating the leaf
+    // before the containment walk would create it outside the workspace.
+    await symlink(outside, join(changes, 'auth'), 'junction')
+    const written = await writePortableApproval(root, boundaryRecord)
+    expect(written.ok).toBe(false)
+    if (!written.ok) expect(written.error).toContain('link')
+    expect(await readdir(outside)).toEqual([])
+  })
 })
 
 describe('record path identity and portable target boundary', () => {
