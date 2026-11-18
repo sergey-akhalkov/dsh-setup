@@ -221,6 +221,20 @@ describe('adoption of existing changes', () => {
     const changedRefused = await verifyAdoptionEvidence(changed, 'auth')
     expect(changedRefused).toMatchObject({ ok: false })
     if (!changedRefused.ok) expect(changedRefused.reason).toContain('skip_specs: true')
+
+    // A non-boolean scalar spelling is not the marker: the PASS is stale and
+    // eligibility refuses without honoring the declaration.
+    const invalid = await tempWorkspace()
+    await adoptableSpecLess(invalid)
+    await writeArtifact(
+      invalid,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true#disabled\n',
+    )
+    expect((await verifyWholeSpecRecord(invalid, 'auth')).ok).toBe(false)
+    const invalidRefused = await verifyAdoptionEvidence(invalid, 'auth')
+    expect(invalidRefused).toMatchObject({ ok: false })
+    if (!invalidRefused.ok) expect(invalidRefused.reason).toContain('skip_specs: true')
   })
 
   it('refuses a change with neither a spec file nor the marker despite a current PASS', async () => {

@@ -614,6 +614,101 @@ describe('native review host admission', () => {
     }
   })
 
+  it.each([
+    { name: 'changes the skip_specs marker', restore: false },
+    { name: 'changes and restores the skip_specs marker', restore: true },
+  ])('discards a live-fallback whole-spec verdict when the run $name', async ({ restore }) => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    // A spec-less change: the marker is the reviewed eligibility state.
+    await rm(join(workspace, 'openspec', 'changes', 'auth', 'specs'), {
+      recursive: true,
+      force: true,
+    })
+    const markerPath = join(workspace, 'openspec', 'changes', 'auth', '.openspec.yaml')
+    const original = 'schema: spec-driven\nskip_specs: true\n'
+    await writeFile(markerPath, original, 'utf8')
+    // The snapshot cannot be built without the `.dsh/` ignore rule: the review
+    // falls back to the live artifacts under the mutation guard.
+    await writeFile(join(workspace, '.gitignore'), '', 'utf8')
+    const definition = validateDefinition({
+      v: 1,
+      id: 'fallback-marker-review',
+      name: 'Fallback marker review',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: true,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        gate: 'review',
+        gateIdentity: 'fallback-marker-review',
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Review the whole change spec',
+          executor: 'review',
+          review: { target: 'codex', instruction: 'review-spec', scope: 'whole', phase: 'spec' },
+          evidence: {
+            kind: 'record',
+            rule: 'fallback-marker-review',
+            change: '{name}',
+            phase: 'spec',
+            scope: 'whole',
+            verdicts: ['PASS', 'ERROR'],
+            digest: 'current',
+            path: '.dsh/workflows/records/fallback-marker-review/{name}/spec.json',
+          },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    })
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const run = createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, run, auth)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.releases.length >= 1)
+      await writeFile(markerPath, 'schema: spec-driven\nskip_specs: false\n', 'utf8')
+      if (restore) await writeFile(markerPath, original, 'utf8')
+      host.releases[0]?.()
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'fallback-marker-review',
+        'auth',
+        'spec.json',
+      )
+      await waitFor(async () => (await readFile(recordPath, 'utf8').catch(() => '')) !== '')
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
+      expect(record.verdict).toBe('ERROR')
+      expect(record.failureClass).toBe('reviewed-inputs-changed')
+      expect(String(record.error)).toContain('.openspec.yaml')
+    } finally {
+      unregister()
+    }
+  })
+
   it('normalizes task ticks and approvals out of the change artifact digest', async () => {
     const workspace = await gitWorkspace()
     const before = await currentSpecDigest(workspace, 'auth')

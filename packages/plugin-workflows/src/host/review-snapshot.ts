@@ -508,9 +508,7 @@ export async function reviewInputTree(
 /** The change-artifact signature; a whole-spec fallback tracks only its reviewed scope. */
 export async function specInputs(changeDir: string): Promise<InputSignature> {
   return inputSignature(await realpath(changeDir).catch(() => changeDir), CHANGE_INPUT_EXCLUDES)
-}
-
-/**
+} /**
  * Build the disposable review snapshot from the exact review input set. The
  * checkout lives at the stable path of `key` (the unit key; a run id also
  * works) and replaces any leftover checkout at that path. Returns undefined
@@ -644,8 +642,12 @@ export interface InputSignature {
   readonly entries: ReadonlyMap<string, string>
 }
 
-/** Change-root entries that are engine output, not reviewed input. */
-const CHANGE_INPUT_EXCLUDES: ReadonlySet<string> = new Set(['.openspec.yaml', 'reviews'])
+/**
+ * Change-root entries that are engine output, not reviewed input. `.openspec.yaml`
+ * is reviewed input: its effective `skip_specs` declaration is bound into the
+ * change digest, so a marker change must discard a live-fallback verdict.
+ */
+const CHANGE_INPUT_EXCLUDES: ReadonlySet<string> = new Set(['reviews'])
 
 async function inputStat(path: string): Promise<string> {
   try {

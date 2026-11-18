@@ -112,6 +112,17 @@ describe('exploratory testing templates', () => {
     }
   })
 
+  it('ships proposals with the OpenSpec Why and What Changes headings', () => {
+    for (const heading of ['## A: proposal.md', '## B: proposal.md']) {
+      const start = templates.indexOf(heading)
+      const fence = templates.indexOf('```markdown', start)
+      const end = templates.indexOf('\n```', fence + '```markdown'.length)
+      const block = templates.slice(fence + '```markdown'.length, end)
+      expect(block, heading).toMatch(/^## Why$/mu)
+      expect(block, heading).toMatch(/^## What Changes$/mu)
+    }
+  })
+
   it('names every finding-record and decision-log field', () => {
     for (const field of [
       'Severity:',
@@ -135,7 +146,7 @@ describe('exploratory testing templates', () => {
     for (const field of [
       'Why this area now',
       'State snapshot',
-      'Scope',
+      'In scope',
       'Non-goals',
       'Focus register',
       'Rejected candidates',

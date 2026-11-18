@@ -357,28 +357,34 @@ async function specCheck(
   // Only a missing delta falls through to the marker; an unsafe or unreadable
   // glob stays the failure instead of being masked as a spec-less change.
   if (delta.failure.reason !== 'no-match') return delta
-  const markerPath = await resolveEvidenceText(SPEC_MARKER, context, item)
-  if (!markerPath.ok) return markerPath
-  const root = await realpath(context.workspace).catch(() => undefined)
-  if (root === undefined) {
-    return failure('path-escape', 'the workspace is not readable', markerPath.text, item)
-  }
-  const text = await readFile(join(root, markerPath.text), 'utf8').catch(() => undefined)
-  if (text !== undefined && SKIP_SPECS.test(text)) {
-    return {
-      ok: true,
-      evidence: {
-        kind: 'file',
-        path: markerPath.text,
-        bytes: text.length,
-        detail: 'skip_specs: true',
-      },
+  // The marker read uses the same containment-checked file check as every other
+  // evidence path, so a link out of the workspace cannot satisfy eligibility.
+  const marker = await fileCheck({ kind: 'file', path: SPEC_MARKER }, context, item)
+  if (!marker.ok && marker.failure.reason !== 'missing-file') return marker
+  if (marker.ok) {
+    const markerPath = marker.evidence.path ?? SPEC_MARKER
+    const root = await realpath(context.workspace).catch(() => undefined)
+    const text =
+      root === undefined
+        ? undefined
+        : await readFile(join(root, markerPath), 'utf8').catch(() => undefined)
+    if (text !== undefined && SKIP_SPECS.test(text)) {
+      return {
+        ok: true,
+        evidence: {
+          kind: 'file',
+          path: markerPath,
+          bytes: text.length,
+          detail: 'skip_specs: true',
+        },
+      }
     }
   }
+  const named = await resolveEvidenceText(SPEC_MARKER, context, item)
   return failure(
     'no-match',
     'the change has neither a specs/**/spec.md file nor a top-level skip_specs: true in .openspec.yaml',
-    markerPath.text,
+    named.ok ? named.text : SPEC_MARKER,
     item,
   )
 }
@@ -542,17 +548,27 @@ function hashParts(parts: readonly string[]): string {
 
 /**
  * The normalized `skip_specs: true` declaration OpenSpec honors for a change
- * without delta specs. A top-level boolean line is enough for the digest and
- * the eligibility check.
+ * without delta specs. A comment needs the YAML separator (whitespace), so
+ * `true#disabled` is the string it is and never counts as the boolean marker.
  * shortcut: line-level read, not a YAML parse; upgrade with the CLI's own reader
  * if OpenSpec starts accepting other spellings.
  */
-const SKIP_SPECS = /^skip_specs[ \t]*:[ \t]*(?:true|True|TRUE)[ \t]*(?:#.*)?\r?$/mu
+const SKIP_SPECS = /^skip_specs[ \t]*:[ \t]*(?:true|True|TRUE)[ \t]*(?:[ \t]+#.*)?\r?$/mu
 
-/** Whether the change's `.openspec.yaml` declares `skip_specs: true`. */
+/**
+ * Whether the change's `.openspec.yaml` declares `skip_specs: true`. The marker
+ * only counts while the file resolves inside the change directory; a link out of
+ * the workspace is not a declaration.
+ */
 export async function declaresSkipSpecs(changeDir: string): Promise<boolean> {
-  const text = await readFile(join(changeDir, '.openspec.yaml'), 'utf8').catch(() => undefined)
-  return text !== undefined && SKIP_SPECS.test(text)
+  try {
+    const root = await realpath(changeDir)
+    const target = await realpath(join(changeDir, '.openspec.yaml'))
+    if (!isInside(root, target)) return false
+    return SKIP_SPECS.test(await readFile(target, 'utf8'))
+  } catch {
+    return false
+  }
 }
 
 /**

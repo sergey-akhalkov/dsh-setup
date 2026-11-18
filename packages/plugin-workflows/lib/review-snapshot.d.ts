@@ -42,8 +42,7 @@ export declare function reviewInputTree(cwd: string, change: {
     readonly dir: string;
 }, runGit: GitRunner, signal: AbortSignal): Promise<string>;
 /** The change-artifact signature; a whole-spec fallback tracks only its reviewed scope. */
-export declare function specInputs(changeDir: string): Promise<InputSignature>;
-/**
+export declare function specInputs(changeDir: string): Promise<InputSignature>; /**
  * Build the disposable review snapshot from the exact review input set. The
  * checkout lives at the stable path of `key` (the unit key; a run id also
  * works) and replaces any leftover checkout at that path. Returns undefined

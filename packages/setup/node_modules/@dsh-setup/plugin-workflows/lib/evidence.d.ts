@@ -115,7 +115,11 @@ export interface GlobExpansion {
  * partial result it happened to see.
  */
 export declare function expandGlob(root: string, pattern: string): Promise<GlobExpansion>;
-/** Whether the change's `.openspec.yaml` declares `skip_specs: true`. */
+/**
+ * Whether the change's `.openspec.yaml` declares `skip_specs: true`. The marker
+ * only counts while the file resolves inside the change directory; a link out of
+ * the workspace is not a declaration.
+ */
 export declare function declaresSkipSpecs(changeDir: string): Promise<boolean>;
 /**
  * The change artifact digest: it hashes every file under the change directory

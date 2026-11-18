@@ -85,6 +85,41 @@ The workflows plugin SHALL provide `workflowsArchiveGate.authorizeAndCheck(works
 - **WHEN** a profile does not install the workflows engine
 - **THEN** no archive gate service exists, and the OpenSpec plugin's own complete-task check still applies
 
+### Requirement: Reviewed change-artifact inputs
+
+A whole-scope review whose digest includes the change-artifact digest MUST freeze the reviewed
+change's artifacts in its snapshot, regardless of Git ignore rules, excluding the `reviews/` approval
+directory. The live-worktree fallback MUST track the change artifacts including `.openspec.yaml`, so
+the effective `skip_specs` declaration is a reviewed input: a marker change or an edit-read-restore
+during the run MUST discard the verdict as `reviewed-inputs-changed` instead of publishing a `PASS`.
+A task-scoped review MUST freeze the change directory in its snapshot and compute the digest from that
+copy; the live fallback tracks the union including `.openspec.yaml`.
+
+#### Scenario: Change artifact changes during a whole-spec review
+
+- **WHEN** a change artifact is edited while a whole-spec review runs
+- **THEN** the frozen review publishes, no input-change `ERROR` is written, and the record is stale against the edited artifacts
+
+#### Scenario: Task approval does not invalidate the spec review
+
+- **WHEN** a portable `reviews/<taskId>.json` record is written while a whole-spec review runs
+- **THEN** the review publishes, because the approval directory is excluded from the reviewed inputs
+
+#### Scenario: Fallback tracks the union
+
+- **WHEN** the snapshot was unavailable and a change artifact is edited while the fallback task review runs
+- **THEN** no `PASS` is published, because the fallback tracks the union of the Git-visible worktree and the change artifacts
+
+#### Scenario: Marker changes during a live fallback spec review
+
+- **WHEN** the snapshot was unavailable and `.openspec.yaml` changes its `skip_specs` declaration while a whole-spec fallback review runs
+- **THEN** no `PASS` is published, the record is an `ERROR` with failure class `reviewed-inputs-changed`, and the error names `.openspec.yaml`
+
+#### Scenario: Marker change-and-restore during a live fallback spec review
+
+- **WHEN** the marker is changed and restored before a live fallback review settles
+- **THEN** the changed `.openspec.yaml` stat still discards the verdict and no `PASS` is published
+
 ## ADDED Requirements
 
 ### Requirement: Finding records in whole-spec review

@@ -106,6 +106,7 @@ describe('exploratory testing plugin', () => {
       provider: 'dsh-setup-exploratory-testing',
       source: 'bundled',
       rank: 600,
+      invocation: { modelInvocable: true, userInvocable: true },
       resourceBase: { kind: 'directory' },
     })
     expect(candidate?.resourceBase?.path.replaceAll('\\', '/')).toMatch(
@@ -138,6 +139,9 @@ describe('exploratory testing plugin', () => {
 
     const definition = await provider.get(candidate, {})
     expect(definition?.name).toBe('exploratory-testing')
+    expect(definition).toMatchObject({
+      invocation: { modelInvocable: true, userInvocable: true },
+    })
     expect(definition?.content.startsWith(skillAsset)).toBe(true)
     expect(definition?.content).toContain('templates.md')
   })

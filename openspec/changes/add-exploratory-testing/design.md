@@ -302,7 +302,9 @@ The change extends four contracts:
   whole-spec PASS record.
 - User-click archive: the same artifact rule; still require the current whole-spec PASS.
 - Digest and eligibility freshness: the change artifact digest includes the effective `skip_specs`
-  declaration; archive authorization and adoption recheck that the change still has a spec file or
+  declaration, and the live-worktree reviewed-input signature covers `.openspec.yaml`, so a marker
+  change or an edit-read-restore during a live review is a `reviewed-inputs-changed` ERROR, never a
+  PASS. Archive authorization and adoption recheck that the change still has a spec file or
   `skip_specs: true` after the record check. Changing or removing the marker after a PASS makes the
   record stale and refuses archive or adoption, including while an adoption confirmation is open.
 
@@ -322,9 +324,11 @@ the process would depend on bypassing its own gates).
 A whole-spec review is bound to the change digest it prepared. A frozen whole-scope review preserves
 its verdict despite concurrent code writes; only a change to the plan artifacts (`proposal.md`,
 `design.md`, delta specs, `tasks.md`) makes the record stale and requires another round. Code-only
-worktree edits do not invalidate a spec review. An ERROR `reviewed-inputs-changed` means the plan was
-not judged: the record stays, and a new plan digest triggers a fresh review. The live fallback is
-tested against its actual reviewed scope, which is the plan, not the whole worktree. The installed
+worktree edits do not invalidate a spec review. The live fallback tracks its actual reviewed scope,
+the plan: the reviewed-input signature covers `.openspec.yaml` and its effective `skip_specs`
+declaration, so a marker change, or a change-and-restore whose stat differs, discards the verdict as
+`reviewed-inputs-changed` instead of publishing a PASS. An ERROR `reviewed-inputs-changed` means the
+plan was not judged: the record stays, and a new plan digest triggers a fresh review. The installed
 0.43.0 engine provides the frozen whole-scope snapshot; the acceptance verifies it against this plan.
 The method never deletes or hand-edits a review record.
 

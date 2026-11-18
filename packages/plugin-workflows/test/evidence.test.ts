@@ -195,12 +195,45 @@ describe('spec eligibility evidence', () => {
       'schema: spec-driven\n# skip_specs: true is not set here\n',
       'schema: spec-driven\nskip_specs: false\n',
       'schema: spec-driven\nnested:\n  skip_specs: true\n',
+      // `#` without the YAML separator leaves a string, not the boolean marker.
+      'schema: spec-driven\nskip_specs: true#disabled\n',
+      'schema: spec-driven\nskip_specs: "true"\n',
     ]) {
       await writeArtifact(workspace, 'openspec/changes/auth/.openspec.yaml', metadata)
       expect(await verifyEvidence(spec, { workspace, values }), metadata).toMatchObject({
         ok: false,
       })
     }
+
+    // A whitespace-separated comment is valid YAML and keeps the boolean marker.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true # pending review\n',
+    )
+    expect(await verifyEvidence(spec, { workspace, values })).toMatchObject({ ok: true })
+  })
+
+  it('refuses a marker link that leaves the workspace', async () => {
+    const workspace = await tempWorkspace()
+    const outside = await tempWorkspace()
+    await writeArtifact(outside, 'metadata.yaml', 'schema: spec-driven\nskip_specs: true\n')
+    await writeArtifact(workspace, 'openspec/changes/auth/proposal.md', '# Proposal\n')
+    const markerPath = join(workspace, 'openspec', 'changes', 'auth', '.openspec.yaml')
+    try {
+      await symlink(join(outside, 'metadata.yaml'), markerPath, 'file')
+    } catch (error) {
+      // Creating a file symlink needs developer mode on Windows; skip only the
+      // host that cannot express the attack.
+      if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        return
+      }
+      throw error
+    }
+    expect(await verifyEvidence(spec, { workspace, values })).toMatchObject({
+      ok: false,
+      failure: { reason: 'path-escape' },
+    })
   })
 
   it('binds the marker into the change digest', async () => {
@@ -233,6 +266,21 @@ describe('spec eligibility evidence', () => {
       'schema: spec-driven\ncreated: 2026-01-01\nskip_specs: false\n',
     )
     expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
+
+    // An invalid scalar spelling is not the marker, so it must not join the digest.
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true#disabled\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(base)
+
+    await writeArtifact(
+      workspace,
+      'openspec/changes/auth/.openspec.yaml',
+      'schema: spec-driven\nskip_specs: true # pending review\n',
+    )
+    expect(await currentSpecDigest(workspace, 'auth')).toBe(marked)
 
     await writeArtifact(workspace, 'openspec/changes/auth/.openspec.yaml', 'schema: spec-driven\n')
     expect(await currentSpecDigest(workspace, 'auth')).toBe(base)

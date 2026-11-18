@@ -8,21 +8,18 @@ section only when its phase does not apply. The method body is in `SKILL.md` in 
 ```markdown
 # Proposal
 
-## Why this area now
+## Why
 
-- Selected focus: `<area>`
-- Focus mode: `<knowledge | coverage | defect | spec>`
-- Scan summary: `<top three candidates and scores>`
-- Hard override: `<none, or the defect/incident/risk/contradiction that outranked the score>`
+Why this area now: `<selected focus, focus mode, scan summary, and the hard override if any>`.
+
+## What Changes
+
+- In scope: `<capabilities, surfaces, or code paths>`
+- Expected outcome: `<outcome change when findings are actionable, or the decision to close with none>`
 
 ## State snapshot
 
 `<short summary of the state that justified this cycle; the full register is in state.md>`
-
-## Scope
-
-- In scope: `<capabilities, surfaces, or code paths>`
-- Expected outcome: `<outcome change when findings are actionable, or the decision to close with none>`
 
 ## Non-goals
 
@@ -213,13 +210,22 @@ Rejected candidates: `<area — reason it lost; area — reason>`.
 ```markdown
 # Proposal
 
-## Findings summary
+## Why
+
+The cycle found `<n>` actionable candidate(s); the user must classify each before any fix is applied.
+
+### Findings summary
 
 | ID | Severity | Observed | Expected / oracle | Evidence | Proposed class | Confidence | Action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `F-<n>` | `<P0-P3>` | `<behavior>` | `<oracle or "none">` | `<link>` | `<bug/feature/spec error/test gap/unknown>` | `<high/medium/low>` | `<fix/document/correct spec/test/ask>` |
 
-## Classification decision requested
+## What Changes
+
+The outcome depends on the classification: each accepted finding becomes a fix, a spec correction,
+a test, or a recorded rationale; a rejected finding leaves an oracle or a test.
+
+### Classification decision requested
 
 `<the list of findings and the decision the user must make; no fix has been applied>`
 
