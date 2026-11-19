@@ -19,7 +19,7 @@ tasks first if #7 is not applied yet.
 
 ### Session-row indicator (client)
 
-- [ ] 1.5 Add the Client polling store for live reviews using the `sessions` form: collect the mounted session ids, send one batch request every 4000 ms while the document is visible, cap the ids, and keep the last state on a failed read; verify unit tests for the id dedupe/cap and the response decode.
+- [x] 1.5 Add the Client polling store for live reviews using the `sessions` form: collect the mounted session ids, send one batch request every 4000 ms while the document is visible, cap the ids, and keep the last state on a failed read; verify unit tests for the id dedupe/cap and the response decode.
 - [ ] 1.6 Register the `sidebar.session.row.leading` occupant (id `dsh-setup-workflows-review`) with the 14px ring, the waiting glyph, the accessible name, the tooltip, and the reduced-motion rule; verify in a throwaway `DSH_HOME` with the Nuphus browser that a live review shows the ring and a settled verdict removes it.
 - [ ] 1.7 Document the session-row review indicator in `docs/workflows.md` (the waiting-close section); verify `pnpm lint`.
 
