@@ -8355,6 +8355,87 @@ describe('restart supersede through the fresh round', () => {
     expect(after?.status).toBe('running')
     releases.shift()?.()
   })
+
+  it('preserves an interrupted intake that shares the review identity', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+    await writeFile(
+      join(change, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [ ] 1.1 Only task\n',
+      'utf8',
+    )
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const releases: Array<() => void> = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async () => {
+        const pending = new Promise<void>((resolve) => {
+          releases.push(resolve)
+        })
+        return {
+          childId: `child-${String(releases.length)}`,
+          result: pending.then(() => ({
+            output: [{ type: 'text', text: '```json\n{"digest":"","verdict":"PASS"}\n```' }],
+            stopReason: 'completed',
+          })),
+          dispose: async () => {},
+        }
+      },
+    }
+    const host = fakeHost(workspace, { subagents: runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const intake = definitionsRegistry.installed('change-intake')?.definition
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // The intake shares the spec-review identity but is a gated workflow: a
+    // fresh standalone round must not cancel it, so it can resume and consume
+    // the shared record before its approval step.
+    const intakeRun = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-2',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      now: 1_000,
+    })
+    await runs.writeRun(
+      workspace,
+      runs.setRunStatus(intakeRun, 'interrupted', 2_000, 'the Host restarted'),
+      auth,
+    )
+    const fresh = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 3_000,
+    })
+    await runs.writeRun(workspace, fresh, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(() => releases.length === 1, 5_000)
+    const after = await runs.readAuthenticatedRun(workspace, intakeRun.id, auth)
+    expect(after?.status).toBe('interrupted')
+    releases.shift()?.()
+  })
 })
 
 describe('unapproved active definitions', () => {

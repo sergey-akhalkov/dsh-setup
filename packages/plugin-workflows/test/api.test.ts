@@ -1091,12 +1091,13 @@ describe('live review route', () => {
       status: 400,
       body: { error: 'at most 100 sessions' },
     })
-    // Exactly the cap is allowed; every id is unknown here, so nothing is live.
+    // Exactly the cap is allowed; the three live setup ids resolve normally.
     expect(await refuse(`sessions=${ids(MAX_LIVE_SESSIONS)}`)).toEqual({
       status: 200,
       body: { live: [] },
     })
-    expect(calls).toEqual([])
+    expect(calls).toEqual([value.workspaceOne, value.workspaceTwo])
+    const beforePost = calls.length
     const routeDefinition = value.routes.find((route) => route.path === LIVE_REVIEWS_ROUTE)
     if (routeDefinition === undefined) throw new Error('the live reviews route is missing')
     const refused = await routeDefinition.fetch(
@@ -1104,7 +1105,7 @@ describe('live review route', () => {
     )
     expect(refused.status).toBe(405)
     expect(refused.headers.get('allow')).toBe('GET')
-    expect(calls).toEqual([])
+    expect(calls).toHaveLength(beforePost)
   })
 
   it('returns an empty list when nothing is live', async () => {

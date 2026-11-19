@@ -3445,7 +3445,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       if (typeof run.context.name !== 'string' || run.context.name !== input.change) return false
       const definition = definitions.find((entry) => entry.id === run.definition.id)
       const step = definition?.steps.find((entry) => entry.executor === 'review')
-      if (definition === undefined || step === undefined) return false
+      // Only a standalone review workflow is superseded whole: a gated workflow
+      // that merely shares the review identity (the intake) keeps its run so it
+      // can resume and consume the shared record before its own steps complete.
+      if (definition === undefined || step === undefined || !isReviewDefinition(definition)) {
+        return false
+      }
       const stored = run.steps.find((entry) => entry.id === step.id)
       if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
         return false
@@ -3469,7 +3474,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (current === undefined || current.status !== 'interrupted') return
         const definition = definitions.find((entry) => entry.id === current.definition.id)
         const step = definition?.steps.find((entry) => entry.executor === 'review')
-        if (definition === undefined || step === undefined) return
+        if (definition === undefined || step === undefined || !isReviewDefinition(definition))
+          return
         const stored = current.steps.find((entry) => entry.id === step.id)
         if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) return
         const settled = setRunStatus(
