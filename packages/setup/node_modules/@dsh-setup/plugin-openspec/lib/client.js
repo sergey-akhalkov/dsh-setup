@@ -304,6 +304,14 @@ window.__ModuleLoader__.load({
           spinning: true
         };
       }
+      if (entry.unit === "integration") {
+        return {
+          label: `${t("review.integrationUnit")} ${String(entry.attempt)}`,
+          tone: "info",
+          tooltip,
+          spinning: true
+        };
+      }
       return {
         label: `${t("review.running")} ${String(entry.attempt)}`,
         tone: "info",
@@ -322,6 +330,8 @@ window.__ModuleLoader__.load({
       else if (review?.tasks !== void 0 && review.tasks !== null) {
         units.push(reviewTasksUnit(review.tasks, t));
       }
+      const integrationLive = liveOf("integration");
+      if (integrationLive !== void 0) units.push(reviewLiveUnit(integrationLive, t, now));
       return units;
     }
     function isoDate(value) {
@@ -967,6 +977,7 @@ window.__ModuleLoader__.load({
       "review.reviewed": "reviewed",
       "review.running": "spec review running - attempt",
       "review.tasksUnit": "reviewing tasks",
+      "review.integrationUnit": "integration review running - attempt",
       "review.waiting": "waiting for the live review run",
       "review.passTooltip": "Whole-spec review PASS by",
       "review.staleTooltip": "The PASS is stale: the change artifacts changed after it",
@@ -1259,17 +1270,22 @@ window.__ModuleLoader__.load({
       const [live, setLive] = (0, import_react.useState)({});
       const settled = (0, import_react.useRef)(onSettled);
       settled.current = onSettled;
+      const observed = (0, import_react.useRef)({
+        sessionId,
+        entries: []
+      });
       (0, import_react.useEffect)(() => {
         if (!active) return void 0;
         let stopped = false;
         let timer;
-        let previous = [];
         const poll = async () => {
           try {
             const entries = await requestLiveReviews(sessionId);
             if (stopped) return;
             if (entries === void 0) {
               stopped = true;
+              setLive({});
+              observed.current = { sessionId, entries: [] };
               return;
             }
             const byChange = /* @__PURE__ */ Object.create(null);
@@ -1279,8 +1295,9 @@ window.__ModuleLoader__.load({
               else current.push(entry);
             }
             setLive(byChange);
+            const previous = observed.current.sessionId === sessionId ? observed.current.entries : [];
             const done = settledReviews(previous, entries);
-            previous = entries;
+            observed.current = { sessionId, entries };
             if (done.length > 0) settled.current();
           } catch {
           } finally {
@@ -1337,6 +1354,7 @@ window.__ModuleLoader__.load({
         segment === "changes" && tab.visible && enginePresent,
         settleReload
       );
+      const liveReviews = enginePresent ? live : {};
       const knownRows = (0, import_react.useRef)([]);
       if (changes.state.phase === "ready") knownRows.current = changes.state.value.changes;
       const useResource = props.useResource ?? noResource;
@@ -1391,7 +1409,7 @@ window.__ModuleLoader__.load({
             segment,
             changes: changes.state,
             capabilities: capabilities.state,
-            live,
+            live: liveReviews,
             refreshing: segment === "specs" ? capabilities.refreshing : changes.refreshing,
             specQuery,
             archiveQuery,

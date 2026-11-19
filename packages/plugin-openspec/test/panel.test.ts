@@ -275,6 +275,7 @@ const COPY: Record<string, string> = {
   'review.reviewed': 'reviewed',
   'review.running': 'spec review running - attempt',
   'review.tasksUnit': 'reviewing tasks',
+  'review.integrationUnit': 'integration review running - attempt',
   'review.waiting': 'waiting for the live review run',
   'review.passTooltip': 'Whole-spec review PASS by',
   'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
@@ -3473,6 +3474,21 @@ describe('OpenSpec live observation', () => {
     return found
   }
 
+  function rootViewOf(body: Mounted<never>): Found {
+    const found = nodes(body.tree).find((node) => node.type === RootView)
+    if (found === undefined) throw new Error('root view missing')
+    return found
+  }
+
+  /** Whether the rendered review line carries a live spinner ring. */
+  function hasLiveRing(tree: unknown): boolean {
+    return nodes(tree).some(
+      (node) =>
+        typeof node.props.className === 'string' &&
+        node.props.className.includes('dsh-openspec-review-ring-live'),
+    )
+  }
+
   it('mounts one watch per file of the active rows and none outside the Changes segment', async () => {
     const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
       deltaCapabilities: ['auth', 'identity/auth'],
@@ -3860,6 +3876,73 @@ describe('OpenSpec live observation', () => {
     }
   })
 
+  it('clears a retained live review when the engine disappears', async () => {
+    vi.useFakeTimers()
+    try {
+      const liveEntry = {
+        session: 's1',
+        runId: 'run-live',
+        change: 'add-auth',
+        definition: 'spec-review',
+        unit: 'spec',
+        state: 'live',
+        attempt: 1,
+        since: '2026-11-19T10:00:00.000Z',
+      }
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE)
+      let liveEngine = true
+      let listEngine = true
+      const fetchMock = vi.fn(async (url: string) => {
+        const target = String(url)
+        if (target.includes('reviews/live')) {
+          return liveEngine
+            ? response({ live: [liveEntry] })
+            : response({ error: 'not found' }, false, 404)
+        }
+        if (target.includes(SPECS_PATH)) return response({ capabilities: [] })
+        return response({
+          changes: [activeRow],
+          archived: [],
+          counts: { active: 1, archived: 0, capabilities: 0 },
+          ...(listEngine ? { reviewAvailable: true } : {}),
+        })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const tab = fakeTab(ROOT_ADDRESS)
+      const body = mount(RootBody as never, rootBodyProps({ tab: tab.tab }) as never)
+      body.render()
+      await settle()
+      body.render()
+      await settle()
+      body.render()
+      expect(rootViewOf(body).props.live).toEqual({ 'add-auth': [liveEntry] })
+      expect(hasLiveRing(RootView(rootViewOf(body).props as never))).toBe(true)
+      const refresh = tab.commands[0]?.refresh
+      if (refresh === undefined) throw new Error('refresh missing')
+      // A fresh list without the engine flag may not render the retained entry.
+      listEngine = false
+      refresh()
+      await settle()
+      body.render()
+      expect(rootViewOf(body).props.live).toEqual({})
+      expect(hasLiveRing(RootView(rootViewOf(body).props as never))).toBe(false)
+      // A confirmed 404 drops the retained state itself, so restoring the flag
+      // cannot bring a stale spinner back.
+      liveEngine = false
+      listEngine = true
+      refresh()
+      await settle()
+      body.render()
+      await settle()
+      body.render()
+      expect(rootViewOf(body).props.live).toEqual({})
+      expect(hasLiveRing(RootView(rootViewOf(body).props as never))).toBe(false)
+      body.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not poll live reviews while the tab is hidden and starts on the visibility edge', async () => {
     vi.useFakeTimers()
     try {
@@ -3890,6 +3973,92 @@ describe('OpenSpec live observation', () => {
       body.render(rootBodyProps() as never)
       await settle()
       expect(liveCalls()).toBe(1)
+      body.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('detects a review that settled while the panel was paused', async () => {
+    vi.useFakeTimers()
+    try {
+      const liveEntry = {
+        session: 's1',
+        runId: 'run-settle',
+        change: 'add-auth',
+        definition: 'spec-review',
+        unit: 'spec',
+        state: 'live',
+        attempt: 1,
+        since: '2026-11-19T10:00:00.000Z',
+      }
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE)
+      let live: unknown[] = [liveEntry]
+      let verdict: unknown
+      const fetchMock = vi.fn(async (url: string) => {
+        const target = String(url)
+        if (target.includes('reviews/live')) return response({ live })
+        if (target.includes(SPECS_PATH)) return response({ capabilities: [] })
+        return response({
+          changes: [
+            verdict === undefined ? activeRow : { ...activeRow, review: verdict as unknown },
+          ],
+          archived: [],
+          counts: { active: 1, archived: 0, capabilities: 0 },
+          reviewAvailable: true,
+        })
+      })
+      const listCalls = (): number =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes(CHANGES_PATH)).length
+      vi.stubGlobal('fetch', fetchMock)
+      const tab = fakeTab(ROOT_ADDRESS)
+      const body = mount(RootBody as never, rootBodyProps({ tab: tab.tab }) as never)
+      body.render()
+      await settle()
+      body.render()
+      await settle()
+      body.render()
+      expect(rootViewOf(body).props.live).toEqual({ 'add-auth': [liveEntry] })
+      expect(listCalls()).toBe(1)
+      const choose = segmented(RootView(rootViewOf(body).props as never)).props.onChange as (
+        next: string,
+      ) => void
+      // Leaving Changes pauses the poll; changing segment does not re-read it.
+      choose('specs')
+      body.render()
+      await settle()
+      body.render()
+      expect(listCalls()).toBe(1)
+      // The verdict lands while the panel is paused.
+      live = []
+      verdict = {
+        spec: {
+          verdict: 'PASS',
+          current: true,
+          at: '2026-11-19T10:05:00.000Z',
+          findings: 0,
+          reviewer: 'codex',
+        },
+        tasks: { checked: 2, passed: 2, missing: [] },
+      }
+      choose('changes')
+      body.render()
+      await settle()
+      body.render()
+      // The first resumed poll compares against the runs observed before the
+      // pause: exactly one debounced change-list re-read, no visible refresh.
+      expect(rootViewOf(body).props.live).toEqual({})
+      expect(listCalls()).toBe(1)
+      vi.advanceTimersByTime(300)
+      await settle()
+      body.render()
+      expect(listCalls()).toBe(2)
+      expect(textOf(RootView(rootViewOf(body).props as never))).toContain('spec PASS')
+      // Later polls see no further disappearance and re-read nothing.
+      vi.advanceTimersByTime(4000)
+      await settle()
+      body.render()
+      expect(listCalls()).toBe(2)
       body.destroy()
     } finally {
       vi.useRealTimers()
@@ -4854,26 +5023,38 @@ describe('OpenSpec review state', () => {
     expect(waiting[1]).not.toHaveProperty('spinning')
   })
 
-  it('ignores an integration review and still shows a live review without a static field', () => {
-    expect(
-      reviewUnits(
-        summary(),
-        [
-          {
-            session: 's1',
-            change: 'add-auth',
-            definition: 'integration-review',
-            unit: 'integration',
-            state: 'live',
-            attempt: 1,
-            runId: 'run-5',
-            since: '2026-11-05T16:00:00',
-          },
-        ],
-        t,
-        NOW,
-      ),
-    ).toHaveLength(2)
+  it('shows an integration review only while it is live or waiting', () => {
+    const integration: ReviewLiveEntry = {
+      session: 's1',
+      change: 'add-auth',
+      definition: 'integration-review',
+      unit: 'integration',
+      state: 'live',
+      attempt: 1,
+      runId: 'run-5',
+      since: '2026-11-05T16:00:00',
+    }
+    const running = reviewUnits(summary(), [integration], t, NOW)
+    expect(running.map((unit) => unit.label)).toEqual([
+      'spec PASS',
+      'reviewed 16/16 tasks',
+      'integration review running - attempt 1',
+    ])
+    expect(running[2]).toMatchObject({ tone: 'info', spinning: true })
+    const waiting = reviewUnits(summary(), [{ ...integration, state: 'waiting' }], t, NOW)
+    expect(waiting[2]).toMatchObject({
+      label: 'waiting for the live review run',
+      waiting: true,
+    })
+    expect(waiting[2]).not.toHaveProperty('spinning')
+    // A settled integration verdict adds no new settled unit: the card keeps
+    // exactly its spec/tasks lines once the live entry is gone.
+    expect(reviewUnits(summary(), [], t, NOW)).toEqual(reviewUnits(summary(), undefined, t, NOW))
+    expect(reviewUnits(summary(), [], t, NOW).map((unit) => unit.label)).toEqual([
+      'spec PASS',
+      'reviewed 16/16 tasks',
+    ])
+    // A live unit still renders without any static review field.
     const liveOnly = reviewUnits(
       undefined,
       [

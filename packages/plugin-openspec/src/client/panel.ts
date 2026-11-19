@@ -607,6 +607,14 @@ function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now:
       spinning: true,
     }
   }
+  if (entry.unit === 'integration') {
+    return {
+      label: `${t('review.integrationUnit')} ${String(entry.attempt)}`,
+      tone: 'info',
+      tooltip,
+      spinning: true,
+    }
+  }
   return {
     label: `${t('review.running')} ${String(entry.attempt)}`,
     tone: 'info',
@@ -618,7 +626,8 @@ function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now:
 /**
  * The card's review line: the static state, with a live review replacing only
  * its own unit, so a running review is never rendered as settled. An
- * integration entry has no unit on the card and is ignored.
+ * integration review has no settled unit on the card; it shows only while it
+ * runs or waits.
  */
 export function reviewUnits(
   review: ChangeReviewSummary | undefined,
@@ -637,6 +646,8 @@ export function reviewUnits(
   else if (review?.tasks !== undefined && review.tasks !== null) {
     units.push(reviewTasksUnit(review.tasks, t))
   }
+  const integrationLive = liveOf('integration')
+  if (integrationLive !== undefined) units.push(reviewLiveUnit(integrationLive, t, now))
   return units
 }
 

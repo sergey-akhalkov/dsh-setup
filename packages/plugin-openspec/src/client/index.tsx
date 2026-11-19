@@ -301,6 +301,7 @@ const EN: Record<string, string> = {
   'review.reviewed': 'reviewed',
   'review.running': 'spec review running - attempt',
   'review.tasksUnit': 'reviewing tasks',
+  'review.integrationUnit': 'integration review running - attempt',
   'review.waiting': 'waiting for the live review run',
   'review.passTooltip': 'Whole-spec review PASS by',
   'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
@@ -791,9 +792,10 @@ const LIVE_REVIEW_POLL_MS = 4000
 /**
  * The engine's live reviews for this workspace, keyed by change. The poll runs
  * only while the Changes segment is visible; a 404 (no workflows plugin) stops
- * it, a failed read keeps the last state, and a change whose live review
- * settled triggers one debounced list re-read because a verdict-only write
- * changes no watched artifact.
+ * it and drops the last state, a failed read keeps the last state, and a change
+ * whose live review settled triggers one debounced list re-read because a
+ * verdict-only write changes no watched artifact. The observed runs survive a
+ * visibility pause, so the first resumed poll still detects a settle.
  */
 function useLiveReviews(
   sessionId: string,
@@ -803,17 +805,25 @@ function useLiveReviews(
   const [live, setLive] = useState<Readonly<Record<string, readonly ReviewLiveEntry[]>>>({})
   const settled = useRef(onSettled)
   settled.current = onSettled
+  // The last runs this session observed; a ref so pausing the poll keeps them.
+  const observed = useRef<{ sessionId: string; entries: readonly ReviewLiveEntry[] }>({
+    sessionId,
+    entries: [],
+  })
   useEffect(() => {
     if (!active) return undefined
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    let previous: readonly ReviewLiveEntry[] = []
     const poll = async (): Promise<void> => {
       try {
         const entries = await requestLiveReviews(sessionId)
         if (stopped) return
         if (entries === undefined) {
+          // A confirmed 404 means no engine: drop the last entries so a
+          // stopped poll leaves no spinner behind.
           stopped = true
+          setLive({})
+          observed.current = { sessionId, entries: [] }
           return
         }
         // A prototype-less record keeps a valid change name such as
@@ -825,8 +835,9 @@ function useLiveReviews(
           else current.push(entry)
         }
         setLive(byChange)
+        const previous = observed.current.sessionId === sessionId ? observed.current.entries : []
         const done = settledReviews(previous, entries)
-        previous = entries
+        observed.current = { sessionId, entries }
         if (done.length > 0) settled.current()
       } catch {
         // A failed read keeps the last state; the next tick retries.
@@ -921,6 +932,9 @@ export function RootBody(props: RootBodyProps): ReactNode {
     segment === 'changes' && tab.visible && enginePresent,
     settleReload,
   )
+  // A fresh list without the engine flag means the live route is gone too: a
+  // retained entry must not render a spinner on the stale card.
+  const liveReviews = enginePresent ? live : {}
   // An error render drops the ready rows; keep the last ones so the watches
   // stay mounted through it.
   const knownRows = useRef<readonly ChangeRow[]>([])
@@ -989,7 +1003,7 @@ export function RootBody(props: RootBodyProps): ReactNode {
         segment={segment}
         changes={changes.state}
         capabilities={capabilities.state}
-        live={live}
+        live={liveReviews}
         refreshing={segment === 'specs' ? capabilities.refreshing : changes.refreshing}
         specQuery={specQuery}
         archiveQuery={archiveQuery}
