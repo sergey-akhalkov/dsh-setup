@@ -218,14 +218,14 @@ describe('review snapshot', () => {
     await discardReviewSnapshot(dir, 'run-b', defaultGit)
   })
 
-  it('falls back when .dsh is not ignored', async () => {
+  it('ignores .dsh automatically through the local exclude', async () => {
     const dir = await repository()
     await writeFile(join(dir, '.gitignore'), 'ignored.txt\n')
     const changeDir = join(dir, 'openspec', 'changes', 'change-a')
     await mkdir(changeDir, { recursive: true })
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
-    let reason: string | undefined
-    const snapshot = await createReviewSnapshot(
+    const reasons: string[] = []
+    const first = await createReviewSnapshot(
       dir,
       change('change-a', changeDir),
       'run-c',
@@ -233,11 +233,27 @@ describe('review snapshot', () => {
       new AbortController().signal,
       undefined,
       (value) => {
-        reason = value
+        reasons.push(value)
       },
     )
-    expect(snapshot).toBeUndefined()
-    expect(reason).toContain('not Git-ignored')
+    if (first === undefined) throw new Error(`expected a snapshot: ${reasons.join(' ')}`)
+    await discardReviewSnapshot(dir, 'run-c', defaultGit)
+    const exclude = join(dir, '.git', 'info', 'exclude')
+    const listed = async (): Promise<number> =>
+      (await readFile(exclude, 'utf8')).split(/\r?\n/u).filter((line) => line.trim() === '.dsh/')
+        .length
+    expect(await listed()).toBe(1)
+    // A second build reuses the single rule instead of appending it again.
+    const second = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      'run-c',
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (second === undefined) throw new Error('expected a second snapshot')
+    expect(await listed()).toBe(1)
+    await discardReviewSnapshot(dir, 'run-c', defaultGit)
   })
 
   it('falls back when the change directory is outside the repository', async () => {

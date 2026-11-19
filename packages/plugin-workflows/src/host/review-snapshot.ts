@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { type Dirent, existsSync } from 'node:fs'
 import {
+  appendFile,
   cp,
   lstat,
   mkdir,
@@ -509,6 +510,48 @@ export async function reviewInputTree(
 export async function specInputs(changeDir: string): Promise<InputSignature> {
   return inputSignature(await realpath(changeDir).catch(() => changeDir), CHANGE_INPUT_EXCLUDES)
 } /**
+ * Make the harness scratch directory ignored without touching the project's
+ * tracked ignore file: when no rule covers `.dsh`, append it once to the
+ * repository's local exclude. A fresh project therefore never fails a review on
+ * setup, and the owner can still move the rule into .gitignore.
+ */
+async function ensureScratchIgnored(
+  root: string,
+  cwd: string,
+  runGit: GitRunner,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const ignored = async (): Promise<boolean> => {
+    try {
+      await runGit(['check-ignore', '-q', '--no-index', '.dsh'], cwd, signal)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (await ignored()) return true
+  try {
+    const reported = (await runGit(['rev-parse', '--git-path', 'info/exclude'], root, signal))
+      .toString('utf8')
+      .trim()
+    if (reported === '') return false
+    const file = isAbsolute(reported) ? reported : resolve(root, reported)
+    const existing = await readFile(file, 'utf8').catch(() => '')
+    const listed = existing
+      .split(/\r?\n/u)
+      .some((line) => line.trim() === '.dsh/' || line.trim() === '.dsh')
+    if (!listed) {
+      await mkdir(dirname(file), { recursive: true })
+      const separator = existing === '' || existing.endsWith('\n') ? '' : '\n'
+      await appendFile(file, `${separator}.dsh/\n`, 'utf8')
+    }
+  } catch {
+    return false
+  }
+  return ignored()
+}
+
+/**
  * Build the disposable review snapshot from the exact review input set. The
  * checkout lives at the stable path of `key` (the unit key; a run id also
  * works) and replaces any leftover checkout at that path. Returns undefined
@@ -549,10 +592,13 @@ export async function createReviewSnapshot(
   }
   try {
     await mkdir(resolve(cwd, '.dsh'), { recursive: true })
-    await runGit(['check-ignore', '-q', '--no-index', '.dsh'], cwd, signal)
   } catch {
+    onUnavailable?.('the .dsh scratch directory could not be created')
+    return undefined
+  }
+  if (!(await ensureScratchIgnored(root, cwd, runGit, signal))) {
     onUnavailable?.(
-      'the .dsh scratch directory is not Git-ignored; add .dsh/ to .gitignore or .git/info/exclude',
+      'the .dsh scratch directory could not be Git-ignored (add .dsh/ to .gitignore or .git/info/exclude)',
     )
     return undefined
   }

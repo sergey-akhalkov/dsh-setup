@@ -531,9 +531,10 @@ describe('native review host admission', () => {
   it('discards a live-fallback whole-spec verdict when a reviewed artifact changes', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await gitWorkspace()
-    // The snapshot cannot be built without the `.dsh/` ignore rule: the review
-    // falls back to the live artifacts under the mutation guard.
-    await writeFile(join(workspace, '.gitignore'), '', 'utf8')
+    // The project's own negation keeps `.dsh` unignored even after the automatic
+    // exclude rule: the snapshot is refused and the review falls back to the
+    // live artifacts under the mutation guard.
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n!.dsh/\n', 'utf8')
     const definition = validateDefinition({
       v: 1,
       id: 'fallback-spec-review',
@@ -628,9 +629,9 @@ describe('native review host admission', () => {
     const markerPath = join(workspace, 'openspec', 'changes', 'auth', '.openspec.yaml')
     const original = 'schema: spec-driven\nskip_specs: true\n'
     await writeFile(markerPath, original, 'utf8')
-    // The snapshot cannot be built without the `.dsh/` ignore rule: the review
-    // falls back to the live artifacts under the mutation guard.
-    await writeFile(join(workspace, '.gitignore'), '', 'utf8')
+    // The project's own negation keeps `.dsh` unignored: the snapshot is refused
+    // and the review falls back to the live artifacts under the mutation guard.
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n!.dsh/\n', 'utf8')
     const definition = validateDefinition({
       v: 1,
       id: 'fallback-marker-review',

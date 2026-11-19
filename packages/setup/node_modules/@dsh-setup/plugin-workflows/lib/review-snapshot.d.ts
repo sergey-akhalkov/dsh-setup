@@ -43,6 +43,12 @@ export declare function reviewInputTree(cwd: string, change: {
 }, runGit: GitRunner, signal: AbortSignal): Promise<string>;
 /** The change-artifact signature; a whole-spec fallback tracks only its reviewed scope. */
 export declare function specInputs(changeDir: string): Promise<InputSignature>; /**
+ * Make the harness scratch directory ignored without touching the project's
+ * tracked ignore file: when no rule covers `.dsh`, append it once to the
+ * repository's local exclude. A fresh project therefore never fails a review on
+ * setup, and the owner can still move the rule into .gitignore.
+ */
+/**
  * Build the disposable review snapshot from the exact review input set. The
  * checkout lives at the stable path of `key` (the unit key; a run id also
  * works) and replaces any leftover checkout at that path. Returns undefined
