@@ -65,6 +65,7 @@ window.__ModuleLoader__.load({
     var primitives = __toESM(require("@deepseek-ai/dsh-client-ui-primitives"), 1);
     var CHANGES_PATH = "api/plugins/dsh-setup-openspec/changes";
     var CHANGE_PATH = "api/plugins/dsh-setup-openspec/change";
+    var LIVE_REVIEWS_PATH = "api/workflows/reviews/live";
     var SPECS_PATH = "api/plugins/dsh-setup-openspec/specs";
     var ARCHIVE_PATH = "api/plugins/dsh-setup-openspec/archive";
     var OPENSPEC_ID = "@dsh-setup/plugin-openspec/panel";
@@ -219,6 +220,39 @@ window.__ModuleLoader__.load({
         years: "y"
       };
       return `${String(n)}${suffix[unit]} ago`;
+    }
+    function settledChanges(previous, next) {
+      const current = new Set(next);
+      return previous.filter((change) => !current.has(change));
+    }
+    function decodeLiveReviewEntries(body) {
+      if (!isRecord(body) || !Array.isArray(body.live)) return void 0;
+      const entries = [];
+      for (const value of body.live) {
+        if (!isRecord(value)) return void 0;
+        const session = value.session;
+        const change = value.change;
+        const definition = value.definition;
+        const unit = value.unit;
+        const state = value.state;
+        const attempt = value.attempt;
+        const since = value.since;
+        if (typeof session !== "string" || session === "" || typeof change !== "string" || change === "" || typeof definition !== "string" || definition === "" || unit !== "spec" && unit !== "tasks" && unit !== "integration" || state !== "starting" && state !== "live" && state !== "waiting" || typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 1 || typeof since !== "string" || since === "") {
+          return void 0;
+        }
+        const label = summaryText(value.label);
+        entries.push({
+          session,
+          change,
+          definition,
+          unit,
+          ...label === null ? {} : { label },
+          state,
+          attempt,
+          since
+        });
+      }
+      return entries;
     }
     function reviewSpecUnit(spec, t, now) {
       if (spec === null) return { label: t("review.specMissing"), tone: "quiet" };
@@ -758,6 +792,20 @@ window.__ModuleLoader__.load({
         (body) => decodeCapabilityDetail(body.capability)
       );
     }
+    async function requestLiveReviews(sessionId) {
+      const response = await fetch(`${LIVE_REVIEWS_PATH}?session=${encodeURIComponent(sessionId)}`, {
+        headers: { accept: "application/json" },
+        credentials: "same-origin"
+      });
+      if (response.status === 404) return void 0;
+      if (!response.ok) {
+        throw new Error(`The live review request failed (${String(response.status)}).`);
+      }
+      const body = await response.json();
+      const entries = decodeLiveReviewEntries(body);
+      if (entries === void 0) throw new Error("The live review response was not understood.");
+      return entries;
+    }
     async function requestArchive(sessionId, name) {
       const response = await fetch(ARCHIVE_PATH, {
         method: "POST",
@@ -1196,6 +1244,48 @@ window.__ModuleLoader__.load({
         }, LIVE_DEBOUNCE_MS);
       };
     }
+    var LIVE_REVIEW_POLL_MS = 4e3;
+    function useLiveReviews(sessionId, active, onSettled) {
+      const [live, setLive] = (0, import_react.useState)({});
+      const settled = (0, import_react.useRef)(onSettled);
+      settled.current = onSettled;
+      (0, import_react.useEffect)(() => {
+        if (!active) return void 0;
+        let stopped = false;
+        let timer;
+        let previous = [];
+        const poll = async () => {
+          try {
+            const entries = await requestLiveReviews(sessionId);
+            if (stopped) return;
+            if (entries === void 0) {
+              stopped = true;
+              return;
+            }
+            const byChange = {};
+            for (const entry of entries) {
+              const current = byChange[entry.change];
+              if (current === void 0) byChange[entry.change] = [entry];
+              else current.push(entry);
+            }
+            setLive(byChange);
+            const next = Object.keys(byChange);
+            const done = settledChanges(previous, next);
+            previous = next;
+            if (done.length > 0) settled.current();
+          } catch {
+          } finally {
+            if (!stopped) timer = setTimeout(() => void poll(), LIVE_REVIEW_POLL_MS);
+          }
+        };
+        void poll();
+        return () => {
+          stopped = true;
+          if (timer !== void 0) clearTimeout(timer);
+        };
+      }, [sessionId, active]);
+      return live;
+    }
     function useMarkdownLabels(t) {
       return (0, import_react.useMemo)(
         () => ({
@@ -1231,6 +1321,13 @@ window.__ModuleLoader__.load({
       const [archiveQuery, setArchiveQuery] = (0, import_react.useState)("");
       const changes = useRead(() => requestChangeList(sessionId));
       const capabilities = useRead(() => requestCapabilities(sessionId));
+      const settleReload = useLiveReload(() => changes.reload());
+      const enginePresent = changes.state.phase === "ready" && changes.state.value.changes.some((row) => row.archived !== true && row.review !== void 0);
+      const live = useLiveReviews(
+        sessionId,
+        segment === "changes" && tab.visible && enginePresent,
+        settleReload
+      );
       const knownRows = (0, import_react.useRef)([]);
       if (changes.state.phase === "ready") knownRows.current = changes.state.value.changes;
       const useResource = props.useResource ?? noResource;
@@ -1285,6 +1382,7 @@ window.__ModuleLoader__.load({
             segment,
             changes: changes.state,
             capabilities: capabilities.state,
+            live,
             refreshing: segment === "specs" ? capabilities.refreshing : changes.refreshing,
             specQuery,
             archiveQuery,
@@ -1530,6 +1628,7 @@ window.__ModuleLoader__.load({
               row,
               t: props.t,
               now: props.now,
+              live: props.live?.[row.name],
               onOpen: (name) => props.onOpenChange(name, false),
               onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
               onApply: () => props.onApply(row.name)
@@ -1546,6 +1645,7 @@ window.__ModuleLoader__.load({
               row,
               t: props.t,
               now: props.now,
+              live: props.live?.[row.name],
               onOpen: (name) => props.onOpenChange(name, false),
               onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
               onArchive: () => props.onArchiveChange(row.name),

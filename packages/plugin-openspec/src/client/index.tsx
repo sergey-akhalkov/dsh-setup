@@ -87,8 +87,10 @@ import {
   requestCapability,
   requestChange,
   requestChangeList,
+  requestLiveReviews,
   reviewUnits,
   type SegmentStorage,
+  settledChanges,
   sortArchived,
   sortChanges,
   sortHistory,
@@ -783,6 +785,63 @@ function useLiveReload(reload: () => void): () => void {
   }
 }
 
+/** Live-review poll cadence; a review runs for tens of seconds at minimum. */
+const LIVE_REVIEW_POLL_MS = 4000
+
+/**
+ * The engine's live reviews for this workspace, keyed by change. The poll runs
+ * only while the Changes segment is visible; a 404 (no workflows plugin) stops
+ * it, a failed read keeps the last state, and a change whose live review
+ * settled triggers one debounced list re-read because a verdict-only write
+ * changes no watched artifact.
+ */
+function useLiveReviews(
+  sessionId: string,
+  active: boolean,
+  onSettled: () => void,
+): Readonly<Record<string, readonly ReviewLiveEntry[]>> {
+  const [live, setLive] = useState<Readonly<Record<string, readonly ReviewLiveEntry[]>>>({})
+  const settled = useRef(onSettled)
+  settled.current = onSettled
+  useEffect(() => {
+    if (!active) return undefined
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let previous: readonly string[] = []
+    const poll = async (): Promise<void> => {
+      try {
+        const entries = await requestLiveReviews(sessionId)
+        if (stopped) return
+        if (entries === undefined) {
+          stopped = true
+          return
+        }
+        const byChange: Record<string, ReviewLiveEntry[]> = {}
+        for (const entry of entries) {
+          const current = byChange[entry.change]
+          if (current === undefined) byChange[entry.change] = [entry]
+          else current.push(entry)
+        }
+        setLive(byChange)
+        const next = Object.keys(byChange)
+        const done = settledChanges(previous, next)
+        previous = next
+        if (done.length > 0) settled.current()
+      } catch {
+        // A failed read keeps the last state; the next tick retries.
+      } finally {
+        if (!stopped) timer = setTimeout(() => void poll(), LIVE_REVIEW_POLL_MS)
+      }
+    }
+    void poll()
+    return () => {
+      stopped = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [sessionId, active])
+  return live
+}
+
 /** Reference-stable Markdown chrome for the current locale. */
 function useMarkdownLabels(t: Translate): MarkdownLabels {
   return useMemo(
@@ -846,6 +905,19 @@ export function RootBody(props: RootBodyProps): ReactNode {
   const [archiveQuery, setArchiveQuery] = useState('')
   const changes = useRead<ChangeListResponse>(() => requestChangeList(sessionId))
   const capabilities = useRead<CapabilitySummary[]>(() => requestCapabilities(sessionId))
+  // The live reviews ride a separate route so the CLI-backed list is never
+  // polled; a settled verdict triggers one debounced list re-read below. The
+  // engine's `review` field on any active row proves the workflows plugin is
+  // present; a host without it has no live route to poll.
+  const settleReload = useLiveReload(() => changes.reload())
+  const enginePresent =
+    changes.state.phase === 'ready' &&
+    changes.state.value.changes.some((row) => row.archived !== true && row.review !== undefined)
+  const live = useLiveReviews(
+    sessionId,
+    segment === 'changes' && tab.visible && enginePresent,
+    settleReload,
+  )
   // An error render drops the ready rows; keep the last ones so the watches
   // stay mounted through it.
   const knownRows = useRef<readonly ChangeRow[]>([])
@@ -914,6 +986,7 @@ export function RootBody(props: RootBodyProps): ReactNode {
         segment={segment}
         changes={changes.state}
         capabilities={capabilities.state}
+        live={live}
         refreshing={segment === 'specs' ? capabilities.refreshing : changes.refreshing}
         specQuery={specQuery}
         archiveQuery={archiveQuery}
@@ -1150,6 +1223,8 @@ export interface RootViewProps {
   readonly segment: RootSegment
   readonly changes: ReadState<ChangeListResponse>
   readonly capabilities: ReadState<CapabilitySummary[]>
+  /** The engine's live reviews, keyed by change; merged into each card's line. */
+  readonly live?: Readonly<Record<string, readonly ReviewLiveEntry[]>>
   /** A background re-read is in flight; the shown rows stay on screen. */
   readonly refreshing?: boolean
   readonly specQuery: string
@@ -1275,6 +1350,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 row,
                 t: props.t,
                 now: props.now,
+                live: props.live?.[row.name],
                 onOpen: (name) => props.onOpenChange(name, false),
                 onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
                 onApply: () => props.onApply(row.name),
@@ -1295,6 +1371,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 row,
                 t: props.t,
                 now: props.now,
+                live: props.live?.[row.name],
                 onOpen: (name) => props.onOpenChange(name, false),
                 onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
                 onArchive: () => props.onArchiveChange(row.name),

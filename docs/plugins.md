@@ -661,7 +661,11 @@ reviewed` when this clone has no local record) and `reviewed X/Y tasks` for the 
 portable task-review `PASS` the archive gate counts, with the missing task numbers in its tooltip. The
 line reads the workflows engine's `workflowsReviewStatus` service: a profile without the engine, an
 archived row, or a failed read renders the card exactly as before, and a commit-backed audit of the
-approvals stays with `pnpm reviews:check`. An empty change list repeats both actions, shows the
+approvals stays with `pnpm reviews:check`. While a review of one of the workspace's changes is live,
+the card's line replaces the affected unit with a spinning `reviewing ...` tag: the panel reads the
+engine's live route every four seconds while `Changes` is visible, stops when that route is absent,
+and performs one debounced change-list re-read when a previously live review settles so the new
+verdict replaces the spinner without a manual refresh. The change list itself is never polled. An empty change list repeats both actions, shows the
 workspace totals, and lists the three most recently archived changes with a link to the full archive.
 The `Specs` segment (`dsh-resource://openspec/specs`, the address that opens the same root on that
 segment) lists the accepted capabilities with their purpose, requirement count and provenance — the

@@ -134,6 +134,7 @@ import {
   changeAddress,
   changeListWatchAddresses,
   type Delta,
+  decodeLiveReviewEntries,
   decodeReview,
   derivePhase,
   fileAddress,
@@ -168,6 +169,7 @@ import {
   SPECS_ADDRESS,
   SPECS_PATH,
   segmentStorageKey,
+  settledChanges,
   sortArchived,
   sortChanges,
   sortHistory,
@@ -3612,20 +3614,24 @@ describe('OpenSpec live observation', () => {
     }
   })
 
-  it('re-reads the change list once per observed file change and never polls', async () => {
+  it('re-reads the change list once per observed file change and never polls it', async () => {
     vi.useFakeTimers()
     try {
       const interval = vi.spyOn(globalThis, 'setInterval')
       const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
         deltaCapabilities: ['auth'],
       })
-      const fetchMock = vi.fn(async () =>
-        response({
-          changes: [activeRow],
-          archived: [],
-          counts: { active: 1, archived: 0, capabilities: 0 },
-        }),
+      const fetchMock = vi.fn(async (url: string) =>
+        String(url).includes('reviews/live')
+          ? response({ error: 'not found' }, false, 404)
+          : response({
+              changes: [activeRow],
+              archived: [],
+              counts: { active: 1, archived: 0, capabilities: 0 },
+            }),
       )
+      const listCalls = (): number =>
+        fetchMock.mock.calls.filter(([url]) => !String(url).includes('reviews/live')).length
       vi.stubGlobal('fetch', fetchMock)
       const body = mount(RootBody as never, rootBodyProps() as never)
       body.render()
@@ -3639,19 +3645,21 @@ describe('OpenSpec live observation', () => {
         files[address] ?? { status: 'live', value: { version: 'v1' } }
       const watches = new Map<string, WatchMount>()
       syncWatches(mounted.tree, watches, useResource)
-      expect(fetchMock).toHaveBeenCalledTimes(1)
+      // The separate liveness read stopped on 404 (no workflows plugin); the
+      // change list itself is never polled.
+      expect(listCalls()).toBe(1)
       // The first settlement of the initial set schedules one reconciliation read.
       expect(vi.getTimerCount()).toBe(1)
       vi.advanceTimersByTime(300)
       await settle()
       body.render()
-      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(listCalls()).toBe(2)
       expect(vi.getTimerCount()).toBe(0)
       // An unchanged version schedules nothing.
       mounted.render(observationOf(body.tree).props as never)
       syncWatches(mounted.tree, watches, useResource)
       expect(vi.getTimerCount()).toBe(0)
-      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(listCalls()).toBe(2)
       // One version bump on tasks.md schedules exactly one re-read after 300 ms.
       files = { [tasksAddress]: { status: 'live', value: { version: 'v2' } } }
       syncWatches(mounted.tree, watches, useResource)
@@ -3659,11 +3667,11 @@ describe('OpenSpec live observation', () => {
       vi.advanceTimersByTime(299)
       await settle()
       body.render()
-      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(listCalls()).toBe(2)
       vi.advanceTimersByTime(1)
       await settle()
       body.render()
-      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(listCalls()).toBe(3)
       expect(vi.getTimerCount()).toBe(0)
       // An observed absence and a later appearance each schedule one re-read.
       files = { [tasksAddress]: { status: 'failed' } }
@@ -3672,22 +3680,83 @@ describe('OpenSpec live observation', () => {
       vi.advanceTimersByTime(300)
       await settle()
       body.render()
-      expect(fetchMock).toHaveBeenCalledTimes(4)
+      expect(listCalls()).toBe(4)
       files = { [tasksAddress]: { status: 'live', value: { version: 'v3' } } }
       syncWatches(mounted.tree, watches, useResource)
       expect(vi.getTimerCount()).toBe(1)
       vi.advanceTimersByTime(300)
       await settle()
       body.render()
-      expect(fetchMock).toHaveBeenCalledTimes(5)
+      expect(listCalls()).toBe(5)
       expect(vi.getTimerCount()).toBe(0)
-      // No polling timer exists; an idle segment issues no request.
+      // The change list has no polling timer of its own; an idle segment issues
+      // no change-list request even after the liveness interval would have fired.
       expect(interval).not.toHaveBeenCalled()
       vi.advanceTimersByTime(1500)
       await settle()
-      expect(fetchMock).toHaveBeenCalledTimes(5)
+      expect(listCalls()).toBe(5)
       expect(vi.getTimerCount()).toBe(0)
       mounted.destroy()
+      body.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('polls live reviews while visible and re-reads the list once when a review settles', async () => {
+    vi.useFakeTimers()
+    try {
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+        review: { spec: null, tasks: { checked: 1, passed: 0, missing: ['1'] } },
+      })
+      const liveEntry = {
+        session: 's1',
+        change: 'add-auth',
+        definition: 'spec-review',
+        unit: 'spec',
+        state: 'live',
+        attempt: 1,
+        since: '2026-11-19T10:00:00.000Z',
+      }
+      let live: unknown[] = [liveEntry]
+      const fetchMock = vi.fn(async (url: string) =>
+        String(url).includes('reviews/live')
+          ? response({ live })
+          : response({
+              changes: [activeRow],
+              archived: [],
+              counts: { active: 1, archived: 0, capabilities: 0 },
+            }),
+      )
+      const listCalls = (): number =>
+        fetchMock.mock.calls.filter(([url]) => !String(url).includes('reviews/live')).length
+      vi.stubGlobal('fetch', fetchMock)
+      const body = mount(RootBody as never, rootBodyProps() as never)
+      body.render()
+      await settle()
+      body.render()
+      // The ready list proves the engine is present; the next render starts the
+      // separate live poll, whose first read resolves here.
+      await settle()
+      body.render()
+      const rootView = (): Found => {
+        const found = nodes(body.tree).find((node) => node.type === RootView)
+        if (found === undefined) throw new Error('root view missing')
+        return found
+      }
+      expect(rootView().props.live).toEqual({ 'add-auth': [liveEntry] })
+      // The interval poll sees the settled state; the card line goes back to the
+      // static units and one debounced list re-read shows the new verdict.
+      live = []
+      vi.advanceTimersByTime(4000)
+      await settle()
+      body.render()
+      expect(rootView().props.live).toEqual({})
+      expect(listCalls()).toBe(1)
+      vi.advanceTimersByTime(300)
+      await settle()
+      body.render()
+      expect(listCalls()).toBe(2)
       body.destroy()
     } finally {
       vi.useRealTimers()
@@ -4707,5 +4776,31 @@ describe('OpenSpec review state', () => {
     expect(decodeReview({ spec: null, tasks: { checked: 'many' } })).toBeUndefined()
     expect(decodeReview(undefined)).toBeUndefined()
     expect(decodeReview({ spec: null, tasks: null })).toEqual({ spec: null, tasks: null })
+  })
+
+  it('decodes the engine live reviews and rejects a malformed body', () => {
+    const live = {
+      session: 's1',
+      change: 'add-auth',
+      definition: 'spec-review',
+      unit: 'spec',
+      label: '2. Lane',
+      state: 'live',
+      attempt: 1,
+      since: '2026-11-19T10:00:00.000Z',
+    }
+    expect(decodeLiveReviewEntries({ live: [live] })).toEqual([live])
+    expect(decodeLiveReviewEntries({ live: [{ ...live, state: 'orphaned' }] })).toBeUndefined()
+    expect(decodeLiveReviewEntries({ live: [{ ...live, attempt: 0 }] })).toBeUndefined()
+    expect(decodeLiveReviewEntries({ live: [{ ...live, unit: 'whole' }] })).toBeUndefined()
+    expect(decodeLiveReviewEntries({ live: 'nope' })).toBeUndefined()
+    expect(decodeLiveReviewEntries(undefined)).toBeUndefined()
+  })
+
+  it('names the changes whose live review settled between two polls', () => {
+    expect(settledChanges(['a', 'b'], ['b'])).toEqual(['a'])
+    expect(settledChanges(['a'], ['a', 'c'])).toEqual([])
+    expect(settledChanges([], ['a'])).toEqual([])
+    expect(settledChanges(['a'], [])).toEqual(['a'])
   })
 })

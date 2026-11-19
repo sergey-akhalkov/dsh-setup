@@ -13,6 +13,9 @@ export const CHANGES_PATH = 'api/plugins/dsh-setup-openspec/changes'
 /** Document-relative Host route for one change's artifacts and progress. */
 export const CHANGE_PATH = 'api/plugins/dsh-setup-openspec/change'
 
+/** Document-relative route for the engine's live reviews (the workflows plugin). */
+export const LIVE_REVIEWS_PATH = 'api/workflows/reviews/live'
+
 /** Document-relative Host route for the capability inventory and one spec. */
 export const SPECS_PATH = 'api/plugins/dsh-setup-openspec/specs'
 
@@ -464,6 +467,64 @@ export function relativeLabel(
     years: 'y',
   }
   return `${String(n)}${suffix[unit]} ago`
+}
+
+/**
+ * The changes whose live review disappeared between two polls; each one needs
+ * one debounced change-list re-read because a verdict-only write changes no
+ * watched artifact.
+ */
+export function settledChanges(
+  previous: readonly string[],
+  next: readonly string[],
+): readonly string[] {
+  const current = new Set(next)
+  return previous.filter((change) => !current.has(change))
+}
+
+/** Decode the engine's live-review body; anything malformed is not understood. */
+export function decodeLiveReviewEntries(body: unknown): ReviewLiveEntry[] | undefined {
+  if (!isRecord(body) || !Array.isArray(body.live)) return undefined
+  const entries: ReviewLiveEntry[] = []
+  for (const value of body.live) {
+    if (!isRecord(value)) return undefined
+    const session = value.session
+    const change = value.change
+    const definition = value.definition
+    const unit = value.unit
+    const state = value.state
+    const attempt = value.attempt
+    const since = value.since
+    if (
+      typeof session !== 'string' ||
+      session === '' ||
+      typeof change !== 'string' ||
+      change === '' ||
+      typeof definition !== 'string' ||
+      definition === '' ||
+      (unit !== 'spec' && unit !== 'tasks' && unit !== 'integration') ||
+      (state !== 'starting' && state !== 'live' && state !== 'waiting') ||
+      typeof attempt !== 'number' ||
+      !Number.isSafeInteger(attempt) ||
+      attempt < 1 ||
+      typeof since !== 'string' ||
+      since === ''
+    ) {
+      return undefined
+    }
+    const label = summaryText(value.label)
+    entries.push({
+      session,
+      change,
+      definition,
+      unit,
+      ...(label === null ? {} : { label }),
+      state,
+      attempt,
+      since,
+    })
+  }
+  return entries
 }
 
 /** One rendered unit of the card's review line. */
@@ -1216,6 +1277,28 @@ export async function requestCapability(sessionId: string, id: string): Promise<
     'The OpenSpec capability response was not understood.',
     (body) => decodeCapabilityDetail(body.capability),
   )
+}
+
+/**
+ * Read the engine's live reviews for the panel's session; `undefined` means the
+ * workflows plugin is absent (the route does not exist), so the panel stops
+ * polling instead of retrying a route it can never reach.
+ */
+export async function requestLiveReviews(
+  sessionId: string,
+): Promise<readonly ReviewLiveEntry[] | undefined> {
+  const response = await fetch(`${LIVE_REVIEWS_PATH}?session=${encodeURIComponent(sessionId)}`, {
+    headers: { accept: 'application/json' },
+    credentials: 'same-origin',
+  })
+  if (response.status === 404) return undefined
+  if (!response.ok) {
+    throw new Error(`The live review request failed (${String(response.status)}).`)
+  }
+  const body: unknown = await response.json()
+  const entries = decodeLiveReviewEntries(body)
+  if (entries === undefined) throw new Error('The live review response was not understood.')
+  return entries
 }
 
 /**

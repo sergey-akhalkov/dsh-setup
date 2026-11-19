@@ -21,15 +21,15 @@ tasks first if #7 is not applied yet.
 
 - [x] 1.5 Add the Client polling store for live reviews using the `sessions` form: collect the mounted session ids, send one batch request every 4000 ms while the document is visible, cap the ids, and keep the last state on a failed read; verify unit tests for the id dedupe/cap and the response decode.
 - [ ] 1.6 Register the `sidebar.session.row.leading` occupant (id `dsh-setup-workflows-review`) with the 14px ring, the waiting glyph, the accessible name, the tooltip, and the reduced-motion rule; verify in a throwaway `DSH_HOME` with the Nuphus browser that a live review shows the ring and a settled verdict removes it.
-- [ ] 1.7 Document the session-row review indicator in `docs/workflows.md` (the waiting-close section); verify `pnpm lint`.
+- [x] 1.7 Document the session-row review indicator in `docs/workflows.md` (the waiting-close section); verify `pnpm lint`.
 
 ### OpenSpec panel review state
 
 - [x] 1.8 Read `workflowsReviewStatus` at request time in the change-list route and add the optional `review` field to active rows only, omitting it when the service is absent or throws; verify a route test with the service, without it, and with a failing summary, plus that archived rows carry no field.
 - [x] 1.9 Extend the panel wire types and decoders with the optional `review` field; verify decoder tests for a valid shape, a malformed field, and an absent field.
 - [x] 1.10 Add the review line to `ChangeCard` with the `spec` and `reviewed X/Y` units, tones, missing-task and provenance tooltips, and the live/waiting unit states; verify the state mapping with unit tests for PASS, outdated, findings, missing approvals, uncommitted approval, not reviewed, live, and waiting.
-- [ ] 1.11 Add the panel's workspace-scoped live poll (single `session` form, 4000 ms, tab visible, stop on 404), merge the live units into the review line, and perform one debounced change-list re-read when a previously observed live entry settles; the periodic read itself never re-reads the list. Update the panel's no-polling test so it asserts that the change list registers no timer while the separate liveness timer is permitted, and verify the hidden-tab, absent-engine, idle-session and cross-session cases plus a verdict-only write (no artifact edit) updating the card without a manual refresh.
-- [ ] 1.12 Document the review line and the separate liveness poll in the OpenSpec panel section of `docs/plugins.md` and update the plugin metadata description in `packages/plugin-openspec/locale/en.json`; verify `pnpm lint`.
+- [x] 1.11 Add the panel's workspace-scoped live poll (single `session` form, 4000 ms, tab visible, stop on 404), merge the live units into the review line, and perform one debounced change-list re-read when a previously observed live entry settles; the periodic read itself never re-reads the list. Update the panel's no-polling test so it asserts that the change list registers no timer while the separate liveness timer is permitted, and verify the hidden-tab, absent-engine, idle-session and cross-session cases plus a verdict-only write (no artifact edit) updating the card without a manual refresh.
+- [x] 1.12 Document the review line and the separate liveness poll in the OpenSpec panel section of `docs/plugins.md` and update the plugin metadata description in `packages/plugin-openspec/locale/en.json`; verify `pnpm lint`.
 
 ### Integration
 
