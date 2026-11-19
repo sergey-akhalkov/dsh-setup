@@ -40,3 +40,11 @@ The browser was driven by a self-spawned `nuphus-mcp` child with
   it did.
 - The fake change's review ended in `FINDINGS` and the loop started another round, so the settled
   state was observed for one full verdict cycle, not for a final `PASS`.
+
+## Gate state
+
+The panel and observability deltas are synced into the main specs (`ab99f60`) and validate. At the
+time this line was written `pnpm reviews:check --change show-review-status` reported 14/16 portable
+approvals, missing only these two acceptance tasks; their task-review runs were already in flight.
+The change is ready to close once those two approvals land.
+
