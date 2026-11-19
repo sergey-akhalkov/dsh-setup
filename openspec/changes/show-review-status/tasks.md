@@ -20,7 +20,7 @@ tasks first if #7 is not applied yet.
 ### Session-row indicator (client)
 
 - [x] 1.5 Add the Client polling store for live reviews using the `sessions` form: collect the mounted session ids, send one batch request every 4000 ms while the document is visible, cap the ids, and keep the last state on a failed read; verify unit tests for the id dedupe/cap and the response decode.
-- [ ] 1.6 Register the `sidebar.session.row.leading` occupant (id `dsh-setup-workflows-review`) with the 14px ring, the waiting glyph, the accessible name, the tooltip, and the reduced-motion rule; verify in a throwaway `DSH_HOME` with the Nuphus browser that a live review shows the ring and a settled verdict removes it.
+- [x] 1.6 Register the `sidebar.session.row.leading` occupant (id `dsh-setup-workflows-review`) with the 14px ring, the waiting glyph, the accessible name, the tooltip, and the reduced-motion rule; verify in a throwaway `DSH_HOME` with the Nuphus browser that a live review shows the ring and a settled verdict removes it.
 - [x] 1.7 Document the session-row review indicator in `docs/workflows.md` (the waiting-close section); verify `pnpm lint`.
 
 ### OpenSpec panel review state
@@ -36,7 +36,7 @@ tasks first if #7 is not applied yet.
 - [x] 1.13 Rebuild the packages and the vendored setup copy (`pnpm build`, `pnpm gen`) and commit the generated files; verify `pnpm gen:check` and `pnpm build && git diff --exit-code` are clean.
 - [x] 1.14 Run `pnpm check` (typecheck, lint, build, test) and `pnpm validate:repo`; verify both exit 0.
 - [x] 1.15 Run `openspec validate show-review-status --strict`; verify exit 0 with the ADDED and MODIFIED requirements accepted.
-- [ ] 1.16 Run the acceptance in a throwaway `DSH_HOME` with the Nuphus browser: a live review shows the session-row indicator and the card line, an idle panel session sees a review owned by another session, and a settled verdict replaces both without a manual refresh; never run it against the live desktop profile.
+- [x] 1.16 Run the acceptance in a throwaway `DSH_HOME` with the Nuphus browser: a live review shows the session-row indicator and the card line, an idle panel session sees a review owned by another session, and a settled verdict replaces both without a manual refresh; never run it against the live desktop profile.
 
 ## Workflow follow-up
 
