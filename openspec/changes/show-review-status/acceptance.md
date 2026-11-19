@@ -34,12 +34,14 @@ The browser was driven by a self-spawned `nuphus-mcp` child with
 
 ## Scope limits
 
-- The browser observations were taken in one session. The end-to-end cross-session case (an idle
-  session's panel showing a review owned by another session) is covered by the host route test for
-  the `?session=` form; the browser run did not open a second session, and this file does not claim
-  it did.
+- The cross-session case was exercised in the browser: a second session was created in the same
+  throwaway workspace, its OpenSpec panel was opened while that session was idle, and it showed the
+  live review owned by the first session (`spec review running - attempt 1 · reviewed 1/1 tasks`).
+  The settled line was observed on the first session's panel; the second session's polls ran while
+  the review loop kept re-arming, so the settled transition was seen once, not for both views.
 - The fake change's review ended in `FINDINGS` and the loop started another round, so the settled
   state was observed for one full verdict cycle, not for a final `PASS`.
+
 
 ## Gate state
 
