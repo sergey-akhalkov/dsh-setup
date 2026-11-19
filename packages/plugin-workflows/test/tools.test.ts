@@ -74,7 +74,7 @@ function host(
   definitions: readonly Definition[],
   runs: WorkflowRun[] = [],
   calls: Calls = { starts: 0, resumes: 0, cancels: 0 },
-  sessionLive: (session: string) => boolean = () => true,
+  sessionExecuting: (session: string) => boolean = () => true,
 ): WorkflowsToolHost {
   return {
     workspace: '/workspace',
@@ -82,7 +82,7 @@ function host(
     definitions,
     auth: HostAuth.fromKey('test-tools-host-key-0123456789'),
     maxRuns: 5,
-    sessionLive,
+    sessionExecuting,
     listRuns: async () => runs,
     readRun: async (runId) => runs.find((run) => run.id === runId),
     startRun: async (entry) => {
@@ -205,7 +205,7 @@ describe('workflows tool', () => {
     ).rejects.toThrow(/unsigned, modified, or unreadable/u)
   })
 
-  it('cancels a dead-session run and still refuses a live foreign one', async () => {
+  it('cancels an idle-owner run and still refuses an executing foreign one', async () => {
     const calls: Calls = { starts: 0, resumes: 0, cancels: 0 }
     const other = runFor('/workspace', 'run-dead', 'session-2')
     const dead = host([definition('model-start')], [other], calls, () => false)

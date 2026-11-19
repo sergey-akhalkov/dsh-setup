@@ -44,6 +44,17 @@ export interface WorkflowsToolRequest {
   readonly reason?: string
 }
 
+/** The read-time liveness of one review step: the executor, its unit, or nothing. */
+export interface ReviewLiveness {
+  readonly state: 'live' | 'waiting' | 'orphaned'
+  /** The current attempt count for a live review. */
+  readonly attempt?: number
+  /** The live covering review a waiting run waits on. */
+  readonly waitingOn?: string
+  /** The bounded reason a pending review step has no executor. */
+  readonly reason?: string
+}
+
 export interface WorkflowsToolHost {
   readonly workspace: string
   readonly session: string
@@ -52,8 +63,10 @@ export interface WorkflowsToolHost {
   readonly questions?: HumanQuestionService
   readonly maxRuns?: number
   readonly now?: () => number
-  /** Whether a session still has a live agent; absent means "treat it as live". */
-  readonly sessionLive?: (session: string) => boolean
+  /** Whether a session is executing a turn; absent means "treat it as executing". */
+  readonly sessionExecuting?: (session: string) => boolean
+  /** The host's review-step liveness; absent means the status line has no token. */
+  readonly reviewLiveness?: (run: WorkflowRun) => ReviewLiveness | undefined
   /** The host-owned starter; it persists the run before returning. */
   startRun(
     definition: Definition,
@@ -227,7 +240,7 @@ function definitionById(host: WorkflowsToolHost, id: string): Definition {
 
 /**
  * The run must authenticate. A change also requires this session, unless the
- * owning session is no longer live and the action allows clearing its run.
+ * owning agent is not executing a turn and the action allows clearing its run.
  */
 async function sessionRun(
   host: WorkflowsToolHost,
@@ -237,8 +250,8 @@ async function sessionRun(
   const run = await host.readRun(runId)
   if (run === undefined) fail(`run "${runId}" is unsigned, modified, or unreadable`)
   if (run.session !== host.session) {
-    const live = host.sessionLive?.(run.session) ?? true
-    if (!live && options.allowDeadOwner === true) return run
+    const executing = host.sessionExecuting?.(run.session) ?? true
+    if (!executing && options.allowDeadOwner === true) return run
     fail(`run "${runId}" belongs to another session; it can be viewed but not changed here`)
   }
   return run
@@ -301,8 +314,21 @@ export async function executeWorkflowsTool(
       const run = await host.readRun(request.runId)
       if (run === undefined) fail(`run "${request.runId}" is not authenticated`)
       const current = run.steps.find((step) => step.state === 'open' || step.state === 'blocked')
+      // The liveness token follows the unchanged prefix so an older parser keeps
+      // reading the same run, status, name, and next-step fields.
+      const liveness = host.reviewLiveness?.(run)
+      const livenessText =
+        liveness === undefined
+          ? ''
+          : `; review ${
+              liveness.state === 'live'
+                ? `live (attempt ${String(liveness.attempt ?? 1)})`
+                : liveness.state === 'waiting'
+                  ? `waiting on ${liveness.waitingOn ?? 'a live review'}`
+                  : `orphaned${liveness.reason === undefined ? '' : `: ${liveness.reason}`}`
+            }`
       return bounded(
-        `run ${run.id} [${run.status}] ${run.definition.name} (${run.definition.id}); next ${current?.id ?? 'end'}; ${run.steps
+        `run ${run.id} [${run.status}] ${run.definition.name} (${run.definition.id}); next ${current?.id ?? 'end'}${livenessText}; ${run.steps
           .map(
             (step) =>
               `${step.id}:${step.state}${

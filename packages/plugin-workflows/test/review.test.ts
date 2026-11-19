@@ -29,6 +29,7 @@ import {
   runReviewStep,
   type SectionReview,
   sectionReviewDigest,
+  settleDuplicateReviewAttempt,
   writeLocalReviewRecord,
   writePortableApproval,
   writeReviewFileAtomic,
@@ -2466,5 +2467,30 @@ describe('per-signal switch diagnostics', () => {
       expect(issues.join('\n')).toContain(switchName)
       expect(issues.join('\n')).toContain('off')
     }
+  })
+})
+
+describe('duplicate review settlement', () => {
+  it('cancels the rejected attempt naming the covering run and writes no record', () => {
+    const run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace: '/workspace',
+      context: { name: 'auth' },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    const settled = settleDuplicateReviewAttempt(run, 'review', 'run-covering', 2_000)
+    expect(settled.status).toBe('cancelled')
+    expect(settled.reason).toContain('run-covering')
+    expect(settled.updatedAt).toBe(2_000)
+    // The step is terminal, so no executor can advance it later.
+    expect(settled.steps.find((step) => step.id === 'review')).toMatchObject({
+      state: 'cancelled',
+      reason: expect.stringContaining('run-covering'),
+    })
+    // The settlement is pure: it writes no PASS/ERROR record of any kind.
+    expect(settled.steps.find((step) => step.id === 'review')?.evidence).toBeUndefined()
   })
 })

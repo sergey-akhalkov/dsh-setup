@@ -156,15 +156,15 @@ function definitionById(host, id) {
 }
 /**
  * The run must authenticate. A change also requires this session, unless the
- * owning session is no longer live and the action allows clearing its run.
+ * owning agent is not executing a turn and the action allows clearing its run.
  */
 async function sessionRun(host, runId, options = {}) {
     const run = await host.readRun(runId);
     if (run === undefined)
         fail(`run "${runId}" is unsigned, modified, or unreadable`);
     if (run.session !== host.session) {
-        const live = host.sessionLive?.(run.session) ?? true;
-        if (!live && options.allowDeadOwner === true)
+        const executing = host.sessionExecuting?.(run.session) ?? true;
+        if (!executing && options.allowDeadOwner === true)
             return run;
         fail(`run "${runId}" belongs to another session; it can be viewed but not changed here`);
     }
@@ -220,7 +220,17 @@ export async function executeWorkflowsTool(value, host) {
             if (run === undefined)
                 fail(`run "${request.runId}" is not authenticated`);
             const current = run.steps.find((step) => step.state === 'open' || step.state === 'blocked');
-            return bounded(`run ${run.id} [${run.status}] ${run.definition.name} (${run.definition.id}); next ${current?.id ?? 'end'}; ${run.steps
+            // The liveness token follows the unchanged prefix so an older parser keeps
+            // reading the same run, status, name, and next-step fields.
+            const liveness = host.reviewLiveness?.(run);
+            const livenessText = liveness === undefined
+                ? ''
+                : `; review ${liveness.state === 'live'
+                    ? `live (attempt ${String(liveness.attempt ?? 1)})`
+                    : liveness.state === 'waiting'
+                        ? `waiting on ${liveness.waitingOn ?? 'a live review'}`
+                        : `orphaned${liveness.reason === undefined ? '' : `: ${liveness.reason}`}`}`;
+            return bounded(`run ${run.id} [${run.status}] ${run.definition.name} (${run.definition.id}); next ${current?.id ?? 'end'}${livenessText}; ${run.steps
                 .map((step) => `${step.id}:${step.state}${step.attempts === undefined ? '' : ` (attempts ${String(step.attempts)})`}`)
                 .join(' ')}`);
         }

@@ -1021,6 +1021,11 @@ describe('shared whole-spec review admission', () => {
       expect(host.steers).toHaveLength(beforeIntake)
       // The shared identity ran one reviewer, not two.
       expect(host.digests).toHaveLength(1)
+      // A waiting run publishes no record while it waits: the shared record
+      // belongs to the live attempt and does not exist yet.
+      const sharedRecordPath = join(workspace, '.dsh/workflows/records/spec-review/auth/spec.json')
+      expect(await readFile(sharedRecordPath, 'utf8').catch(() => undefined)).toBeUndefined()
+      expect(admitted?.steps.find((step) => step.id === 'spec-review')?.evidence).toBeUndefined()
       // A waiting close submits no steer: session 2's own close ends silently
       // while its review is live (design D3).
       expect(steersTwo).toHaveLength(0)
@@ -1029,7 +1034,7 @@ describe('shared whole-spec review admission', () => {
       const release = host.releases[0]
       if (release === undefined) throw new Error('the shared review never started')
       release()
-      const recordPath = join(workspace, '.dsh/workflows/records/spec-review/auth/spec.json')
+      const recordPath = sharedRecordPath
       await waitFor(
         async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
       )

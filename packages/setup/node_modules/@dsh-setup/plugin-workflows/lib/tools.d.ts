@@ -32,6 +32,16 @@ export interface WorkflowsToolRequest {
     readonly status?: ProgressStatus;
     readonly reason?: string;
 }
+/** The read-time liveness of one review step: the executor, its unit, or nothing. */
+export interface ReviewLiveness {
+    readonly state: 'live' | 'waiting' | 'orphaned';
+    /** The current attempt count for a live review. */
+    readonly attempt?: number;
+    /** The live covering review a waiting run waits on. */
+    readonly waitingOn?: string;
+    /** The bounded reason a pending review step has no executor. */
+    readonly reason?: string;
+}
 export interface WorkflowsToolHost {
     readonly workspace: string;
     readonly session: string;
@@ -40,8 +50,10 @@ export interface WorkflowsToolHost {
     readonly questions?: HumanQuestionService;
     readonly maxRuns?: number;
     readonly now?: () => number;
-    /** Whether a session still has a live agent; absent means "treat it as live". */
-    readonly sessionLive?: (session: string) => boolean;
+    /** Whether a session is executing a turn; absent means "treat it as executing". */
+    readonly sessionExecuting?: (session: string) => boolean;
+    /** The host's review-step liveness; absent means the status line has no token. */
+    readonly reviewLiveness?: (run: WorkflowRun) => ReviewLiveness | undefined;
     /** The host-owned starter; it persists the run before returning. */
     startRun(definition: Definition, at: number, selection?: {
         readonly change?: string;

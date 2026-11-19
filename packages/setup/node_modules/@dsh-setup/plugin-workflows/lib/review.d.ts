@@ -378,6 +378,13 @@ export declare function passContractOf(evidence: Evidence): RecordEvidence | und
  * matches the step contract keeps the close blocked.
  */
 export declare function provisionalReviewSteps(run: WorkflowRun, definition: Definition, context: EvidenceContext): Promise<ReadonlySet<string>>;
+/**
+ * The duplicate admission settlement: a review attempt the scheduler rejected
+ * because a live run already covers the unit is terminal. It settles cancelled
+ * naming that run and writes no review record, so it can never linger blocked
+ * with an open step and no executor.
+ */
+export declare function settleDuplicateReviewAttempt(run: WorkflowRun, stepId: string, coveringRunId: string, at: number): WorkflowRun;
 /** The review identity every attempt carries before a verdict exists. */
 type ReviewRecordBase = Omit<ReviewRecord, 'verdict' | 'findings'>;
 export type ReviewAttemptResult = {

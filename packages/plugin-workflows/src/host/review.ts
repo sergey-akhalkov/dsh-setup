@@ -17,7 +17,7 @@ import type { SubagentRunner, SubagentRunResult } from './executors.js'
 import { isInside } from './fs-change.js'
 import { defaultGit, type GitRunner, repositoryRoot } from './git.js'
 import { classifyFailure, type FailureClass } from './review-queue.js'
-import { settleStep, type WorkflowRun } from './runs.js'
+import { setRunStatus, settleStep, type WorkflowRun } from './runs.js'
 
 /**
  * The native review executor. It resolves a reviewer from the row's
@@ -1414,6 +1414,22 @@ async function settleFromRecord(
     evidence: { kind: 'record', path: recordPath, digest: record.digest },
     ...(typeof record.failureClass === 'string' ? { failureClass: record.failureClass } : {}),
   })
+}
+
+/**
+ * The duplicate admission settlement: a review attempt the scheduler rejected
+ * because a live run already covers the unit is terminal. It settles cancelled
+ * naming that run and writes no review record, so it can never linger blocked
+ * with an open step and no executor.
+ */
+export function settleDuplicateReviewAttempt(
+  run: WorkflowRun,
+  stepId: string,
+  coveringRunId: string,
+  at: number,
+): WorkflowRun {
+  const reason = `the live review run "${coveringRunId}" already covers this unit; that run carries the review`
+  return setRunStatus(settleStep(run, stepId, 'cancelled', { at, reason }), 'cancelled', at, reason)
 }
 
 async function writeErrorRecord(

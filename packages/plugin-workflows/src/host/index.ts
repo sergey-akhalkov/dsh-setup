@@ -128,6 +128,7 @@ import {
   reviewUnitKey,
   type SectionReview,
   sectionReviewDigest,
+  settleDuplicateReviewAttempt,
   TASK_ID_PATTERN,
 } from './review.js'
 import { type ReviewReprepareOutcome, ReviewScheduler } from './review-scheduler.js'
@@ -180,7 +181,7 @@ import {
   taskLanes,
   taskOf,
 } from './tasks.js'
-import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
+import { executeWorkflowsTool, type ReviewLiveness, type WorkflowsToolHost } from './tools.js'
 import {
   checkpointRequired,
   classifyIntent,
@@ -1896,7 +1897,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       run.definition.id === 'task-review' &&
                       run.context.name === capture &&
                       isOpenRun(run) &&
-                      (reviewIsLive(run.id) || reviewStepOpen(run, definition)),
+                      (reviewLive(run) ||
+                        (run.session === input.session && reviewStepOpen(run, definition))),
                   )
                   const attempted = new Set<string>()
                   // Task ids a review started by this event already covers: two
@@ -3316,11 +3318,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   })
   /**
    * Whether a review run's reviewer is genuinely live in this host, in any
-   * session. A run whose session is merely still open but idle is not coverage:
-   * a settled FINDINGS run or a dead-session run must never block the next round
-   * for that unit.
+   * session: the review executor holds it, or this advance's admission is in
+   * flight. The persisted running/blocked status is never liveness by itself,
+   * and a run whose session is merely open but idle is not coverage either: a
+   * settled FINDINGS run or a dead-session run must never block the next round.
    */
-  const reviewIsLive = (runId: string): boolean => reviewScheduler.liveRunById(runId) !== undefined
+  const reviewStarting = new Set<string>()
+  const reviewLive = (run: { readonly id: string }): boolean =>
+    reviewStarting.has(run.id) || reviewScheduler.liveRunById(run.id) !== undefined
   /** A unit checkout being prepared, keyed by workspace and unit key, until admission. */
   const preparedUnits = new Map<string, string>()
   /** A run whose review step is still open: its reviewer start may be in flight. */
@@ -3334,6 +3339,114 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const state =
       stepId === undefined ? undefined : run.steps.find((step) => step.id === stepId)?.state
     return state === 'open' || state === 'blocked'
+  }
+  /**
+   * The read-time review-step liveness for the status surface: live while the
+   * executor or this advance's admission holds it, waiting on the live review
+   * of its own unit (including an equal-coverage predecessor at another digest)
+   * or the live review covering it across shapes, and orphaned when a pending
+   * step has no executor. Nothing is persisted.
+   */
+  const reviewLivenessOf = (
+    workspace: string,
+    run: WorkflowRun,
+    definitions: readonly Definition[],
+  ): ReviewLiveness | undefined => {
+    const definition = definitions.find((entry) => entry.id === run.definition.id)
+    const step = definition?.steps.find((entry) => entry.executor === 'review')
+    if (definition === undefined || step === undefined) return undefined
+    const stored = run.steps.find((entry) => entry.id === step.id)
+    if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
+      return undefined
+    }
+    const attempt = stored.attempts ?? 1
+    if (reviewLive(run)) return { state: 'live', attempt }
+    const change = typeof run.context.name === 'string' ? run.context.name : ''
+    if (change !== '') {
+      const recordId = typeof run.context.taskId === 'string' ? run.context.taskId : undefined
+      const sameUnit = reviewScheduler.liveUnit({
+        workspace,
+        rule: reviewIdentityOf(definition, step),
+        change,
+        ...(recordId === undefined ? {} : { taskId: recordId }),
+        phase: reviewPhase(step.review?.scope ?? 'whole', step.review?.phase),
+      })
+      if (sameUnit !== undefined && sameUnit.id !== run.id) {
+        return { state: 'waiting', waitingOn: sameUnit.id }
+      }
+      const covered = Array.isArray(run.context.taskIds)
+        ? run.context.taskIds.filter((entry): entry is string => typeof entry === 'string')
+        : recordId === undefined
+          ? []
+          : [recordId]
+      const covering = reviewScheduler.liveCovering(workspace, change, covered)
+      if (covering !== undefined && covering.id !== run.id) {
+        return { state: 'waiting', waitingOn: covering.id }
+      }
+    }
+    const reason = run.reason === undefined ? '' : run.reason.slice(0, 200)
+    return { state: 'orphaned', ...(reason === '' ? {} : { reason }) }
+  }
+  /** The bounded reason a fresh round records when it supersedes a restart. */
+  const RESTART_SUPERSEDE_REASON = 'superseded by a fresh review round after a host restart'
+  /**
+   * Settle the interrupted review runs a fresh round supersedes: the same change
+   * and an overlapping unit (intersecting task coverage for task scope, the same
+   * rule and phase for whole scope), in any session. Recovery already marked
+   * them interrupted; this write is the restart cleanup and never publishes a
+   * review record.
+   */
+  const supersedeInterruptedReviews = async (input: {
+    readonly workspace: string
+    readonly auth: HostAuth
+    readonly change: string
+    readonly scope: 'whole' | 'task'
+    readonly phase: string
+    readonly rule: string
+    readonly taskIds: readonly string[]
+    readonly freshRunId: string
+  }): Promise<void> => {
+    const definitions = definitionsByWorkspace.get(input.workspace) ?? []
+    const coveredOf = (run: WorkflowRun): string[] => {
+      if (Array.isArray(run.context.taskIds)) {
+        return run.context.taskIds.filter((entry): entry is string => typeof entry === 'string')
+      }
+      return typeof run.context.taskId === 'string' ? [run.context.taskId] : []
+    }
+    const candidates = (await listAuthenticatedRuns(input.workspace, input.auth)).filter((run) => {
+      if (run.id === input.freshRunId || run.status !== 'interrupted') return false
+      if (typeof run.context.name !== 'string' || run.context.name !== input.change) return false
+      const definition = definitions.find((entry) => entry.id === run.definition.id)
+      const step = definition?.steps.find((entry) => entry.executor === 'review')
+      if (definition === undefined || step === undefined) return false
+      const stored = run.steps.find((entry) => entry.id === step.id)
+      if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
+        return false
+      }
+      if ((step.review?.scope ?? 'whole') !== input.scope) return false
+      if (input.scope === 'whole') {
+        return (
+          reviewIdentityOf(definition, step) === input.rule &&
+          reviewPhase('whole', step.review?.phase) === input.phase
+        )
+      }
+      return coveredOf(run).some((id) => input.taskIds.includes(id))
+    })
+    for (const candidate of candidates) {
+      const definition = definitions.find((entry) => entry.id === candidate.definition.id)
+      const step = definition?.steps.find((entry) => entry.executor === 'review')
+      if (definition === undefined || step === undefined) continue
+      const at = journal.time()
+      const settled = setRunStatus(
+        settleStep(candidate, step.id, 'cancelled', { at, reason: RESTART_SUPERSEDE_REASON }),
+        'cancelled',
+        at,
+        RESTART_SUPERSEDE_REASON,
+      )
+      await withRunLock(candidate.id, () =>
+        writeCommit(input.workspace, settled, input.auth),
+      ).catch(() => undefined)
+    }
   }
   const advanceRun = async (
     workspace: string,
@@ -3595,10 +3708,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               ? sectionReviewDigest(sectionValue, specDigest)
               : sectionReviewDigest(sectionValue, specDigest, admissionTree)
         if (reviewQueue.enabled) {
-          // The same workflow run must keep its one admission even when live
-          // inputs changed; a new digest does not license a second snapshot.
-          // The step stays open and the background settlement writes the record.
-          if (reviewScheduler?.liveRunById(reviewRun.id) !== undefined) return undefined
+          // The same workflow run must keep its one admission once the scheduler
+          // holds it, even when live inputs changed; the in-flight admission
+          // window is this advance's own and is guarded by the unit reservation.
+          if (reviewScheduler.liveRunById(reviewRun.id) !== undefined) return undefined
           // A live review of the same unit at another digest is a predecessor
           // still reading the stable unit path: prepare nothing over its
           // checkout, and let the next close start this round after it settles.
@@ -3637,6 +3750,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               : sectionValue.covered.map((entry) => entry.id)
           const covering = reviewScheduler?.liveCovering(workspace, change, coveredIds)
           if (covering !== undefined && covering.id !== reviewRun.id) return undefined
+          // This fresh round supersedes any interrupted predecessor of its unit:
+          // recovery marked those interrupted, and this close is their cleanup.
+          await supersedeInterruptedReviews({
+            workspace,
+            auth,
+            change,
+            scope: spec.scope,
+            phase: reviewPhase(spec.scope, spec.phase),
+            rule: reviewRule,
+            taskIds: coveredIds,
+            freshRunId: reviewRun.id,
+          })
         }
         // Reserve the unit before preparing it: the scheduler's live-unit check
         // cannot cover the interval until admission, and two concurrent starts
@@ -3645,6 +3770,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const holder = preparedUnits.get(reservation)
         if (holder !== undefined && holder !== reviewRun.id) return undefined
         preparedUnits.set(reservation, reviewRun.id)
+        // The admission window starts before the asynchronous preparation: a
+        // concurrent start, trigger, or close must see this run as live for the
+        // whole prepare-then-enqueue span, not only once a snapshot exists.
+        reviewStarting.add(reviewRun.id)
         try {
           // Capture the complete reviewed input set before preparing it: a stat
           // signature survives an edit-read-restore that a content digest hides.
@@ -4014,7 +4143,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             await discardReviewSnapshot(workspace, unitKey, defaultGit).catch(() => undefined)
             return undefined
           }
-          await reviewScheduler.enqueue({
+          const admission = await reviewScheduler.enqueue({
             workspace,
             run: reviewRun,
             request,
@@ -4027,10 +4156,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             snapshotKey: unitKey,
             reprepare,
           })
+          // A live successor already covers this unit: this attempt is terminal,
+          // not a waiter, and writes no record.
+          if (admission.kind === 'duplicate' && admission.runId !== reviewRun.id) {
+            return settleDuplicateReviewAttempt(reviewRun, step.id, admission.runId, journal.time())
+          }
           // The review is admitted (or a duplicate is already live): the step
           // stays open and the background settlement writes the record.
           return undefined
         } finally {
+          reviewStarting.delete(reviewRun.id)
           if (preparedUnits.get(reservation) === reviewRun.id) preparedUnits.delete(reservation)
         }
       },
@@ -5035,7 +5170,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 // This session's run covers the unit only while its review step
                 // is still due; a foreign run only while scheduler-live.
                 ((run.session === sessionId && reviewStepPending(run, taskReview)) ||
-                  reviewIsLive(run.id)),
+                  reviewLive(run)),
             )
           const dispatched: WorkflowRun[] = []
           const event: DefinitionEvent = {
@@ -5278,7 +5413,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // only this session's pending runs and genuinely live reviewers cover
           // a unit, so an abandoned session can never stall the loop.
           const reviewOpenRuns = pendingReviewRuns(currentRuns, definitions).filter(
-            (entry) => entry.session === sessionId || reviewIsLive(entry.id),
+            (entry) => entry.session === sessionId || reviewLive(entry),
           )
           // A run containing an owned review step is gated by its due units:
           // while every due unit has a live review the close waits instead of
@@ -5642,7 +5777,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       maxRuns,
       ...(questions === undefined ? {} : { questions }),
       now: () => journal.time(),
-      sessionLive: (session) => services.agents.get(session) !== undefined,
+      sessionExecuting: (session) => services.agents.get(session)?.status === 'running',
+      reviewLiveness: (run) => reviewLivenessOf(workspace, run, definitions),
       evidenceContext: (run, step) => {
         const sessionId = String(agent.session.id)
         const state = run.steps.find((entry) => entry.id === step.id)
@@ -5731,13 +5867,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               }
               // A review admitted while the queue waits is blocked, not running,
               // and still holds live coverage. A run whose review step already
-              // settled is only waiting for completion coverage, so a retry
-              // must not reuse that stale handle.
+              // settled, or whose executor is gone, is only waiting for
+              // completion coverage, so a retry must not reuse that stale handle.
               const step = candidate.steps.find((entry) => entry.id === reviewStep.id)
               if (step === undefined || (step.state !== 'open' && step.state !== 'blocked')) {
                 return false
               }
-              return candidate.status === 'running' || candidate.status === 'blocked'
+              return reviewLive(candidate)
             })
             const covered = (candidate: WorkflowRun): string[] => idsOf(candidate.context)
             const complete = live.find((candidate) => {
@@ -5767,21 +5903,30 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           release()
         }
         if (!created) return { run, firstStep: definition.steps[0]?.id ?? 'end' }
-        // A model start executes its first step now: a review dispatch admits the
-        // reviewer before the tool returns, so the gate waits on a live review
-        // instead of a run that only starts when the turn closes.
-        const legacyState = legacySignalState()
-        const current = await advanceRun(
-          workspace,
-          run,
-          definition,
-          agent,
-          auth,
-          legacyState.installed,
-          legacyState.enabled,
-          turnMetrics.get(sessionId)?.turn ?? 1,
-        )
-        return { run: current, firstStep: definition.steps[0]?.id ?? 'end' }
+        // Hold the admission from the moment the run exists: the workspace lock
+        // is already released, so a concurrent start that acquires it next must
+        // see this run as live before its advance reaches the review executor.
+        const admitsReview = reviewStep !== undefined
+        if (admitsReview) reviewStarting.add(run.id)
+        try {
+          // A model start executes its first step now: a review dispatch admits
+          // the reviewer before the tool returns, so the gate waits on a live
+          // review instead of a run that only starts when the turn closes.
+          const legacyState = legacySignalState()
+          const current = await advanceRun(
+            workspace,
+            run,
+            definition,
+            agent,
+            auth,
+            legacyState.installed,
+            legacyState.enabled,
+            turnMetrics.get(sessionId)?.turn ?? 1,
+          )
+          return { run: current, firstStep: definition.steps[0]?.id ?? 'end' }
+        } finally {
+          if (admitsReview) reviewStarting.delete(run.id)
+        }
       },
       resumeRun: async (runId) => {
         await recoverIfNeeded(workspace)
@@ -5955,7 +6100,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     session: string,
   ): Promise<string[]> => {
     const openRuns = pendingReviewRuns(runs, definitions).filter(
-      (entry) => entry.session === session || entry.state === 'open' || reviewIsLive(entry.id),
+      (entry) => entry.session === session || entry.state === 'open' || reviewLive(entry),
     )
     const changes = [
       ...new Set([...(await activeChangeNames(workspace)), ...openRuns.map((run) => run.change)]),

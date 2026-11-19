@@ -1961,6 +1961,41 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(reviewRuns.map((entry) => entry.id)).toEqual([existing.id])
   })
 
+  it('starts a task review a stored foreign open step does not cover', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const taskId = taskIdOf('Task')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // A foreign run whose review step is merely persisted open, with no live
+    // executor: the trigger must not count it as this session's coverage.
+    const foreign = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-2',
+      workspace,
+      context: { name: 'auth', taskId },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, foreign, auth)
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    const reviewRuns = async (): Promise<Array<{ id: string }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+        (entry) => entry.definition.id === 'task-review',
+      )
+    await waitFor(async () => (await reviewRuns()).some((run) => run.id !== foreign.id), 5_000)
+  })
+
   it('starts one run when two newly checked tasks share the same text', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
@@ -7879,6 +7914,336 @@ describe('workflows tool live wiring', () => {
       /not the host-verified evidence/u,
     )
   })
+
+  it('cancels an idle foreign run and refuses one whose owner is executing a turn', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as {
+      execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+    }
+    const foreign = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-2',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, foreign, auth)
+    // The fake host's agent has no status: an idle owner, so the cancel clears it.
+    expect(
+      (await tool.execute({ action: 'cancel', runId: foreign.id }, { agent: host.agent })).text,
+    ).toContain('cancelled')
+    // The same shape is refused while its owner executes a turn.
+    const executing = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-3',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review', 'complete-review'],
+      now: 2_000,
+    })
+    await runs.writeRun(workspace, executing, auth)
+    host.agent.status = 'running'
+    await expect(
+      tool.execute({ action: 'cancel', runId: executing.id }, { agent: host.agent }),
+    ).rejects.toThrow(/another session/u)
+  })
+
+  it('prints live, waiting, and orphaned review liveness tokens', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(change, { recursive: true })
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(
+      join(change, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Only task\n',
+      'utf8',
+    )
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const releases: Array<() => void> = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async () => {
+        const pending = new Promise<void>((resolve) => {
+          releases.push(resolve)
+        })
+        return {
+          childId: `child-${String(releases.length)}`,
+          result: pending.then(() => ({
+            output: [{ type: 'text', text: '```json\n{"digest":"","verdict":"PASS"}\n```' }],
+            stopReason: 'completed',
+          })),
+          dispose: async () => {},
+        }
+      },
+    }
+    const host = fakeHost(workspace, { subagents: runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as {
+      execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+    }
+    const status = async (runId: string): Promise<string> =>
+      (await tool.execute({ action: 'status', runId }, { agent: host.agent })).text
+    const taskId = taskIdOf('Only task')
+    const sectionRun = (now: number) =>
+      runs.createRun({
+        definition: 'task-review',
+        trigger: 'fs.change',
+        session: 'session-1',
+        workspace,
+        context: {
+          name: 'auth',
+          taskId: sectionRecordId('1'),
+          section: '1',
+          sectionTitle: '1. Engine',
+          taskIds: [taskId],
+        },
+        steps: ['review', 'complete-review'],
+        now,
+      })
+    const first = sectionRun(1_000)
+    await runs.writeRun(workspace, first, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(() => releases.length === 1, 5_000)
+    expect(await status(first.id)).toContain('review live (attempt 1)')
+    // A second run of the same unit (equal coverage at another digest) waits on
+    // the live one instead of being reported as running.
+    const second = sectionRun(2_000)
+    await runs.writeRun(workspace, second, auth)
+    expect(await status(second.id)).toContain(`waiting on ${first.id}`)
+    // A pending review step with no executor and no live unit is orphaned and
+    // names the bounded reason.
+    const orphan = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', taskId: taskIdOf('Other task') },
+      steps: ['review', 'complete-review'],
+      now: 3_000,
+    })
+    await runs.writeRun(
+      workspace,
+      runs.setRunStatus(
+        orphan,
+        'interrupted',
+        4_000,
+        'the Host restarted while this review run was unfinished',
+      ),
+      auth,
+    )
+    const orphanText = await status(orphan.id)
+    expect(orphanText).toContain('review orphaned')
+    expect(orphanText).toContain('the Host restarted')
+    releases.shift()?.()
+  })
+
+  it('reports a whole-scope waiter behind the live same-phase review', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const releases: Array<() => void> = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async () => {
+        const pending = new Promise<void>((resolve) => {
+          releases.push(resolve)
+        })
+        return {
+          childId: `child-${String(releases.length)}`,
+          result: pending.then(() => ({
+            output: [{ type: 'text', text: '```json\n{"digest":"","verdict":"PASS"}\n```' }],
+            stopReason: 'completed',
+          })),
+          dispose: async () => {},
+        }
+      },
+    }
+    const host = fakeHost(workspace, { subagents: runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as {
+      execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+    }
+    const first = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, first, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(() => releases.length === 1, 5_000)
+    const second = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 2_000,
+    })
+    await runs.writeRun(workspace, second, auth)
+    const text = (await tool.execute({ action: 'status', runId: second.id }, { agent: host.agent }))
+      .text
+    expect(text).toContain(`waiting on ${first.id}`)
+    releases.shift()?.()
+  })
+})
+
+describe('restart supersede through the fresh round', () => {
+  const CASES = [
+    {
+      definition: 'task-review',
+      steps: ['review', 'complete-review'],
+      context: (taskId: string, sectionId: string) => ({
+        name: 'auth',
+        taskId: sectionId,
+        section: '1',
+        sectionTitle: '1. Engine',
+        taskIds: [taskId],
+      }),
+    },
+    { definition: 'spec-review', steps: ['review'], context: () => ({ name: 'auth' }) },
+    { definition: 'integration-review', steps: ['review'], context: () => ({ name: 'auth' }) },
+  ] as const
+
+  it('cancels each interrupted predecessor without writing a record', async () => {
+    for (const entry of CASES) {
+      process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+      const workspace = await tempWorkspace()
+      const change = join(workspace, 'openspec', 'changes', 'auth')
+      await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+      await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+      await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+      await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+      await writeFile(
+        join(change, 'tasks.md'),
+        '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Only task\n',
+        'utf8',
+      )
+      const git = (...args: string[]): void => {
+        execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+      }
+      git('init')
+      git('config', 'user.name', 'review')
+      git('config', 'user.email', 'review@example.test')
+      git('add', '-A')
+      git('commit', '-m', 'init')
+      const releases: Array<() => void> = []
+      const runtime = {
+        getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+        startActivation: async () => {
+          const pending = new Promise<void>((resolve) => {
+            releases.push(resolve)
+          })
+          return {
+            childId: `child-${String(releases.length)}`,
+            result: pending.then(() => ({
+              output: [{ type: 'text', text: '```json\n{"digest":"","verdict":"PASS"}\n```' }],
+              stopReason: 'completed',
+            })),
+            dispose: async () => {},
+          }
+        },
+      }
+      const host = fakeHost(workspace, { subagents: runtime })
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      const runs = await import('../src/host/runs.ts')
+      const { HostAuth } = await import('../src/host/host-auth.ts')
+      const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const context = entry.context(taskIdOf('Only task'), sectionRecordId('1'))
+      // Recovery left the predecessor interrupted with its review step open; the
+      // fresh round for the same unit is the next close's dispatch.
+      const predecessor = runs.setRunStatus(
+        runs.createRun({
+          definition: entry.definition,
+          trigger: 'turn.stopping',
+          session: 'session-2',
+          workspace,
+          context,
+          steps: entry.steps,
+          now: 1_000,
+        }),
+        'interrupted',
+        2_000,
+        'the Host restarted while this run was unfinished',
+      )
+      await runs.writeRun(workspace, predecessor, auth)
+      const fresh = runs.createRun({
+        definition: entry.definition,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context,
+        steps: entry.steps,
+        now: 3_000,
+      })
+      await runs.writeRun(workspace, fresh, auth)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(
+        async () =>
+          (await runs.readAuthenticatedRun(workspace, predecessor.id, auth))?.status ===
+          'cancelled',
+        5_000,
+      )
+      const settled = await runs.readAuthenticatedRun(workspace, predecessor.id, auth)
+      expect(settled?.reason).toContain('fresh review round after a host restart')
+      expect(settled?.steps.find((step) => step.id === 'review')).toMatchObject({
+        state: 'cancelled',
+        reason: expect.stringContaining('fresh review round after a host restart'),
+      })
+      // The supersede writes no review record; the fresh round is still held.
+      expect(
+        await readdir(join(workspace, '.dsh', 'workflows', 'records')).catch(() => []),
+      ).toEqual([])
+      expect(releases.length).toBe(1)
+      releases.shift()?.()
+    }
+  })
 })
 
 describe('unapproved active definitions', () => {
@@ -10185,23 +10550,218 @@ describe('public review start through the workflows tool', () => {
     const stub = reviewerStub()
     const host = fakeHost(dir, { subagents: stub.runtime })
     apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
-    await runStart(host, {
+    const first = await runStart(host, {
       action: 'start',
       definitionId: 'task-review',
       change: 'auth',
       task: 'Task',
     })
     await waitFor(() => stub.releases.length > 0)
-    await expect(
-      runStart(host, {
-        action: 'start',
-        definitionId: 'task-review',
-        change: 'auth',
-        section: '1',
-      }),
-    ).rejects.toThrow(/overlaps|does not cover/u)
+    const firstId = /run (\S+) started/u.exec(first)?.[1] ?? ''
+    // The refusal must name the live covering run, not just any run.
+    const refusal = await runStart(host, {
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      section: '1',
+    }).then(
+      () => undefined,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    )
+    expect(refusal).toContain(firstId)
+    expect(refusal).toContain('does not cover')
     expect(stub.releases.length).toBe(1)
     stub.releases.shift()?.()
+  })
+
+  it('starts a fresh run when only a stored blocked review overlaps the unit', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const dir = await sectionWorkspace('- [x] 1.1 Task\n')
+    const stub = reviewerStub()
+    const host = fakeHost(dir, { subagents: stub.runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // A stored blocked run with an open review step and no executor: its
+    // persisted status is not coverage, so it must not refuse a fresh start.
+    const stale = runs.setRunStatus(
+      runs.createRun({
+        definition: 'task-review',
+        trigger: 'fs.change',
+        session: 'session-2',
+        workspace: dir,
+        context: {
+          name: 'auth',
+          taskId: sectionRecordId('1'),
+          section: '1',
+          sectionTitle: '1. Engine',
+          taskIds: [taskIdOf('Task')],
+        },
+        steps: ['review', 'complete-review'],
+        now: 1_000,
+      }),
+      'blocked',
+      1_001,
+    )
+    await runs.writeRun(dir, stale, auth)
+    const started = await runStart(host, {
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      section: '1',
+    })
+    const startedId = /run (\S+) started/u.exec(started)?.[1] ?? ''
+    expect(startedId).not.toBe('')
+    expect(startedId).not.toBe(stale.id)
+    await waitFor(() => stub.releases.length > 0)
+    stub.releases.shift()?.()
+  })
+
+  it('reuses one run for two concurrent starts while preparation is in flight', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const dir = await sectionWorkspace('- [x] 1.1 Task\n')
+    const stub = reviewerStub()
+    const host = fakeHost(dir, { subagents: stub.runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // The first start is still preparing its snapshot when the second asks for
+    // the same coverage: the admission window covers preparation, so the second
+    // start must reuse the run instead of creating a second one.
+    const pendingFirst = runStart(host, {
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      task: 'Task',
+    })
+    await waitFor(
+      async () =>
+        (await runs.listAuthenticatedRuns(dir, auth)).some(
+          (run) => run.definition.id === 'task-review',
+        ),
+      5_000,
+    )
+    const second = await runStart(host, {
+      action: 'start',
+      definitionId: 'task-review',
+      change: 'auth',
+      section: '1',
+    })
+    const first = await pendingFirst
+    const firstId = /run (\S+) started/u.exec(first)?.[1] ?? ''
+    const secondId = /run (\S+) started/u.exec(second)?.[1] ?? ''
+    expect(firstId).not.toBe('')
+    expect(secondId).toBe(firstId)
+    await waitFor(() => stub.releases.length > 0)
+    expect(stub.releases.length).toBe(1)
+    stub.releases.shift()?.()
+  })
+
+  it('settles a duplicate task attempt cancelled with the covering section id', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(change, { recursive: true })
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(
+      join(change, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Only task\n',
+      'utf8',
+    )
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const activations: string[] = []
+    const releases: Array<() => void> = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async (spec: { prompt: Array<{ text: string }> }) => {
+        activations.push(spec.prompt.map((block) => block.text).join('\n'))
+        const pending = new Promise<void>((resolve) => {
+          releases.push(resolve)
+        })
+        return {
+          childId: `child-${String(activations.length)}`,
+          result: pending.then(() => ({
+            output: [{ type: 'text', text: '```json\n{"digest":"","verdict":"PASS"}\n```' }],
+            stopReason: 'completed',
+          })),
+          dispose: async () => {},
+        }
+      },
+    }
+    const host = fakeHost(workspace, { subagents: runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const taskId = taskIdOf('Only task')
+    // A one-task section run is admitted and stays live; a stored per-task run
+    // for the same task then has equal coverage the pre-checks skip, so the
+    // scheduler rejects it as a different-shape duplicate.
+    const section = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: sectionRecordId('1'),
+        section: '1',
+        sectionTitle: '1. Engine',
+        taskIds: [taskId],
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, section, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await waitFor(() => activations.length === 1, 5_000)
+    const task = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', taskId },
+      steps: ['review', 'complete-review'],
+      now: 1_100,
+    })
+    await runs.writeRun(workspace, task, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(workspace, task.id, auth))?.status === 'cancelled',
+      5_000,
+    )
+    const settled = await runs.readAuthenticatedRun(workspace, task.id, auth)
+    expect(settled?.reason).toContain(section.id)
+    const reviewStep = settled?.steps.find((step) => step.id === 'review')
+    expect(reviewStep).toMatchObject({ state: 'cancelled' })
+    expect(reviewStep?.reason).toContain(section.id)
+    expect(reviewStep?.evidence).toBeUndefined()
+    // The covering run stays live (its reviewer is still held) and no record
+    // was published.
+    const incumbent = await runs.readAuthenticatedRun(workspace, section.id, auth)
+    expect(incumbent?.status).toBe('blocked')
+    expect(incumbent?.steps.find((step) => step.id === 'review')?.state).toBe('open')
+    expect(activations).toHaveLength(1)
+    expect(activations[0]).toContain('review:auth:section:1')
+    expect(await readdir(join(workspace, '.dsh', 'workflows', 'records')).catch(() => [])).toEqual(
+      [],
+    )
+    releases.shift()?.()
   })
 
   it('allows a waiting close with eight live reviews and submits no steer', async () => {
