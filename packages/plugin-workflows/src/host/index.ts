@@ -1515,7 +1515,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   ): Promise<Map<string, WorkflowRun>> => {
     const settledById = new Map<string, WorkflowRun>()
     const candidates = runs.filter((run) => {
-      if (run.session === session) return false
+      // Another session's run is never advanced by this close; the exception is
+      // an interrupted run, whose pending completion only evidence can settle.
+      if (run.session === session && run.status !== 'interrupted') return false
       // An interrupted run still owes its completion when the crash left the
       // review settled and only the completion step pending.
       if (run.status !== 'running' && run.status !== 'blocked' && run.status !== 'interrupted') {

@@ -486,12 +486,9 @@ describe('task review completion recovery', () => {
       return status === 'interrupted'
     })
     await writeFile(join(changeDir, 'reviews', `${laneB}.json`), approval(laneB, '02'), 'utf8')
-    const closing = {
-      ...host.agent,
-      id: 'session-2',
-      session: { id: 'session-2', header: { origin: 'root' } },
-    }
-    await host.emit('agent/turn-stopping', { agent: closing, turn: 1 })
+    // The original session continues; an interrupted run is skipped by normal
+    // advancement, so only the evidence-based reclaim can settle it.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const settled = await readAuthenticatedRun(workspace, run.id, auth)
     expect(settled?.status).toBe('completed')
     expect(settled?.steps.map((step) => step.state)).toEqual(['done', 'done'])
