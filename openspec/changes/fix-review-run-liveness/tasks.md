@@ -31,7 +31,7 @@ and `docs/workflows.md` — so implement the groups serially in one lane rather 
 
 ## 5. Generated output and gate
 
-- [ ] 5.1 Rebuild the package and the vendored setup copy (`pnpm build`, `pnpm gen`) and verify `pnpm gen:check` and `pnpm build && git diff --exit-code` are clean after committing the generated files.
+- [x] 5.1 Rebuild the package and the vendored setup copy (`pnpm build`, `pnpm gen`) and verify `pnpm gen:check` and `pnpm build && git diff --exit-code` are clean after committing the generated files.
 - [x] 5.2 Run `pnpm check` (typecheck, lint, build, test) and `pnpm validate:repo`; verify both exit 0.
 - [x] 5.3 Run `openspec validate fix-review-run-liveness --strict` and verify exit 0 with the delta's ADDED and MODIFIED requirements accepted.
 
