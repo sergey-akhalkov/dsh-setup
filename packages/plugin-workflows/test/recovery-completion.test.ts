@@ -209,4 +209,43 @@ describe('task review completion recovery', () => {
     expect(completion?.evidence).toMatchObject({ kind: 'check', callId: 'task-review-coverage' })
     expect(activations).toEqual([])
   })
+
+  it('recovers the review step from the portable approval when the record was never written', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await approvedWorkspace()
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // The crash fell between the portable approval write and the local record
+    // write: the approval exists, the record does not, and the review step is
+    // still open.
+    const run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: CRASHED_SESSION,
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: TASK_ID,
+        section: '1',
+        sectionTitle: '1. Engine',
+        taskIds: [TASK_ID],
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await writeRun(workspace, run, auth)
+    apply(fakeHost(workspace).ctx as never, {
+      reviewers: { codex: { provider: 'codex-subagent' } },
+    })
+    await waitFor(async () => {
+      const status = (await readAuthenticatedRun(workspace, run.id, auth))?.status
+      return status !== undefined && status !== 'running'
+    })
+    const settled = await readAuthenticatedRun(workspace, run.id, auth)
+    expect(settled?.status).toBe('completed')
+    expect(settled?.steps.map((step) => step.state)).toEqual(['done', 'done'])
+    expect(settled?.steps.find((step) => step.id === 'review')?.evidence).toMatchObject({
+      kind: 'record',
+      path: `openspec/changes/auth/reviews/${TASK_ID}.json`,
+    })
+  })
 })

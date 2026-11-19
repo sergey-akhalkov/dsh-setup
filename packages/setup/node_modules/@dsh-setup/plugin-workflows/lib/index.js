@@ -24,7 +24,7 @@ import { advanceIntake } from './intake.js';
 import { readInvolvement, writeInvolvement } from './involvement.js';
 import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
 import { writeProgressNote } from './notes.js';
-import { checkpointGateIssue, parityLoadIssues, readParityReport, readPortableApproval, resolveVerifySettings, retiredGateIssue, reviewerBinding, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
+import { checkpointGateIssue, parityLoadIssues, portableTaskReview, readParityReport, readPortableApproval, resolveVerifySettings, retiredGateIssue, reviewerBinding, shippedParityReportPath, taskReviewCompletion, withVerifySettings, } from './parity.js';
 import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
@@ -1036,12 +1036,37 @@ export function apply(ctx, config = {}) {
         return session === undefined ? runs : runs.filter((run) => run.session === session);
     };
     /**
+     * A task-review record the crash never wrote: when publication was interrupted
+     * between the portable approval and the local record, the gate's own approval
+     * match stands in for the missing record and no local record is synthesized.
+     */
+    const portableRecoveredEvidence = (workspace, evidence, context) => {
+        if (evidence?.kind !== 'record' || evidence.rule !== 'task-review')
+            return undefined;
+        const change = context.name;
+        const taskId = context.taskId;
+        if (typeof change !== 'string' || typeof taskId !== 'string')
+            return undefined;
+        const task = taskOf(workspace, change, taskId);
+        if (task === undefined)
+            return undefined;
+        const match = portableTaskReview(workspace, change, task, evidence.rule, reviewerBinding(workspace));
+        if (match.mismatch.length > 0)
+            return undefined;
+        return {
+            kind: 'record',
+            path: `openspec/changes/${change}/reviews/${taskId}.json`,
+            detail: 'recovered from the portable approval; the local record was never written',
+        };
+    };
+    /**
      * The recovery reconciliation: every pending step of a review run whose
      * authoritative evidence already verifies settles from that evidence instead
-     * of the run being interrupted. The review step needs its record; the shipped
-     * task-review completion step needs portable coverage, including when the
-     * review step was already done before the crash. Only verified evidence
-     * counts; no PASS is synthesized.
+     * of the run being interrupted. The review step needs its record, or the
+     * portable approval when publication was interrupted; the shipped task-review
+     * completion step needs portable coverage, including when the review step was
+     * already done before the crash. Only verified evidence counts; no PASS is
+     * synthesized.
      */
     const reconcileRecoveredRun = async (workspace, run) => {
         await loadDefinitions(workspace);
@@ -1065,8 +1090,17 @@ export function apply(ctx, config = {}) {
                 // A whole-worktree review needs the same worktree digest it was gated on.
                 runGit: defaultGit,
             });
-            if (!check.ok)
+            if (!check.ok) {
+                const recovered = portableRecoveredEvidence(workspace, step.evidence, settled.context);
+                if (recovered === undefined)
+                    continue;
+                settled = settleStep(settled, step.id, 'done', {
+                    at: journal.time(),
+                    evidence: recovered,
+                });
+                changed = true;
                 continue;
+            }
             settled = settleStep(settled, step.id, 'done', {
                 at: journal.time(),
                 evidence: check.evidence,
