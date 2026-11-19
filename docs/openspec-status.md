@@ -174,6 +174,16 @@ approvals arrive after startup (16/16 portable approvals; the whole-worktree and
 passed). The `workflows` main spec carries the three added requirements and the updated restart and
 model-interface requirements.
 
+The change archived on 2026-11-19 after it is `show-review-status`, which made review state visible
+on every surface: the workflows summaries service and the live read (with the waiting and orphaned
+states), the OpenSpec change-list `review` field, the card's spec/task review line with its live and
+waiting units, the four-second workspace liveness read that pauses while hidden and re-reads the list
+once on a settlement, and the sidebar session-row review indicator (16 tasks, 16/16 portable
+approvals; the indicator and the card line were verified live in a throwaway `DSH_HOME`). It added
+the `openspec-panel` review-state requirements and the `workflow-observability` indicator and
+liveness-read requirements.
+
+
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
@@ -239,6 +249,7 @@ was written (2026-11-10). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-13-simplify-codex-subagent`                     | 13/13          |
 | `2026-11-13-widen-answer-page-policy`                    | 8/8            |
 | `2026-11-19-fix-review-run-liveness`                     | 16/16          |
+| `2026-11-19-show-review-status`                          | 16/16          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
