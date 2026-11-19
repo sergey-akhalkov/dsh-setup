@@ -104,6 +104,7 @@ interface PortableApproval {
         readonly provider?: unknown;
         readonly model?: unknown;
     };
+    readonly time?: unknown;
 }
 export declare function readPortableApproval(workspace: string, change: string, taskId: string): PortableApproval | undefined;
 /** The marker's reviewer binding, its archive-gate settings, or its error. */
@@ -154,6 +155,19 @@ export interface TaskReviewCoverage {
     /** One line per missing review unit. */
     readonly gaps: readonly string[];
 }
+export interface PortableTaskReview {
+    /** Why the approval does not match the gate's rule; empty when it matches. */
+    readonly mismatch: readonly string[];
+    /** The approval's recorded time when it matches. */
+    readonly time?: string;
+}
+/**
+ * The working-tree portable approval match the archive gate applies: rule,
+ * change, task id, PASS verdict, and the marker's reviewer binding when
+ * declared. The completion coverage and the review row share this one
+ * definition, so the row can never disagree with the gate.
+ */
+export declare function portableTaskReview(workspace: string, change: string, task: TaskLine, rule: string, reviewer: ReviewApprovalBinding | undefined): PortableTaskReview;
 /**
  * The portable completion/archive coverage: every checked task needs a portable
  * PASS for the given task-scoped rule (default the shipped `task-review`) and

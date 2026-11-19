@@ -32,6 +32,7 @@ import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
 import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, reviewUnitKey, sectionReviewDigest, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, reviewInputTree, signatureHash, specInputs, } from './review-snapshot.js';
+import { summaries as reviewStatusSummaries, } from './review-status.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, liveSlotCount, MAX_CONTEXT_BYTES, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
@@ -664,6 +665,17 @@ export function apply(ctx, config = {}) {
     }
     catch (error) {
         console.error(`workflows: the archive gate service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`);
+    }
+    // The OpenSpec change card reads these static facts at request time. The live
+    // half of the review surface belongs to the review-liveness change.
+    try {
+        const reviewStatusService = {
+            summaries: (workspace, changes) => reviewStatusSummaries(workspace, changes),
+        };
+        ctx.provide('workflowsReviewStatus', reviewStatusService);
+    }
+    catch (error) {
+        console.error(`workflows: the review status service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`);
     }
     /**
      * The clicked-archive path the OpenSpec host route calls. The carrier admits

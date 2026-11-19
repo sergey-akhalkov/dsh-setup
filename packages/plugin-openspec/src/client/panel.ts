@@ -69,6 +69,46 @@ export interface CommitFact {
   readonly url?: string
 }
 
+/** One change's static review facts as the workflows engine reports them. */
+export interface ReviewSpecState {
+  readonly verdict: 'PASS' | 'FINDINGS' | 'ERROR'
+  /** The record's digest still matches the change artifacts. */
+  readonly current: boolean
+  readonly at: string
+  readonly findings: number
+  readonly reviewer: string
+  readonly model?: string
+}
+
+/** Checked-task coverage: portable task-review PASS records over checked tasks. */
+export interface ReviewTaskState {
+  readonly checked: number
+  readonly passed: number
+  /** The checked tasks without a portable PASS, bounded by the host. */
+  readonly missing: readonly string[]
+  /** The newest matching approval time, when there is one. */
+  readonly at?: string
+}
+
+/** The optional `review` field an active change row may carry. */
+export interface ChangeReviewSummary {
+  readonly spec: ReviewSpecState | null
+  readonly tasks: ReviewTaskState | null
+}
+
+/** One live review the engine reports for a change. */
+export interface ReviewLiveEntry {
+  readonly session: string
+  readonly change: string
+  readonly definition: string
+  readonly unit: 'spec' | 'tasks' | 'integration'
+  /** Bounded unit detail: a section title, a task number, or a phase. */
+  readonly label?: string
+  readonly state: 'starting' | 'live' | 'waiting'
+  readonly attempt: number
+  readonly since: string
+}
+
 /** One row of the change-list route; every post-redesign field is optional. */
 export interface ChangeRow {
   readonly name: string
@@ -88,6 +128,8 @@ export interface ChangeRow {
   readonly deltaCapabilities?: readonly string[]
   readonly modified?: string | null
   readonly commit?: CommitFact | null
+  /** The engine's review state; absent when the workflows plugin is not installed. */
+  readonly review?: ChangeReviewSummary
 }
 
 /** Totals for the root header, carried by the first change-list response. */
@@ -424,6 +466,106 @@ export function relativeLabel(
   return `${String(n)}${suffix[unit]} ago`
 }
 
+/** One rendered unit of the card's review line. */
+export interface ReviewUnit {
+  readonly label: string
+  readonly tone: TagTone
+  /** Bounded tooltip text; absent renders the unit plainly. */
+  readonly tooltip?: string
+  /** A live review spins; a waiting review keeps a static ring. */
+  readonly spinning?: boolean
+  readonly waiting?: boolean
+}
+
+/** The whole-spec unit: PASS, outdated, findings, error, or not reviewed. */
+function reviewSpecUnit(
+  spec: ReviewSpecState | null,
+  t: (key: string) => string,
+  now: Date,
+): ReviewUnit {
+  if (spec === null) return { label: t('review.specMissing'), tone: 'quiet' }
+  if (spec.verdict === 'PASS' && spec.current) {
+    const relative = relativeLabel(spec.at, now)
+    const reviewer = spec.model === undefined ? spec.reviewer : `${spec.reviewer} (${spec.model})`
+    return {
+      label: t('review.specPass'),
+      tone: 'success',
+      tooltip: `${t('review.passTooltip')} ${reviewer}${relative === null ? '' : ` - ${relative}`}`,
+    }
+  }
+  if (!spec.current) {
+    return { label: t('review.specOutdated'), tone: 'warning', tooltip: t('review.staleTooltip') }
+  }
+  if (spec.verdict === 'FINDINGS') {
+    return { label: `${t('review.specFindings')} (${String(spec.findings)})`, tone: 'warning' }
+  }
+  return { label: t('review.specError'), tone: 'warning' }
+}
+
+/** The checked-task unit: reviewed out of checked, naming the missing ones. */
+function reviewTasksUnit(tasks: ReviewTaskState, t: (key: string) => string): ReviewUnit {
+  return {
+    label: `${t('review.reviewed')} ${String(tasks.passed)}/${String(tasks.checked)} ${t('change.tasks')}`,
+    tone: tasks.passed >= tasks.checked ? 'success' : 'warning',
+    ...(tasks.missing.length === 0
+      ? {}
+      : { tooltip: `${t('review.missingTooltip')}: ${tasks.missing.join(', ')}` }),
+  }
+}
+
+/** One live review: a running unit spins, a waiting unit keeps a static ring. */
+function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now: Date): ReviewUnit {
+  if (entry.state === 'waiting') {
+    return {
+      label: t('review.waiting'),
+      tone: 'info',
+      tooltip: t('review.waitTooltip'),
+      waiting: true,
+    }
+  }
+  const relative = relativeLabel(entry.since, now)
+  const tooltip = `${entry.definition} - ${t('review.liveTooltip')}${relative === null ? '' : ` ${relative}`}`
+  if (entry.unit === 'tasks') {
+    return {
+      label: `${t('review.tasksUnit')}${entry.label === undefined ? '' : ` - ${entry.label}`}`,
+      tone: 'info',
+      tooltip,
+      spinning: true,
+    }
+  }
+  return {
+    label: `${t('review.running')} ${String(entry.attempt)}`,
+    tone: 'info',
+    tooltip,
+    spinning: true,
+  }
+}
+
+/**
+ * The card's review line: the static state, with a live review replacing only
+ * its own unit, so a running review is never rendered as settled. An
+ * integration entry has no unit on the card and is ignored.
+ */
+export function reviewUnits(
+  review: ChangeReviewSummary | undefined,
+  live: readonly ReviewLiveEntry[] | undefined,
+  t: (key: string) => string,
+  now: Date = new Date(),
+): readonly ReviewUnit[] {
+  const liveOf = (unit: ReviewLiveEntry['unit']): ReviewLiveEntry | undefined =>
+    live?.find((entry) => entry.unit === unit)
+  const units: ReviewUnit[] = []
+  const specLive = liveOf('spec')
+  if (specLive !== undefined) units.push(reviewLiveUnit(specLive, t, now))
+  else if (review !== undefined) units.push(reviewSpecUnit(review.spec, t, now))
+  const tasksLive = liveOf('tasks')
+  if (tasksLive !== undefined) units.push(reviewLiveUnit(tasksLive, t, now))
+  else if (review?.tasks !== undefined && review.tasks !== null) {
+    units.push(reviewTasksUnit(review.tasks, t))
+  }
+  return units
+}
+
 /** The `YYYY-MM-DD` date of an ISO timestamp or archive-date prefix, or null. */
 export function isoDate(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null
@@ -681,6 +823,54 @@ function decodePhase(value: unknown): Phase | undefined {
     : undefined
 }
 
+const REVIEW_VERDICTS = new Set(['PASS', 'FINDINGS', 'ERROR'])
+
+/** The whole-spec unit; a malformed value drops the review field, not the row. */
+function decodeReviewSpec(value: unknown): ReviewSpecState | null {
+  if (!isRecord(value)) return null
+  if (typeof value.verdict !== 'string' || !REVIEW_VERDICTS.has(value.verdict)) return null
+  if (typeof value.reviewer !== 'string' || value.reviewer === '') return null
+  const findings = integer(value.findings)
+  if (findings === undefined) return null
+  return {
+    verdict: value.verdict as ReviewSpecState['verdict'],
+    current: value.current === true,
+    at: typeof value.at === 'string' ? value.at : '',
+    findings,
+    reviewer: value.reviewer,
+    ...(typeof value.model === 'string' && value.model !== '' ? { model: value.model } : {}),
+  }
+}
+
+/** The checked-task unit; null when the task count is not readable. */
+function decodeReviewTasks(value: unknown): ReviewTaskState | null {
+  if (!isRecord(value)) return null
+  const checked = integer(value.checked)
+  const passed = integer(value.passed)
+  if (checked === undefined || passed === undefined) return null
+  const missing = Array.isArray(value.missing)
+    ? value.missing.filter((entry): entry is string => typeof entry === 'string')
+    : []
+  return {
+    checked,
+    passed,
+    missing,
+    ...(typeof value.at === 'string' ? { at: value.at } : {}),
+  }
+}
+
+/** The optional review field; a malformed unit drops the field but never the row. */
+export function decodeReview(value: unknown): ChangeReviewSummary | undefined {
+  if (!isRecord(value)) return undefined
+  const rawSpec = value.spec
+  const rawTasks = value.tasks
+  const spec = rawSpec === null || rawSpec === undefined ? null : decodeReviewSpec(rawSpec)
+  if (rawSpec !== null && rawSpec !== undefined && spec === null) return undefined
+  const tasks = rawTasks === null || rawTasks === undefined ? null : decodeReviewTasks(rawTasks)
+  if (rawTasks !== null && rawTasks !== undefined && tasks === null) return undefined
+  return { spec, tasks }
+}
+
 /** Additive delta capability ids; a malformed value falls back to the fixed artifacts. */
 function decodeDeltaCapabilities(value: unknown): string[] | undefined {
   if (value === undefined) return undefined
@@ -695,6 +885,7 @@ function decodeChangeRow(value: unknown): ChangeRow | undefined {
   const totalTasks = integer(value.totalTasks) ?? 0
   const phase = decodePhase(value.phase)
   const deltaCapabilities = decodeDeltaCapabilities(value.deltaCapabilities)
+  const review = value.review === undefined ? undefined : decodeReview(value.review)
   return {
     name: value.name,
     completedTasks,
@@ -712,6 +903,7 @@ function decodeChangeRow(value: unknown): ChangeRow | undefined {
     ...(deltaCapabilities === undefined ? {} : { deltaCapabilities }),
     ...(value.modified === undefined ? {} : { modified: stringOrNull(value.modified) }),
     ...(value.commit === undefined ? {} : { commit: decodeCommit(value.commit) }),
+    ...(review === undefined ? {} : { review }),
   }
 }
 

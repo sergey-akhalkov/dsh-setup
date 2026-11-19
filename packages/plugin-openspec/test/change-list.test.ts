@@ -772,7 +772,12 @@ interface RouteHarness {
 }
 
 /** A desktop shell host has `connection.fetch` but no `webServer` service. */
-function routeHarness(workspaces: ReadonlyMap<string, string>): RouteHarness {
+function routeHarness(
+  workspaces: ReadonlyMap<string, string>,
+  reviewStatus?: {
+    summaries(workspace: string, changes: readonly string[]): Promise<Record<string, unknown>>
+  },
+): RouteHarness {
   let route: FetchRoute | undefined
   const services: Record<string, unknown> = {
     connection: {
@@ -799,6 +804,7 @@ function routeHarness(workspaces: ReadonlyMap<string, string>): RouteHarness {
         throw new Error('the change list route must not depend on webServer')
       },
     },
+    ...(reviewStatus === undefined ? {} : { workflowsReviewStatus: reviewStatus }),
   }
   const ctx = {
     get(name: string) {
@@ -853,6 +859,97 @@ describe('change list route', () => {
     expect(body.changes.map((row) => row.name)).toEqual(['add-auth'])
     expect(body.archived.map((row) => row.name)).toEqual(['2026-10-27-old'])
     expect(body.counts).toEqual({ active: 1, archived: 1, capabilities: 1 })
+  })
+
+  it('attaches the engine review facts to active rows only', async () => {
+    const cwd = workspace(true)
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nActive work.\n' })
+    writeChange(cwd, '2026-10-27-old', { proposal: '# Why\n\nOld work.\n' }, true)
+    const calls: { workspace: string; changes: readonly string[] }[] = []
+    const review = {
+      spec: {
+        verdict: 'PASS',
+        current: true,
+        at: '2026-11-18T20:55:00.000Z',
+        findings: 0,
+        reviewer: 'codex',
+      },
+      tasks: { checked: 16, passed: 14, missing: ['2.3', '4.1'] },
+    }
+    const harness = routeHarness(new Map([['s1', cwd]]), {
+      async summaries(workspace, changes) {
+        calls.push({ workspace, changes })
+        return { 'add-auth': review }
+      },
+    })
+    const children = spawnQueue()
+    const pending = harness.route.fetch(
+      new Request(`http://localhost${CHANGES_ROUTE}?session=s1`, { method: 'GET' }),
+    )
+    answerList(
+      children,
+      listOutput(cwd, [
+        { name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+        {
+          name: '2026-10-27-old',
+          completedTasks: 1,
+          totalTasks: 1,
+          status: 'complete',
+          archived: true,
+        },
+      ]),
+      specsOutput(cwd, []),
+    )
+    const response = await pending
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      changes: { name: string; review?: unknown }[]
+      archived: { name: string; review?: unknown }[]
+    }
+    expect(body.changes[0]?.review).toEqual(review)
+    expect(body.archived[0]).not.toHaveProperty('review')
+    expect(calls).toEqual([{ workspace: cwd, changes: ['add-auth'] }])
+  })
+
+  it('omits the review field on a host without the workflows engine', async () => {
+    const cwd = workspace(true)
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nActive work.\n' })
+    const harness = routeHarness(new Map([['s1', cwd]]))
+    const children = spawnQueue()
+    const pending = harness.route.fetch(
+      new Request(`http://localhost${CHANGES_ROUTE}?session=s1`, { method: 'GET' }),
+    )
+    answerList(
+      children,
+      listOutput(cwd, [{ name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' }]),
+      specsOutput(cwd, []),
+    )
+    const body = (await (await pending).json()) as { changes: { review?: unknown }[] }
+    expect(body.changes[0]).not.toHaveProperty('review')
+  })
+
+  it('keeps the list when the review summary fails', async () => {
+    const cwd = workspace(true)
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nActive work.\n' })
+    const harness = routeHarness(new Map([['s1', cwd]]), {
+      async summaries() {
+        throw new Error('the review read failed')
+      },
+    })
+    const children = spawnQueue()
+    const pending = harness.route.fetch(
+      new Request(`http://localhost${CHANGES_ROUTE}?session=s1`, { method: 'GET' }),
+    )
+    answerList(
+      children,
+      listOutput(cwd, [{ name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' }]),
+      specsOutput(cwd, []),
+    )
+    const response = await pending
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { changes: { name: string; review?: unknown }[] }
+    expect(body.changes.map((row) => row.name)).toEqual(['add-auth'])
+    expect(body.changes[0]).not.toHaveProperty('review')
   })
 
   it('scopes each session to its own workspace', async () => {

@@ -10,7 +10,11 @@ import {
   readWorkspaceChange,
   UnreportedItemError,
 } from './change-detail.js'
-import { archiveWorkspaceChange, listWorkspaceChanges } from './change-list.js'
+import {
+  archiveWorkspaceChange,
+  listWorkspaceChanges,
+  type WorkspaceChangeList,
+} from './change-list.js'
 import { registerWorkflowsContribution } from './workflows.js'
 
 /**
@@ -334,6 +338,51 @@ function archiveGateOf(ctx: Context): ArchiveGateService | undefined {
   }
 }
 
+/** The optional engine service that carries the review facts for active rows. */
+interface ReviewStatusService {
+  summaries(
+    workspace: string,
+    changes: readonly string[],
+  ): Promise<Readonly<Record<string, unknown>>>
+}
+
+/** Read the optional review service at request time; absent means no review field. */
+function reviewStatusOf(ctx: Context): ReviewStatusService | undefined {
+  try {
+    const status = ctx.get('workflowsReviewStatus') as ReviewStatusService | undefined
+    return status !== undefined && typeof status.summaries === 'function' ? status : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Attach the engine's static review facts to the active rows. A host without
+ * the workflows plugin, a failed summary, or an unknown row leaves the list
+ * exactly as it was; archived rows never carry the field.
+ */
+async function withReviewFacts(
+  list: WorkspaceChangeList,
+  workspace: string,
+  status: ReviewStatusService | undefined,
+): Promise<WorkspaceChangeList> {
+  if (status === undefined) return list
+  try {
+    const summaries = await status.summaries(
+      workspace,
+      list.changes.map((row) => row.name),
+    )
+    return {
+      ...list,
+      changes: list.changes.map((row) =>
+        summaries[row.name] === undefined ? row : { ...row, review: summaries[row.name] },
+      ),
+    }
+  } catch {
+    return list
+  }
+}
+
 /** A bounded one-line reason, never the whole request body. */
 function boundedReason(text: string): string {
   return text.length > 500 ? `${text.slice(0, 499)}…` : text
@@ -362,7 +411,11 @@ function registerRoutes(ctx: Context): void {
         const resolved = sessionWorkspace(services, request)
         if ('response' in resolved) return resolved.response
         try {
-          return jsonResponse(200, await listWorkspaceChanges(resolved.workspace))
+          const listed = await listWorkspaceChanges(resolved.workspace)
+          return jsonResponse(
+            200,
+            await withReviewFacts(listed, resolved.workspace, reviewStatusOf(ctx)),
+          )
         } catch (error) {
           return errorResponse(error, 'The change list could not be read.')
         }

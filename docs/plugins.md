@@ -654,7 +654,14 @@ carry the totals from the first `/changes` read, so all three are complete befor
 `Changes` lists the workspace's active changes, unfinished first. Each card states the derived status
 (`planning`, `ready to apply`, `applying` or `complete`) as a semantic tag, a task progress bar with
 `completed/total`, the proposal's one-line `## Why` summary, the artifact kinds the change carries,
-when it last changed, and the last commit. An empty change list repeats both actions, shows the
+when it last changed, and the last commit. Between the progress bar and the artifact tags, an active
+card carries one `Review` line: the whole-spec verdict (`spec PASS` while the record still matches the
+change artifacts, `spec outdated` after a plan edit, `spec findings (N)`, `spec error`, or `spec not
+reviewed` when this clone has no local record) and `reviewed X/Y tasks` for the checked tasks with the
+portable task-review `PASS` the archive gate counts, with the missing task numbers in its tooltip. The
+line reads the workflows engine's `workflowsReviewStatus` service: a profile without the engine, an
+archived row, or a failed read renders the card exactly as before, and a commit-backed audit of the
+approvals stays with `pnpm reviews:check`. An empty change list repeats both actions, shows the
 workspace totals, and lists the three most recently archived changes with a link to the full archive.
 The `Specs` segment (`dsh-resource://openspec/specs`, the address that opens the same root on that
 segment) lists the accepted capabilities with their purpose, requirement count and provenance — the
@@ -702,7 +709,8 @@ read-only except for the `Archive` action: it never syncs, validates, ticks a ta
 archives a change that is not complete.
 
 The three read routes are `GET /api/plugins/dsh-setup-openspec/changes?session=<id>` (active
-`changes`, additive `archived`, and `counts`),
+`changes`, additive `archived`, and `counts`; an active row carries the optional `review` field when
+the workflows engine is installed),
 `GET /api/plugins/dsh-setup-openspec/change?session=<id>&name=<change>` (add `&archived=1` for the
 archive family), and `GET /api/plugins/dsh-setup-openspec/specs?session=<id>` (add `&id=<capability>`
 for one spec). The one write route is `POST /api/plugins/dsh-setup-openspec/archive` with

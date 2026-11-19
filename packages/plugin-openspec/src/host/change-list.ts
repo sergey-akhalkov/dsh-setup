@@ -59,6 +59,8 @@ export interface WorkspaceChange extends WorkspaceChangeRow {
   readonly deltaCapabilities: readonly string[]
   readonly commit: CommitFact | null
   readonly presence: ChangePresence
+  /** The engine's optional review facts; an older client ignores the field. */
+  readonly review?: unknown
 }
 
 /** Totals the root header renders before any segment body loads. */

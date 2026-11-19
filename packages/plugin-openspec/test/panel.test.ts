@@ -126,6 +126,7 @@ import {
   type ChangeDetail,
   type ChangeListResponse,
   type ChangePresence,
+  type ChangeReviewSummary,
   type ChangeRow,
   type CommitFact,
   canOpenOpenSpec,
@@ -133,6 +134,7 @@ import {
   changeAddress,
   changeListWatchAddresses,
   type Delta,
+  decodeReview,
   derivePhase,
   fileAddress,
   type HistoryEntry,
@@ -153,6 +155,7 @@ import {
   phaseOf,
   phaseTone,
   type Requirement,
+  type ReviewLiveEntry,
   ROOT_ADDRESS,
   readSegment,
   relativeLabel,
@@ -160,6 +163,7 @@ import {
   requestCapability,
   requestChange,
   requestChangeList,
+  reviewUnits,
   type SegmentStorage,
   SPECS_ADDRESS,
   SPECS_PATH,
@@ -260,6 +264,21 @@ const COPY: Record<string, string> = {
   'markdown.copy': 'Copy',
   'markdown.copied': 'Copied',
   'markdown.footnotes': 'Footnotes',
+  'review.label': 'Review',
+  'review.specPass': 'spec PASS',
+  'review.specOutdated': 'spec outdated',
+  'review.specFindings': 'spec findings',
+  'review.specError': 'spec error',
+  'review.specMissing': 'spec not reviewed',
+  'review.reviewed': 'reviewed',
+  'review.running': 'spec review running - attempt',
+  'review.tasksUnit': 'reviewing tasks',
+  'review.waiting': 'waiting for the live review run',
+  'review.passTooltip': 'Whole-spec review PASS by',
+  'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
+  'review.missingTooltip': 'No portable task-review PASS for',
+  'review.liveTooltip': 'Started',
+  'review.waitTooltip': 'Waiting for the live review run',
 }
 
 const t = (key: string): string => COPY[key] ?? key
@@ -4489,5 +4508,204 @@ describe('OpenSpec panel visual contract', () => {
     expect(PANEL_CSS).toContain('-webkit-line-clamp: 3')
     expect(PANEL_CSS).toContain('flex-wrap: wrap')
     expect(PANEL_CSS).not.toContain('.dsh-openspec-purpose-toggle')
+  })
+})
+
+describe('OpenSpec review state', () => {
+  function summary(overrides: Partial<ChangeReviewSummary> = {}): ChangeReviewSummary {
+    return {
+      spec: {
+        verdict: 'PASS',
+        current: true,
+        at: '2026-11-05T15:00:00',
+        findings: 0,
+        reviewer: 'codex',
+        model: 'gpt-5.1-codex',
+      },
+      tasks: { checked: 16, passed: 16, missing: [] },
+      ...overrides,
+    }
+  }
+
+  it('renders a current PASS and full task coverage as two success units', () => {
+    const units = reviewUnits(summary(), undefined, t, NOW)
+    expect(units.map((unit) => [unit.label, unit.tone])).toEqual([
+      ['spec PASS', 'success'],
+      ['reviewed 16/16 tasks', 'success'],
+    ])
+    expect(units[0]?.tooltip).toBe('Whole-spec review PASS by codex (gpt-5.1-codex) - 2h ago')
+  })
+
+  it('renders a stale PASS as outdated without claiming the change is reviewed', () => {
+    const units = reviewUnits(
+      summary({
+        spec: {
+          verdict: 'PASS',
+          current: false,
+          at: '2026-11-05T15:00:00',
+          findings: 0,
+          reviewer: 'codex',
+        },
+      }),
+      undefined,
+      t,
+      NOW,
+    )
+    expect(units[0]).toMatchObject({ label: 'spec outdated', tone: 'warning' })
+    expect(units[0]?.tooltip).toBe('The PASS is stale: the change artifacts changed after it')
+  })
+
+  it('names the findings count and an engine error instead of PASS', () => {
+    const findings = reviewUnits(
+      summary({
+        spec: {
+          verdict: 'FINDINGS',
+          current: true,
+          at: '2026-11-05T15:00:00',
+          findings: 2,
+          reviewer: 'codex',
+        },
+      }),
+      undefined,
+      t,
+      NOW,
+    )
+    expect(findings[0]).toMatchObject({ label: 'spec findings (2)', tone: 'warning' })
+    const error = reviewUnits(
+      summary({
+        spec: {
+          verdict: 'ERROR',
+          current: true,
+          at: '2026-11-05T15:00:00',
+          findings: 0,
+          reviewer: 'codex',
+        },
+      }),
+      undefined,
+      t,
+      NOW,
+    )
+    expect(error[0]).toMatchObject({ label: 'spec error', tone: 'warning' })
+  })
+
+  it('reads a missing local record as not reviewed and drops an unreadable task unit', () => {
+    const units = reviewUnits({ spec: null, tasks: null }, undefined, t, NOW)
+    expect(units).toEqual([{ label: 'spec not reviewed', tone: 'quiet' }])
+  })
+
+  it('counts the checked tasks with a portable PASS and names the missing ones', () => {
+    const units = reviewUnits(
+      summary({ tasks: { checked: 16, passed: 10, missing: ['2.3', '4.1'] } }),
+      undefined,
+      t,
+      NOW,
+    )
+    expect(units[1]).toMatchObject({ label: 'reviewed 10/16 tasks', tone: 'warning' })
+    expect(units[1]?.tooltip).toBe('No portable task-review PASS for: 2.3, 4.1')
+  })
+
+  it('replaces only the live unit and keeps the settled unit beside it', () => {
+    const units = reviewUnits(
+      summary(),
+      [
+        {
+          session: 's1',
+          change: 'add-auth',
+          definition: 'spec-review',
+          unit: 'spec',
+          state: 'live',
+          attempt: 2,
+          since: '2026-11-05T16:00:00',
+        },
+      ],
+      t,
+      NOW,
+    )
+    expect(units.map((unit) => unit.label)).toEqual([
+      'spec review running - attempt 2',
+      'reviewed 16/16 tasks',
+    ])
+    expect(units[0]).toMatchObject({ tone: 'info', spinning: true })
+    expect(units[1]).toMatchObject({ tone: 'success' })
+  })
+
+  it('names the reviewed task unit and keeps the spinner off while waiting', () => {
+    const tasks: ReviewLiveEntry = {
+      session: 's1',
+      change: 'add-auth',
+      definition: 'task-review',
+      unit: 'tasks',
+      label: '2. Lane A',
+      state: 'live',
+      attempt: 1,
+      since: '2026-11-05T16:00:00',
+    }
+    const running = reviewUnits(summary(), [tasks], t, NOW)
+    expect(running[1]).toMatchObject({ label: 'reviewing tasks - 2. Lane A', spinning: true })
+    const waiting = reviewUnits(summary(), [{ ...tasks, state: 'waiting' }], t, NOW)
+    expect(waiting[1]).toMatchObject({
+      label: 'waiting for the live review run',
+      waiting: true,
+    })
+    expect(waiting[1]).not.toHaveProperty('spinning')
+  })
+
+  it('ignores an integration review and still shows a live review without a static field', () => {
+    expect(
+      reviewUnits(
+        summary(),
+        [
+          {
+            session: 's1',
+            change: 'add-auth',
+            definition: 'integration-review',
+            unit: 'integration',
+            state: 'live',
+            attempt: 1,
+            since: '2026-11-05T16:00:00',
+          },
+        ],
+        t,
+        NOW,
+      ),
+    ).toHaveLength(2)
+    const liveOnly = reviewUnits(
+      undefined,
+      [
+        {
+          session: 's1',
+          change: 'add-auth',
+          definition: 'spec-review',
+          unit: 'spec',
+          state: 'starting',
+          attempt: 1,
+          since: '2026-11-05T16:59:00',
+        },
+      ],
+      t,
+      NOW,
+    )
+    expect(liveOnly).toHaveLength(1)
+    expect(liveOnly[0]).toMatchObject({ tone: 'info', spinning: true })
+  })
+
+  it('decodes a valid review field, drops a malformed one, and ignores an absent one', () => {
+    const valid = decodeReview({
+      spec: {
+        verdict: 'PASS',
+        current: true,
+        at: '2026-11-05T15:00:00Z',
+        findings: 0,
+        reviewer: 'codex',
+        model: 'gpt-5.1-codex',
+      },
+      tasks: { checked: 16, passed: 14, missing: ['2.3', '4.1'], at: '2026-11-05T14:00:00Z' },
+    })
+    expect(valid?.spec?.verdict).toBe('PASS')
+    expect(valid?.tasks?.missing).toEqual(['2.3', '4.1'])
+    expect(decodeReview({ spec: { verdict: 'BROKEN' }, tasks: null })).toBeUndefined()
+    expect(decodeReview({ spec: null, tasks: { checked: 'many' } })).toBeUndefined()
+    expect(decodeReview(undefined)).toBeUndefined()
+    expect(decodeReview({ spec: null, tasks: null })).toEqual({ spec: null, tasks: null })
   })
 })

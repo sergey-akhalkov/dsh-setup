@@ -220,6 +220,71 @@ window.__ModuleLoader__.load({
       };
       return `${String(n)}${suffix[unit]} ago`;
     }
+    function reviewSpecUnit(spec, t, now) {
+      if (spec === null) return { label: t("review.specMissing"), tone: "quiet" };
+      if (spec.verdict === "PASS" && spec.current) {
+        const relative = relativeLabel(spec.at, now);
+        const reviewer = spec.model === void 0 ? spec.reviewer : `${spec.reviewer} (${spec.model})`;
+        return {
+          label: t("review.specPass"),
+          tone: "success",
+          tooltip: `${t("review.passTooltip")} ${reviewer}${relative === null ? "" : ` - ${relative}`}`
+        };
+      }
+      if (!spec.current) {
+        return { label: t("review.specOutdated"), tone: "warning", tooltip: t("review.staleTooltip") };
+      }
+      if (spec.verdict === "FINDINGS") {
+        return { label: `${t("review.specFindings")} (${String(spec.findings)})`, tone: "warning" };
+      }
+      return { label: t("review.specError"), tone: "warning" };
+    }
+    function reviewTasksUnit(tasks, t) {
+      return {
+        label: `${t("review.reviewed")} ${String(tasks.passed)}/${String(tasks.checked)} ${t("change.tasks")}`,
+        tone: tasks.passed >= tasks.checked ? "success" : "warning",
+        ...tasks.missing.length === 0 ? {} : { tooltip: `${t("review.missingTooltip")}: ${tasks.missing.join(", ")}` }
+      };
+    }
+    function reviewLiveUnit(entry, t, now) {
+      if (entry.state === "waiting") {
+        return {
+          label: t("review.waiting"),
+          tone: "info",
+          tooltip: t("review.waitTooltip"),
+          waiting: true
+        };
+      }
+      const relative = relativeLabel(entry.since, now);
+      const tooltip = `${entry.definition} - ${t("review.liveTooltip")}${relative === null ? "" : ` ${relative}`}`;
+      if (entry.unit === "tasks") {
+        return {
+          label: `${t("review.tasksUnit")}${entry.label === void 0 ? "" : ` - ${entry.label}`}`,
+          tone: "info",
+          tooltip,
+          spinning: true
+        };
+      }
+      return {
+        label: `${t("review.running")} ${String(entry.attempt)}`,
+        tone: "info",
+        tooltip,
+        spinning: true
+      };
+    }
+    function reviewUnits(review, live, t, now = /* @__PURE__ */ new Date()) {
+      const liveOf = (unit) => live?.find((entry) => entry.unit === unit);
+      const units = [];
+      const specLive = liveOf("spec");
+      if (specLive !== void 0) units.push(reviewLiveUnit(specLive, t, now));
+      else if (review !== void 0) units.push(reviewSpecUnit(review.spec, t, now));
+      const tasksLive = liveOf("tasks");
+      if (tasksLive !== void 0) units.push(reviewLiveUnit(tasksLive, t, now));
+      else if (review?.tasks !== void 0 && review.tasks !== null) {
+        units.push(reviewTasksUnit(review.tasks, t));
+      }
+      return units;
+    }
     function isoDate(value) {
       if (value === null || value === void 0) return null;
       const direct = /^(\d{4}-\d{2}-\d{2})/.exec(value);
@@ -368,6 +433,45 @@ window.__ModuleLoader__.load({
     function decodePhase(value) {
       return value === "planning" || value === "ready-to-apply" || value === "applying" || value === "complete" || value === "archived" ? value : void 0;
     }
+    var REVIEW_VERDICTS = /* @__PURE__ */ new Set(["PASS", "FINDINGS", "ERROR"]);
+    function decodeReviewSpec(value) {
+      if (!isRecord(value)) return null;
+      if (typeof value.verdict !== "string" || !REVIEW_VERDICTS.has(value.verdict)) return null;
+      if (typeof value.reviewer !== "string" || value.reviewer === "") return null;
+      const findings = integer(value.findings);
+      if (findings === void 0) return null;
+      return {
+        verdict: value.verdict,
+        current: value.current === true,
+        at: typeof value.at === "string" ? value.at : "",
+        findings,
+        reviewer: value.reviewer,
+        ...typeof value.model === "string" && value.model !== "" ? { model: value.model } : {}
+      };
+    }
+    function decodeReviewTasks(value) {
+      if (!isRecord(value)) return null;
+      const checked = integer(value.checked);
+      const passed = integer(value.passed);
+      if (checked === void 0 || passed === void 0) return null;
+      const missing = Array.isArray(value.missing) ? value.missing.filter((entry) => typeof entry === "string") : [];
+      return {
+        checked,
+        passed,
+        missing,
+        ...typeof value.at === "string" ? { at: value.at } : {}
+      };
+    }
+    function decodeReview(value) {
+      if (!isRecord(value)) return void 0;
+      const rawSpec = value.spec;
+      const rawTasks = value.tasks;
+      const spec = rawSpec === null || rawSpec === void 0 ? null : decodeReviewSpec(rawSpec);
+      if (rawSpec !== null && rawSpec !== void 0 && spec === null) return void 0;
+      const tasks = rawTasks === null || rawTasks === void 0 ? null : decodeReviewTasks(rawTasks);
+      if (rawTasks !== null && rawTasks !== void 0 && tasks === null) return void 0;
+      return { spec, tasks };
+    }
     function decodeDeltaCapabilities(value) {
       if (value === void 0) return void 0;
       if (!Array.isArray(value)) return [];
@@ -380,6 +484,7 @@ window.__ModuleLoader__.load({
       const totalTasks = integer(value.totalTasks) ?? 0;
       const phase = decodePhase(value.phase);
       const deltaCapabilities2 = decodeDeltaCapabilities(value.deltaCapabilities);
+      const review = value.review === void 0 ? void 0 : decodeReview(value.review);
       return {
         name: value.name,
         completedTasks,
@@ -394,7 +499,8 @@ window.__ModuleLoader__.load({
         ...value.requirementCount === void 0 ? {} : { requirementCount: integer(value.requirementCount) ?? 0 },
         ...deltaCapabilities2 === void 0 ? {} : { deltaCapabilities: deltaCapabilities2 },
         ...value.modified === void 0 ? {} : { modified: stringOrNull(value.modified) },
-        ...value.commit === void 0 ? {} : { commit: decodeCommit(value.commit) }
+        ...value.commit === void 0 ? {} : { commit: decodeCommit(value.commit) },
+        ...review === void 0 ? {} : { review }
       };
     }
     function decodeChangeRows(value) {
@@ -793,7 +899,22 @@ window.__ModuleLoader__.load({
       "scenario.but": "BUT",
       "markdown.copy": "Copy",
       "markdown.copied": "Copied",
-      "markdown.footnotes": "Footnotes"
+      "markdown.footnotes": "Footnotes",
+      "review.label": "Review",
+      "review.specPass": "spec PASS",
+      "review.specOutdated": "spec outdated",
+      "review.specFindings": "spec findings",
+      "review.specError": "spec error",
+      "review.specMissing": "spec not reviewed",
+      "review.reviewed": "reviewed",
+      "review.running": "spec review running - attempt",
+      "review.tasksUnit": "reviewing tasks",
+      "review.waiting": "waiting for the live review run",
+      "review.passTooltip": "Whole-spec review PASS by",
+      "review.staleTooltip": "The PASS is stale: the change artifacts changed after it",
+      "review.missingTooltip": "No portable task-review PASS for",
+      "review.liveTooltip": "Started",
+      "review.waitTooltip": "Waiting for the live review run"
     };
     var fallbackTranslate = (key) => EN[key] ?? key;
     var alwaysOpenSession = (select) => select({ openState: "open" });
@@ -1574,6 +1695,7 @@ window.__ModuleLoader__.load({
       const archived = props.archived === true || props.row.archived === true;
       const phase = archived ? "archived" : phaseOf(props.row);
       const updated = relativeLabel(props.row.modified, props.now);
+      const review = archived ? [] : reviewUnits(props.row.review, props.live, props.t, props.now);
       return (
         // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
@@ -1603,6 +1725,7 @@ window.__ModuleLoader__.load({
                 t: props.t,
                 showLabel: false
               }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
+              review.length === 0 ? null : ReviewLine({ units: review, label: props.t("review.label") }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(
                   props.row.presence,
@@ -1649,6 +1772,22 @@ window.__ModuleLoader__.load({
           }
         )
       );
+    }
+    function ReviewLine(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-review-row", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-review-label", children: props.label }),
+        props.units.map((unit, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-review-unit", children: [
+          index === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-review-sep", "aria-hidden": "true", children: "\xB7" }),
+          unit.spinning === true ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "span",
+            {
+              className: "dsh-openspec-review-ring dsh-openspec-review-ring-live",
+              "aria-hidden": "true"
+            }
+          ) : unit.waiting === true ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-review-ring", "aria-hidden": "true" }) : null,
+          unit.tooltip === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: unit.tone, children: unit.label }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: unit.tooltip, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: unit.tone, children: unit.label }) })
+        ] }, `${unit.label}-${String(index)}`))
+      ] });
     }
     function CapabilityCard(props) {
       const provenance = props.row.lastChange;
@@ -2350,6 +2489,39 @@ window.__ModuleLoader__.load({
       gap: 10px;
       min-width: 0;
     }
+    .dsh-openspec-review-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+      font: var(--dsw-font-xxs-12);
+      color: var(--dsw-alias-label-tertiary);
+    }
+    .dsh-openspec-review-label {
+      font: var(--dsw-font-xxxs-strong-11);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .dsh-openspec-review-unit {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+    }
+    .dsh-openspec-review-ring {
+      display: inline-block;
+      box-sizing: border-box;
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--dsw-alias-label-secondary);
+      border-radius: 50%;
+    }
+    .dsh-openspec-review-ring-live {
+      border-color: var(--dsw-alias-label-tertiary);
+      border-top-color: transparent;
+      animation: dsh-openspec-spin 900ms linear infinite;
+    }
     .dsh-openspec-artifact-link {
       display: inline-flex;
       align-items: center;
@@ -2669,6 +2841,10 @@ window.__ModuleLoader__.load({
       }
       .dsh-openspec-refreshing {
         animation: none;
+      }
+      .dsh-openspec-review-ring-live {
+        animation: none;
+        border-top-color: var(--dsw-alias-label-tertiary);
       }
     }
     `;

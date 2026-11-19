@@ -142,6 +142,10 @@ import {
   specInputs,
 } from './review-snapshot.js'
 import {
+  summaries as reviewStatusSummaries,
+  type WorkflowsReviewStatusService,
+} from './review-status.js'
+import {
   addViolation,
   completeNotApplicable,
   createRun,
@@ -995,6 +999,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   } catch (error) {
     console.error(
       `workflows: the archive gate service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
+    )
+  }
+  // The OpenSpec change card reads these static facts at request time. The live
+  // half of the review surface belongs to the review-liveness change.
+  try {
+    const reviewStatusService: WorkflowsReviewStatusService = {
+      summaries: (workspace, changes) => reviewStatusSummaries(workspace, changes),
+    }
+    ctx.provide('workflowsReviewStatus', reviewStatusService)
+  } catch (error) {
+    console.error(
+      `workflows: the review status service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
     )
   }
   /**

@@ -1,0 +1,136 @@
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { CHANGE_NAME } from './command-parse.js';
+import { currentSpecDigest, readWorkspaceFile } from './evidence.js';
+import { isInside } from './fs-change.js';
+import { checkedTaskLines, portableTaskReview, reviewerBinding, } from './parity.js';
+import { localRecordError } from './projection.js';
+/** Most missing checked tasks one summary names; the card's tooltip stays bounded. */
+const MAX_MISSING = 20;
+/** Longest raw checked line a task summary repeats. */
+const MAX_UNPARSED = 40;
+function isRecord(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function nonEmpty(value) {
+    return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+/**
+ * The local whole-spec record when it is a readable whole-scope spec record.
+ * The record's digest is the artifact digest a current PASS must still match.
+ */
+async function readSpecState(workspace, change, currentDigest) {
+    // The gate's own reader: a linked or oversized record is not evidence.
+    const record = await readWorkspaceFile(workspace, `.dsh/workflows/records/spec-review/${change}/spec.json`);
+    if (record === undefined) {
+        // A fresh clone has no local record; absence is not a failed review.
+        return null;
+    }
+    let raw;
+    try {
+        raw = JSON.parse(record.text);
+    }
+    catch {
+        return null;
+    }
+    if (!isRecord(raw) || localRecordError(raw) !== undefined)
+        return null;
+    if (raw.rule !== 'spec-review' || raw.change !== change || raw.phase !== 'spec')
+        return null;
+    if (raw.scope !== 'whole')
+        return null;
+    const target = isRecord(raw.target) ? raw.target : {};
+    const model = nonEmpty(target.model);
+    return {
+        verdict: raw.verdict,
+        current: currentDigest !== undefined && raw.digest === currentDigest,
+        at: String(raw.time),
+        findings: Array.isArray(raw.findings) ? raw.findings.length : 0,
+        reviewer: nonEmpty(raw.reviewer) ?? nonEmpty(target.provider) ?? 'reviewer',
+        ...(model === undefined ? {} : { model }),
+    };
+}
+/** Checked-task coverage by the archive gate's portable approval match. */
+function taskCoverage(workspace, change, markdown, binding) {
+    const rule = binding?.taskRule ?? 'task-review';
+    const tasks = checkedTaskLines(markdown);
+    const missing = [];
+    let checked = 0;
+    let passed = 0;
+    let at;
+    for (const task of tasks) {
+        checked += 1;
+        const match = binding?.invalid === undefined
+            ? portableTaskReview(workspace, change, task, rule, binding)
+            : { mismatch: [binding.invalid] };
+        if (match.mismatch.length === 0) {
+            passed += 1;
+            if (match.time !== undefined &&
+                (at === undefined || Date.parse(match.time) > Date.parse(at))) {
+                at = match.time;
+            }
+        }
+        else if (missing.length < MAX_MISSING) {
+            missing.push(task.number);
+        }
+    }
+    // A checked line the task parser cannot read is an unapproved checked task,
+    // exactly as the completion coverage treats it: it counts and is named raw.
+    for (const line of markdown.split('\n')) {
+        if (!/^\s*[-*+]\s*\[[xX]\]/u.test(line))
+            continue;
+        if (/^\s*-\s*\[[xX]\]\s+\d+(?:\.\d+)*\s+\S/u.test(line))
+            continue;
+        checked += 1;
+        if (missing.length < MAX_MISSING)
+            missing.push(line.trim().slice(0, MAX_UNPARSED));
+    }
+    return { checked, passed, missing, ...(at === undefined ? {} : { at }) };
+}
+/** One change's static review state; an unknown or unreadable change is undefined. */
+export async function reviewSummary(workspace, change, 
+/** Test seam for the artifact digest read; production uses `currentSpecDigest`. */
+digestOf = currentSpecDigest) {
+    if (!CHANGE_NAME.test(change))
+        return undefined;
+    // A change directory that resolves outside the workspace is never a row: a
+    // junction there would otherwise expose another tree's tasks to the card.
+    const root = await realpath(workspace).catch(() => undefined);
+    const changeDirectory = await realpath(join(workspace, 'openspec', 'changes', change)).catch(() => undefined);
+    if (root === undefined || changeDirectory === undefined || !isInside(root, changeDirectory)) {
+        return undefined;
+    }
+    const info = await stat(changeDirectory).catch(() => undefined);
+    // A missing change directory is an unknown row, not an unreviewed one.
+    if (info?.isDirectory() !== true)
+        return undefined;
+    const binding = reviewerBinding(workspace);
+    // A failed digest read does not hide the change: it only makes `current` false.
+    const currentDigest = await digestOf(workspace, change).catch(() => undefined);
+    const spec = await readSpecState(workspace, change, currentDigest);
+    let tasks = null;
+    try {
+        const markdown = await readFile(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
+        tasks = taskCoverage(workspace, change, markdown, binding);
+    }
+    catch {
+        // An unreadable tasks file omits the task unit instead of claiming coverage.
+        tasks = null;
+    }
+    return { spec, tasks };
+}
+/** Per-change summaries; an unknown or unreadable row is omitted, never thrown. */
+export async function summaries(workspace, changes) {
+    const result = {};
+    for (const change of changes) {
+        try {
+            const summary = await reviewSummary(workspace, change);
+            if (summary !== undefined)
+                result[change] = summary;
+        }
+        catch {
+            // One unreadable change never fails the list request.
+        }
+    }
+    return result;
+}

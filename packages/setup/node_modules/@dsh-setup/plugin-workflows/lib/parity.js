@@ -658,6 +658,37 @@ export function reviewUnitText(change, unit, options = {}) {
     return clampUnitText(head, action(`section: "${section.key}"`));
 }
 /**
+ * The working-tree portable approval match the archive gate applies: rule,
+ * change, task id, PASS verdict, and the marker's reviewer binding when
+ * declared. The completion coverage and the review row share this one
+ * definition, so the row can never disagree with the gate.
+ */
+export function portableTaskReview(workspace, change, task, rule, reviewer) {
+    const record = readPortableApproval(workspace, change, task.id);
+    const mismatch = [];
+    if (record === undefined)
+        mismatch.push('no portable PASS record');
+    else {
+        if (record.rule !== rule)
+            mismatch.push(`rule "${String(record.rule)}"`);
+        if (record.change !== change)
+            mismatch.push(`change "${String(record.change)}"`);
+        if (record.taskId !== task.id)
+            mismatch.push(`task id "${String(record.taskId)}"`);
+        if (record.verdict !== 'PASS')
+            mismatch.push(`verdict ${String(record.verdict)}`);
+        const target = record.target ?? {};
+        if (reviewer?.provider !== undefined && target.provider !== reviewer.provider) {
+            mismatch.push(`target provider "${String(target.provider)}"`);
+        }
+        if (reviewer?.model !== undefined && target.model !== reviewer.model) {
+            mismatch.push(`target model "${String(target.model)}"`);
+        }
+    }
+    const time = record?.time;
+    return mismatch.length === 0 && typeof time === 'string' ? { mismatch, time } : { mismatch };
+}
+/**
  * The portable completion/archive coverage: every checked task needs a portable
  * PASS for the given task-scoped rule (default the shipped `task-review`) and
  * the marker's reviewer when one is declared. A section with two or more checked
@@ -693,27 +724,7 @@ export function taskReviewCoverage(workspace, change, rule, options = {}) {
         }
     }
     const taskGap = (task) => {
-        const record = readPortableApproval(workspace, change, task.id);
-        const mismatch = [];
-        if (record === undefined)
-            mismatch.push('no portable PASS record');
-        else {
-            if (record.rule !== effectiveRule)
-                mismatch.push(`rule "${String(record.rule)}"`);
-            if (record.change !== change)
-                mismatch.push(`change "${String(record.change)}"`);
-            if (record.taskId !== task.id)
-                mismatch.push(`task id "${String(record.taskId)}"`);
-            if (record.verdict !== 'PASS')
-                mismatch.push(`verdict ${String(record.verdict)}`);
-            const target = record.target ?? {};
-            if (reviewer?.provider !== undefined && target.provider !== reviewer.provider) {
-                mismatch.push(`target provider "${String(target.provider)}"`);
-            }
-            if (reviewer?.model !== undefined && target.model !== reviewer.model) {
-                mismatch.push(`target model "${String(target.model)}"`);
-            }
-        }
+        const { mismatch } = portableTaskReview(workspace, change, task, effectiveRule, reviewer);
         if (mismatch.length === 0)
             return undefined;
         const unitTask = { ...task, checked: true };

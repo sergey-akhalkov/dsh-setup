@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listWorkspaceCapabilityRows, readWorkspaceCapability, readWorkspaceChange, UnreportedItemError, } from './change-detail.js';
-import { archiveWorkspaceChange, listWorkspaceChanges } from './change-list.js';
+import { archiveWorkspaceChange, listWorkspaceChanges, } from './change-list.js';
 import { registerWorkflowsContribution } from './workflows.js';
 /**
  * OpenSpec plugin: registers the six generated core skills from a pinned
@@ -244,6 +244,35 @@ function archiveGateOf(ctx) {
         return undefined;
     }
 }
+/** Read the optional review service at request time; absent means no review field. */
+function reviewStatusOf(ctx) {
+    try {
+        const status = ctx.get('workflowsReviewStatus');
+        return status !== undefined && typeof status.summaries === 'function' ? status : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+/**
+ * Attach the engine's static review facts to the active rows. A host without
+ * the workflows plugin, a failed summary, or an unknown row leaves the list
+ * exactly as it was; archived rows never carry the field.
+ */
+async function withReviewFacts(list, workspace, status) {
+    if (status === undefined)
+        return list;
+    try {
+        const summaries = await status.summaries(workspace, list.changes.map((row) => row.name));
+        return {
+            ...list,
+            changes: list.changes.map((row) => summaries[row.name] === undefined ? row : { ...row, review: summaries[row.name] }),
+        };
+    }
+    catch {
+        return list;
+    }
+}
 /** A bounded one-line reason, never the whole request body. */
 function boundedReason(text) {
     return text.length > 500 ? `${text.slice(0, 499)}…` : text;
@@ -273,7 +302,8 @@ function registerRoutes(ctx) {
                 if ('response' in resolved)
                     return resolved.response;
                 try {
-                    return jsonResponse(200, await listWorkspaceChanges(resolved.workspace));
+                    const listed = await listWorkspaceChanges(resolved.workspace);
+                    return jsonResponse(200, await withReviewFacts(listed, resolved.workspace, reviewStatusOf(ctx)));
                 }
                 catch (error) {
                     return errorResponse(error, 'The change list could not be read.');

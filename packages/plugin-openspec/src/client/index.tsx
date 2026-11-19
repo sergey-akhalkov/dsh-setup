@@ -75,6 +75,8 @@ import {
   phaseTone,
   type ReadState,
   type Requirement,
+  type ReviewLiveEntry,
+  type ReviewUnit,
   ROOT_ADDRESS,
   ROOT_SEGMENTS,
   type RootSegment,
@@ -85,6 +87,7 @@ import {
   requestCapability,
   requestChange,
   requestChangeList,
+  reviewUnits,
   type SegmentStorage,
   sortArchived,
   sortChanges,
@@ -287,6 +290,21 @@ const EN: Record<string, string> = {
   'markdown.copy': 'Copy',
   'markdown.copied': 'Copied',
   'markdown.footnotes': 'Footnotes',
+  'review.label': 'Review',
+  'review.specPass': 'spec PASS',
+  'review.specOutdated': 'spec outdated',
+  'review.specFindings': 'spec findings',
+  'review.specError': 'spec error',
+  'review.specMissing': 'spec not reviewed',
+  'review.reviewed': 'reviewed',
+  'review.running': 'spec review running - attempt',
+  'review.tasksUnit': 'reviewing tasks',
+  'review.waiting': 'waiting for the live review run',
+  'review.passTooltip': 'Whole-spec review PASS by',
+  'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
+  'review.missingTooltip': 'No portable task-review PASS for',
+  'review.liveTooltip': 'Started',
+  'review.waitTooltip': 'Waiting for the live review run',
 }
 
 type Translate = (key: string) => string
@@ -1497,12 +1515,14 @@ function FilterField(props: {
   )
 }
 
-/** One change card: phase, purpose, progress, provenance, and its one action. */
+/** One change card: phase, purpose, progress, review state, provenance, and its one action. */
 function ChangeCard(props: {
   readonly row: ChangeRow
   readonly t: Translate
   readonly now?: Date
   readonly archived?: boolean
+  /** The engine's live reviews of this change; the card merges them into its review line. */
+  readonly live?: readonly ReviewLiveEntry[]
   /** An archive action is in flight for this row. */
   readonly archiving?: boolean
   /** The Host's bounded archive refusal, shown inline. */
@@ -1515,6 +1535,7 @@ function ChangeCard(props: {
   const archived = props.archived === true || props.row.archived === true
   const phase = archived ? 'archived' : phaseOf(props.row)
   const updated = relativeLabel(props.row.modified, props.now)
+  const review = archived ? [] : reviewUnits(props.row.review, props.live, props.t, props.now)
   return (
     // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
     <div
@@ -1555,6 +1576,7 @@ function ChangeCard(props: {
       ) : (
         <span className="dsh-openspec-meta">{props.t('change.tasksNotWritten')}</span>
       )}
+      {review.length === 0 ? null : ReviewLine({ units: review, label: props.t('review.label') })}
       <span className="dsh-openspec-meta">
         <span className="dsh-openspec-tags">
           {presenceFacts(
@@ -1610,6 +1632,42 @@ function ChangeCard(props: {
         </span>
       ) : null}
     </div>
+  )
+}
+
+/** The card's one review line: the label plus one tag per review unit. */
+function ReviewLine(props: {
+  readonly units: readonly ReviewUnit[]
+  readonly label: string
+}): ReactNode {
+  return (
+    <span className="dsh-openspec-review-row">
+      <span className="dsh-openspec-review-label">{props.label}</span>
+      {props.units.map((unit, index) => (
+        <span className="dsh-openspec-review-unit" key={`${unit.label}-${String(index)}`}>
+          {index === 0 ? null : (
+            <span className="dsh-openspec-review-sep" aria-hidden="true">
+              ·
+            </span>
+          )}
+          {unit.spinning === true ? (
+            <span
+              className="dsh-openspec-review-ring dsh-openspec-review-ring-live"
+              aria-hidden="true"
+            />
+          ) : unit.waiting === true ? (
+            <span className="dsh-openspec-review-ring" aria-hidden="true" />
+          ) : null}
+          {unit.tooltip === undefined ? (
+            <Tag tone={unit.tone}>{unit.label}</Tag>
+          ) : (
+            <primitives.Tooltip label={unit.tooltip} portal>
+              <Tag tone={unit.tone}>{unit.label}</Tag>
+            </primitives.Tooltip>
+          )}
+        </span>
+      ))}
+    </span>
   )
 }
 
@@ -2616,6 +2674,39 @@ export const PANEL_CSS = `
   gap: 10px;
   min-width: 0;
 }
+.dsh-openspec-review-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+}
+.dsh-openspec-review-label {
+  font: var(--dsw-font-xxxs-strong-11);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.dsh-openspec-review-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.dsh-openspec-review-ring {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--dsw-alias-label-secondary);
+  border-radius: 50%;
+}
+.dsh-openspec-review-ring-live {
+  border-color: var(--dsw-alias-label-tertiary);
+  border-top-color: transparent;
+  animation: dsh-openspec-spin 900ms linear infinite;
+}
 .dsh-openspec-artifact-link {
   display: inline-flex;
   align-items: center;
@@ -2935,6 +3026,10 @@ export const PANEL_CSS = `
   }
   .dsh-openspec-refreshing {
     animation: none;
+  }
+  .dsh-openspec-review-ring-live {
+    animation: none;
+    border-top-color: var(--dsw-alias-label-tertiary);
   }
 }
 `
