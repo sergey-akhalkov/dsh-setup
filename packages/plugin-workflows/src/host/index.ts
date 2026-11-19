@@ -1429,7 +1429,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
       return undefined
     }
-    const check = await verifyEvidence(step.evidence, { workspace, values: run.context })
+    const check = await verifyEvidence(step.evidence, {
+      workspace,
+      values: run.context,
+      // A whole-worktree review needs the same worktree digest it was gated on.
+      runGit: defaultGit,
+    })
     if (!check.ok) return undefined
     const at = journal.time()
     const settled = settleStep(run, step.id, 'done', { at, evidence: check.evidence })
