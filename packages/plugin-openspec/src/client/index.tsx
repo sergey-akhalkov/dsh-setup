@@ -90,7 +90,7 @@ import {
   requestLiveReviews,
   reviewUnits,
   type SegmentStorage,
-  settledChanges,
+  settledReviews,
   sortArchived,
   sortChanges,
   sortHistory,
@@ -807,7 +807,7 @@ function useLiveReviews(
     if (!active) return undefined
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    let previous: readonly string[] = []
+    let previous: readonly ReviewLiveEntry[] = []
     const poll = async (): Promise<void> => {
       try {
         const entries = await requestLiveReviews(sessionId)
@@ -816,16 +816,17 @@ function useLiveReviews(
           stopped = true
           return
         }
-        const byChange: Record<string, ReviewLiveEntry[]> = {}
+        // A prototype-less record keeps a valid change name such as
+        // "constructor" from colliding with Object.prototype.
+        const byChange: Record<string, ReviewLiveEntry[]> = Object.create(null)
         for (const entry of entries) {
           const current = byChange[entry.change]
           if (current === undefined) byChange[entry.change] = [entry]
           else current.push(entry)
         }
         setLive(byChange)
-        const next = Object.keys(byChange)
-        const done = settledChanges(previous, next)
-        previous = next
+        const done = settledReviews(previous, entries)
+        previous = entries
         if (done.length > 0) settled.current()
       } catch {
         // A failed read keeps the last state; the next tick retries.
@@ -907,12 +908,14 @@ export function RootBody(props: RootBodyProps): ReactNode {
   const capabilities = useRead<CapabilitySummary[]>(() => requestCapabilities(sessionId))
   // The live reviews ride a separate route so the CLI-backed list is never
   // polled; a settled verdict triggers one debounced list re-read below. The
-  // engine's `review` field on any active row proves the workflows plugin is
-  // present; a host without it has no live route to poll.
+  // host's `reviewAvailable` flag enables the poll independently of the static
+  // summaries (a failed summary still leaves the live route usable); an older
+  // host is recognized by any active row carrying the review field.
   const settleReload = useLiveReload(() => changes.reload())
   const enginePresent =
     changes.state.phase === 'ready' &&
-    changes.state.value.changes.some((row) => row.archived !== true && row.review !== undefined)
+    (changes.state.value.reviewAvailable === true ||
+      changes.state.value.changes.some((row) => row.archived !== true && row.review !== undefined))
   const live = useLiveReviews(
     sessionId,
     segment === 'changes' && tab.visible && enginePresent,

@@ -147,6 +147,8 @@ export interface ChangeListResponse {
   readonly changes: readonly ChangeRow[]
   readonly archived: readonly ChangeRow[]
   readonly counts: WorkspaceCounts
+  /** The workflows engine is present; its live route may be polled. */
+  readonly reviewAvailable?: boolean
 }
 
 /** One delta spec body as the legacy change route returns it. */
@@ -470,16 +472,21 @@ export function relativeLabel(
 }
 
 /**
- * The changes whose live review disappeared between two polls; each one needs
- * one debounced change-list re-read because a verdict-only write changes no
- * watched artifact.
+ * Stable identity of one live review. A settle is per review, not per change:
+ * a spec review that finishes while a task review of the same change stays live
+ * still needs its own refresh.
  */
-export function settledChanges(
-  previous: readonly string[],
-  next: readonly string[],
-): readonly string[] {
-  const current = new Set(next)
-  return previous.filter((change) => !current.has(change))
+export function reviewIdentity(entry: ReviewLiveEntry): string {
+  return `${entry.change}\u0000${entry.definition}\u0000${entry.unit}`
+}
+
+/** The live reviews that disappeared between two polls; each needs one refresh. */
+export function settledReviews(
+  previous: readonly ReviewLiveEntry[],
+  next: readonly ReviewLiveEntry[],
+): readonly ReviewLiveEntry[] {
+  const current = new Set(next.map((entry) => reviewIdentity(entry)))
+  return previous.filter((entry) => !current.has(reviewIdentity(entry)))
 }
 
 /** Decode the engine's live-review body; anything malformed is not understood. */
@@ -997,7 +1004,12 @@ function decodeChangeList(body: Record<string, unknown>): ChangeListResponse | u
   if (changes === undefined) return undefined
   const archived = body.archived === undefined ? [] : decodeChangeRows(body.archived)
   if (archived === undefined) return undefined
-  return { changes, archived, counts: decodeCounts(body.counts, changes, archived) }
+  return {
+    changes,
+    archived,
+    counts: decodeCounts(body.counts, changes, archived),
+    ...(body.reviewAvailable === true ? { reviewAvailable: true } : {}),
+  }
 }
 
 function decodeRequirementScenario(value: unknown): RequirementScenario | undefined {

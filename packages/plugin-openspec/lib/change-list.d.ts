@@ -62,6 +62,8 @@ export interface WorkspaceChangeList {
     readonly changes: WorkspaceChange[];
     readonly archived: WorkspaceChange[];
     readonly counts: ChangeListCounts;
+    /** The workflows engine is present; its live route may be polled. */
+    readonly reviewAvailable?: boolean;
 }
 /** One row of the capability inventory. */
 export interface CapabilitySummary {

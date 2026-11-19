@@ -169,7 +169,7 @@ import {
   SPECS_ADDRESS,
   SPECS_PATH,
   segmentStorageKey,
-  settledChanges,
+  settledReviews,
   sortArchived,
   sortChanges,
   sortHistory,
@@ -3703,14 +3703,14 @@ describe('OpenSpec live observation', () => {
     }
   })
 
-  it('polls live reviews while visible and re-reads the list once when a review settles', async () => {
+  it('polls live reviews independently of summaries and refreshes per settled review', async () => {
     vi.useFakeTimers()
     try {
-      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
-        review: { spec: null, tasks: { checked: 1, passed: 0, missing: ['1'] } },
-      })
-      const liveEntry = {
-        session: 's1',
+      // The row carries no static review (a failed summary); the host's
+      // reviewAvailable flag keeps the live poll enabled.
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE)
+      const specLive = {
+        session: 's2',
         change: 'add-auth',
         definition: 'spec-review',
         unit: 'spec',
@@ -3718,14 +3718,37 @@ describe('OpenSpec live observation', () => {
         attempt: 1,
         since: '2026-11-19T10:00:00.000Z',
       }
-      let live: unknown[] = [liveEntry]
+      const tasksLive = {
+        session: 's1',
+        change: 'add-auth',
+        definition: 'task-review',
+        unit: 'tasks',
+        label: '1. Lane',
+        state: 'live',
+        attempt: 1,
+        since: '2026-11-19T10:01:00.000Z',
+      }
+      const constructorLive = {
+        session: 's1',
+        change: 'constructor',
+        definition: 'spec-review',
+        unit: 'spec',
+        state: 'live',
+        attempt: 1,
+        since: '2026-11-19T10:02:00.000Z',
+      }
+      let live: unknown[] = [specLive, tasksLive, constructorLive]
+      let verdict: unknown
       const fetchMock = vi.fn(async (url: string) =>
         String(url).includes('reviews/live')
           ? response({ live })
           : response({
-              changes: [activeRow],
+              changes: [
+                verdict === undefined ? activeRow : { ...activeRow, review: verdict as unknown },
+              ],
               archived: [],
               counts: { active: 1, archived: 0, capabilities: 0 },
+              reviewAvailable: true,
             }),
       )
       const listCalls = (): number =>
@@ -3744,19 +3767,123 @@ describe('OpenSpec live observation', () => {
         if (found === undefined) throw new Error('root view missing')
         return found
       }
-      expect(rootView().props.live).toEqual({ 'add-auth': [liveEntry] })
-      // The interval poll sees the settled state; the card line goes back to the
-      // static units and one debounced list re-read shows the new verdict.
-      live = []
+      // A cross-session review is visible to the idle panel, and a change named
+      // "constructor" does not collide with Object.prototype.
+      expect(rootView().props.live).toEqual({
+        'add-auth': [specLive, tasksLive],
+        constructor: [constructorLive],
+      })
+      // One review of the change settles while the other keeps running: the
+      // once debounced list re-read still happens.
+      const reviewVerdict = {
+        spec: {
+          verdict: 'PASS',
+          current: true,
+          at: '2026-11-19T10:05:00.000Z',
+          findings: 0,
+          reviewer: 'codex',
+        },
+        tasks: { checked: 2, passed: 1, missing: ['1.2'] },
+      }
+      live = [tasksLive, constructorLive]
+      verdict = reviewVerdict
       vi.advanceTimersByTime(4000)
       await settle()
       body.render()
-      expect(rootView().props.live).toEqual({})
+      expect(rootView().props.live).toEqual({
+        'add-auth': [tasksLive],
+        constructor: [constructorLive],
+      })
       expect(listCalls()).toBe(1)
       vi.advanceTimersByTime(300)
       await settle()
       body.render()
       expect(listCalls()).toBe(2)
+      // The re-read row carries the settled verdict for the card line.
+      const changes = rootView().props.changes as {
+        phase: string
+        value: { changes: Array<{ review?: unknown }> }
+      }
+      expect(changes.value.changes[0]?.review).toEqual(reviewVerdict)
+      // The last review settles: another debounced refresh.
+      live = []
+      vi.advanceTimersByTime(4000)
+      await settle()
+      body.render()
+      expect(rootView().props.live).toEqual({})
+      vi.advanceTimersByTime(300)
+      await settle()
+      body.render()
+      expect(listCalls()).toBe(3)
+      body.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops the live poll when its route is absent', async () => {
+    vi.useFakeTimers()
+    try {
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE)
+      const fetchMock = vi.fn(async (url: string) =>
+        String(url).includes('reviews/live')
+          ? response({ error: 'not found' }, false, 404)
+          : response({
+              changes: [activeRow],
+              archived: [],
+              counts: { active: 1, archived: 0, capabilities: 0 },
+              reviewAvailable: true,
+            }),
+      )
+      const liveCalls = (): number =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes('reviews/live')).length
+      vi.stubGlobal('fetch', fetchMock)
+      const body = mount(RootBody as never, rootBodyProps() as never)
+      body.render()
+      await settle()
+      body.render()
+      await settle()
+      body.render()
+      expect(liveCalls()).toBe(1)
+      vi.advanceTimersByTime(8000)
+      await settle()
+      expect(liveCalls()).toBe(1)
+      body.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not poll live reviews while the tab is hidden and starts on the visibility edge', async () => {
+    vi.useFakeTimers()
+    try {
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE)
+      const fetchMock = vi.fn(async (url: string) =>
+        String(url).includes('reviews/live')
+          ? response({ live: [] })
+          : response({
+              changes: [activeRow],
+              archived: [],
+              counts: { active: 1, archived: 0, capabilities: 0 },
+              reviewAvailable: true,
+            }),
+      )
+      const liveCalls = (): number =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes('reviews/live')).length
+      vi.stubGlobal('fetch', fetchMock)
+      const body = mount(
+        RootBody as never,
+        rootBodyProps({ tab: fakeTab(ROOT_ADDRESS, false).tab }) as never,
+      )
+      body.render()
+      await settle()
+      body.render()
+      await settle()
+      body.render()
+      expect(liveCalls()).toBe(0)
+      body.render(rootBodyProps() as never)
+      await settle()
+      expect(liveCalls()).toBe(1)
       body.destroy()
     } finally {
       vi.useRealTimers()
@@ -4797,10 +4924,28 @@ describe('OpenSpec review state', () => {
     expect(decodeLiveReviewEntries(undefined)).toBeUndefined()
   })
 
-  it('names the changes whose live review settled between two polls', () => {
-    expect(settledChanges(['a', 'b'], ['b'])).toEqual(['a'])
-    expect(settledChanges(['a'], ['a', 'c'])).toEqual([])
-    expect(settledChanges([], ['a'])).toEqual([])
-    expect(settledChanges(['a'], [])).toEqual(['a'])
+  it('names each disappeared live review even when its change keeps another one', () => {
+    const spec: ReviewLiveEntry = {
+      session: 's2',
+      change: 'add-auth',
+      definition: 'spec-review',
+      unit: 'spec',
+      state: 'live',
+      attempt: 1,
+      since: '2026-11-19T10:00:00.000Z',
+    }
+    const tasks: ReviewLiveEntry = {
+      session: 's1',
+      change: 'add-auth',
+      definition: 'task-review',
+      unit: 'tasks',
+      state: 'live',
+      attempt: 1,
+      since: '2026-11-19T10:01:00.000Z',
+    }
+    expect(settledReviews([spec, tasks], [tasks])).toEqual([spec])
+    expect(settledReviews([spec, tasks], [])).toEqual([spec, tasks])
+    expect(settledReviews([], [spec])).toEqual([])
+    expect(settledReviews([spec], [{ ...spec, attempt: 2 }])).toEqual([])
   })
 })

@@ -367,6 +367,8 @@ async function withReviewFacts(
   status: ReviewStatusService | undefined,
 ): Promise<WorkspaceChangeList> {
   if (status === undefined) return list
+  // The engine is present, so the live route is available even when the static
+  // summaries below fail; the panel must keep polling it either way.
   try {
     const summaries = await status.summaries(
       workspace,
@@ -374,12 +376,13 @@ async function withReviewFacts(
     )
     return {
       ...list,
+      reviewAvailable: true,
       changes: list.changes.map((row) =>
         summaries[row.name] === undefined ? row : { ...row, review: summaries[row.name] },
       ),
     }
   } catch {
-    return list
+    return { ...list, reviewAvailable: true }
   }
 }
 

@@ -262,15 +262,18 @@ function reviewStatusOf(ctx) {
 async function withReviewFacts(list, workspace, status) {
     if (status === undefined)
         return list;
+    // The engine is present, so the live route is available even when the static
+    // summaries below fail; the panel must keep polling it either way.
     try {
         const summaries = await status.summaries(workspace, list.changes.map((row) => row.name));
         return {
             ...list,
+            reviewAvailable: true,
             changes: list.changes.map((row) => summaries[row.name] === undefined ? row : { ...row, review: summaries[row.name] }),
         };
     }
     catch {
-        return list;
+        return { ...list, reviewAvailable: true };
     }
 }
 /** A bounded one-line reason, never the whole request body. */

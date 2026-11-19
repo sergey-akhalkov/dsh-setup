@@ -221,9 +221,12 @@ window.__ModuleLoader__.load({
       };
       return `${String(n)}${suffix[unit]} ago`;
     }
-    function settledChanges(previous, next) {
-      const current = new Set(next);
-      return previous.filter((change) => !current.has(change));
+    function reviewIdentity(entry) {
+      return `${entry.change}\0${entry.definition}\0${entry.unit}`;
+    }
+    function settledReviews(previous, next) {
+      const current = new Set(next.map((entry) => reviewIdentity(entry)));
+      return previous.filter((entry) => !current.has(reviewIdentity(entry)));
     }
     function decodeLiveReviewEntries(body) {
       if (!isRecord(body) || !Array.isArray(body.live)) return void 0;
@@ -560,7 +563,12 @@ window.__ModuleLoader__.load({
       if (changes === void 0) return void 0;
       const archived = body.archived === void 0 ? [] : decodeChangeRows(body.archived);
       if (archived === void 0) return void 0;
-      return { changes, archived, counts: decodeCounts(body.counts, changes, archived) };
+      return {
+        changes,
+        archived,
+        counts: decodeCounts(body.counts, changes, archived),
+        ...body.reviewAvailable === true ? { reviewAvailable: true } : {}
+      };
     }
     function decodeRequirementScenario(value) {
       if (!isRecord(value) || typeof value.name !== "string") return void 0;
@@ -1262,16 +1270,15 @@ window.__ModuleLoader__.load({
               stopped = true;
               return;
             }
-            const byChange = {};
+            const byChange = /* @__PURE__ */ Object.create(null);
             for (const entry of entries) {
               const current = byChange[entry.change];
               if (current === void 0) byChange[entry.change] = [entry];
               else current.push(entry);
             }
             setLive(byChange);
-            const next = Object.keys(byChange);
-            const done = settledChanges(previous, next);
-            previous = next;
+            const done = settledReviews(previous, entries);
+            previous = entries;
             if (done.length > 0) settled.current();
           } catch {
           } finally {
@@ -1322,7 +1329,7 @@ window.__ModuleLoader__.load({
       const changes = useRead(() => requestChangeList(sessionId));
       const capabilities = useRead(() => requestCapabilities(sessionId));
       const settleReload = useLiveReload(() => changes.reload());
-      const enginePresent = changes.state.phase === "ready" && changes.state.value.changes.some((row) => row.archived !== true && row.review !== void 0);
+      const enginePresent = changes.state.phase === "ready" && (changes.state.value.reviewAvailable === true || changes.state.value.changes.some((row) => row.archived !== true && row.review !== void 0));
       const live = useLiveReviews(
         sessionId,
         segment === "changes" && tab.visible && enginePresent,

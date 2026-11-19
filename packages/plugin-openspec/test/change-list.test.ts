@@ -905,9 +905,11 @@ describe('change list route', () => {
     const body = (await response.json()) as {
       changes: { name: string; review?: unknown }[]
       archived: { name: string; review?: unknown }[]
+      reviewAvailable?: boolean
     }
     expect(body.changes[0]?.review).toEqual(review)
     expect(body.archived[0]).not.toHaveProperty('review')
+    expect(body.reviewAvailable).toBe(true)
     expect(calls).toEqual([{ workspace: cwd, changes: ['add-auth'] }])
   })
 
@@ -924,8 +926,12 @@ describe('change list route', () => {
       listOutput(cwd, [{ name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' }]),
       specsOutput(cwd, []),
     )
-    const body = (await (await pending).json()) as { changes: { review?: unknown }[] }
+    const body = (await (await pending).json()) as {
+      changes: { review?: unknown }[]
+      reviewAvailable?: boolean
+    }
     expect(body.changes[0]).not.toHaveProperty('review')
+    expect(body).not.toHaveProperty('reviewAvailable')
   })
 
   it('keeps the list when the review summary fails', async () => {
@@ -947,9 +953,14 @@ describe('change list route', () => {
     )
     const response = await pending
     expect(response.status).toBe(200)
-    const body = (await response.json()) as { changes: { name: string; review?: unknown }[] }
+    const body = (await response.json()) as {
+      changes: { name: string; review?: unknown }[]
+      reviewAvailable?: boolean
+    }
     expect(body.changes.map((row) => row.name)).toEqual(['add-auth'])
     expect(body.changes[0]).not.toHaveProperty('review')
+    // The live route is still available even though the static summaries failed.
+    expect(body.reviewAvailable).toBe(true)
   })
 
   it('scopes each session to its own workspace', async () => {
