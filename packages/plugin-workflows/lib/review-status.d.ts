@@ -72,6 +72,12 @@ digestOf?: (workspace: string, change: string) => Promise<string | undefined>): 
 /** Per-change summaries; an unknown or unreadable row is omitted, never thrown. */
 export declare function summaries(workspace: string, changes: readonly string[]): Promise<Record<string, ChangeReviewSummary>>;
 /**
+ * The bounded label the live route may return. User text never carries a machine
+ * path off the host: the requesting workspace is the path the route knows, and a
+ * drive or UNC path is hidden wherever it appears.
+ */
+export declare function redactReviewLabel(text: string, workspace: string): string | undefined;
+/**
  * One entry per live or waiting review in the workspace. The #7 projection
  * decides the state and the host's admission set decides `starting`; an
  * orphaned run with no executor is never reported.

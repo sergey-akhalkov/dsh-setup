@@ -5,6 +5,7 @@ import { currentSpecDigest, readWorkspaceFile } from './evidence.js';
 import { isInside } from './fs-change.js';
 import { checkedTaskLines, portableTaskReview, reviewerBinding, } from './parity.js';
 import { localRecordError } from './projection.js';
+import { taskOf } from './tasks.js';
 /** Most missing checked tasks one summary names; the card's tooltip stays bounded. */
 const MAX_MISSING = 20;
 /** Longest raw checked line a task summary repeats. */
@@ -142,13 +143,36 @@ function unitOf(step) {
         return 'tasks';
     return step.review?.phase === 'integration' ? 'integration' : 'spec';
 }
-/** The bounded section title a task unit carries, when the run records one. */
-function labelOf(context) {
-    const title = context.sectionTitle;
-    if (typeof title !== 'string')
-        return undefined;
-    const bounded = title.trim().slice(0, MAX_LABEL);
+/**
+ * The bounded label the live route may return. User text never carries a machine
+ * path off the host: the requesting workspace is the path the route knows, and a
+ * drive or UNC path is hidden wherever it appears.
+ */
+export function redactReviewLabel(text, workspace) {
+    const root = workspace.replaceAll('\\', '/').replace(/\/+$/u, '');
+    let safe = workspace === '' ? text : text.replaceAll(workspace, '[path]');
+    if (root.length > 1)
+        safe = safe.replaceAll(root, '[path]');
+    safe = safe
+        .replace(/\b[A-Za-z]:[\\/][^\s"'<>|]*/gu, '[path]')
+        .replace(/\\\\[^\s"'<>|]+/gu, '[path]');
+    const bounded = safe.trim().slice(0, MAX_LABEL);
     return bounded === '' ? undefined : bounded;
+}
+/** The bounded unit label: a section title, or a task number and text for one task. */
+function labelOf(workspace, change, context) {
+    const title = context.sectionTitle;
+    if (typeof title === 'string' && title.trim() !== '')
+        return redactReviewLabel(title, workspace);
+    // An individual task run records only its id; resolve the task so the card
+    // can name it instead of showing a bare task unit.
+    const taskId = context.taskId;
+    if (typeof taskId !== 'string')
+        return undefined;
+    const task = taskOf(workspace, change, taskId);
+    return task === undefined
+        ? undefined
+        : redactReviewLabel(`${task.number} ${task.text}`, workspace);
 }
 /**
  * One entry per live or waiting review in the workspace. The #7 projection
@@ -170,7 +194,7 @@ export function live(workspace, source) {
         const stored = step === undefined ? undefined : run.steps.find((entry) => entry.id === step.id);
         if (step === undefined || stored === undefined)
             continue;
-        const label = labelOf(run.context);
+        const label = labelOf(workspace, change, run.context);
         const entry = {
             session: run.session,
             change,

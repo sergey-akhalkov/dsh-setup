@@ -390,7 +390,55 @@ describe('live reviews', () => {
     expect(entries[0]?.label?.startsWith('1. xxx')).toBe(true)
   })
 
+  it('names an individual task review and redacts workspace paths from labels', async () => {
+    const workspace = await tempWorkspace()
+    await writeTasks(workspace, '- [x] 1.1 First task\n- [x] 1.2 Second task\n')
+    // An individual task run records only its id; the projection resolves the
+    // number and text so the card can name the task.
+    const individual = reviewRun({
+      definition: 'task-review',
+      context: { taskId: taskId('Second task') },
+    })
+    const [taskEntry] = live(
+      workspace,
+      source([candidate(individual, { state: 'live', attempt: 1 })]),
+    )
+    expect(taskEntry?.label).toBe('1.2 Second task')
+
+    // A section heading can contain the absolute workspace path; the wire label
+    // must not carry it.
+    const pathTitle = `2. ${workspace} section`
+    const withPath = reviewRun({
+      definition: 'task-review',
+      context: { sectionTitle: pathTitle, section: '2', taskId: taskId('First task') },
+    })
+    const [sectionEntry] = live(
+      workspace,
+      source([candidate(withPath, { state: 'live', attempt: 1 })]),
+    )
+    expect(sectionEntry?.label).toContain('[path]')
+    expect(sectionEntry?.label).not.toContain(workspace)
+  })
+
   it('reports nothing when no run is pending', () => {
     expect(live('/workspace', source([]))).toEqual([])
+  })
+
+  it('names an individual task review and redacts a workspace path from a label', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, `openspec/changes/${CHANGE}/proposal.md`, '# Proposal\n')
+    await writeTasks(workspace, '- [x] 1.1 Only task\n')
+    const id = taskId('Only task')
+    const individual = reviewRun({ definition: 'task-review', context: { taskId: id } })
+    const named = live(workspace, source([candidate(individual, { state: 'live', attempt: 1 })]))
+    expect(named[0]?.label).toBe('1.1 Only task')
+    // A section title that embeds the workspace must not leak the path.
+    const leaky = reviewRun({
+      definition: 'task-review',
+      context: { sectionTitle: `1. ${workspace}/docs`, section: '1', taskId: id },
+    })
+    const redacted = live(workspace, source([candidate(leaky, { state: 'live', attempt: 1 })]))
+    expect(redacted[0]?.label).not.toContain(workspace)
+    expect(redacted[0]?.label).toContain('[path]')
   })
 })

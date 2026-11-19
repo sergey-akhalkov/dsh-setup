@@ -13,6 +13,7 @@ import {
 } from './parity.js'
 import { localRecordError } from './projection.js'
 import type { WorkflowRun } from './runs.js'
+import { taskOf } from './tasks.js'
 import type { ReviewLiveness } from './tools.js'
 
 /**
@@ -249,12 +250,38 @@ function unitOf(step: Step): ReviewLiveEntry['unit'] {
   return step.review?.phase === 'integration' ? 'integration' : 'spec'
 }
 
-/** The bounded section title a task unit carries, when the run records one. */
-function labelOf(context: Readonly<Record<string, unknown>>): string | undefined {
-  const title = context.sectionTitle
-  if (typeof title !== 'string') return undefined
-  const bounded = title.trim().slice(0, MAX_LABEL)
+/**
+ * The bounded label the live route may return. User text never carries a machine
+ * path off the host: the requesting workspace is the path the route knows, and a
+ * drive or UNC path is hidden wherever it appears.
+ */
+export function redactReviewLabel(text: string, workspace: string): string | undefined {
+  const root = workspace.replaceAll('\\', '/').replace(/\/+$/u, '')
+  let safe = workspace === '' ? text : text.replaceAll(workspace, '[path]')
+  if (root.length > 1) safe = safe.replaceAll(root, '[path]')
+  safe = safe
+    .replace(/\b[A-Za-z]:[\\/][^\s"'<>|]*/gu, '[path]')
+    .replace(/\\\\[^\s"'<>|]+/gu, '[path]')
+  const bounded = safe.trim().slice(0, MAX_LABEL)
   return bounded === '' ? undefined : bounded
+}
+
+/** The bounded unit label: a section title, or a task number and text for one task. */
+function labelOf(
+  workspace: string,
+  change: string,
+  context: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const title = context.sectionTitle
+  if (typeof title === 'string' && title.trim() !== '') return redactReviewLabel(title, workspace)
+  // An individual task run records only its id; resolve the task so the card
+  // can name it instead of showing a bare task unit.
+  const taskId = context.taskId
+  if (typeof taskId !== 'string') return undefined
+  const task = taskOf(workspace, change, taskId)
+  return task === undefined
+    ? undefined
+    : redactReviewLabel(`${task.number} ${task.text}`, workspace)
 }
 
 /**
@@ -274,7 +301,7 @@ export function live(workspace: string, source: ReviewLiveSource): ReviewLiveEnt
     const step = definition?.steps.find((entry) => entry.executor === 'review')
     const stored = step === undefined ? undefined : run.steps.find((entry) => entry.id === step.id)
     if (step === undefined || stored === undefined) continue
-    const label = labelOf(run.context)
+    const label = labelOf(workspace, change, run.context)
     const entry: ReviewLiveEntry = {
       session: run.session,
       change,
