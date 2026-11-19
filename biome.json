@@ -15,6 +15,7 @@
       "!openspec",
       "!.tmp",
       "!.dsh",
+      "!.vitest",
       "!.agents",
       "!.serena",
       "!coverage"

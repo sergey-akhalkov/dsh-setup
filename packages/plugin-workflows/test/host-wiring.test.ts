@@ -4815,6 +4815,92 @@ describe('startup recovery guard', () => {
     const reloaded = await runs.readAuthenticatedRun(workspace, 'run-live-x', auth)
     expect(reloaded?.status).toBe('running')
   })
+
+  it('reconciles a run whose verdict was published before the crash', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(change, 'design.md'), '# Design\n', 'utf8')
+    await writeFile(join(change, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const digest = (await currentSpecDigest(workspace, 'auth')) as string
+    // The run file was left running and its current PASS was already published:
+    // recovery must settle it from the record instead of interrupting it.
+    const run = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, run, auth)
+    const recordPath = join(
+      workspace,
+      '.dsh',
+      'workflows',
+      'records',
+      'spec-review',
+      'auth',
+      'spec.json',
+    )
+    await mkdir(dirname(recordPath), { recursive: true })
+    await writeFile(
+      recordPath,
+      `${JSON.stringify({
+        rule: 'spec-review',
+        change: 'auth',
+        phase: 'spec',
+        scope: 'whole',
+        verdict: 'PASS',
+        digest,
+        findings: [],
+        time: '2026-11-19T09:00:00.000Z',
+        target: { provider: 'codex-subagent' },
+      })}\n`,
+      'utf8',
+    )
+    const activations: string[] = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async () => {
+        activations.push('started')
+        return {
+          childId: 'child',
+          result: Promise.resolve({ output: [], stopReason: 'completed' }),
+          dispose: async () => {},
+        }
+      },
+    }
+    const host = fakeHost(workspace, { subagents: runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(workspace, run.id, auth))?.status === 'completed',
+      5_000,
+    )
+    const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    expect(settled?.steps.find((step) => step.id === 'review')?.state).toBe('done')
+    expect(settled?.steps.find((step) => step.id === 'review')?.evidence?.kind).toBe('record')
+    // Recovery synthesized nothing and started no reviewer.
+    expect(activations).toEqual([])
+  })
 })
 
 describe('recovery and resume ordering', () => {

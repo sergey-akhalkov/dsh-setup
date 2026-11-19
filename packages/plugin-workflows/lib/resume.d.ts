@@ -9,11 +9,21 @@ import { type WorkflowRun } from './runs.js';
 export declare const INTERRUPTED_REASON = "the host process ended while this run was unfinished";
 export interface RecoverResult {
     readonly recovered: readonly string[];
+    /** Runs settled from their authoritative record instead of interrupted. */
+    readonly reconciled: readonly string[];
     /** Runs that were unsigned or already terminal; left untouched. */
     readonly skipped: readonly string[];
 }
-/** Mark every authenticated running or blocked run as interrupted. */
-export declare function recoverRuns(workspace: string, auth: HostAuth, now?: number): Promise<RecoverResult>;
+/**
+ * The recovery read of one unfinished run: the run settled from its
+ * authoritative record, or undefined when it must be interrupted.
+ */
+export type RecoverReconcile = (run: WorkflowRun) => Promise<WorkflowRun | undefined>;
+/**
+ * Mark every authenticated running or blocked run as interrupted, unless a
+ * reconciliation proves its authoritative record already settled it.
+ */
+export declare function recoverRuns(workspace: string, auth: HostAuth, now?: number, reconcile?: RecoverReconcile): Promise<RecoverResult>;
 /** The first step still open or blocked; the step resume re-evaluates. */
 export declare function pendingStep(run: WorkflowRun): string | undefined;
 export interface ResumeResult {

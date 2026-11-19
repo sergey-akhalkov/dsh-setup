@@ -19,28 +19,48 @@ export const INTERRUPTED_REASON = 'the host process ended while this run was unf
 
 export interface RecoverResult {
   readonly recovered: readonly string[]
+  /** Runs settled from their authoritative record instead of interrupted. */
+  readonly reconciled: readonly string[]
   /** Runs that were unsigned or already terminal; left untouched. */
   readonly skipped: readonly string[]
 }
 
-/** Mark every authenticated running or blocked run as interrupted. */
+/**
+ * The recovery read of one unfinished run: the run settled from its
+ * authoritative record, or undefined when it must be interrupted.
+ */
+export type RecoverReconcile = (run: WorkflowRun) => Promise<WorkflowRun | undefined>
+
+/**
+ * Mark every authenticated running or blocked run as interrupted, unless a
+ * reconciliation proves its authoritative record already settled it.
+ */
 export async function recoverRuns(
   workspace: string,
   auth: HostAuth,
   now = Date.now(),
+  reconcile?: RecoverReconcile,
 ): Promise<RecoverResult> {
   const recovered: string[] = []
+  const reconciled: string[] = []
   const skipped: string[] = []
   for (const run of await listAuthenticatedRuns(workspace, auth)) {
     if (run.status !== 'running' && run.status !== 'blocked') {
       skipped.push(run.id)
       continue
     }
+    const settled =
+      reconcile === undefined ? undefined : await reconcile(run).catch(() => undefined)
+    if (settled !== undefined) {
+      await writeRun(workspace, settled, auth)
+      reconciled.push(run.id)
+      continue
+    }
     const interrupted = setRunStatus(run, 'interrupted', now, INTERRUPTED_REASON)
     await writeRun(workspace, interrupted, auth)
     recovered.push(run.id)
   }
-  return { recovered, skipped }
+  return { recovered, reconciled, skipped }
 }
 
 /** The first step still open or blocked; the step resume re-evaluates. */

@@ -1035,6 +1035,32 @@ export function apply(ctx, config = {}) {
         // obligation; an unknown scope keeps the workspace-scoped list.
         return session === undefined ? runs : runs.filter((run) => run.session === session);
     };
+    /**
+     * The recovery reconciliation: a review run whose pending step's authoritative
+     * record already verifies settles from that record instead of being
+     * interrupted. Only a current, evidence-verified record counts; no PASS is
+     * synthesized for a run with no record.
+     */
+    const reconcileRecoveredRun = async (workspace, run) => {
+        await loadDefinitions(workspace);
+        const definitions = definitionsByWorkspace.get(workspace) ?? [];
+        const definition = definitions.find((entry) => entry.id === run.definition.id);
+        const step = definition?.steps.find((entry) => entry.executor === 'review');
+        if (definition === undefined || step === undefined || step.evidence === undefined) {
+            return undefined;
+        }
+        const stored = run.steps.find((entry) => entry.id === step.id);
+        if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
+            return undefined;
+        }
+        const check = await verifyEvidence(step.evidence, { workspace, values: run.context });
+        if (!check.ok)
+            return undefined;
+        const at = journal.time();
+        const settled = settleStep(run, step.id, 'done', { at, evidence: check.evidence });
+        const pending = settled.steps.some((entry) => entry.state === 'open' || entry.state === 'blocked');
+        return setRunStatus(settled, pending ? 'running' : 'completed', at);
+    };
     /** Mark unfinished runs from a previous process interrupted, never completed. */
     const recoveries = new Map();
     /** One startup recovery per workspace; later agents must not re-interrupt live runs. */
@@ -1049,9 +1075,12 @@ export function apply(ctx, config = {}) {
                 const auth = await ensureAuth();
                 if (auth === undefined || pluginDisposed)
                     return;
-                const result = await recoverRuns(workspace, auth);
+                const result = await recoverRuns(workspace, auth, journal.time(), (run) => reconcileRecoveredRun(workspace, run));
                 if (result.recovered.length > 0) {
                     console.error(`workflows: ${String(result.recovered.length)} unfinished run(s) marked interrupted; resume or cancel them instead of auto-completing`);
+                }
+                if (result.reconciled.length > 0) {
+                    console.error(`workflows: ${String(result.reconciled.length)} run(s) reconciled from their authoritative review record`);
                 }
                 if (!pluginDisposed) {
                     // Retention runs at boot, before the next session adds history.

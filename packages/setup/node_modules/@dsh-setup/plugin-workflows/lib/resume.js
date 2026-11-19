@@ -6,20 +6,30 @@ import { listAuthenticatedRuns, readAuthenticatedRun, setRunStatus, settleStep, 
  * or recreates a change directory.
  */
 export const INTERRUPTED_REASON = 'the host process ended while this run was unfinished';
-/** Mark every authenticated running or blocked run as interrupted. */
-export async function recoverRuns(workspace, auth, now = Date.now()) {
+/**
+ * Mark every authenticated running or blocked run as interrupted, unless a
+ * reconciliation proves its authoritative record already settled it.
+ */
+export async function recoverRuns(workspace, auth, now = Date.now(), reconcile) {
     const recovered = [];
+    const reconciled = [];
     const skipped = [];
     for (const run of await listAuthenticatedRuns(workspace, auth)) {
         if (run.status !== 'running' && run.status !== 'blocked') {
             skipped.push(run.id);
             continue;
         }
+        const settled = reconcile === undefined ? undefined : await reconcile(run).catch(() => undefined);
+        if (settled !== undefined) {
+            await writeRun(workspace, settled, auth);
+            reconciled.push(run.id);
+            continue;
+        }
         const interrupted = setRunStatus(run, 'interrupted', now, INTERRUPTED_REASON);
         await writeRun(workspace, interrupted, auth);
         recovered.push(run.id);
     }
-    return { recovered, skipped };
+    return { recovered, reconciled, skipped };
 }
 /** The first step still open or blocked; the step resume re-evaluates. */
 export function pendingStep(run) {
