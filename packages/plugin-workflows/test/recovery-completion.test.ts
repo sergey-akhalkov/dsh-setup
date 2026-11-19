@@ -109,6 +109,7 @@ function fakeHost(
 ): {
   readonly ctx: Record<string, unknown>
   readonly agent: Record<string, unknown>
+  readonly emit: (name: string, payload: unknown) => Promise<void>
 } {
   const listeners = new Map<string, Listener[]>()
   const provided = new Map<string, unknown>(Object.entries(services))
@@ -163,7 +164,13 @@ function fakeHost(
       return () => {}
     },
   }
-  return { ctx, agent }
+  return {
+    ctx,
+    agent,
+    emit: async (name: string, payload: unknown): Promise<void> => {
+      for (const listener of listeners.get(name) ?? []) await listener(payload)
+    },
+  }
 }
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
@@ -317,5 +324,95 @@ describe('task review completion recovery', () => {
     const settled = await readAuthenticatedRun(workspace, run.id, auth)
     expect(settled?.status).toBe('completed')
     expect(settled?.steps.map((step) => step.state)).toEqual(['done', 'done'])
+  })
+
+  it('reclaims a recovered run when a later session supplies the missing approval', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    await mkdir(join(changeDir, 'specs', 'auth'), { recursive: true })
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(changeDir, 'design.md'), '# Design\n', 'utf8')
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Lane A task\n\n## 2. Surface\n\n- [x] 2.1 Lane B task\n',
+      'utf8',
+    )
+    await writeFile(join(changeDir, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+    const laneA = taskIdOf('Lane A task')
+    const laneB = taskIdOf('Lane B task')
+    const approval = (id: string, minute: string): string =>
+      `${JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: id,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: `2026-11-19T09:${minute}:00.000Z`,
+      })}\n`
+    // Only lane A's approval exists at the crash; lane B arrives later.
+    await writeFile(join(changeDir, 'reviews', `${laneA}.json`), approval(laneA, '01'), 'utf8')
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'recovery')
+    git('config', 'user.email', 'recovery@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: CRASHED_SESSION,
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: sectionRecordId('1'),
+        section: '1',
+        sectionTitle: '1. Engine',
+        taskIds: [laneA],
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await writeRun(workspace, run, auth)
+    const activations: string[] = []
+    const host = fakeHost(workspace, {
+      subagents: {
+        getProvider: () => ({ capabilities: { agentOptions: false } }),
+        startActivation: async () => {
+          activations.push('started')
+          throw new Error('reclaim must not start a reviewer')
+        },
+      },
+    })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    // The review step settles from lane A's approval; lane B's missing approval
+    // keeps the completion step open, so the recovered run is running.
+    await waitFor(async () => {
+      const current = await readAuthenticatedRun(workspace, run.id, auth)
+      return (
+        current?.status === 'running' &&
+        current.steps.find((step) => step.id === 'review')?.state === 'done'
+      )
+    })
+    await writeFile(join(changeDir, 'reviews', `${laneB}.json`), approval(laneB, '02'), 'utf8')
+    const closing = {
+      ...host.agent,
+      id: 'session-2',
+      session: { id: 'session-2', header: { origin: 'root' } },
+    }
+    await host.emit('agent/turn-stopping', { agent: closing, turn: 1 })
+    const settled = await readAuthenticatedRun(workspace, run.id, auth)
+    expect(settled?.status).toBe('completed')
+    expect(settled?.steps.map((step) => step.state)).toEqual(['done', 'done'])
+    expect(settled?.session).toBe(CRASHED_SESSION)
+    expect(activations).toEqual([])
   })
 })

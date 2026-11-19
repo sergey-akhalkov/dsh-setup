@@ -1500,6 +1500,52 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     )
     return setRunStatus(settled, pending ? 'running' : 'completed', journal.time())
   }
+  /**
+   * A recovered task review can owe its completion after startup: another lane's
+   * approval arrives later, and the close skips another session's runs. This
+   * reclaim re-verifies the pending steps on each close, session-independently
+   * and under the run's lock; it writes only a settlement, never a record.
+   */
+  const reclaimRecoveredRuns = async (
+    workspace: string,
+    session: string,
+    auth: HostAuth,
+    definitions: readonly Definition[],
+    runs: readonly WorkflowRun[],
+  ): Promise<Map<string, WorkflowRun>> => {
+    const settledById = new Map<string, WorkflowRun>()
+    const candidates = runs.filter((run) => {
+      if (run.session === session) return false
+      if (run.status !== 'running' && run.status !== 'blocked') return false
+      if (!run.steps.some((step) => step.state === 'open' || step.state === 'blocked')) return false
+      const definition = definitions.find((entry) => entry.id === run.definition.id)
+      if (definition === undefined || definition.settings.gate !== 'review') return false
+      if (reviewLive(run)) return false
+      if (disposalFenced.has(run.id) || endedRunIds.has(run.id)) return false
+      return !endedSessionIds.has(run.session)
+    })
+    for (const candidate of candidates) {
+      try {
+        await withRunLock(candidate.id, async () => {
+          const current = await readAuthenticatedRun(workspace, candidate.id, auth)
+          if (
+            current === undefined ||
+            (current.status !== 'running' && current.status !== 'blocked')
+          ) {
+            return
+          }
+          if (reviewLive(current)) return
+          const settled = await reconcileRecoveredRun(workspace, current)
+          if (settled === undefined) return
+          await writeCommit(workspace, settled, auth)
+          settledById.set(current.id, settled)
+        })
+      } catch {
+        // A reclaim failure never blocks the close; the next close retries it.
+      }
+    }
+    return settledById
+  }
   /** Mark unfinished runs from a previous process interrupted, never completed. */
   const recoveries = new Map<string, Promise<void>>()
   /** One startup recovery per workspace; later agents must not re-interrupt live runs. */
@@ -5089,6 +5135,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const runGenerationsAtRead = snapshot.generations
         const sessionGenerationAtRead = sessionGenerationAtEntry
         const sessionId = String(payload.agent.session.id)
+        // A recovered task review whose coverage became complete after startup
+        // still owes its completion; the close reclaims it across sessions.
+        const reclaimed = await reclaimRecoveredRuns(workspace, sessionId, auth, definitions, runs)
+        for (const [id, settled] of reclaimed) {
+          const index = runs.findIndex((entry) => entry.id === id)
+          if (index !== -1) runs.splice(index, 1, settled)
+        }
         // A later code write invalidates a completed verification for the same
         // turn; reopen the run so a fresh check is required before the close.
         const verifyWriteAt =
