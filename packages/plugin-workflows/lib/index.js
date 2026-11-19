@@ -30,6 +30,7 @@ import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
 import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, reviewUnitKey, sectionReviewDigest, settleDuplicateReviewAttempt, TASK_ID_PATTERN, } from './review.js';
+import { supersedeInterruptedReviews } from './review-restart.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, reviewInputTree, signatureHash, specInputs, } from './review-snapshot.js';
 import { live as reviewStatusLive, summaries as reviewStatusSummaries, } from './review-status.js';
@@ -2811,69 +2812,6 @@ export function apply(ctx, config = {}) {
             definitionsFor: () => definitions,
         });
     }
-    /** The bounded reason a fresh round records when it supersedes a restart. */
-    const RESTART_SUPERSEDE_REASON = 'superseded by a fresh review round after a host restart';
-    /**
-     * Settle the interrupted review runs a fresh round supersedes: the same change
-     * and an overlapping unit (intersecting task coverage for task scope, the same
-     * rule and phase for whole scope), in any session. Recovery already marked
-     * them interrupted; this write is the restart cleanup and never publishes a
-     * review record.
-     */
-    const supersedeInterruptedReviews = async (input) => {
-        const definitions = definitionsByWorkspace.get(input.workspace) ?? [];
-        const coveredOf = (run) => {
-            if (Array.isArray(run.context.taskIds)) {
-                return run.context.taskIds.filter((entry) => typeof entry === 'string');
-            }
-            return typeof run.context.taskId === 'string' ? [run.context.taskId] : [];
-        };
-        const candidates = (await listAuthenticatedRuns(input.workspace, input.auth)).filter((run) => {
-            if (run.id === input.freshRunId || run.status !== 'interrupted')
-                return false;
-            if (typeof run.context.name !== 'string' || run.context.name !== input.change)
-                return false;
-            const definition = definitions.find((entry) => entry.id === run.definition.id);
-            const step = definition?.steps.find((entry) => entry.executor === 'review');
-            // Only a standalone review workflow is superseded whole: a gated workflow
-            // that merely shares the review identity (the intake) keeps its run so it
-            // can resume and consume the shared record before its own steps complete.
-            if (definition === undefined || step === undefined || !isReviewDefinition(definition)) {
-                return false;
-            }
-            const stored = run.steps.find((entry) => entry.id === step.id);
-            if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
-                return false;
-            }
-            if ((step.review?.scope ?? 'whole') !== input.scope)
-                return false;
-            if (input.scope === 'whole') {
-                return (reviewIdentityOf(definition, step) === input.rule &&
-                    reviewPhase('whole', step.review?.phase) === input.phase);
-            }
-            return coveredOf(run).some((id) => input.taskIds.includes(id));
-        });
-        for (const candidate of candidates) {
-            const at = journal.time();
-            // Revalidate inside the lock: a resume can commit between the candidate
-            // read and this write, and a run that moved on must never be cancelled
-            // from the stale snapshot.
-            await withRunLock(candidate.id, async () => {
-                const current = await readAuthenticatedRun(input.workspace, candidate.id, input.auth);
-                if (current === undefined || current.status !== 'interrupted')
-                    return;
-                const definition = definitions.find((entry) => entry.id === current.definition.id);
-                const step = definition?.steps.find((entry) => entry.executor === 'review');
-                if (definition === undefined || step === undefined || !isReviewDefinition(definition))
-                    return;
-                const stored = current.steps.find((entry) => entry.id === step.id);
-                if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked'))
-                    return;
-                const settled = setRunStatus(settleStep(current, step.id, 'cancelled', { at, reason: RESTART_SUPERSEDE_REASON }), 'cancelled', at, RESTART_SUPERSEDE_REASON);
-                await writeCommit(input.workspace, settled, input.auth);
-            }).catch(() => undefined);
-        }
-    };
     const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration, capturedSessionGeneration, stop) => {
         // A user stop wins over this advance: an abort that lands during any await
         // below keeps the run as it is and dispatches/persists nothing.
@@ -3150,8 +3088,13 @@ export function apply(ctx, config = {}) {
                     // This fresh round supersedes any interrupted predecessor of its unit:
                     // recovery marked those interrupted, and this close is their cleanup.
                     await supersedeInterruptedReviews({
-                        workspace,
-                        auth,
+                        definitions: definitionsByWorkspace.get(workspace) ?? [],
+                        listRuns: () => listAuthenticatedRuns(workspace, auth),
+                        readRun: (runId) => readAuthenticatedRun(workspace, runId, auth),
+                        withRunLock: (runId, action) => withRunLock(runId, action),
+                        writeRun: (run) => writeCommit(workspace, run, auth),
+                        now: () => journal.time(),
+                    }, {
                         change,
                         scope: spec.scope,
                         phase: reviewPhase(spec.scope, spec.phase),

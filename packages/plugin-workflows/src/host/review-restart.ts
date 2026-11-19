@@ -1,0 +1,103 @@
+import type { Definition, Step } from './definitions.js'
+import { reviewIdentityOf } from './definitions.js'
+import { reviewPhase } from './review.js'
+import { setRunStatus, settleStep, type WorkflowRun } from './runs.js'
+
+/**
+ * The restart cleanup: a fresh review round supersedes the interrupted runs of
+ * its own unit. Recovery already marked them interrupted; this write settles
+ * them cancelled with a bounded reason and publishes no review record. The
+ * module takes its store and lock through deps so the capture-then-lock ordering
+ * is testable without the host.
+ */
+
+/** The bounded reason a fresh round records when it supersedes a restart. */
+export const RESTART_SUPERSEDE_REASON = 'superseded by a fresh review round after a host restart'
+
+/** A workflow whose only purpose is a review gate; a gated flow is preserved. */
+function isReviewDefinition(definition: Definition): boolean {
+  return definition.settings.gate === 'review'
+}
+
+function reviewStepOf(definition: Definition): Step | undefined {
+  return definition.steps.find((step) => step.executor === 'review')
+}
+
+export interface RestartSupersedeDeps {
+  readonly definitions: readonly Definition[]
+  readonly listRuns: () => Promise<readonly WorkflowRun[]>
+  readonly readRun: (runId: string) => Promise<WorkflowRun | undefined>
+  readonly withRunLock: <T>(runId: string, action: () => Promise<T>) => Promise<T>
+  readonly writeRun: (run: WorkflowRun) => Promise<void>
+  readonly now: () => number
+}
+
+export interface RestartSupersedeInput {
+  readonly change: string
+  readonly scope: 'whole' | 'task'
+  readonly phase: string
+  readonly rule: string
+  readonly taskIds: readonly string[]
+  readonly freshRunId: string
+}
+
+export async function supersedeInterruptedReviews(
+  deps: RestartSupersedeDeps,
+  input: RestartSupersedeInput,
+): Promise<void> {
+  const coveredOf = (run: WorkflowRun): string[] => {
+    if (Array.isArray(run.context.taskIds)) {
+      return run.context.taskIds.filter((entry): entry is string => typeof entry === 'string')
+    }
+    return typeof run.context.taskId === 'string' ? [run.context.taskId] : []
+  }
+  const candidates = (await deps.listRuns()).filter((run) => {
+    if (run.id === input.freshRunId || run.status !== 'interrupted') return false
+    if (typeof run.context.name !== 'string' || run.context.name !== input.change) return false
+    const definition = deps.definitions.find((entry) => entry.id === run.definition.id)
+    const step = definition === undefined ? undefined : reviewStepOf(definition)
+    // Only a standalone review workflow is superseded whole: a gated workflow
+    // that merely shares the review identity (the intake) keeps its run so it
+    // can resume and consume the shared record before its own steps complete.
+    if (definition === undefined || step === undefined || !isReviewDefinition(definition)) {
+      return false
+    }
+    const stored = run.steps.find((entry) => entry.id === step.id)
+    if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
+      return false
+    }
+    if ((step.review?.scope ?? 'whole') !== input.scope) return false
+    if (input.scope === 'whole') {
+      return (
+        reviewIdentityOf(definition, step) === input.rule &&
+        reviewPhase('whole', step.review?.phase) === input.phase
+      )
+    }
+    return coveredOf(run).some((id) => input.taskIds.includes(id))
+  })
+  for (const candidate of candidates) {
+    const at = deps.now()
+    // Revalidate inside the lock: a resume can commit between the candidate
+    // read and this write, and a run that moved on must never be cancelled
+    // from the stale snapshot.
+    await deps
+      .withRunLock(candidate.id, async () => {
+        const current = await deps.readRun(candidate.id)
+        if (current === undefined || current.status !== 'interrupted') return
+        const definition = deps.definitions.find((entry) => entry.id === current.definition.id)
+        const step = definition === undefined ? undefined : reviewStepOf(definition)
+        if (definition === undefined || step === undefined || !isReviewDefinition(definition))
+          return
+        const stored = current.steps.find((entry) => entry.id === step.id)
+        if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) return
+        const settled = setRunStatus(
+          settleStep(current, step.id, 'cancelled', { at, reason: RESTART_SUPERSEDE_REASON }),
+          'cancelled',
+          at,
+          RESTART_SUPERSEDE_REASON,
+        )
+        await deps.writeRun(settled)
+      })
+      .catch(() => undefined)
+  }
+}

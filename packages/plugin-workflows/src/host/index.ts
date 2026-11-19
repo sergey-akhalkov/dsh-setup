@@ -131,6 +131,7 @@ import {
   settleDuplicateReviewAttempt,
   TASK_ID_PATTERN,
 } from './review.js'
+import { supersedeInterruptedReviews } from './review-restart.js'
 import { type ReviewReprepareOutcome, ReviewScheduler } from './review-scheduler.js'
 import {
   changedInputPaths,
@@ -3414,80 +3415,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       definitionsFor: () => definitions,
     })
   }
-  /** The bounded reason a fresh round records when it supersedes a restart. */
-  const RESTART_SUPERSEDE_REASON = 'superseded by a fresh review round after a host restart'
-  /**
-   * Settle the interrupted review runs a fresh round supersedes: the same change
-   * and an overlapping unit (intersecting task coverage for task scope, the same
-   * rule and phase for whole scope), in any session. Recovery already marked
-   * them interrupted; this write is the restart cleanup and never publishes a
-   * review record.
-   */
-  const supersedeInterruptedReviews = async (input: {
-    readonly workspace: string
-    readonly auth: HostAuth
-    readonly change: string
-    readonly scope: 'whole' | 'task'
-    readonly phase: string
-    readonly rule: string
-    readonly taskIds: readonly string[]
-    readonly freshRunId: string
-  }): Promise<void> => {
-    const definitions = definitionsByWorkspace.get(input.workspace) ?? []
-    const coveredOf = (run: WorkflowRun): string[] => {
-      if (Array.isArray(run.context.taskIds)) {
-        return run.context.taskIds.filter((entry): entry is string => typeof entry === 'string')
-      }
-      return typeof run.context.taskId === 'string' ? [run.context.taskId] : []
-    }
-    const candidates = (await listAuthenticatedRuns(input.workspace, input.auth)).filter((run) => {
-      if (run.id === input.freshRunId || run.status !== 'interrupted') return false
-      if (typeof run.context.name !== 'string' || run.context.name !== input.change) return false
-      const definition = definitions.find((entry) => entry.id === run.definition.id)
-      const step = definition?.steps.find((entry) => entry.executor === 'review')
-      // Only a standalone review workflow is superseded whole: a gated workflow
-      // that merely shares the review identity (the intake) keeps its run so it
-      // can resume and consume the shared record before its own steps complete.
-      if (definition === undefined || step === undefined || !isReviewDefinition(definition)) {
-        return false
-      }
-      const stored = run.steps.find((entry) => entry.id === step.id)
-      if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
-        return false
-      }
-      if ((step.review?.scope ?? 'whole') !== input.scope) return false
-      if (input.scope === 'whole') {
-        return (
-          reviewIdentityOf(definition, step) === input.rule &&
-          reviewPhase('whole', step.review?.phase) === input.phase
-        )
-      }
-      return coveredOf(run).some((id) => input.taskIds.includes(id))
-    })
-    for (const candidate of candidates) {
-      const at = journal.time()
-      // Revalidate inside the lock: a resume can commit between the candidate
-      // read and this write, and a run that moved on must never be cancelled
-      // from the stale snapshot.
-      await withRunLock(candidate.id, async () => {
-        const current = await readAuthenticatedRun(input.workspace, candidate.id, input.auth)
-        if (current === undefined || current.status !== 'interrupted') return
-        const definition = definitions.find((entry) => entry.id === current.definition.id)
-        const step = definition?.steps.find((entry) => entry.executor === 'review')
-        if (definition === undefined || step === undefined || !isReviewDefinition(definition))
-          return
-        const stored = current.steps.find((entry) => entry.id === step.id)
-        if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) return
-        const settled = setRunStatus(
-          settleStep(current, step.id, 'cancelled', { at, reason: RESTART_SUPERSEDE_REASON }),
-          'cancelled',
-          at,
-          RESTART_SUPERSEDE_REASON,
-        )
-        await writeCommit(input.workspace, settled, input.auth)
-      }).catch(() => undefined)
-    }
-  }
   const advanceRun = async (
     workspace: string,
     run: WorkflowRun,
@@ -3792,16 +3719,24 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           if (covering !== undefined && covering.id !== reviewRun.id) return undefined
           // This fresh round supersedes any interrupted predecessor of its unit:
           // recovery marked those interrupted, and this close is their cleanup.
-          await supersedeInterruptedReviews({
-            workspace,
-            auth,
-            change,
-            scope: spec.scope,
-            phase: reviewPhase(spec.scope, spec.phase),
-            rule: reviewRule,
-            taskIds: coveredIds,
-            freshRunId: reviewRun.id,
-          })
+          await supersedeInterruptedReviews(
+            {
+              definitions: definitionsByWorkspace.get(workspace) ?? [],
+              listRuns: () => listAuthenticatedRuns(workspace, auth),
+              readRun: (runId) => readAuthenticatedRun(workspace, runId, auth),
+              withRunLock: (runId, action) => withRunLock(runId, action),
+              writeRun: (run) => writeCommit(workspace, run, auth),
+              now: () => journal.time(),
+            },
+            {
+              change,
+              scope: spec.scope,
+              phase: reviewPhase(spec.scope, spec.phase),
+              rule: reviewRule,
+              taskIds: coveredIds,
+              freshRunId: reviewRun.id,
+            },
+          )
         }
         // Reserve the unit before preparing it: the scheduler's live-unit check
         // cannot cover the interval until admission, and two concurrent starts
