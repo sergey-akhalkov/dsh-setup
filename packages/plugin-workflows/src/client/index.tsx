@@ -6,6 +6,7 @@ import {
   designTabKey,
 } from './design-page.tsx'
 import { EN } from './panel.tsx'
+import { SidebarReviewMark } from './review-mark.tsx'
 import { WorkflowsView } from './view.tsx'
 
 /**
@@ -103,6 +104,23 @@ export function apply(ctx: ClientContext): void {
               t={t}
               {...(props.sessionId === undefined ? {} : { sessionId: props.sessionId })}
             />
+          ),
+        ),
+      ),
+    )
+    // The session row's leading seat shows a review ring while this session owns
+    // a live or waiting review; the seat renders only on an idle row.
+    ctx.effect(() =>
+      slots.inject('sidebar.session.row.leading', () =>
+        slots.register(
+          {
+            name: 'sidebar.session.row.leading',
+            id: 'dsh-setup-workflows-review',
+            order: 40,
+            locale: NS,
+          },
+          (props: { readonly sessionId?: string }) => (
+            <SidebarReviewMark sessionId={props.sessionId} t={t} />
           ),
         ),
       ),

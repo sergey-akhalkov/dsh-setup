@@ -469,19 +469,24 @@ describe('Workflows Client half', () => {
     expect(module.inject).toEqual(['slots', 'locale', 'resources'])
     expect(locales[0]?.namespace).toBe('dsh-setup-workflows')
     expect(locales[0]?.dictionary['view.label']).toBe('Workflows')
-    expect(registrations).toHaveLength(1)
-    const options = registrations[0]?.options ?? {}
+    expect(registrations).toHaveLength(2)
+    const conversation = registrations.find((entry) => entry.options.name === 'conversation.view')
+    const options = conversation?.options ?? {}
     expect(options.name).toBe('conversation.view')
     expect(options.id).toBe('workflows')
     expect(options.order).toBe(30)
     expect((options.label as () => string)()).toBe('view.label')
-    const registered = registrations[0]?.component as (props: Record<string, unknown>) => Element
+    const registered = conversation?.component as (props: Record<string, unknown>) => Element
     expect(typeof registered).toBe('function')
     const tree = registered({ sessionId: 'session-42' })
     expect(typeof tree.type).toBe('function')
     expect((tree.type as { name?: string }).name).toBe('WorkflowsView')
     expect(tree.props.sessionId).toBe('session-42')
     expect((tree.props.t as (key: string) => string)('view.label')).toBe('view.label')
+    // The session row's leading seat carries the live-review mark.
+    const mark = registrations.find((entry) => entry.options.name === 'sidebar.session.row.leading')
+    expect(mark?.options.id).toBe('dsh-setup-workflows-review')
+    expect(typeof mark?.component).toBe('function')
     expect(module.ENTRY_LIMITATION).toContain('tab is the entry')
   })
 

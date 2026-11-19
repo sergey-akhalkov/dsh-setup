@@ -3,10 +3,10 @@ import {
   createLiveReviewStore,
   decodeLiveReviews,
   LIVE_REVIEWS_PATH,
+  type LiveReviewEntry,
   liveReviewsUrl,
   liveSessions,
   MAX_LIVE_SESSIONS,
-  type LiveReviewEntry,
 } from '../src/client/review-store.ts'
 
 /**
@@ -68,7 +68,10 @@ describe('live review wire', () => {
         entry('', {}),
       ],
     })
-    expect(decoded).toEqual([entry('session-a'), entry('session-a', { label: undefined, state: 'waiting' })])
+    expect(decoded).toEqual([
+      entry('session-a'),
+      entry('session-a', { label: undefined, state: 'waiting' }),
+    ])
     expect(decodeLiveReviews({ live: 'nope' })).toEqual([])
     expect(decodeLiveReviews(undefined)).toEqual([])
   })
@@ -135,6 +138,41 @@ describe('live review store', () => {
     store.dispose()
     await manual.tick()
     expect(seen).toHaveLength(2)
+  })
+
+  it('serializes reads so a superseded response cannot restore a settled state', async () => {
+    const manual = clock()
+    let resolveFirst: ((value: unknown) => void) | undefined
+    let calls = 0
+    const store = createLiveReviewStore({
+      fetch: () => {
+        calls += 1
+        if (calls === 1) {
+          return new Promise<unknown>((resolve) => {
+            resolveFirst = resolve
+          })
+        }
+        return Promise.resolve({ live: [] })
+      },
+      setTimer: manual.setTimer,
+      clearTimer: manual.clearTimer,
+    })
+    const seen: LiveReviewEntry[][] = []
+    store.subscribe('session-a', (entries) => seen.push([...entries]))
+    await flush()
+    expect(calls).toBe(1)
+    // The interval fires while the first read is in flight: no second request
+    // starts, so an older response can never overwrite a newer one.
+    await manual.tick()
+    await manual.tick()
+    expect(calls).toBe(1)
+    resolveFirst?.({ live: [entry('session-a')] })
+    await flush()
+    expect(seen.at(-1)?.map((value) => value.state)).toEqual(['live'])
+    // The next read carries the settled state and stays.
+    await manual.tick()
+    expect(seen.at(-1)).toEqual([])
+    store.dispose()
   })
 
   it('pauses while hidden and reads once on the visibility edge', async () => {

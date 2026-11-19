@@ -259,6 +259,11 @@ export const EN: Record<string, string> = {
     '.dsh/workflows/receipts/{change}.json and openspec/changes/{change}/reviews/{taskId}.json',
   'gates.archive.steer':
     'openspec archive <change> is refused with the missing evidence; the refusal names the intake, review, or task to finish.',
+  'mark.live': 'Review running',
+  'mark.waiting': 'Waiting for review',
+  'mark.running': 'running',
+  'mark.attempt': 'attempt',
+  'mark.waitingTooltip': 'Waiting for the live review run',
 }
 
 /** The English fallback for a surface rendered without the locale service. */
