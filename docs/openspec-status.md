@@ -163,6 +163,17 @@ request, the `work_checkpoint` tool with its atomic local record, the close gate
 goal-as-work-unit and checkpoint clauses in the always-on contract within the 1500 estimated-token
 budget, and the `work_checkpoint` observability attribution (19 tasks, 18/19 portable approvals).
 
+The change archived on 2026-11-19 is `fix-review-run-liveness`, which made review liveness the
+executor's state: a review run is live only while the scheduler holds its attempt or the advance is
+admitting it, a run whose executor returned early is a waiter that stays open and is re-advanced at
+its session's next close, a duplicate admission settles `cancelled` naming the covering run, a start
+covers only a live run, `status` names `live`/`waiting on <runId>`/`orphaned`, and restart recovery
+reconciles a published verdict from its authoritative record (the portable approval stands in when the
+local record was interrupted), supersedes interrupted predecessors, and reclaims a completion whose
+approvals arrive after startup (16/16 portable approvals; the whole-worktree and whole-spec reviews
+passed). The `workflows` main spec carries the three added requirements and the updated restart and
+model-interface requirements.
+
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
@@ -227,6 +238,7 @@ was written (2026-11-10). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-10-retire-legacy-gates`                         | 17/21          |
 | `2026-11-13-simplify-codex-subagent`                     | 13/13          |
 | `2026-11-13-widen-answer-page-policy`                    | 8/8            |
+| `2026-11-19-fix-review-run-liveness`                     | 16/16          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
