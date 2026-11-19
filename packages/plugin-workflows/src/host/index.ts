@@ -1516,7 +1516,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const settledById = new Map<string, WorkflowRun>()
     const candidates = runs.filter((run) => {
       if (run.session === session) return false
-      if (run.status !== 'running' && run.status !== 'blocked') return false
+      // An interrupted run still owes its completion when the crash left the
+      // review settled and only the completion step pending.
+      if (run.status !== 'running' && run.status !== 'blocked' && run.status !== 'interrupted') {
+        return false
+      }
       if (!run.steps.some((step) => step.state === 'open' || step.state === 'blocked')) return false
       const definition = definitions.find((entry) => entry.id === run.definition.id)
       if (definition === undefined || definition.settings.gate !== 'review') return false
@@ -1530,7 +1534,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const current = await readAuthenticatedRun(workspace, candidate.id, auth)
           if (
             current === undefined ||
-            (current.status !== 'running' && current.status !== 'blocked')
+            (current.status !== 'running' &&
+              current.status !== 'blocked' &&
+              current.status !== 'interrupted')
           ) {
             return
           }
