@@ -33,9 +33,9 @@ tasks first if #7 is not applied yet.
 
 ### Integration
 
-- [ ] 1.13 Rebuild the packages and the vendored setup copy (`pnpm build`, `pnpm gen`) and commit the generated files; verify `pnpm gen:check` and `pnpm build && git diff --exit-code` are clean.
-- [ ] 1.14 Run `pnpm check` (typecheck, lint, build, test) and `pnpm validate:repo`; verify both exit 0.
-- [ ] 1.15 Run `openspec validate show-review-status --strict`; verify exit 0 with the ADDED and MODIFIED requirements accepted.
+- [x] 1.13 Rebuild the packages and the vendored setup copy (`pnpm build`, `pnpm gen`) and commit the generated files; verify `pnpm gen:check` and `pnpm build && git diff --exit-code` are clean.
+- [x] 1.14 Run `pnpm check` (typecheck, lint, build, test) and `pnpm validate:repo`; verify both exit 0.
+- [x] 1.15 Run `openspec validate show-review-status --strict`; verify exit 0 with the ADDED and MODIFIED requirements accepted.
 - [ ] 1.16 Run the acceptance in a throwaway `DSH_HOME` with the Nuphus browser: a live review shows the session-row indicator and the card line, an idle panel session sees a review owned by another session, and a settled verdict replaces both without a manual refresh; never run it against the live desktop profile.
 
 ## Workflow follow-up
