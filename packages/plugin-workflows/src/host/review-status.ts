@@ -1,6 +1,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
+import type { Definition, Step } from './definitions.js'
 import { currentSpecDigest, readWorkspaceFile } from './evidence.js'
 import { isInside } from './fs-change.js'
 import {
@@ -11,12 +12,16 @@ import {
   type TaskLine,
 } from './parity.js'
 import { localRecordError } from './projection.js'
+import type { WorkflowRun } from './runs.js'
+import type { ReviewLiveness } from './tools.js'
 
 /**
- * The static review read model the change card renders: the local whole-spec
- * verdict at its digest, and the portable task-review coverage the archive gate
- * counts. One definition of "reviewed" — the gate's — so the card can never
- * disagree with an archive decision. Nothing here reads the review executor.
+ * The review read model the change card and the session rows render: the static
+ * whole-spec verdict at its digest with the portable task-review coverage the
+ * archive gate counts, and the live projection of the reviews the scheduler is
+ * running. One definition of "reviewed" — the gate's — so the card can never
+ * disagree with an archive decision; liveness stays the executor's #7 rule and
+ * is never re-derived here.
  */
 
 export interface ChangeReviewSummary {
@@ -42,12 +47,45 @@ export interface ChangeReviewSummary {
   } | null
 }
 
+/** One live or waiting review the card and the session rows render. */
+export interface ReviewLiveEntry {
+  readonly session: string
+  readonly change: string
+  readonly definition: string
+  /** `spec` for a whole spec phase, `tasks` for task scope, `integration` for integration. */
+  readonly unit: 'spec' | 'tasks' | 'integration'
+  /** Bounded unit detail: a section title, a task number, or a phase. */
+  readonly label?: string
+  readonly state: 'starting' | 'live' | 'waiting'
+  readonly attempt: number
+  /** ISO timestamp of when the current attempt started (or began waiting). */
+  readonly since: string
+}
+
+/** One pending review the host's #7 liveness projection still reports. */
+export interface ReviewLiveCandidate {
+  readonly run: WorkflowRun
+  readonly liveness: ReviewLiveness
+  /** This advance's admission is in flight, before the scheduler holds it. */
+  readonly starting: boolean
+}
+
+/** The host-owned facts `live()` shapes; liveness itself is never re-derived here. */
+export interface ReviewLiveSource {
+  /** The pending review runs the host already tracks in memory. */
+  candidatesFor(workspace: string): readonly ReviewLiveCandidate[]
+  /** The installed definitions of one workspace, for the review step's scope. */
+  definitionsFor(workspace: string): readonly Definition[]
+}
+
 /** The host service a feature plugin reads as `workflowsReviewStatus`. */
 export interface WorkflowsReviewStatusService {
   summaries(
     workspace: string,
     changes: readonly string[],
   ): Promise<Record<string, ChangeReviewSummary>>
+  /** Live entries for one workspace; an orphaned run is not returned. */
+  live(workspace: string): Promise<ReviewLiveEntry[]>
 }
 
 /** Most missing checked tasks one summary names; the card's tooltip stays bounded. */
@@ -55,6 +93,9 @@ const MAX_MISSING = 20
 
 /** Longest raw checked line a task summary repeats. */
 const MAX_UNPARSED = 40
+
+/** Longest unit label kept; the card's one review line stays one line. */
+const MAX_LABEL = 80
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -200,4 +241,54 @@ export async function summaries(
     }
   }
   return result
+}
+
+/** The unit one review step produces; a custom whole-scope phase reads as spec. */
+function unitOf(step: Step): ReviewLiveEntry['unit'] {
+  if (step.review?.scope === 'task') return 'tasks'
+  return step.review?.phase === 'integration' ? 'integration' : 'spec'
+}
+
+/** The bounded section title a task unit carries, when the run records one. */
+function labelOf(context: Readonly<Record<string, unknown>>): string | undefined {
+  const title = context.sectionTitle
+  if (typeof title !== 'string') return undefined
+  const bounded = title.trim().slice(0, MAX_LABEL)
+  return bounded === '' ? undefined : bounded
+}
+
+/**
+ * One entry per live or waiting review in the workspace. The #7 projection
+ * decides the state and the host's admission set decides `starting`; an
+ * orphaned run with no executor is never reported.
+ */
+export function live(workspace: string, source: ReviewLiveSource): ReviewLiveEntry[] {
+  const definitions = source.definitionsFor(workspace)
+  const running: ReviewLiveEntry[] = []
+  const waiting: ReviewLiveEntry[] = []
+  for (const { run, liveness, starting } of source.candidatesFor(workspace)) {
+    if (liveness.state === 'orphaned') continue
+    const change = typeof run.context.name === 'string' ? run.context.name : ''
+    if (!CHANGE_NAME.test(change)) continue
+    const definition = definitions.find((entry) => entry.id === run.definition.id)
+    const step = definition?.steps.find((entry) => entry.executor === 'review')
+    const stored = step === undefined ? undefined : run.steps.find((entry) => entry.id === step.id)
+    if (step === undefined || stored === undefined) continue
+    const label = labelOf(run.context)
+    const entry: ReviewLiveEntry = {
+      session: run.session,
+      change,
+      definition: run.definition.id,
+      unit: unitOf(step),
+      ...(label === undefined ? {} : { label }),
+      state: starting ? 'starting' : liveness.state,
+      attempt: stored.attempts ?? liveness.attempt ?? 1,
+      since: new Date(stored.requestedAt ?? run.updatedAt).toISOString(),
+    }
+    // A unit can be both running and waited on; the first entry a client picks
+    // for that unit must be the running one, never its waiter.
+    if (liveness.state === 'waiting') waiting.push(entry)
+    else running.push(entry)
+  }
+  return [...running, ...waiting]
 }

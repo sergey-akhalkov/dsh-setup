@@ -8,6 +8,7 @@ import { type RunView, sessionRuns } from './projection.js'
 import type { WorkflowReceipt } from './receipts.js'
 import { redactPayload, redactValue } from './redact.js'
 import type { InstalledDefinition, InstalledTrigger } from './registry.js'
+import type { ReviewLiveEntry } from './review-status.js'
 import type { Trigger } from './triggers.js'
 
 /**
@@ -26,10 +27,13 @@ export const EVIDENCE_ROUTE = '/api/workflows/evidence'
 export const DEFINITIONS_ROUTE = '/api/workflows/definitions'
 export const TEMPLATES_ROUTE = '/api/workflows/templates'
 export const RECEIPTS_ROUTE = '/api/workflows/receipts'
+export const LIVE_REVIEWS_ROUTE = '/api/workflows/reviews/live'
 
 /** Default and maximum page sizes. */
 export const DEFAULT_LIMIT = 50
 export const MAX_LIMIT = 200
+/** Most session ids one live-reviews request may name. */
+export const MAX_LIVE_SESSIONS = 100
 /** Every method the carrier must dispatch so a non-GET reaches the 405 guard. */
 export const ROUTE_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
 
@@ -83,6 +87,8 @@ export interface WorkflowApiServices {
   >
   /** The authenticated receipts of one workspace. */
   readonly receiptsFor?: (workspace: string) => Promise<readonly WorkflowReceipt[]>
+  /** The live or waiting reviews of one workspace. */
+  readonly liveReviewsFor?: (workspace: string) => Promise<readonly ReviewLiveEntry[]>
 }
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
@@ -128,6 +134,17 @@ function resolveSession(services: WorkflowApiServices, request: Request): Resolv
     return { workspace: services.workingDirectory.get(agent.session), session }
   } catch {
     return { response: json(400, { error: 'the session workspace is unavailable' }) }
+  }
+}
+
+/** One session's workspace; an unknown or closed session resolves to undefined. */
+function liveWorkspaceOf(services: WorkflowApiServices, session: string): string | undefined {
+  const agent = services.agents.get(session)
+  if (agent === undefined) return undefined
+  try {
+    return services.workingDirectory.get(agent.session)
+  } catch {
+    return undefined
   }
 }
 
@@ -554,6 +571,51 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
         ...snapshot,
         ...(lastEventAt === undefined ? {} : { lastEventAt }),
       })
+    }),
+    route(LIVE_REVIEWS_ROUTE, async (request) => {
+      const url = new URL(request.url)
+      const singleRaw = url.searchParams.get('session')
+      const sessionsRaw = url.searchParams.get('sessions')
+      const single = singleRaw === null || singleRaw === '' ? undefined : singleRaw
+      const listed = [
+        ...new Set(
+          (sessionsRaw ?? '')
+            .split(',')
+            .map((id) => id.trim())
+            .filter((id) => id !== ''),
+        ),
+      ]
+      if (single === undefined && listed.length === 0) {
+        return json(400, { error: 'a session id is required' })
+      }
+      if (single !== undefined && listed.length > 0) {
+        return json(400, { error: 'send either session or sessions, not both' })
+      }
+      if (listed.length > MAX_LIVE_SESSIONS) {
+        return json(400, { error: 'at most 100 sessions' })
+      }
+      // Resolve every requested id to its workspace; an unknown or closed
+      // session is skipped, never an error.
+      const requested = single === undefined ? listed : [single]
+      const byWorkspace = new Map<string, Set<string>>()
+      for (const id of requested) {
+        const workspace = liveWorkspaceOf(services, id)
+        if (workspace === undefined) continue
+        const ids = byWorkspace.get(workspace) ?? new Set<string>()
+        ids.add(id)
+        byWorkspace.set(workspace, ids)
+      }
+      const live: ReviewLiveEntry[] = []
+      for (const [workspace, sessions] of byWorkspace) {
+        const entries = (await services.liveReviewsFor?.(workspace)) ?? []
+        for (const entry of entries) {
+          // The workspace form reports every review in the workspace; the list
+          // form stays session-attributed so a row never shows a foreign review.
+          if (single === undefined && !sessions.has(entry.session)) continue
+          live.push(entry)
+        }
+      }
+      return json(200, { live })
     }),
   ]
 }

@@ -9,6 +9,8 @@ import { localRecordError } from './projection.js';
 const MAX_MISSING = 20;
 /** Longest raw checked line a task summary repeats. */
 const MAX_UNPARSED = 40;
+/** Longest unit label kept; the card's one review line stays one line. */
+const MAX_LABEL = 80;
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -133,4 +135,58 @@ export async function summaries(workspace, changes) {
         }
     }
     return result;
+}
+/** The unit one review step produces; a custom whole-scope phase reads as spec. */
+function unitOf(step) {
+    if (step.review?.scope === 'task')
+        return 'tasks';
+    return step.review?.phase === 'integration' ? 'integration' : 'spec';
+}
+/** The bounded section title a task unit carries, when the run records one. */
+function labelOf(context) {
+    const title = context.sectionTitle;
+    if (typeof title !== 'string')
+        return undefined;
+    const bounded = title.trim().slice(0, MAX_LABEL);
+    return bounded === '' ? undefined : bounded;
+}
+/**
+ * One entry per live or waiting review in the workspace. The #7 projection
+ * decides the state and the host's admission set decides `starting`; an
+ * orphaned run with no executor is never reported.
+ */
+export function live(workspace, source) {
+    const definitions = source.definitionsFor(workspace);
+    const running = [];
+    const waiting = [];
+    for (const { run, liveness, starting } of source.candidatesFor(workspace)) {
+        if (liveness.state === 'orphaned')
+            continue;
+        const change = typeof run.context.name === 'string' ? run.context.name : '';
+        if (!CHANGE_NAME.test(change))
+            continue;
+        const definition = definitions.find((entry) => entry.id === run.definition.id);
+        const step = definition?.steps.find((entry) => entry.executor === 'review');
+        const stored = step === undefined ? undefined : run.steps.find((entry) => entry.id === step.id);
+        if (step === undefined || stored === undefined)
+            continue;
+        const label = labelOf(run.context);
+        const entry = {
+            session: run.session,
+            change,
+            definition: run.definition.id,
+            unit: unitOf(step),
+            ...(label === undefined ? {} : { label }),
+            state: starting ? 'starting' : liveness.state,
+            attempt: stored.attempts ?? liveness.attempt ?? 1,
+            since: new Date(stored.requestedAt ?? run.updatedAt).toISOString(),
+        };
+        // A unit can be both running and waited on; the first entry a client picks
+        // for that unit must be the running one, never its waiter.
+        if (liveness.state === 'waiting')
+            waiting.push(entry);
+        else
+            running.push(entry);
+    }
+    return [...running, ...waiting];
 }

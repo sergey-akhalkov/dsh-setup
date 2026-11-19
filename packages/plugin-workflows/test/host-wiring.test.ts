@@ -8244,6 +8244,117 @@ describe('restart supersede through the fresh round', () => {
       releases.shift()?.()
     }
   })
+
+  it('never cancels a predecessor claimed by a resume before the cleanup write', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    await writeFile(join(change, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+    await writeFile(
+      join(change, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Only task\n',
+      'utf8',
+    )
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'review')
+    git('config', 'user.email', 'review@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const releases: Array<() => void> = []
+    const runtime = {
+      getProvider: (provider: string) => (provider === 'codex-subagent' ? {} : undefined),
+      startActivation: async () => {
+        const pending = new Promise<void>((resolve) => {
+          releases.push(resolve)
+        })
+        return {
+          childId: `child-${String(releases.length)}`,
+          result: pending.then(() => ({
+            output: [{ type: 'text', text: '```json\n{"digest":"","verdict":"PASS"}\n```' }],
+            stopReason: 'completed',
+          })),
+          dispose: async () => {},
+        }
+      },
+    }
+    const host = fakeHost(workspace, { subagents: runtime })
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { sectionRecordId, taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const context = {
+      name: 'auth',
+      taskId: sectionRecordId('1'),
+      section: '1',
+      sectionTitle: '1. Engine',
+      taskIds: [taskIdOf('Only task')],
+    }
+    const predecessor = runs.setRunStatus(
+      runs.createRun({
+        definition: 'task-review',
+        trigger: 'turn.stopping',
+        session: 'session-2',
+        workspace,
+        context,
+        steps: ['review', 'complete-review'],
+        now: 1_000,
+      }),
+      'interrupted',
+      2_000,
+      'the Host restarted while this run was unfinished',
+    )
+    await runs.writeRun(workspace, predecessor, auth)
+    const fresh = runs.createRun({
+      definition: 'task-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context,
+      steps: ['review', 'complete-review'],
+      now: 3_000,
+    })
+    await runs.writeRun(workspace, fresh, auth)
+    // Pause the cleanup's in-lock re-read of the predecessor (the second read of
+    // its run file, after the candidate selection), claim the run as running,
+    // then release: the cleanup must re-read and skip it.
+    let releaseGate!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve
+    })
+    let markPaused!: () => void
+    const paused = new Promise<void>((resolve) => {
+      markPaused = resolve
+    })
+    let reads = 0
+    runStoreFaults.pauseNextRead = gate
+    runStoreFaults.onReadPaused = () => markPaused()
+    runStoreFaults.pauseReadFor = (path) => {
+      if (!path.includes(predecessor.id)) return false
+      reads += 1
+      return reads === 2
+    }
+    const closing = host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await Promise.race([
+      paused,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('the cleanup never re-read the predecessor')), 5_000)
+      }),
+    ])
+    await runs.writeRun(workspace, runs.setRunStatus(predecessor, 'running', 2_500), auth)
+    releaseGate()
+    await closing
+    const after = await runs.readAuthenticatedRun(workspace, predecessor.id, auth)
+    expect(after?.status).toBe('running')
+    releases.shift()?.()
+  })
 })
 
 describe('unapproved active definitions', () => {

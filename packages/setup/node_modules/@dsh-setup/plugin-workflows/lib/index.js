@@ -32,7 +32,7 @@ import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
 import { InputMutationError, provisionalReviewSteps, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, reviewUnitKey, sectionReviewDigest, settleDuplicateReviewAttempt, TASK_ID_PATTERN, } from './review.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, reviewInputTree, signatureHash, specInputs, } from './review-snapshot.js';
-import { summaries as reviewStatusSummaries, } from './review-status.js';
+import { live as reviewStatusLive, summaries as reviewStatusSummaries, } from './review-status.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, liveSlotCount, MAX_CONTEXT_BYTES, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, settleStep, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
@@ -666,11 +666,12 @@ export function apply(ctx, config = {}) {
     catch (error) {
         console.error(`workflows: the archive gate service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`);
     }
-    // The OpenSpec change card reads these static facts at request time. The live
-    // half of the review surface belongs to the review-liveness change.
+    // The OpenSpec change card reads these static facts at request time, and the
+    // card and session rows poll the live half from the review scheduler below.
     try {
         const reviewStatusService = {
             summaries: (workspace, changes) => reviewStatusSummaries(workspace, changes),
+            live: (workspace) => Promise.resolve(liveReviewsIn(workspace)),
         };
         ctx.provide('workflowsReviewStatus', reviewStatusService);
     }
@@ -2724,7 +2725,7 @@ export function apply(ctx, config = {}) {
      * and a run whose session is merely open but idle is not coverage either: a
      * settled FINDINGS run or a dead-session run must never block the next round.
      */
-    const reviewStarting = new Set();
+    const reviewStarting = new Map();
     const reviewLive = (run) => reviewStarting.has(run.id) || reviewScheduler.liveRunById(run.id) !== undefined;
     /** A unit checkout being prepared, keyed by workspace and unit key, until admission. */
     const preparedUnits = new Map();
@@ -2784,6 +2785,32 @@ export function apply(ctx, config = {}) {
         const reason = run.reason === undefined ? '' : run.reason.slice(0, 200);
         return { state: 'orphaned', ...(reason === '' ? {} : { reason }) };
     };
+    /**
+     * The live review read the API and the OpenSpec card poll: the pending runs
+     * the host keeps in memory plus this advance's in-flight admission, projected
+     * by the same #7 rule. It starts nothing, persists nothing, and reads no store.
+     */
+    function liveReviewsIn(workspace) {
+        const runs = new Map();
+        for (const run of promptRunsByWorkspace.get(workspace) ?? [])
+            runs.set(run.id, run);
+        for (const [id, run] of reviewStarting) {
+            if (run.workspaceKey === workspace)
+                runs.set(id, run);
+        }
+        const definitions = definitionsByWorkspace.get(workspace) ?? [];
+        const candidates = [];
+        for (const run of runs.values()) {
+            const liveness = reviewLivenessOf(workspace, run, definitions);
+            if (liveness === undefined)
+                continue;
+            candidates.push({ run, liveness, starting: reviewStarting.has(run.id) });
+        }
+        return reviewStatusLive(workspace, {
+            candidatesFor: () => candidates,
+            definitionsFor: () => definitions,
+        });
+    }
     /** The bounded reason a fresh round records when it supersedes a restart. */
     const RESTART_SUPERSEDE_REASON = 'superseded by a fresh review round after a host restart';
     /**
@@ -2823,13 +2850,24 @@ export function apply(ctx, config = {}) {
             return coveredOf(run).some((id) => input.taskIds.includes(id));
         });
         for (const candidate of candidates) {
-            const definition = definitions.find((entry) => entry.id === candidate.definition.id);
-            const step = definition?.steps.find((entry) => entry.executor === 'review');
-            if (definition === undefined || step === undefined)
-                continue;
             const at = journal.time();
-            const settled = setRunStatus(settleStep(candidate, step.id, 'cancelled', { at, reason: RESTART_SUPERSEDE_REASON }), 'cancelled', at, RESTART_SUPERSEDE_REASON);
-            await withRunLock(candidate.id, () => writeCommit(input.workspace, settled, input.auth)).catch(() => undefined);
+            // Revalidate inside the lock: a resume can commit between the candidate
+            // read and this write, and a run that moved on must never be cancelled
+            // from the stale snapshot.
+            await withRunLock(candidate.id, async () => {
+                const current = await readAuthenticatedRun(input.workspace, candidate.id, input.auth);
+                if (current === undefined || current.status !== 'interrupted')
+                    return;
+                const definition = definitions.find((entry) => entry.id === current.definition.id);
+                const step = definition?.steps.find((entry) => entry.executor === 'review');
+                if (definition === undefined || step === undefined)
+                    return;
+                const stored = current.steps.find((entry) => entry.id === step.id);
+                if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked'))
+                    return;
+                const settled = setRunStatus(settleStep(current, step.id, 'cancelled', { at, reason: RESTART_SUPERSEDE_REASON }), 'cancelled', at, RESTART_SUPERSEDE_REASON);
+                await writeCommit(input.workspace, settled, input.auth);
+            }).catch(() => undefined);
         }
     };
     const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration, capturedSessionGeneration, stop) => {
@@ -3129,7 +3167,7 @@ export function apply(ctx, config = {}) {
                 // The admission window starts before the asynchronous preparation: a
                 // concurrent start, trigger, or close must see this run as live for the
                 // whole prepare-then-enqueue span, not only once a snapshot exists.
-                reviewStarting.add(reviewRun.id);
+                reviewStarting.set(reviewRun.id, reviewRun);
                 try {
                     // Capture the complete reviewed input set before preparing it: a stat
                     // signature survives an edit-read-restore that a content digest hides.
@@ -4934,7 +4972,7 @@ export function apply(ctx, config = {}) {
                 // see this run as live before its advance reaches the review executor.
                 const admitsReview = reviewStep !== undefined;
                 if (admitsReview)
-                    reviewStarting.add(run.id);
+                    reviewStarting.set(run.id, run);
                 try {
                     // A model start executes its first step now: a review dispatch admits
                     // the reviewer before the tool returns, so the gate waits on a live
@@ -5326,6 +5364,7 @@ export function apply(ctx, config = {}) {
             const auth = storedAuth;
             return auth === undefined ? [] : listReceipts(workspace, auth);
         },
+        liveReviewsFor: (workspace) => Promise.resolve(liveReviewsIn(workspace)),
     });
     // The Design mode's write API shares the read API's carrier and host key, so a
     // saved definition is approved exactly as a `/workflows install` would be.

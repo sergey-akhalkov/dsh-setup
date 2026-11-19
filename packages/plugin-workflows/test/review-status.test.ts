@@ -3,13 +3,22 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { type Definition, loadShippedDefinitions } from '../src/host/definitions.ts'
 import { currentSpecDigest } from '../src/host/evidence.ts'
-import { reviewSummary, summaries } from '../src/host/review-status.ts'
+import {
+  live,
+  type ReviewLiveCandidate,
+  type ReviewLiveEntry,
+  type ReviewLiveSource,
+  reviewSummary,
+  summaries,
+} from '../src/host/review-status.ts'
+import { createRun, type RunStep, type WorkflowRun } from '../src/host/runs.ts'
 
 /**
- * The static review read model: the whole-spec record at its digest and the
- * portable task-review coverage the archive gate counts. Nothing here starts or
- * observes a review.
+ * The review read model: the whole-spec record at its digest and the portable
+ * task-review coverage the archive gate counts, plus the live projection of the
+ * reviews the scheduler holds. Nothing here starts or observes a review.
  */
 
 const TEMP_DIRECTORIES: string[] = []
@@ -259,5 +268,129 @@ describe('review summaries', () => {
     )
     expect(await reviewSummary(workspace, CHANGE)).toBeUndefined()
     expect(await summaries(workspace, [CHANGE])).toEqual({})
+  })
+})
+
+const shipped = loadShippedDefinitions()
+
+function definitionOf(id: string): Definition {
+  const definition = shipped.find((entry) => entry.id === id)
+  if (definition === undefined) throw new Error(`the shipped definition "${id}" is missing`)
+  return definition
+}
+
+/** One pending review run of a shipped review definition. */
+function reviewRun(input: {
+  readonly definition: string
+  readonly session?: string
+  readonly change?: string
+  readonly context?: Readonly<Record<string, unknown>>
+  readonly now?: number
+}): WorkflowRun {
+  const definition = definitionOf(input.definition)
+  return createRun({
+    definition: definition.id,
+    trigger: definition.trigger.kind,
+    session: input.session ?? 'session-1',
+    workspace: '/workspace',
+    context: { name: input.change ?? CHANGE, ...input.context },
+    steps: definition.steps.map((step) => step.id),
+    now: input.now ?? 1_762_500_000_000,
+  })
+}
+
+/** The same run with one step's attempt facts stamped, as an advance would. */
+function withStep(run: WorkflowRun, patch: Partial<RunStep>): WorkflowRun {
+  return { ...run, steps: run.steps.map((step) => ({ ...step, ...patch })) }
+}
+
+function candidate(
+  run: WorkflowRun,
+  liveness: ReviewLiveCandidate['liveness'],
+  starting = false,
+): ReviewLiveCandidate {
+  return { run, liveness, starting }
+}
+
+function source(
+  candidates: ReviewLiveCandidate[],
+  definitions: readonly Definition[] = shipped,
+): ReviewLiveSource {
+  return { candidatesFor: () => candidates, definitionsFor: () => definitions }
+}
+
+describe('live reviews', () => {
+  it('maps starting, live, and waiting reviews and excludes an orphaned run', () => {
+    const liveSpec = withStep(reviewRun({ definition: 'spec-review', session: 'session-2' }), {
+      attempts: 2,
+      requestedAt: 1_762_500_000_000,
+    })
+    const starting = reviewRun({ definition: 'integration-review', session: 'session-3' })
+    const waiting = withStep(
+      reviewRun({
+        definition: 'task-review',
+        context: { sectionTitle: '2. Live surface', section: '2', taskId: 'a'.repeat(16) },
+      }),
+      { requestedAt: 1_762_500_010_000 },
+    )
+    const orphan = reviewRun({ definition: 'spec-review', session: 'session-4' })
+    const entries: ReviewLiveEntry[] = live(
+      '/workspace',
+      source([
+        candidate(liveSpec, { state: 'live', attempt: 2 }),
+        candidate(starting, { state: 'live' }, true),
+        candidate(waiting, { state: 'waiting', waitingOn: 'run-live' }),
+        candidate(orphan, { state: 'orphaned', reason: 'the host restarted' }),
+      ]),
+    )
+    // A running review sorts before its waiter, so a first-entry lookup spins.
+    expect(entries.map((entry) => [entry.definition, entry.state])).toEqual([
+      ['spec-review', 'live'],
+      ['integration-review', 'starting'],
+      ['task-review', 'waiting'],
+    ])
+    expect(entries[0]).toEqual({
+      session: 'session-2',
+      change: CHANGE,
+      definition: 'spec-review',
+      unit: 'spec',
+      state: 'live',
+      attempt: 2,
+      since: new Date(1_762_500_000_000).toISOString(),
+    })
+    expect(entries[1]).toMatchObject({ unit: 'integration', attempt: 1 })
+    expect(entries[2]).toMatchObject({
+      session: 'session-1',
+      unit: 'tasks',
+      label: '2. Live surface',
+      state: 'waiting',
+      since: new Date(1_762_500_010_000).toISOString(),
+    })
+  })
+
+  it('bounds the section label and omits a non-change context', () => {
+    const longTitle = reviewRun({
+      definition: 'task-review',
+      context: { sectionTitle: `1. ${'x'.repeat(200)}`, section: '1', taskId: 'b'.repeat(16) },
+    })
+    const noChange = reviewRun({
+      definition: 'spec-review',
+      change: '../outside',
+      context: {},
+    })
+    const entries = live(
+      '/workspace',
+      source([
+        candidate(longTitle, { state: 'live', attempt: 1 }),
+        candidate(noChange, { state: 'live', attempt: 1 }),
+      ]),
+    )
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.label).toHaveLength(80)
+    expect(entries[0]?.label?.startsWith('1. xxx')).toBe(true)
+  })
+
+  it('reports nothing when no run is pending', () => {
+    expect(live('/workspace', source([]))).toEqual([])
   })
 })

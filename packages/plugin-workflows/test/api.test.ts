@@ -10,6 +10,8 @@ import {
   EVIDENCE_ROUTE,
   type FetchRoute,
   HEALTH_ROUTE,
+  LIVE_REVIEWS_ROUTE,
+  MAX_LIVE_SESSIONS,
   RECEIPTS_ROUTE,
   RUNS_ROUTE,
   registerWorkflowRoutes,
@@ -22,6 +24,7 @@ import { WorkflowHealth } from '../src/host/health.ts'
 import { Journal, type JournalInput } from '../src/host/journal.ts'
 import { hashSession } from '../src/host/projection.ts'
 import type { InstalledDefinition } from '../src/host/registry.ts'
+import type { ReviewLiveEntry } from '../src/host/review-status.ts'
 import { loadCatalog } from '../src/host/triggers.ts'
 
 interface Setup {
@@ -47,6 +50,7 @@ async function setup(
   options: {
     definitions?: readonly unknown[]
     installed?: readonly InstalledDefinition[]
+    liveReviews?: (workspace: string) => Promise<readonly ReviewLiveEntry[]>
     entries?: readonly {
       readonly id: string
       readonly name: string
@@ -111,6 +115,7 @@ async function setup(
     ...(options.entries === undefined
       ? {}
       : { definitionEntriesFor: async () => ({ definitions: options.entries as never }) }),
+    ...(options.liveReviews === undefined ? {} : { liveReviewsFor: options.liveReviews }),
   }
   return {
     routes: createWorkflowRoutes(services),
@@ -198,6 +203,7 @@ describe('workflows read API', () => {
       TEMPLATES_ROUTE,
       RECEIPTS_ROUTE,
       HEALTH_ROUTE,
+      LIVE_REVIEWS_ROUTE,
     ])
     for (const route of value.routes) {
       expect(route.methods).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
@@ -962,5 +968,150 @@ describe('workflow statistics', () => {
       paged.body as { runs: Array<{ source: string; status: string; lifecycle?: string }> }
     ).runs
     expect(runs.find((run) => run.source === 'checkpoint')?.lifecycle).toBe('completed')
+  })
+})
+
+describe('live review route', () => {
+  function entry(session: string, overrides: Partial<ReviewLiveEntry> = {}): ReviewLiveEntry {
+    return {
+      session,
+      change: 'show-review-status',
+      definition: 'spec-review',
+      unit: 'spec',
+      state: 'live',
+      attempt: 1,
+      since: '2026-11-18T20:55:00.000Z',
+      ...overrides,
+    }
+  }
+
+  /** A route setup whose live read is served from a workspace-keyed map. */
+  async function liveSetup(): Promise<{
+    value: Setup
+    entries: Map<string, ReviewLiveEntry[]>
+    calls: string[]
+  }> {
+    const entries = new Map<string, ReviewLiveEntry[]>()
+    const calls: string[] = []
+    const value = await setup({
+      liveReviews: async (workspace) => {
+        calls.push(workspace)
+        return entries.get(workspace) ?? []
+      },
+    })
+    return { value, entries, calls }
+  }
+
+  it('serves the workspace form across sessions and the session-attributed list form', async () => {
+    const { value, entries, calls } = await liveSetup()
+    entries.set(value.workspaceOne, [
+      entry('s1'),
+      entry('s2', { change: 'another-change', unit: 'tasks', label: '1.2' }),
+    ])
+    entries.set(value.workspaceTwo, [entry('s3')])
+
+    // An idle session A reads session B's live review in the same workspace.
+    const workspaceForm = await request(value, LIVE_REVIEWS_ROUTE, { query: 'session=s1' })
+    expect(workspaceForm.status).toBe(200)
+    const workspaceLive = (workspaceForm.body as { live: ReviewLiveEntry[] }).live
+    expect(workspaceLive.map((row) => row.session)).toEqual(['s1', 's2'])
+    expect(workspaceLive[1]).toEqual({
+      session: 's2',
+      change: 'another-change',
+      definition: 'spec-review',
+      unit: 'tasks',
+      label: '1.2',
+      state: 'live',
+      attempt: 1,
+      since: '2026-11-18T20:55:00.000Z',
+    })
+    // Only the review fields leave the host; no prompt, finding, run, or path.
+    expect(Object.keys(workspaceLive[0] ?? {}).sort()).toEqual([
+      'attempt',
+      'change',
+      'definition',
+      'session',
+      'since',
+      'state',
+      'unit',
+    ])
+    expect(JSON.stringify(workspaceForm.body)).not.toContain(value.workspaceOne)
+    expect(calls).toEqual([value.workspaceOne])
+
+    // The list form stays session-attributed: A never sees B's entry.
+    calls.length = 0
+    const listForm = await request(value, LIVE_REVIEWS_ROUTE, { query: 'sessions=s1,s1' })
+    expect(listForm.status).toBe(200)
+    expect((listForm.body as { live: ReviewLiveEntry[] }).live.map((row) => row.session)).toEqual([
+      's1',
+    ])
+    expect(calls).toEqual([value.workspaceOne])
+
+    // One read per distinct workspace, in request order.
+    calls.length = 0
+    const twoWorkspaces = await request(value, LIVE_REVIEWS_ROUTE, {
+      query: 'sessions=s1,s2,s3',
+    })
+    expect(
+      (twoWorkspaces.body as { live: ReviewLiveEntry[] }).live.map((row) => row.session),
+    ).toEqual(['s1', 's2', 's3'])
+    expect(calls).toEqual([value.workspaceOne, value.workspaceTwo])
+
+    // An unknown or closed id is skipped, not an error.
+    calls.length = 0
+    const skipped = await request(value, LIVE_REVIEWS_ROUTE, { query: 'sessions=s1,ghost' })
+    expect(skipped.status).toBe(200)
+    expect((skipped.body as { live: ReviewLiveEntry[] }).live.map((row) => row.session)).toEqual([
+      's1',
+    ])
+    const unknown = await request(value, LIVE_REVIEWS_ROUTE, { query: 'session=ghost' })
+    expect(unknown).toEqual({ status: 200, body: { live: [] } })
+  })
+
+  it('refuses an ambiguous request, the session cap, and a non-GET method', async () => {
+    const { value, calls } = await liveSetup()
+    const refuse = (query: string): Promise<{ status: number; body: unknown }> =>
+      request(value, LIVE_REVIEWS_ROUTE, { query })
+    expect(await refuse('')).toEqual({ status: 400, body: { error: 'a session id is required' } })
+    expect(await refuse('session=')).toEqual({
+      status: 400,
+      body: { error: 'a session id is required' },
+    })
+    expect(await refuse('sessions=')).toEqual({
+      status: 400,
+      body: { error: 'a session id is required' },
+    })
+    expect(await refuse('session=s1&sessions=s2')).toEqual({
+      status: 400,
+      body: { error: 'send either session or sessions, not both' },
+    })
+    const ids = (count: number): string =>
+      Array.from({ length: count }, (_, index) => `s${String(index)}`).join(',')
+    expect(await refuse(`sessions=${ids(MAX_LIVE_SESSIONS + 1)}`)).toEqual({
+      status: 400,
+      body: { error: 'at most 100 sessions' },
+    })
+    // Exactly the cap is allowed; every id is unknown here, so nothing is live.
+    expect(await refuse(`sessions=${ids(MAX_LIVE_SESSIONS)}`)).toEqual({
+      status: 200,
+      body: { live: [] },
+    })
+    expect(calls).toEqual([])
+    const routeDefinition = value.routes.find((route) => route.path === LIVE_REVIEWS_ROUTE)
+    if (routeDefinition === undefined) throw new Error('the live reviews route is missing')
+    const refused = await routeDefinition.fetch(
+      new Request(`http://localhost${LIVE_REVIEWS_ROUTE}?session=s1`, { method: 'POST' }),
+    )
+    expect(refused.status).toBe(405)
+    expect(refused.headers.get('allow')).toBe('GET')
+    expect(calls).toEqual([])
+  })
+
+  it('returns an empty list when nothing is live', async () => {
+    const value = await setup({ liveReviews: async () => [] })
+    expect(await request(value, LIVE_REVIEWS_ROUTE, { query: 'session=s1' })).toEqual({
+      status: 200,
+      body: { live: [] },
+    })
   })
 })
