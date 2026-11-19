@@ -136,6 +136,8 @@ export function createLiveReviewStore(options: LiveReviewStoreOptions = {}): Liv
   const documentLike = options.document
   let timer: unknown
   let disposed = false
+  /** One read at a time: an older response never overwrites a newer state. */
+  let inFlight = false
 
   const visible = (): boolean => (documentLike?.visibilityState ?? 'visible') === 'visible'
 
@@ -152,9 +154,10 @@ export function createLiveReviewStore(options: LiveReviewStoreOptions = {}): Liv
     timer = setTimer(() => {
       void poll()
     }, intervalMs)
-    if (!visible()) return
+    if (inFlight || !visible()) return
     const sessions = liveSessions(listeners.keys())
     if (sessions.length === 0) return
+    inFlight = true
     try {
       const body = await fetchLive(liveReviewsUrl(sessions))
       if (disposed) return
@@ -167,6 +170,8 @@ export function createLiveReviewStore(options: LiveReviewStoreOptions = {}): Liv
       publish()
     } catch {
       // A failed read keeps the last state: the indicator must not blink off.
+    } finally {
+      inFlight = false
     }
   }
 

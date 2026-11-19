@@ -4,6 +4,7 @@ import { loadShippedDefinitions } from './definitions.js';
 import { isInside } from './fs-change.js';
 import { sessionRuns } from './projection.js';
 import { redactPayload, redactValue } from './redact.js';
+import { redactReviewLabel } from './review-status.js';
 /**
  * The read-only Workflows API. Routes are registered through the carrier-neutral
  * `connection.fetch` registry the OpenSpec panel uses; the carrier owns owner
@@ -523,7 +524,10 @@ export function createWorkflowRoutes(services) {
                     // form stays session-attributed so a row never shows a foreign review.
                     if (single === undefined && !sessions.has(entry.session))
                         continue;
-                    live.push(entry);
+                    // The route is the trust boundary: a label never carries the workspace
+                    // path, even when a producer built it from user text.
+                    const label = entry.label === undefined ? undefined : redactReviewLabel(entry.label, workspace);
+                    live.push(label === undefined ? { ...entry, label: undefined } : { ...entry, label });
                 }
             }
             return json(200, { live });

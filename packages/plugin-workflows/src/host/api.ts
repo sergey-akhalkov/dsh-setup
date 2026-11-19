@@ -9,6 +9,7 @@ import type { WorkflowReceipt } from './receipts.js'
 import { redactPayload, redactValue } from './redact.js'
 import type { InstalledDefinition, InstalledTrigger } from './registry.js'
 import type { ReviewLiveEntry } from './review-status.js'
+import { redactReviewLabel } from './review-status.js'
 import type { Trigger } from './triggers.js'
 
 /**
@@ -612,7 +613,11 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
           // The workspace form reports every review in the workspace; the list
           // form stays session-attributed so a row never shows a foreign review.
           if (single === undefined && !sessions.has(entry.session)) continue
-          live.push(entry)
+          // The route is the trust boundary: a label never carries the workspace
+          // path, even when a producer built it from user text.
+          const label =
+            entry.label === undefined ? undefined : redactReviewLabel(entry.label, workspace)
+          live.push(label === undefined ? { ...entry, label: undefined } : { ...entry, label })
         }
       }
       return json(200, { live })

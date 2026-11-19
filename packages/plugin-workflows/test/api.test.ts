@@ -1108,6 +1108,17 @@ describe('live review route', () => {
     expect(calls).toHaveLength(beforePost)
   })
 
+  it('redacts a workspace path from a label at the route boundary', async () => {
+    const { value, entries } = await liveSetup()
+    entries.set(value.workspaceOne, [entry('s1', { label: `2. ${value.workspaceOne} section` })])
+    const response = await request(value, LIVE_REVIEWS_ROUTE, { query: 'session=s1' })
+    expect(response.status).toBe(200)
+    const live = (response.body as { live: ReviewLiveEntry[] }).live
+    expect(live[0]?.label).toContain('[path]')
+    expect(live[0]?.label).not.toContain(value.workspaceOne)
+    expect(JSON.stringify(response.body)).not.toContain(value.workspaceOne)
+  })
+
   it('returns an empty list when nothing is live', async () => {
     const value = await setup({ liveReviews: async () => [] })
     expect(await request(value, LIVE_REVIEWS_ROUTE, { query: 'session=s1' })).toEqual({
