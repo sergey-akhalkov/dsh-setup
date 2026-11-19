@@ -1,0 +1,212 @@
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { HostAuth } from '../src/host/host-auth.ts'
+import { apply } from '../src/host/index.ts'
+import { createRun, readAuthenticatedRun, settleStep, writeRun } from '../src/host/runs.ts'
+import { taskIdOf } from '../src/host/tasks.ts'
+
+/**
+ * Startup recovery regression: the shipped task-review's completion step settles
+ * from its portable coverage check when the owner session is gone and the review
+ * step was already done before the crash, so the run becomes completed.
+ */
+
+type Listener = (...args: unknown[]) => unknown
+
+const KEY = 'a'.repeat(64)
+const TASK_TEXT = 'Only task'
+const TASK_ID = taskIdOf(TASK_TEXT)
+const CRASHED_SESSION = 'session-crashed'
+const TEMP_DIRECTORIES: string[] = []
+
+afterEach(async () => {
+  delete process.env.DSH_WORKFLOWS_HOST_KEY
+  await Promise.all(
+    TEMP_DIRECTORIES.splice(0).map(async (directory) => {
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }),
+  )
+})
+
+async function tempWorkspace(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'workflows-completion-'))
+  TEMP_DIRECTORIES.push(directory)
+  return directory
+}
+
+/** A git workspace whose one checked task already has a portable PASS. */
+async function approvedWorkspace(): Promise<string> {
+  const workspace = await tempWorkspace()
+  await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+  const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+  await mkdir(join(changeDir, 'specs', 'auth'), { recursive: true })
+  await mkdir(join(changeDir, 'reviews'), { recursive: true })
+  await writeFile(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8')
+  await writeFile(join(changeDir, 'design.md'), '# Design\n', 'utf8')
+  await writeFile(
+    join(changeDir, 'tasks.md'),
+    '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 Only task\n',
+    'utf8',
+  )
+  await writeFile(join(changeDir, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+  // The committed subset `portableApprovalOf` writes; coverage never compares
+  // the digest, so a fixed 64-hex value satisfies the portable schema.
+  await writeFile(
+    join(changeDir, 'reviews', `${TASK_ID}.json`),
+    `${JSON.stringify({
+      rule: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId: TASK_ID,
+      digest: 'a'.repeat(64),
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-11-19T09:00:00.000Z',
+    })}\n`,
+    'utf8',
+  )
+  const git = (...args: string[]): void => {
+    execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+  }
+  git('init')
+  git('config', 'user.name', 'recovery')
+  git('config', 'user.email', 'recovery@example.test')
+  git('add', '-A')
+  git('commit', '-m', 'init')
+  return workspace
+}
+
+/** The run a crash left behind: the review done, the completion step open. */
+async function crashedRun(workspace: string): Promise<string> {
+  const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+  const run = createRun({
+    definition: 'task-review',
+    trigger: 'fs.change',
+    session: CRASHED_SESSION,
+    workspace,
+    context: {
+      name: 'auth',
+      taskId: TASK_ID,
+      section: '1',
+      sectionTitle: '1. Engine',
+      taskIds: [TASK_ID],
+    },
+    steps: ['review', 'complete-review'],
+    now: 1_000,
+  })
+  await writeRun(workspace, run, auth)
+  await writeRun(workspace, settleStep(run, 'review', 'done', { at: 1_100 }), auth)
+  return run.id
+}
+
+function fakeHost(
+  workspace: string,
+  services: Record<string, unknown> = {},
+): {
+  readonly ctx: Record<string, unknown>
+  readonly agent: Record<string, unknown>
+} {
+  const listeners = new Map<string, Listener[]>()
+  const provided = new Map<string, unknown>(Object.entries(services))
+  const agent = {
+    id: 'session-1',
+    session: { id: 'session-1', header: { origin: 'root' as const } },
+    ctx: { on: () => () => {} },
+    steer: () => {},
+    inbox: { remove: () => true },
+    inject: () => {},
+  }
+  const tools: Record<string, unknown> = {
+    get: (name: string) =>
+      ['delegate', 'task_progress', 'delegation_status', 'work_checkpoint'].includes(name)
+        ? { name }
+        : undefined,
+    register: () => () => {},
+  }
+  const ctx: Record<string, unknown> = {
+    systemPrompt: { context: () => () => {} },
+    get(name: string): unknown {
+      if (name === 'agents') return { get: () => agent, list: () => [agent] }
+      if (name === 'workingDirectory') return { get: () => workspace }
+      if (name === 'fs') {
+        return {
+          resolve: async (path: unknown) => ({ targetKey: String(path) }),
+          watch: async () => async () => {},
+        }
+      }
+      if (name === 'connection') return { fetch: { register: () => () => {} } }
+      if (name === 'tools') return tools
+      if (name === 'delegationRulesStatus') {
+        return { workflowOwned: false, specReview: true, taskProgress: true, laneFanout: true }
+      }
+      if (name === 'goalContinuityStatus') return { automation: false }
+      if (name === 'verificationGateStatus') return { steering: false }
+      if (name === 'commands') return { register: () => () => {} }
+      if (provided.has(name)) return provided.get(name)
+      return undefined
+    },
+    provide(name: string, value: unknown): void {
+      provided.set(name, value)
+    },
+    on(name: string, listener: Listener): () => void {
+      const list = listeners.get(name) ?? []
+      list.push(listener)
+      listeners.set(name, list)
+      return () => {}
+    },
+    effect(callback: () => () => void): () => void {
+      callback()
+      return () => {}
+    },
+  }
+  return { ctx, agent }
+}
+
+async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+  const started = Date.now()
+  while (!(await check())) {
+    if (Date.now() - started > timeoutMs) throw new Error('the host did not settle in time')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+describe('task review completion recovery', () => {
+  it('settles complete-review from portable coverage after a crash with the owner session gone', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await approvedWorkspace()
+    const runId = await crashedRun(workspace)
+    const activations: string[] = []
+    apply(
+      fakeHost(workspace, {
+        subagents: {
+          getProvider: () => ({ capabilities: { agentOptions: false } }),
+          startActivation: async () => {
+            activations.push('started')
+            throw new Error('recovery must not start a reviewer')
+          },
+        },
+      }).ctx as never,
+      { reviewers: { codex: { provider: 'codex-subagent' } } },
+    )
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const current = async (): Promise<string | undefined> =>
+      (await readAuthenticatedRun(workspace, runId, auth))?.status
+    // Startup recovery settles the run from the evidence; no event or live owner
+    // session of the crashed run fires here.
+    await waitFor(async () => {
+      const status = await current()
+      return status !== undefined && status !== 'running'
+    })
+    const settled = await readAuthenticatedRun(workspace, runId, auth)
+    expect(settled?.status).toBe('completed')
+    expect(settled?.session).toBe(CRASHED_SESSION)
+    expect(settled?.steps.map((step) => step.state)).toEqual(['done', 'done'])
+    const completion = settled?.steps.find((step) => step.id === 'complete-review')
+    expect(completion?.evidence).toMatchObject({ kind: 'check', callId: 'task-review-coverage' })
+    expect(activations).toEqual([])
+  })
+})
