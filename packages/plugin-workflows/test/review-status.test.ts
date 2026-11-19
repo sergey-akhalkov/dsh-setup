@@ -351,6 +351,7 @@ describe('live reviews', () => {
     ])
     expect(entries[0]).toEqual({
       session: 'session-2',
+      runId: liveSpec.id,
       change: CHANGE,
       definition: 'spec-review',
       unit: 'spec',
@@ -366,6 +367,35 @@ describe('live reviews', () => {
       state: 'waiting',
       since: new Date(1_762_500_010_000).toISOString(),
     })
+  })
+
+  it('carries a distinct durable run id for each section review of one change', () => {
+    // Two task-section reviews of one change share change, definition, and
+    // unit; only the run id tells their settlements apart.
+    const first = reviewRun({
+      definition: 'task-review',
+      context: { sectionTitle: '1. First lane', section: '1', taskId: 'c'.repeat(16) },
+      now: 1_762_500_000_000,
+    })
+    const second = reviewRun({
+      definition: 'task-review',
+      context: { sectionTitle: '2. Second lane', section: '2', taskId: 'd'.repeat(16) },
+      now: 1_762_500_001_000,
+    })
+    const entries = live(
+      '/workspace',
+      source([
+        candidate(first, { state: 'live', attempt: 1 }),
+        candidate(second, { state: 'live', attempt: 1 }),
+      ]),
+    )
+    expect(
+      entries.map((entry) => [entry.definition, entry.unit, entry.label, entry.runId]),
+    ).toEqual([
+      ['task-review', 'tasks', '1. First lane', first.id],
+      ['task-review', 'tasks', '2. Second lane', second.id],
+    ])
+    expect(first.id).not.toBe(second.id)
   })
 
   it('bounds the section label and omits a non-change context', () => {

@@ -13859,18 +13859,20 @@ window.__ModuleLoader__.load({
     function decodeEntry(value2) {
       if (!isRecord(value2)) return void 0;
       const session = nonEmpty(value2.session);
+      const runId = nonEmpty(value2.runId);
       const change = nonEmpty(value2.change);
       const definition = nonEmpty(value2.definition);
       const unit = nonEmpty(value2.unit);
       const state = value2.state;
       const attempt = value2.attempt;
       const since = nonEmpty(value2.since);
-      if (session === void 0 || change === void 0 || definition === void 0 || unit === void 0 || since === void 0 || state !== "starting" && state !== "live" && state !== "waiting" || typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 1) {
+      if (session === void 0 || runId === void 0 || change === void 0 || definition === void 0 || unit === void 0 || since === void 0 || state !== "starting" && state !== "live" && state !== "waiting" || typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 1) {
         return void 0;
       }
       const label = nonEmpty(value2.label);
       return {
         session,
+        runId,
         change,
         definition,
         unit,

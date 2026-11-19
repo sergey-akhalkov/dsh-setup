@@ -3709,17 +3709,22 @@ describe('OpenSpec live observation', () => {
       // The row carries no static review (a failed summary); the host's
       // reviewAvailable flag keeps the live poll enabled.
       const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE)
+      // Two task-section reviews of one change: only the run id tells them
+      // apart, so one settling while the other stays live must still re-read.
       const specLive = {
         session: 's2',
+        runId: 'run-spec-live',
         change: 'add-auth',
-        definition: 'spec-review',
-        unit: 'spec',
+        definition: 'task-review',
+        unit: 'tasks',
+        label: '2. Second lane',
         state: 'live',
         attempt: 1,
         since: '2026-11-19T10:00:00.000Z',
       }
       const tasksLive = {
         session: 's1',
+        runId: 'run-tasks-live',
         change: 'add-auth',
         definition: 'task-review',
         unit: 'tasks',
@@ -3730,6 +3735,7 @@ describe('OpenSpec live observation', () => {
       }
       const constructorLive = {
         session: 's1',
+        runId: 'run-constructor-live',
         change: 'constructor',
         definition: 'spec-review',
         unit: 'spec',
@@ -4811,6 +4817,7 @@ describe('OpenSpec review state', () => {
           unit: 'spec',
           state: 'live',
           attempt: 2,
+          runId: 'run-7',
           since: '2026-11-05T16:00:00',
         },
       ],
@@ -4834,6 +4841,7 @@ describe('OpenSpec review state', () => {
       label: '2. Lane A',
       state: 'live',
       attempt: 1,
+      runId: 'run-6',
       since: '2026-11-05T16:00:00',
     }
     const running = reviewUnits(summary(), [tasks], t, NOW)
@@ -4858,6 +4866,7 @@ describe('OpenSpec review state', () => {
             unit: 'integration',
             state: 'live',
             attempt: 1,
+            runId: 'run-5',
             since: '2026-11-05T16:00:00',
           },
         ],
@@ -4875,6 +4884,7 @@ describe('OpenSpec review state', () => {
           unit: 'spec',
           state: 'starting',
           attempt: 1,
+          runId: 'run-4',
           since: '2026-11-05T16:59:00',
         },
       ],
@@ -4914,6 +4924,7 @@ describe('OpenSpec review state', () => {
       label: '2. Lane',
       state: 'live',
       attempt: 1,
+      runId: 'run-3',
       since: '2026-11-19T10:00:00.000Z',
     }
     expect(decodeLiveReviewEntries({ live: [live] })).toEqual([live])
@@ -4932,6 +4943,7 @@ describe('OpenSpec review state', () => {
       unit: 'spec',
       state: 'live',
       attempt: 1,
+      runId: 'run-2',
       since: '2026-11-19T10:00:00.000Z',
     }
     const tasks: ReviewLiveEntry = {
@@ -4941,6 +4953,7 @@ describe('OpenSpec review state', () => {
       unit: 'tasks',
       state: 'live',
       attempt: 1,
+      runId: 'run-1',
       since: '2026-11-19T10:01:00.000Z',
     }
     expect(settledReviews([spec, tasks], [tasks])).toEqual([spec])

@@ -19,6 +19,8 @@ export type LiveReviewState = 'starting' | 'live' | 'waiting'
 /** One live or waiting review as the route reports it. */
 export interface LiveReviewEntry {
   readonly session: string
+  /** The durable run id; optional only for an entry built by hand. */
+  readonly runId?: string
   readonly change: string
   readonly definition: string
   readonly unit: 'spec' | 'tasks' | 'integration' | string
@@ -40,6 +42,7 @@ function nonEmpty(value: unknown): string | undefined {
 function decodeEntry(value: unknown): LiveReviewEntry | undefined {
   if (!isRecord(value)) return undefined
   const session = nonEmpty(value.session)
+  const runId = nonEmpty(value.runId)
   const change = nonEmpty(value.change)
   const definition = nonEmpty(value.definition)
   const unit = nonEmpty(value.unit)
@@ -48,6 +51,7 @@ function decodeEntry(value: unknown): LiveReviewEntry | undefined {
   const since = nonEmpty(value.since)
   if (
     session === undefined ||
+    runId === undefined ||
     change === undefined ||
     definition === undefined ||
     unit === undefined ||
@@ -62,6 +66,7 @@ function decodeEntry(value: unknown): LiveReviewEntry | undefined {
   const label = nonEmpty(value.label)
   return {
     session,
+    runId,
     change,
     definition,
     unit,

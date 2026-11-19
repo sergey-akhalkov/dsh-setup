@@ -222,7 +222,7 @@ window.__ModuleLoader__.load({
       return `${String(n)}${suffix[unit]} ago`;
     }
     function reviewIdentity(entry) {
-      return `${entry.change}\0${entry.definition}\0${entry.unit}`;
+      return `${entry.runId}\0${entry.change}\0${entry.definition}\0${entry.unit}`;
     }
     function settledReviews(previous, next) {
       const current = new Set(next.map((entry) => reviewIdentity(entry)));
@@ -234,18 +234,20 @@ window.__ModuleLoader__.load({
       for (const value of body.live) {
         if (!isRecord(value)) return void 0;
         const session = value.session;
+        const runId = value.runId;
         const change = value.change;
         const definition = value.definition;
         const unit = value.unit;
         const state = value.state;
         const attempt = value.attempt;
         const since = value.since;
-        if (typeof session !== "string" || session === "" || typeof change !== "string" || change === "" || typeof definition !== "string" || definition === "" || unit !== "spec" && unit !== "tasks" && unit !== "integration" || state !== "starting" && state !== "live" && state !== "waiting" || typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 1 || typeof since !== "string" || since === "") {
+        if (typeof session !== "string" || session === "" || typeof runId !== "string" || runId === "" || typeof change !== "string" || change === "" || typeof definition !== "string" || definition === "" || unit !== "spec" && unit !== "tasks" && unit !== "integration" || state !== "starting" && state !== "live" && state !== "waiting" || typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 1 || typeof since !== "string" || since === "") {
           return void 0;
         }
         const label = summaryText(value.label);
         entries.push({
           session,
+          runId,
           change,
           definition,
           unit,

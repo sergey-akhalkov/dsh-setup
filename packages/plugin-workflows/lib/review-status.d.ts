@@ -34,6 +34,8 @@ export interface ChangeReviewSummary {
 /** One live or waiting review the card and the session rows render. */
 export interface ReviewLiveEntry {
     readonly session: string;
+    /** The durable run id: one review instance, stable across polls. */
+    readonly runId: string;
     readonly change: string;
     readonly definition: string;
     /** `spec` for a whole spec phase, `tasks` for task scope, `integration` for integration. */

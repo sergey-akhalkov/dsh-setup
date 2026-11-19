@@ -102,6 +102,8 @@ export interface ChangeReviewSummary {
 /** One live review the engine reports for a change. */
 export interface ReviewLiveEntry {
   readonly session: string
+  /** The durable run id: one review instance, stable across polls. */
+  readonly runId: string
   readonly change: string
   readonly definition: string
   readonly unit: 'spec' | 'tasks' | 'integration'
@@ -472,12 +474,12 @@ export function relativeLabel(
 }
 
 /**
- * Stable identity of one live review. A settle is per review, not per change:
- * a spec review that finishes while a task review of the same change stays live
- * still needs its own refresh.
+ * Stable identity of one live review instance. A settle is per run, not per
+ * change or unit: two section reviews of one change share both, so only the
+ * durable run id keeps the settled one visible to this comparison.
  */
 export function reviewIdentity(entry: ReviewLiveEntry): string {
-  return `${entry.change}\u0000${entry.definition}\u0000${entry.unit}`
+  return `${entry.runId}\u0000${entry.change}\u0000${entry.definition}\u0000${entry.unit}`
 }
 
 /** The live reviews that disappeared between two polls; each needs one refresh. */
@@ -496,6 +498,7 @@ export function decodeLiveReviewEntries(body: unknown): ReviewLiveEntry[] | unde
   for (const value of body.live) {
     if (!isRecord(value)) return undefined
     const session = value.session
+    const runId = value.runId
     const change = value.change
     const definition = value.definition
     const unit = value.unit
@@ -505,6 +508,8 @@ export function decodeLiveReviewEntries(body: unknown): ReviewLiveEntry[] | unde
     if (
       typeof session !== 'string' ||
       session === '' ||
+      typeof runId !== 'string' ||
+      runId === '' ||
       typeof change !== 'string' ||
       change === '' ||
       typeof definition !== 'string' ||
@@ -522,6 +527,7 @@ export function decodeLiveReviewEntries(body: unknown): ReviewLiveEntry[] | unde
     const label = summaryText(value.label)
     entries.push({
       session,
+      runId,
       change,
       definition,
       unit,

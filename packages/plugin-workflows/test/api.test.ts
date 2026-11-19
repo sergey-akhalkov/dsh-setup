@@ -975,6 +975,7 @@ describe('live review route', () => {
   function entry(session: string, overrides: Partial<ReviewLiveEntry> = {}): ReviewLiveEntry {
     return {
       session,
+      runId: `run-${session}`,
       change: 'show-review-status',
       definition: 'spec-review',
       unit: 'spec',
@@ -1017,6 +1018,7 @@ describe('live review route', () => {
     expect(workspaceLive.map((row) => row.session)).toEqual(['s1', 's2'])
     expect(workspaceLive[1]).toEqual({
       session: 's2',
+      runId: 'run-s2',
       change: 'another-change',
       definition: 'spec-review',
       unit: 'tasks',
@@ -1030,6 +1032,7 @@ describe('live review route', () => {
       'attempt',
       'change',
       'definition',
+      'runId',
       'session',
       'since',
       'state',

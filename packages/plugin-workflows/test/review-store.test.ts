@@ -17,6 +17,7 @@ import {
 function entry(session: string, overrides: Partial<LiveReviewEntry> = {}): LiveReviewEntry {
   return {
     session,
+    runId: `run-${session}`,
     change: 'show-review-status',
     definition: 'task-review',
     unit: 'tasks',
@@ -65,6 +66,7 @@ describe('live review wire', () => {
         { session: 'session-b', change: 'auth' },
         entry('session-c', { state: 'orphaned' as never }),
         entry('session-d', { attempt: 0 }),
+        entry('session-e', { runId: '' }),
         entry('', {}),
       ],
     })
@@ -72,6 +74,8 @@ describe('live review wire', () => {
       entry('session-a'),
       entry('session-a', { label: undefined, state: 'waiting' }),
     ])
+    // The durable run id is what a settlement comparison keys on.
+    expect(decoded[0]?.runId).toBe('run-session-a')
     expect(decodeLiveReviews({ live: 'nope' })).toEqual([])
     expect(decodeLiveReviews(undefined)).toEqual([])
   })

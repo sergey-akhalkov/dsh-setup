@@ -197,6 +197,7 @@ export function live(workspace, source) {
         const label = labelOf(workspace, change, run.context);
         const entry = {
             session: run.session,
+            runId: run.id,
             change,
             definition: run.definition.id,
             unit: unitOf(step),
