@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
 import { createRun, readAuthenticatedRun, settleStep, writeRun } from '../src/host/runs.ts'
-import { taskIdOf } from '../src/host/tasks.ts'
+import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
 
 /**
  * Startup recovery regression: the shipped task-review's completion step settles
@@ -247,5 +247,75 @@ describe('task review completion recovery', () => {
       kind: 'record',
       path: `openspec/changes/auth/reviews/${TASK_ID}.json`,
     })
+  })
+
+  it('recovers a section review from the approvals of every covered task', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n', 'utf8')
+    await mkdir(join(changeDir, 'specs', 'auth'), { recursive: true })
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'proposal.md'), '# Proposal\n', 'utf8')
+    await writeFile(join(changeDir, 'design.md'), '# Design\n', 'utf8')
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      '# Tasks\n\n## 1. Engine\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n',
+      'utf8',
+    )
+    await writeFile(join(changeDir, 'specs', 'auth', 'spec.md'), '# Spec\n', 'utf8')
+    const covered = [taskIdOf('First task'), taskIdOf('Second task')]
+    for (const [index, id] of covered.entries()) {
+      await writeFile(
+        join(changeDir, 'reviews', `${id}.json`),
+        `${JSON.stringify({
+          rule: 'task-review',
+          change: 'auth',
+          scope: 'task',
+          taskId: id,
+          digest: 'a'.repeat(64),
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: `2026-11-19T09:0${index}:00.000Z`,
+        })}\n`,
+        'utf8',
+      )
+    }
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: workspace, stdio: 'ignore' })
+    }
+    git('init')
+    git('config', 'user.name', 'recovery')
+    git('config', 'user.email', 'recovery@example.test')
+    git('add', '-A')
+    git('commit', '-m', 'init')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: CRASHED_SESSION,
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: sectionRecordId('1'),
+        section: '1',
+        sectionTitle: '1. Engine',
+        taskIds: covered,
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    await writeRun(workspace, run, auth)
+    apply(fakeHost(workspace).ctx as never, {
+      reviewers: { codex: { provider: 'codex-subagent' } },
+    })
+    await waitFor(async () => {
+      const status = (await readAuthenticatedRun(workspace, run.id, auth))?.status
+      return status !== undefined && status !== 'running'
+    })
+    const settled = await readAuthenticatedRun(workspace, run.id, auth)
+    expect(settled?.status).toBe('completed')
+    expect(settled?.steps.map((step) => step.state)).toEqual(['done', 'done'])
   })
 })

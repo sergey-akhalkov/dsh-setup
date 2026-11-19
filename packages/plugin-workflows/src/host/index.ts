@@ -1421,21 +1421,29 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   ): { kind: 'record'; path: string; detail: string } | undefined => {
     if (evidence?.kind !== 'record' || evidence.rule !== 'task-review') return undefined
     const change = context.name
-    const taskId = context.taskId
-    if (typeof change !== 'string' || typeof taskId !== 'string') return undefined
-    const task = taskOf(workspace, change, taskId)
-    if (task === undefined) return undefined
-    const match = portableTaskReview(
-      workspace,
-      change,
-      task,
-      evidence.rule,
-      reviewerBinding(workspace),
-    )
-    if (match.mismatch.length > 0) return undefined
+    if (typeof change !== 'string') return undefined
+    // A section run records the section id in `taskId` and the covered task ids
+    // in `taskIds`; the approval set is keyed by the tasks, so validate all.
+    const ids: string[] = Array.isArray(context.taskIds)
+      ? context.taskIds.filter((id): id is string => typeof id === 'string')
+      : []
+    if (ids.length === 0 && typeof context.taskId === 'string') ids.push(context.taskId)
+    if (ids.length === 0) return undefined
+    for (const id of ids) {
+      const task = taskOf(workspace, change, id)
+      if (task === undefined) return undefined
+      const match = portableTaskReview(
+        workspace,
+        change,
+        task,
+        evidence.rule,
+        reviewerBinding(workspace),
+      )
+      if (match.mismatch.length > 0) return undefined
+    }
     return {
       kind: 'record',
-      path: `openspec/changes/${change}/reviews/${taskId}.json`,
+      path: `openspec/changes/${change}/reviews/${ids[0]}.json`,
       detail: 'recovered from the portable approval; the local record was never written',
     }
   }
