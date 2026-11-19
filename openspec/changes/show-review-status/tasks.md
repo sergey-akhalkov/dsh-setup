@@ -13,9 +13,9 @@ tasks first if #7 is not applied yet.
 ### Workflows review read model
 
 - [x] 1.1 Add `packages/plugin-workflows/src/host/review-status.ts` with `summaries(workspace, changes)`: read the local whole-spec record, compare its `digest` with `currentSpecDigest`, count checked tasks whose portable approval matches the working-tree `taskReviewCoverage` rule, and return the bounded `ChangeReviewSummary`; verify a unit test for current PASS, stale PASS, findings, no record, missing tasks, unreadable `tasks.md`, and a valid but uncommitted approval counting as the gate counts it.
-- [ ] 1.2 Add `live(workspace)` on the same module, mapping the #7 `reviewLive` / waiting projection to `ReviewLiveEntry` and excluding orphaned runs; verify a unit test for starting, live, waiting, and orphaned states.
-- [ ] 1.3 Provide the `workflowsReviewStatus` service next to `workflowsArchiveGate` and register `GET /api/workflows/reviews/live` with both forms: a single workspace-scoped `session` and a bounded `sessions` list (dedupe, 100-id cap, neither/both refused, closed ids skipped, 405 for non-GET, no prompts/findings/diffs/paths); verify the route test for each case, including an idle session A reading session B's review in the same workspace and the `sessions` form for A omitting B.
-- [ ] 1.4 Document the review-liveness read route and its two forms in `docs/workflows.md` beside the review executor section; verify `pnpm lint` after the markdown edit.
+- [x] 1.2 Add `live(workspace)` on the same module, mapping the #7 `reviewLive` / waiting projection to `ReviewLiveEntry` and excluding orphaned runs; verify a unit test for starting, live, waiting, and orphaned states.
+- [x] 1.3 Provide the `workflowsReviewStatus` service next to `workflowsArchiveGate` and register `GET /api/workflows/reviews/live` with both forms: a single workspace-scoped `session` and a bounded `sessions` list (dedupe, 100-id cap, neither/both refused, closed ids skipped, 405 for non-GET, no prompts/findings/diffs/paths); verify the route test for each case, including an idle session A reading session B's review in the same workspace and the `sessions` form for A omitting B.
+- [x] 1.4 Document the review-liveness read route and its two forms in `docs/workflows.md` beside the review executor section; verify `pnpm lint` after the markdown edit.
 
 ### Session-row indicator (client)
 
