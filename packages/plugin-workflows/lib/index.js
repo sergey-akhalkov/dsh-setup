@@ -1036,35 +1036,47 @@ export function apply(ctx, config = {}) {
         return session === undefined ? runs : runs.filter((run) => run.session === session);
     };
     /**
-     * The recovery reconciliation: a review run whose pending step's authoritative
-     * record already verifies settles from that record instead of being
-     * interrupted. Only a current, evidence-verified record counts; no PASS is
-     * synthesized for a run with no record.
+     * The recovery reconciliation: every pending step of a review run whose
+     * authoritative evidence already verifies settles from that evidence instead
+     * of the run being interrupted. The review step needs its record; the shipped
+     * task-review completion step needs portable coverage, including when the
+     * review step was already done before the crash. Only verified evidence
+     * counts; no PASS is synthesized.
      */
     const reconcileRecoveredRun = async (workspace, run) => {
         await loadDefinitions(workspace);
         const definitions = definitionsByWorkspace.get(workspace) ?? [];
         const definition = definitions.find((entry) => entry.id === run.definition.id);
-        const step = definition?.steps.find((entry) => entry.executor === 'review');
-        if (definition === undefined || step === undefined || step.evidence === undefined) {
+        // Only a review workflow is reconciled from records; every other unfinished
+        // run keeps the documented interrupted recovery.
+        if (definition === undefined || definition.settings.gate !== 'review')
             return undefined;
+        let settled = run;
+        let changed = false;
+        for (const step of definition.steps) {
+            const stored = settled.steps.find((entry) => entry.id === step.id);
+            if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked'))
+                continue;
+            if (step.evidence === undefined)
+                continue;
+            const check = await verifyEvidence(step.evidence, {
+                workspace,
+                values: settled.context,
+                // A whole-worktree review needs the same worktree digest it was gated on.
+                runGit: defaultGit,
+            });
+            if (!check.ok)
+                continue;
+            settled = settleStep(settled, step.id, 'done', {
+                at: journal.time(),
+                evidence: check.evidence,
+            });
+            changed = true;
         }
-        const stored = run.steps.find((entry) => entry.id === step.id);
-        if (stored === undefined || (stored.state !== 'open' && stored.state !== 'blocked')) {
+        if (!changed)
             return undefined;
-        }
-        const check = await verifyEvidence(step.evidence, {
-            workspace,
-            values: run.context,
-            // A whole-worktree review needs the same worktree digest it was gated on.
-            runGit: defaultGit,
-        });
-        if (!check.ok)
-            return undefined;
-        const at = journal.time();
-        const settled = settleStep(run, step.id, 'done', { at, evidence: check.evidence });
         const pending = settled.steps.some((entry) => entry.state === 'open' || entry.state === 'blocked');
-        return setRunStatus(settled, pending ? 'running' : 'completed', at);
+        return setRunStatus(settled, pending ? 'running' : 'completed', journal.time());
     };
     /** Mark unfinished runs from a previous process interrupted, never completed. */
     const recoveries = new Map();
