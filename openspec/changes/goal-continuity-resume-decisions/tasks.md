@@ -25,6 +25,8 @@ available.
 ## 4. Verification and close (verification only; owns no source path)
 
 - [x] 4.1 Run the full local gate — `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer` — and verify every command passes
+  - Verified at `c4406ac`: `pnpm check` exit 0 (typecheck, lint, build, 3112 tests in 170 files); `pnpm gen:check` exit 0 (678 generated files match); `pnpm validate:repo` exit 0; `pnpm validate:composition` exit 0; `pnpm validate:installer` exit 0.
 - [ ] 4.2 Answer the design's open question: determine with an integration test or a throwaway-profile acceptance run whether the checkpoint close gate refuses a substantial close without `work_checkpoint`; record the answer under Open Questions in `design.md` and, if the gate does not fire, note it as a defect without changing this change's approach
-- [x] 4.3 File the stale review loop as a repository issue with the evidence that a terminal findings digest restarted a review against an unchanged worktree, and no machine paths, credentials, or session dumps; verify the issue exists and is labelled
+- [x] 4.3 File the review-loop defect as a repository issue with the observed sequences that make it a defect — a stale snapshot repeating an already-fixed findings digest, and a PASS verdict still re-dispatching a review for the same unit — and no machine paths, credentials, or session dumps; verify the issue exists and is labelled
+  - Filed as issue #11 with the `bug` label and a follow-up comment carrying the sanitized sequences; a FINDINGS verdict re-dispatching an unaddressed unit is recorded there as intended behavior, not part of the defect.
 - [ ] 4.4 Sync the delta into `openspec/specs/goal-continuity/spec.md` and archive only after every checked task has a committed task-review PASS; verify `pnpm reviews:check --change goal-continuity-resume-decisions` reports a PASS for each checked task
