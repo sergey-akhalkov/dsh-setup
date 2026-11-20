@@ -1,0 +1,30 @@
+# Tasks
+
+Serial plan: every group is owned by `lead`. The continuation rules all live in one file, and
+`packages/setup/**` plus the generated `lib/**` are shared hot files, so no independent lane is
+available.
+
+## 1. Continuation decisions (owns packages/plugin-goal-continuity/src/host/index.ts, packages/plugin-goal-continuity/test/**)
+
+- [ ] 1.1 Change `DEFAULT_CONFIG.resumeAfterUserStop` to `'never'`, keep both values accepted by the resolver, and update the resolver and load-failure expectations; verify `pnpm exec vitest run packages/plugin-goal-continuity/test/config.test.ts` passes and `resolveConfig({})` reports `never`
+- [ ] 1.2 Add a helper that reads the session's latest successful `work_checkpoint` plan at or before the settled turn, accepting a plan from the settled turn or the turn before it, reusing `parseCheckpointInput`, and treating an unreadable argument or an error result as no evidence; verify unit tests cover fresh, stale, absent, unreadable, and error-result cases
+- [ ] 1.3 Compute the continuation decision once per settled goal round and apply it before the activation early-return in `reconcile` and before the end-reason branches in `handleTurnEnd`: a fresh `done` plan or a `user_decision` bottleneck disarms an armed goal, resumes nothing for a disarmed one, suppresses, and records one notice, while a resumable plan supplies the notice's next action and keeps the resume path through `continueAtCap`/`resumeAndNotify`; verify tests assert `disarm` is called for an armed goal, `resume` is not called for a disarmed one, the cap is not extended, the phase is unchanged, and the notice names the evidence
+- [ ] 1.4 Add the no-effect round counter to the per-agent state and update it on the `turn/end` path for every settled goal round whatever its end reason, counting a round only when it has no write, no worker start, and no successful checkpoint, resetting it on a direct user message and on any effective round, and stopping continuation on the second consecutive no-effect round by disarming an armed goal; verify tests cover a completed no-effect pair, a reset-aborted no-effect pair, an effective aborted round that resets the count, and a completed pair after which no third round starts without any pre-disarmed goal
+- [ ] 1.5 Replace the resume notice with the design's texts: a resume names the plan's next action or, with no fresh plan, requires the next round to make a concrete step or record a plan; a stopped continuation names the evidence and the user action that clears the suppression; every text stays within `NOTICE_TEXT_MAX_CHARS`; verify no delivered notice contains an instruction to continue the current objective and that the `non-goal` opt-in path uses the same gate
+- [ ] 1.6 Update the existing lifecycle and supervisor expectations that assumed a resume after a non-goal Stop, including the `never`-policy case; verify `pnpm exec vitest run packages/plugin-goal-continuity/test` passes
+
+## 2. Composition and generated files (owns packages/plugin-goal-continuity/cordis.fragment.yml, packages/plugin-goal-continuity/cordis.patch.yml, packages/setup/**, scripts/validate-composition.ts)
+
+- [ ] 2.1 Set `resumeAfterUserStop: never` in the plugin fragment and in `packages/setup/defaults.yml`, run `pnpm gen`, and update the shipped-default assertion in `scripts/validate-composition.ts`; verify `pnpm gen:check`, `pnpm validate:composition`, and a repository search find no remaining shipped default of `non-goal`
+- [ ] 2.2 Rebuild and commit the generated `lib/**` and the vendored setup tree with the rest of the change; verify `pnpm build && git diff --exit-code` reports no drift after the commit
+
+## 3. Documentation (owns README.md, docs/plugins.md, docs/goal-continuity.md)
+
+- [ ] 3.1 State the new shipped default, the three continuation rules, and the stop behaviour in the README plugin row, `docs/plugins.md`, and `docs/goal-continuity.md`, including that `non-goal` is now an opt-in that is still evidence-gated and that a stop disarms without changing the goal phase; verify `pnpm lint` passes and each document names the default `never`
+
+## 4. Verification and close (verification only; owns no source path)
+
+- [ ] 4.1 Run the full local gate — `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer` — and verify every command passes
+- [ ] 4.2 Answer the design's open question: determine with an integration test or a throwaway-profile acceptance run whether the checkpoint close gate refuses a substantial close without `work_checkpoint`; record the answer under Open Questions in `design.md` and, if the gate does not fire, note it as a defect without changing this change's approach
+- [ ] 4.3 File the stale review loop as a repository issue with the evidence that a terminal findings digest restarted a review against an unchanged worktree, and no machine paths, credentials, or session dumps; verify the issue exists and is labelled
+- [ ] 4.4 Sync the delta into `openspec/specs/goal-continuity/spec.md` and archive only after every checked task has a committed task-review PASS; verify `pnpm reviews:check --change goal-continuity-resume-decisions` reports a PASS for each checked task
