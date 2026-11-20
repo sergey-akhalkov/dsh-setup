@@ -183,6 +183,15 @@ approvals; the indicator and the card line were verified live in a throwaway `DS
 the `openspec-panel` review-state requirements and the `workflow-observability` indicator and
 liveness-read requirements.
 
+Follow-up `show-review-status` card layout (v0.48.1, no new requirement): the phase tag moved out of
+the card head into one labels row under the progress bars, the `Review` heading disappeared, settled
+task coverage became a second progress bar (`10/16 tasks reviewed`) beside the implementation bar, the
+review bar appears once a task is checked and keeps the missing task numbers in its tooltip, and the
+card's plugin-drawn border ring was replaced with the shipped loading glyph. The labels row carries
+the phase and the review units only; `reviewUnits` no longer returns the settled task unit. The
+existing `Review state on a change row` and `Visual hierarchy and theme conformance` requirements
+still hold, so no spec delta was needed.
+
 
 ## Archive index
 

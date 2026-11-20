@@ -540,15 +540,14 @@ export function decodeLiveReviewEntries(body: unknown): ReviewLiveEntry[] | unde
   return entries
 }
 
-/** One rendered unit of the card's review line. */
+/** One rendered status label on a card: a phase or a review unit. */
 export interface ReviewUnit {
   readonly label: string
   readonly tone: TagTone
   /** Bounded tooltip text; absent renders the unit plainly. */
   readonly tooltip?: string
-  /** A live review spins; a waiting review keeps a static ring. */
+  /** A live review spins; a waiting review stays still. */
   readonly spinning?: boolean
-  readonly waiting?: boolean
 }
 
 /** The whole-spec unit: PASS, outdated, findings, error, or not reviewed. */
@@ -576,25 +575,13 @@ function reviewSpecUnit(
   return { label: t('review.specError'), tone: 'warning' }
 }
 
-/** The checked-task unit: reviewed out of checked, naming the missing ones. */
-function reviewTasksUnit(tasks: ReviewTaskState, t: (key: string) => string): ReviewUnit {
-  return {
-    label: `${t('review.reviewed')} ${String(tasks.passed)}/${String(tasks.checked)} ${t('change.tasks')}`,
-    tone: tasks.passed >= tasks.checked ? 'success' : 'warning',
-    ...(tasks.missing.length === 0
-      ? {}
-      : { tooltip: `${t('review.missingTooltip')}: ${tasks.missing.join(', ')}` }),
-  }
-}
-
-/** One live review: a running unit spins, a waiting unit keeps a static ring. */
+/** One live review: a running unit spins, a waiting unit stays still. */
 function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now: Date): ReviewUnit {
   if (entry.state === 'waiting') {
     return {
       label: t('review.waiting'),
       tone: 'info',
       tooltip: t('review.waitTooltip'),
-      waiting: true,
     }
   }
   const relative = relativeLabel(entry.since, now)
@@ -624,9 +611,10 @@ function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now:
 }
 
 /**
- * The card's review line: the static state, with a live review replacing only
- * its own unit, so a running review is never rendered as settled. An
- * integration review has no settled unit on the card; it shows only while it
+ * The card's review labels: the static spec verdict, with a live review
+ * replacing only its own unit, so a running review is never rendered as
+ * settled. Settled task coverage is the card's review progress bar, not a
+ * label. An integration review has no settled unit; it shows only while it
  * runs or waits.
  */
 export function reviewUnits(
@@ -643,9 +631,6 @@ export function reviewUnits(
   else if (review !== undefined) units.push(reviewSpecUnit(review.spec, t, now))
   const tasksLive = liveOf('tasks')
   if (tasksLive !== undefined) units.push(reviewLiveUnit(tasksLive, t, now))
-  else if (review?.tasks !== undefined && review.tasks !== null) {
-    units.push(reviewTasksUnit(review.tasks, t))
-  }
   const integrationLive = liveOf('integration')
   if (integrationLive !== undefined) units.push(reviewLiveUnit(integrationLive, t, now))
   return units

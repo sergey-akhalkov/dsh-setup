@@ -292,7 +292,6 @@ const EN: Record<string, string> = {
   'markdown.copy': 'Copy',
   'markdown.copied': 'Copied',
   'markdown.footnotes': 'Footnotes',
-  'review.label': 'Review',
   'review.specPass': 'spec PASS',
   'review.specOutdated': 'spec outdated',
   'review.specFindings': 'spec findings',
@@ -1210,11 +1209,20 @@ function loadingLine(t: Translate): ReactNode {
   )
 }
 
+/** The panel's one spinner: the shipped loading glyph, rotating. */
+function Spinner(): ReactNode {
+  return (
+    <span className="dsh-openspec-spinner" aria-hidden="true">
+      <primitives.IconLoadingOutlineRegular size={12} />
+    </span>
+  )
+}
+
 /** A small activity glyph beside the heading of content a re-read is updating. */
 function refreshingSpinner(t: Translate): ReactNode {
   return (
     <span className="dsh-openspec-refreshing" role="status" aria-label={t('state.refreshing')}>
-      <primitives.IconLoadingOutlineRegular size={12} />
+      {Spinner()}
     </span>
   )
 }
@@ -1630,6 +1638,8 @@ function ChangeCard(props: {
   const phase = archived ? 'archived' : phaseOf(props.row)
   const updated = relativeLabel(props.row.modified, props.now)
   const review = archived ? [] : reviewUnits(props.row.review, props.live, props.t, props.now)
+  // Settled task-review coverage is the second bar; its missing tasks stay in the tooltip.
+  const reviewTasks = archived ? undefined : props.row.review?.tasks
   return (
     // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
     <div
@@ -1647,7 +1657,6 @@ function ChangeCard(props: {
     >
       <span className="dsh-openspec-card-head">
         {archived ? <primitives.IconCheckCircleOutlineRegular size={14} /> : null}
-        <Tag tone={phaseTone(phase)}>{props.t(`phase.${phase}`)}</Tag>
         <span className="dsh-openspec-card-title">{props.row.name}</span>
         {updated === null ? null : (
           <span className="dsh-openspec-card-count">{`${props.t('change.updated')} ${updated}`}</span>
@@ -1661,26 +1670,36 @@ function ChangeCard(props: {
         </primitives.Tooltip>
       )}
       {props.row.totalTasks > 0 ? (
-        ProgressBar({
-          done: props.row.completedTasks,
-          total: props.row.totalTasks,
-          t: props.t,
-          showLabel: false,
-        })
+        <span className="dsh-openspec-card-progress">
+          {ProgressBar({
+            done: props.row.completedTasks,
+            total: props.row.totalTasks,
+            t: props.t,
+          })}
+          {reviewTasks === undefined || reviewTasks === null || reviewTasks.checked === 0
+            ? null
+            : ProgressBar({
+                done: reviewTasks.passed,
+                total: reviewTasks.checked,
+                t: props.t,
+                label: `${String(reviewTasks.passed)}/${String(reviewTasks.checked)} ${props.t('change.tasks')} ${props.t('review.reviewed')}`,
+                ...(reviewTasks.missing.length === 0
+                  ? {}
+                  : {
+                      tooltip: `${props.t('review.missingTooltip')}: ${reviewTasks.missing.join(', ')}`,
+                    }),
+              })}
+        </span>
       ) : (
         <span className="dsh-openspec-meta">{props.t('change.tasksNotWritten')}</span>
       )}
-      {review.length === 0 ? null : ReviewLine({ units: review, label: props.t('review.label') })}
+      {CardLabels({ phase, units: review, t: props.t })}
       <span className="dsh-openspec-meta">
         <span className="dsh-openspec-tags">
           {presenceFacts(
             props.row.presence,
             props.t,
-            {
-              requirements: props.row.requirementCount ?? 0,
-              done: props.row.completedTasks,
-              total: props.row.totalTasks,
-            },
+            { requirements: props.row.requirementCount ?? 0 },
             props.onOpenArtifact,
           )}
         </span>
@@ -1729,29 +1748,18 @@ function ChangeCard(props: {
   )
 }
 
-/** The card's one review line: the label plus one tag per review unit. */
-function ReviewLine(props: {
+/** The card's status labels: the phase and the review units in one row under the bars. */
+function CardLabels(props: {
+  readonly phase: Phase
   readonly units: readonly ReviewUnit[]
-  readonly label: string
+  readonly t: Translate
 }): ReactNode {
   return (
-    <span className="dsh-openspec-review-row">
-      <span className="dsh-openspec-review-label">{props.label}</span>
+    <span className="dsh-openspec-card-labels">
+      <Tag tone={phaseTone(props.phase)}>{props.t(`phase.${props.phase}`)}</Tag>
       {props.units.map((unit, index) => (
         <span className="dsh-openspec-review-unit" key={`${unit.label}-${String(index)}`}>
-          {index === 0 ? null : (
-            <span className="dsh-openspec-review-sep" aria-hidden="true">
-              ·
-            </span>
-          )}
-          {unit.spinning === true ? (
-            <span
-              className="dsh-openspec-review-ring dsh-openspec-review-ring-live"
-              aria-hidden="true"
-            />
-          ) : unit.waiting === true ? (
-            <span className="dsh-openspec-review-ring" aria-hidden="true" />
-          ) : null}
+          {unit.spinning === true ? Spinner() : null}
           {unit.tooltip === undefined ? (
             <Tag tone={unit.tone}>{unit.label}</Tag>
           ) : (
@@ -1807,15 +1815,17 @@ function CapabilityCard(props: {
   )
 }
 
-/** Task progress: the bar, and optionally the `4/12 tasks` text. */
+/** One progress bar: the track, a text line, and an optional tooltip. */
 export function ProgressBar(props: {
   readonly done: number
   readonly total: number
   readonly t: Translate
-  readonly showLabel?: boolean
+  /** Bar text; defaults to `4/12 tasks`. */
+  readonly label?: string
+  readonly tooltip?: string
 }): ReactNode {
   const ratio = props.total <= 0 ? 0 : Math.min(1, props.done / props.total)
-  return (
+  const bar = (
     <span
       className="dsh-openspec-progress"
       role="progressbar"
@@ -1826,12 +1836,17 @@ export function ProgressBar(props: {
       <span className="dsh-openspec-progress-track">
         <span className="dsh-openspec-progress-fill" style={{ width: `${String(ratio * 100)}%` }} />
       </span>
-      {props.showLabel === false ? null : (
-        <span className="dsh-openspec-progress-label">
-          {`${String(props.done)}/${String(props.total)} ${props.t('change.tasks')}`}
-        </span>
-      )}
+      <span className="dsh-openspec-progress-label">
+        {props.label ?? `${String(props.done)}/${String(props.total)} ${props.t('change.tasks')}`}
+      </span>
     </span>
+  )
+  return props.tooltip === undefined ? (
+    bar
+  ) : (
+    <primitives.Tooltip label={props.tooltip} portal>
+      {bar}
+    </primitives.Tooltip>
   )
 }
 
@@ -1875,11 +1890,11 @@ function CommitFactView(props: {
   )
 }
 
-/** Quiet artifact facts for a change card, with the spec and task counts. */
+/** Quiet artifact facts for a change card: kinds, delta, and requirement count. */
 function presenceFacts(
   presence: ChangePresence | undefined,
   t: Translate,
-  counts: { readonly requirements: number; readonly done: number; readonly total: number },
+  counts: { readonly requirements: number },
   onOpen?: (kind: ArtifactKind) => void,
 ): ReactNode[] {
   if (presence === undefined) return []
@@ -1896,13 +1911,7 @@ function presenceFacts(
         : {}),
     })
   }
-  if (presence.tasks) {
-    facts.push({
-      kind: 'tasks',
-      label: t('presence.tasks'),
-      ...(counts.total > 0 ? { suffix: `${String(counts.done)}/${String(counts.total)}` } : {}),
-    })
-  }
+  if (presence.tasks) facts.push({ kind: 'tasks', label: t('presence.tasks') })
   return facts.map((fact) => {
     const tag = (
       <Tag tone="quiet" className="dsh-openspec-artifact-tag">
@@ -2667,6 +2676,10 @@ export const PANEL_CSS = `
   display: inline-flex;
   align-items: center;
   color: var(--dsw-alias-label-tertiary);
+}
+.dsh-openspec-spinner {
+  display: inline-flex;
+  align-items: center;
   animation: dsh-openspec-spin 900ms linear infinite;
 }
 @keyframes dsh-openspec-spin {
@@ -2768,7 +2781,7 @@ export const PANEL_CSS = `
   gap: 10px;
   min-width: 0;
 }
-.dsh-openspec-review-row {
+.dsh-openspec-card-labels {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -2777,29 +2790,11 @@ export const PANEL_CSS = `
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
 }
-.dsh-openspec-review-label {
-  font: var(--dsw-font-xxxs-strong-11);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
 .dsh-openspec-review-unit {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
-}
-.dsh-openspec-review-ring {
-  display: inline-block;
-  box-sizing: border-box;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--dsw-alias-label-secondary);
-  border-radius: 50%;
-}
-.dsh-openspec-review-ring-live {
-  border-color: var(--dsw-alias-label-tertiary);
-  border-top-color: transparent;
-  animation: dsh-openspec-spin 900ms linear infinite;
 }
 .dsh-openspec-artifact-link {
   display: inline-flex;
@@ -2822,6 +2817,16 @@ export const PANEL_CSS = `
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+/* Two bars side by side; each label stays under its own track and wraps alone. */
+.dsh-openspec-card-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.dsh-openspec-card-progress .dsh-openspec-progress {
+  flex: 1 1 120px;
 }
 .dsh-openspec-progress-row .dsh-openspec-progress {
   flex: 1 1 120px;
@@ -3118,12 +3123,8 @@ export const PANEL_CSS = `
   .dsh-openspec-history-row {
     transition: none;
   }
-  .dsh-openspec-refreshing {
+  .dsh-openspec-spinner {
     animation: none;
-  }
-  .dsh-openspec-review-ring-live {
-    animation: none;
-    border-top-color: var(--dsw-alias-label-tertiary);
   }
 }
 `

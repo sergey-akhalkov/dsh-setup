@@ -278,20 +278,12 @@ window.__ModuleLoader__.load({
       }
       return { label: t("review.specError"), tone: "warning" };
     }
-    function reviewTasksUnit(tasks, t) {
-      return {
-        label: `${t("review.reviewed")} ${String(tasks.passed)}/${String(tasks.checked)} ${t("change.tasks")}`,
-        tone: tasks.passed >= tasks.checked ? "success" : "warning",
-        ...tasks.missing.length === 0 ? {} : { tooltip: `${t("review.missingTooltip")}: ${tasks.missing.join(", ")}` }
-      };
-    }
     function reviewLiveUnit(entry, t, now) {
       if (entry.state === "waiting") {
         return {
           label: t("review.waiting"),
           tone: "info",
-          tooltip: t("review.waitTooltip"),
-          waiting: true
+          tooltip: t("review.waitTooltip")
         };
       }
       const relative = relativeLabel(entry.since, now);
@@ -327,9 +319,6 @@ window.__ModuleLoader__.load({
       else if (review !== void 0) units.push(reviewSpecUnit(review.spec, t, now));
       const tasksLive = liveOf("tasks");
       if (tasksLive !== void 0) units.push(reviewLiveUnit(tasksLive, t, now));
-      else if (review?.tasks !== void 0 && review.tasks !== null) {
-        units.push(reviewTasksUnit(review.tasks, t));
-      }
       const integrationLive = liveOf("integration");
       if (integrationLive !== void 0) units.push(reviewLiveUnit(integrationLive, t, now));
       return units;
@@ -968,7 +957,6 @@ window.__ModuleLoader__.load({
       "markdown.copy": "Copy",
       "markdown.copied": "Copied",
       "markdown.footnotes": "Footnotes",
-      "review.label": "Review",
       "review.specPass": "spec PASS",
       "review.specOutdated": "spec outdated",
       "review.specFindings": "spec findings",
@@ -1559,8 +1547,11 @@ window.__ModuleLoader__.load({
     function loadingLine(t) {
       return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-state", role: "status", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.TextShimmer, { active: true, children: t("state.loading") }) });
     }
+    function Spinner() {
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-spinner", "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconLoadingOutlineRegular, { size: 12 }) });
+    }
     function refreshingSpinner(t) {
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-refreshing", role: "status", "aria-label": t("state.refreshing"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconLoadingOutlineRegular, { size: 12 }) });
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-refreshing", role: "status", "aria-label": t("state.refreshing"), children: Spinner() });
     }
     function errorState(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-error", children: [
@@ -1823,6 +1814,7 @@ window.__ModuleLoader__.load({
       const phase = archived ? "archived" : phaseOf(props.row);
       const updated = relativeLabel(props.row.modified, props.now);
       const review = archived ? [] : reviewUnits(props.row.review, props.live, props.t, props.now);
+      const reviewTasks = archived ? void 0 : props.row.review?.tasks;
       return (
         // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
@@ -1841,27 +1833,32 @@ window.__ModuleLoader__.load({
             children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
                 archived ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }) : null,
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone(phase), children: props.t(`phase.${phase}`) }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
                 updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
               ] }),
               summaryText(props.row.why ?? props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.why ?? props.row.summary ?? "", portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.why ?? props.row.summary }) }),
-              props.row.totalTasks > 0 ? ProgressBar({
-                done: props.row.completedTasks,
-                total: props.row.totalTasks,
-                t: props.t,
-                showLabel: false
-              }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
-              review.length === 0 ? null : ReviewLine({ units: review, label: props.t("review.label") }),
+              props.row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-progress", children: [
+                ProgressBar({
+                  done: props.row.completedTasks,
+                  total: props.row.totalTasks,
+                  t: props.t
+                }),
+                reviewTasks === void 0 || reviewTasks === null || reviewTasks.checked === 0 ? null : ProgressBar({
+                  done: reviewTasks.passed,
+                  total: reviewTasks.checked,
+                  t: props.t,
+                  label: `${String(reviewTasks.passed)}/${String(reviewTasks.checked)} ${props.t("change.tasks")} ${props.t("review.reviewed")}`,
+                  ...reviewTasks.missing.length === 0 ? {} : {
+                    tooltip: `${props.t("review.missingTooltip")}: ${reviewTasks.missing.join(", ")}`
+                  }
+                })
+              ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
+              CardLabels({ phase, units: review, t: props.t }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(
                   props.row.presence,
                   props.t,
-                  {
-                    requirements: props.row.requirementCount ?? 0,
-                    done: props.row.completedTasks,
-                    total: props.row.totalTasks
-                  },
+                  { requirements: props.row.requirementCount ?? 0 },
                   props.onOpenArtifact
                 ) }),
                 props.row.commit === void 0 || props.row.commit === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-tail", children: CommitFactView({ commit: props.row.commit }) })
@@ -1900,18 +1897,11 @@ window.__ModuleLoader__.load({
         )
       );
     }
-    function ReviewLine(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-review-row", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-review-label", children: props.label }),
+    function CardLabels(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-labels", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone(props.phase), children: props.t(`phase.${props.phase}`) }),
         props.units.map((unit, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-review-unit", children: [
-          index === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-review-sep", "aria-hidden": "true", children: "\xB7" }),
-          unit.spinning === true ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-            "span",
-            {
-              className: "dsh-openspec-review-ring dsh-openspec-review-ring-live",
-              "aria-hidden": "true"
-            }
-          ) : unit.waiting === true ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-review-ring", "aria-hidden": "true" }) : null,
+          unit.spinning === true ? Spinner() : null,
           unit.tooltip === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: unit.tone, children: unit.label }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: unit.tooltip, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: unit.tone, children: unit.label }) })
         ] }, `${unit.label}-${String(index)}`))
       ] });
@@ -1935,7 +1925,7 @@ window.__ModuleLoader__.load({
     }
     function ProgressBar(props) {
       const ratio = props.total <= 0 ? 0 : Math.min(1, props.done / props.total);
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+      const bar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
         "span",
         {
           className: "dsh-openspec-progress",
@@ -1945,10 +1935,11 @@ window.__ModuleLoader__.load({
           "aria-valuenow": props.done,
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-progress-track", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-progress-fill", style: { width: `${String(ratio * 100)}%` } }) }),
-            props.showLabel === false ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-progress-label", children: `${String(props.done)}/${String(props.total)} ${props.t("change.tasks")}` })
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-progress-label", children: props.label ?? `${String(props.done)}/${String(props.total)} ${props.t("change.tasks")}` })
           ]
         }
       );
+      return props.tooltip === void 0 ? bar : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.tooltip, portal: true, children: bar });
     }
     function CommitFactView(props) {
       const href = props.commit.url;
@@ -1989,13 +1980,7 @@ window.__ModuleLoader__.load({
           ...counts.requirements > 0 ? { suffix: `${String(counts.requirements)} ${t("specs.req")}` } : {}
         });
       }
-      if (presence.tasks) {
-        facts.push({
-          kind: "tasks",
-          label: t("presence.tasks"),
-          ...counts.total > 0 ? { suffix: `${String(counts.done)}/${String(counts.total)}` } : {}
-        });
-      }
+      if (presence.tasks) facts.push({ kind: "tasks", label: t("presence.tasks") });
       return facts.map((fact) => {
         const tag = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", className: "dsh-openspec-artifact-tag", children: [
           fact.label,
@@ -2515,6 +2500,10 @@ window.__ModuleLoader__.load({
       display: inline-flex;
       align-items: center;
       color: var(--dsw-alias-label-tertiary);
+    }
+    .dsh-openspec-spinner {
+      display: inline-flex;
+      align-items: center;
       animation: dsh-openspec-spin 900ms linear infinite;
     }
     @keyframes dsh-openspec-spin {
@@ -2616,7 +2605,7 @@ window.__ModuleLoader__.load({
       gap: 10px;
       min-width: 0;
     }
-    .dsh-openspec-review-row {
+    .dsh-openspec-card-labels {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
@@ -2625,29 +2614,11 @@ window.__ModuleLoader__.load({
       font: var(--dsw-font-xxs-12);
       color: var(--dsw-alias-label-tertiary);
     }
-    .dsh-openspec-review-label {
-      font: var(--dsw-font-xxxs-strong-11);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
     .dsh-openspec-review-unit {
       display: inline-flex;
       align-items: center;
       gap: 4px;
       min-width: 0;
-    }
-    .dsh-openspec-review-ring {
-      display: inline-block;
-      box-sizing: border-box;
-      width: 12px;
-      height: 12px;
-      border: 2px solid var(--dsw-alias-label-secondary);
-      border-radius: 50%;
-    }
-    .dsh-openspec-review-ring-live {
-      border-color: var(--dsw-alias-label-tertiary);
-      border-top-color: transparent;
-      animation: dsh-openspec-spin 900ms linear infinite;
     }
     .dsh-openspec-artifact-link {
       display: inline-flex;
@@ -2670,6 +2641,16 @@ window.__ModuleLoader__.load({
       flex-direction: column;
       gap: 4px;
       min-width: 0;
+    }
+    /* Two bars side by side; each label stays under its own track and wraps alone. */
+    .dsh-openspec-card-progress {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      min-width: 0;
+    }
+    .dsh-openspec-card-progress .dsh-openspec-progress {
+      flex: 1 1 120px;
     }
     .dsh-openspec-progress-row .dsh-openspec-progress {
       flex: 1 1 120px;
@@ -2966,12 +2947,8 @@ window.__ModuleLoader__.load({
       .dsh-openspec-history-row {
         transition: none;
       }
-      .dsh-openspec-refreshing {
+      .dsh-openspec-spinner {
         animation: none;
-      }
-      .dsh-openspec-review-ring-live {
-        animation: none;
-        border-top-color: var(--dsw-alias-label-tertiary);
       }
     }
     `;

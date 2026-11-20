@@ -651,18 +651,20 @@ right sidebar. A Start-page card, the sidebar's panel list, and client navigatio
 archived`), `Explore` and `Propose` actions that fill `/openspec-explore ` and `/openspec-propose `
 without submitting, and three counted segments — `Changes`, `Specs` and `Archive`. The segment labels
 carry the totals from the first `/changes` read, so all three are complete before Specs is opened.
-`Changes` lists the workspace's active changes, unfinished first. Each card states the derived status
-(`planning`, `ready to apply`, `applying` or `complete`) as a semantic tag, a task progress bar with
-`completed/total`, the proposal's one-line `## Why` summary, the artifact kinds the change carries,
-when it last changed, and the last commit. Between the progress bar and the artifact tags, an active
-card carries one `Review` line: the whole-spec verdict (`spec PASS` while the record still matches the
-change artifacts, `spec outdated` after a plan edit, `spec findings (N)`, `spec error`, or `spec not
-reviewed` when this clone has no local record) and `reviewed X/Y tasks` for the checked tasks with the
-portable task-review `PASS` the archive gate counts, with the missing task numbers in its tooltip. The
-line reads the workflows engine's `workflowsReviewStatus` service: a profile without the engine, an
-archived row, or a failed read renders the card exactly as before, and a commit-backed audit of the
-approvals stays with `pnpm reviews:check`. While a review of one of the workspace's changes is live,
-the card's line replaces the affected unit with a spinning `reviewing ...` tag: the panel reads the
+`Changes` lists the workspace's active changes, unfinished first. Each card states the proposal's
+one-line `## Why` summary, two progress bars, one row of status labels under them, the artifact kinds
+the change carries, when it last changed, and the last commit. The first bar is the implementation
+progress (`4/12 tasks`, the `tasks.md` checkboxes); the second is the settled review coverage
+(`10/16 tasks reviewed`, the checked tasks with the portable task-review `PASS` the archive gate
+counts, with the missing task numbers in its tooltip) and it appears once a task is checked. The
+labels row carries the derived status (`planning`, `ready to apply`, `applying` or `complete`, and
+`archived` on an archived card) and the whole-spec verdict (`spec PASS` while the record still
+matches the change artifacts, `spec outdated` after a plan edit, `spec findings (N)`, `spec error`, or
+`spec not reviewed` when this clone has no local record), as shipped semantic tags. The line reads the
+workflows engine's `workflowsReviewStatus` service: a profile without the engine, an archived row, or
+a failed read renders the card exactly as before, and a commit-backed audit of the approvals stays
+with `pnpm reviews:check`. While a review of one of the workspace's changes is live, the labels row
+shows that review's own `reviewing ...` tag beside the shipped loading spinner. The panel reads the
 engine's live route every four seconds while `Changes` is visible, stops when that route is absent,
 and performs one debounced change-list re-read when a previously live review settles so the new
 verdict replaces the spinner without a manual refresh. The change list itself is never polled. An empty change list repeats both actions, shows the

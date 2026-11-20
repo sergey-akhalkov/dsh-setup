@@ -266,7 +266,6 @@ const COPY: Record<string, string> = {
   'markdown.copy': 'Copy',
   'markdown.copied': 'Copied',
   'markdown.footnotes': 'Footnotes',
-  'review.label': 'Review',
   'review.specPass': 'spec PASS',
   'review.specOutdated': 'spec outdated',
   'review.specFindings': 'spec findings',
@@ -3480,12 +3479,12 @@ describe('OpenSpec live observation', () => {
     return found
   }
 
-  /** Whether the rendered review line carries a live spinner ring. */
+  /** Whether the rendered card carries a live review spinner. */
   function hasLiveRing(tree: unknown): boolean {
     return nodes(tree).some(
       (node) =>
         typeof node.props.className === 'string' &&
-        node.props.className.includes('dsh-openspec-review-ring-live'),
+        node.props.className.includes('dsh-openspec-spinner'),
     )
   }
 
@@ -4844,6 +4843,78 @@ describe('OpenSpec panel capability body', () => {
 })
 
 describe('OpenSpec panel visual contract', () => {
+  it('puts one labels row under the two progress bars', () => {
+    const review: ChangeReviewSummary = {
+      spec: {
+        verdict: 'PASS',
+        current: true,
+        at: '2026-11-05T15:00:00',
+        findings: 0,
+        reviewer: 'codex',
+      },
+      tasks: { checked: 16, passed: 10, missing: ['2.3', '4.1'] },
+    }
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+              phase: 'applying',
+              review,
+            }),
+          ]),
+        },
+        now: NOW,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const order = nodes(card)
+    const progress = order.find((node) => node.props.className === 'dsh-openspec-card-progress')
+    const labels = order.find((node) => node.props.className === 'dsh-openspec-card-labels')
+    if (progress === undefined || labels === undefined) throw new Error('card layout missing')
+    expect(order.indexOf(progress)).toBeLessThan(order.indexOf(labels))
+    const bars = nodes(progress).filter((node) => node.props.role === 'progressbar')
+    expect(bars).toHaveLength(2)
+    expect(bars[0]?.props['aria-valuenow']).toBe(4)
+    expect(bars[0]?.props['aria-valuemax']).toBe(12)
+    expect(bars[1]?.props['aria-valuenow']).toBe(10)
+    expect(bars[1]?.props['aria-valuemax']).toBe(16)
+    expect(textOf(progress)).toContain('4/12 tasks')
+    expect(textOf(progress)).toContain('10/16 tasks reviewed')
+    expect(typed(card, 'Tooltip').map((tooltip) => tooltip.props.label)).toContain(
+      'No portable task-review PASS for: 2.3, 4.1',
+    )
+    // Labels are the phase and the settled review units, in that order, with no
+    // duplicate phase tag in the card head and no plugin-drawn ring glyph.
+    expect(typed(labels, 'Tag').map((tag) => tag.props.children)).toEqual(['applying', 'spec PASS'])
+    const head = order.find((node) => node.props.className === 'dsh-openspec-card-head')
+    expect(typed(head, 'Tag')).toHaveLength(0)
+    expect(PANEL_CSS).not.toContain('dsh-openspec-review-ring')
+  })
+
+  it('omits the review bar until a task is checked', () => {
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 0, 12, EMPTY_PRESENCE, {
+              phase: 'ready-to-apply',
+              review: { spec: null, tasks: { checked: 0, passed: 0, missing: [] } },
+            }),
+          ]),
+        },
+        now: NOW,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(1)
+    expect(textOf(card)).toContain('ready to apply')
+  })
+
   it('maps each phase to one semantic tag tone', () => {
     expect(phaseTone('planning')).toBe('warning')
     expect(phaseTone('ready-to-apply')).toBe('info')
@@ -4898,12 +4969,9 @@ describe('OpenSpec review state', () => {
     }
   }
 
-  it('renders a current PASS and full task coverage as two success units', () => {
+  it('renders the settled spec verdict as the card label', () => {
     const units = reviewUnits(summary(), undefined, t, NOW)
-    expect(units.map((unit) => [unit.label, unit.tone])).toEqual([
-      ['spec PASS', 'success'],
-      ['reviewed 16/16 tasks', 'success'],
-    ])
+    expect(units.map((unit) => [unit.label, unit.tone])).toEqual([['spec PASS', 'success']])
     expect(units[0]?.tooltip).toBe('Whole-spec review PASS by codex (gpt-5.1-codex) - 2h ago')
   })
 
@@ -4964,18 +5032,7 @@ describe('OpenSpec review state', () => {
     expect(units).toEqual([{ label: 'spec not reviewed', tone: 'quiet' }])
   })
 
-  it('counts the checked tasks with a portable PASS and names the missing ones', () => {
-    const units = reviewUnits(
-      summary({ tasks: { checked: 16, passed: 10, missing: ['2.3', '4.1'] } }),
-      undefined,
-      t,
-      NOW,
-    )
-    expect(units[1]).toMatchObject({ label: 'reviewed 10/16 tasks', tone: 'warning' })
-    expect(units[1]?.tooltip).toBe('No portable task-review PASS for: 2.3, 4.1')
-  })
-
-  it('replaces only the live unit and keeps the settled unit beside it', () => {
+  it('replaces the settled spec unit with its live review', () => {
     const units = reviewUnits(
       summary(),
       [
@@ -4993,12 +5050,8 @@ describe('OpenSpec review state', () => {
       t,
       NOW,
     )
-    expect(units.map((unit) => unit.label)).toEqual([
-      'spec review running - attempt 2',
-      'reviewed 16/16 tasks',
-    ])
+    expect(units.map((unit) => unit.label)).toEqual(['spec review running - attempt 2'])
     expect(units[0]).toMatchObject({ tone: 'info', spinning: true })
-    expect(units[1]).toMatchObject({ tone: 'success' })
   })
 
   it('names the reviewed task unit and keeps the spinner off while waiting', () => {
@@ -5016,10 +5069,7 @@ describe('OpenSpec review state', () => {
     const running = reviewUnits(summary(), [tasks], t, NOW)
     expect(running[1]).toMatchObject({ label: 'reviewing tasks - 2. Lane A', spinning: true })
     const waiting = reviewUnits(summary(), [{ ...tasks, state: 'waiting' }], t, NOW)
-    expect(waiting[1]).toMatchObject({
-      label: 'waiting for the live review run',
-      waiting: true,
-    })
+    expect(waiting[1]).toMatchObject({ label: 'waiting for the live review run' })
     expect(waiting[1]).not.toHaveProperty('spinning')
   })
 
@@ -5037,23 +5087,18 @@ describe('OpenSpec review state', () => {
     const running = reviewUnits(summary(), [integration], t, NOW)
     expect(running.map((unit) => unit.label)).toEqual([
       'spec PASS',
-      'reviewed 16/16 tasks',
       'integration review running - attempt 1',
     ])
-    expect(running[2]).toMatchObject({ tone: 'info', spinning: true })
+    expect(running[1]).toMatchObject({ tone: 'info', spinning: true })
     const waiting = reviewUnits(summary(), [{ ...integration, state: 'waiting' }], t, NOW)
-    expect(waiting[2]).toMatchObject({
+    expect(waiting[1]).toMatchObject({
       label: 'waiting for the live review run',
-      waiting: true,
     })
-    expect(waiting[2]).not.toHaveProperty('spinning')
+    expect(waiting[1]).not.toHaveProperty('spinning')
     // A settled integration verdict adds no new settled unit: the card keeps
-    // exactly its spec/tasks lines once the live entry is gone.
+    // exactly its spec label once the live entry is gone.
     expect(reviewUnits(summary(), [], t, NOW)).toEqual(reviewUnits(summary(), undefined, t, NOW))
-    expect(reviewUnits(summary(), [], t, NOW).map((unit) => unit.label)).toEqual([
-      'spec PASS',
-      'reviewed 16/16 tasks',
-    ])
+    expect(reviewUnits(summary(), [], t, NOW).map((unit) => unit.label)).toEqual(['spec PASS'])
     // A live unit still renders without any static review field.
     const liveOnly = reviewUnits(
       undefined,
