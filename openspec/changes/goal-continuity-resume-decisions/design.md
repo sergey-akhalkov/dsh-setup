@@ -112,9 +112,11 @@ The ordering of one settled goal round:
 
 The decision is computed once per settled turn and reused by both the stop path and `reconcile`, so the resume budget, the cap extension, and the notices keep a single decision point. A stop is a suppression in the existing sense: it survives until a direct user message clears it.
 
-### D7. A user abort outranks the evidence stop
+### D7. A user abort outranks the evidence stop, and the policy decides the non-goal case
 
-A user abort of a goal round already ends that turn through the driver's pause, and the retained pause-prevention rule forbids disarming for a user abort. The evidence stop therefore does not disarm such a round: the pause is the durable record of the user's decision, the evidence and the no-effect count are still recorded, and the stop applies from the next settled round. A user abort of a turn that is not a goal round leaves no driver pause, so there the stop disarms an armed goal and suppresses the resume — which is the incident's exact shape, a Stop on a notification-driven turn while the goal was still live.
+A user abort of a goal round already ends that turn through the driver's pause, and the retained pause-prevention rule forbids disarming for a user abort. The evidence stop therefore does not disarm such a round: the pause is the durable record of the user's decision, the evidence and the no-effect count are still recorded, and the stop applies from the next settled round.
+
+A user abort of a turn that is not a goal round leaves no driver pause, and there the configured policy decides. Under the default `never` the Stop is authoritative: an armed goal is disarmed and the resume suppressed, which is the incident's exact shape — a Stop on a notification-driven turn while the goal was still live, and the disarm is what makes the Stop reach a goal that needs no resume. Under `non-goal` the opt-in from D1 stays meaningful: the evidence rules decide, so a permissive plan lets an armed goal keep running and resumes a disarmed one, and only a stopping plan withholds. Collapsing both policies into an unconditional stop would have made `non-goal` an alias of `never`.
 
 ### D8. Notices carry their reason
 

@@ -67,7 +67,7 @@ When the row is enabled and a root agent is settled with a current goal in phase
 
 ### Requirement: User abort policy
 
-A user abort of a goal round MUST suppress automatic resumes until the next direct user message. Under the default `resumeAfterUserStop` policy `never`, a user abort of a turn that is not a goal round MUST also suppress automatic resumes until the next direct user message and SHALL record one notice. With `resumeAfterUserStop` set to `non-goal`, the supervisor MAY re-arm the goal once that turn settles, and it MUST apply the checkpoint-evidenced continuation rule and the no-effect round rule first. A user abort MUST NOT be read as evidence that the goal is incomplete or that work remains.
+A user abort of a goal round MUST suppress automatic resumes until the next direct user message. Under the default `resumeAfterUserStop` policy `never`, a user abort of a turn that is not a goal round MUST also suppress automatic resumes until the next direct user message, MUST disarm an armed goal so it cannot continue on its own, and SHALL record one notice. With `resumeAfterUserStop` set to `non-goal`, the supervisor MAY re-arm the goal once that turn settles, and it MUST apply the checkpoint-evidenced continuation rule and the no-effect round rule first. A user abort MUST NOT be read as evidence that the goal is incomplete or that work remains.
 
 #### Scenario: Stop during a goal round is respected
 
@@ -77,7 +77,7 @@ A user abort of a goal round MUST suppress automatic resumes until the next dire
 #### Scenario: Stop on a non-goal turn does not kill the goal
 
 - **WHEN** the user aborts a turn that is not a goal round
-- **THEN** the goal keeps its phase and activation under either policy, so a later direct user message or an explicit resume still applies, and no resume follows from the abort itself
+- **THEN** the goal keeps its phase under either policy and is never paused, blocked, or completed, so a later direct user message or an explicit resume still applies, and no resume follows from the abort alone
 
 #### Scenario: Strict stop policy
 
@@ -299,14 +299,19 @@ A goal round is no-effect when it made no successful write, no worker start, and
 
 ### Requirement: User abort outranks a continuation stop
 
-A user abort of a goal round ends that turn through the driver's pause, which is the durable record of the user's decision. A continuation stop MUST NOT disarm such a round and MUST NOT pre-empt that pause; the evidence and the no-effect count are still recorded, and the stop applies to the next settled round instead. A user abort of a turn that is not a goal round leaves no driver pause, so an armed goal is disarmed and the resume is suppressed.
+A user abort of a goal round ends that turn through the driver's pause, which is the durable record of the user's decision. A continuation stop MUST NOT disarm such a round and MUST NOT pre-empt that pause; the evidence and the count are still recorded and the stop applies to the next settled round. A user abort of any other turn follows the configured policy: `never` disarms an armed goal and suppresses, while `non-goal` applies the continuation evidence and may continue.
 
 #### Scenario: User Stop on a no-effect goal round keeps its pause
 
 - **WHEN** the second consecutive no-effect round is a goal round the user aborted
 - **THEN** the supervisor disarms nothing, the driver records the pause, and the count and evidence are still recorded
 
-#### Scenario: User Stop on a non-goal turn stops an armed goal
+#### Scenario: Strict policy Stop stops an armed goal
 
-- **WHEN** the user aborts a turn that is not a goal round while the goal is armed
+- **WHEN** the user aborts a turn that is not a goal round, `resumeAfterUserStop` is `never`, and the goal is armed
 - **THEN** the supervisor disarms the goal and suppresses the resume, and the phase stays active
+
+#### Scenario: Opt-in policy Stop follows the evidence
+
+- **WHEN** the user aborts a turn that is not a goal round, `resumeAfterUserStop` is `non-goal`, and a fresh plan allows continuation
+- **THEN** an armed goal keeps running and a disarmed goal is resumed, so the opt-in differs from `never`
