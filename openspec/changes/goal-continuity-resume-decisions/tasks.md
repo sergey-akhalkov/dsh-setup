@@ -24,7 +24,7 @@ available.
 
 ## 4. Verification and close (verification only; owns no source path)
 
-- [ ] 4.1 Run the full local gate — `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer` — and verify every command passes
+- [x] 4.1 Run the full local gate — `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer` — and verify every command passes
 - [ ] 4.2 Answer the design's open question: determine with an integration test or a throwaway-profile acceptance run whether the checkpoint close gate refuses a substantial close without `work_checkpoint`; record the answer under Open Questions in `design.md` and, if the gate does not fire, note it as a defect without changing this change's approach
-- [ ] 4.3 File the stale review loop as a repository issue with the evidence that a terminal findings digest restarted a review against an unchanged worktree, and no machine paths, credentials, or session dumps; verify the issue exists and is labelled
+- [x] 4.3 File the stale review loop as a repository issue with the evidence that a terminal findings digest restarted a review against an unchanged worktree, and no machine paths, credentials, or session dumps; verify the issue exists and is labelled
 - [ ] 4.4 Sync the delta into `openspec/specs/goal-continuity/spec.md` and archive only after every checked task has a committed task-review PASS; verify `pnpm reviews:check --change goal-continuity-resume-decisions` reports a PASS for each checked task
