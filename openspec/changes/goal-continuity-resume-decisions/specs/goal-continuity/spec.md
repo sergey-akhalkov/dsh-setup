@@ -223,7 +223,12 @@ Before deciding continuation, the supervisor SHALL read the latest successful `w
 
 ### Requirement: Evidence stops automatic continuation
 
-A fresh plan with `outcome: done`, or with `outcome: continue` and a bottleneck whose `action` is `user_decision`, MUST stop automatic continuation: the supervisor disarms an armed goal, resumes no disarmed goal, and records one notice. A user-aborted goal round is the exception: its driver pause is the stop record. Nothing else in the plan stops it. This rule MUST NOT change the goal phase.
+A fresh plan that declares `outcome: done`, or that names a `user_decision` bottleneck, MUST stop automatic continuation when the settled turn ended for a recoverable reason: disarm an armed goal, resume no disarmed one, record one notice. A user-aborted goal round and a terminal end reason keep their own record instead. Nothing else stops it. The phase MUST NOT change.
+
+#### Scenario: Terminal end reason keeps its own stop
+
+- **WHEN** a turn with a stopping plan ends at the token limit, an agent error, or a final hook cause
+- **THEN** the terminal policy delivers the single notice and record, no evidence notice is added, and the plan still counts as recorded evidence for the next settled round
 
 #### Scenario: Done plan stops an armed goal
 
@@ -270,7 +275,7 @@ A resume with no fresh plan SHALL deliver a notice that requires the next round 
 
 ### Requirement: No-effect round stop
 
-A goal round is no-effect when it made no successful write, no worker start, and no successful `work_checkpoint`. Every settled round counts, whatever its end reason. Two consecutive no-effect rounds MUST stop continuation: disarm an armed goal, resume no disarmed one, record one notice. A user-aborted goal round is the exception: its driver pause is the stop record. An effective round or a direct message resets the count, and the phase MUST NOT change.
+A goal round is no-effect when it made no successful write, no worker start, and no successful `work_checkpoint`. Every settled round counts, whatever its end reason. Two consecutive no-effect rounds MUST stop continuation the same way on a recoverable end reason. A user-aborted goal round and a terminal end reason keep their own record. An effective round or a direct message resets the count, and the phase MUST NOT change.
 
 #### Scenario: First no-effect round is tolerated
 

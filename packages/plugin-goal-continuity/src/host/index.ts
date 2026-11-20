@@ -2653,13 +2653,21 @@ function planStop(plan: ContinuationPlan): { cause: StopCause; detail: string } 
   if (plan.bottleneckAction !== 'user_decision') return undefined
   return {
     cause: 'checkpoint-user-decision',
-    detail: `the last work checkpoint names bottleneck "${plan.bottleneckId ?? 'unnamed'}" as a user decision; next: ${plan.next}`,
+    detail: `the last work checkpoint names bottleneck "${bound(plan.bottleneckId ?? 'unnamed', 80)}" as a user decision; next: ${plan.next}`,
   }
 }
 
-/** One bounded notice naming the stop and the user action that continues work. */
+/**
+ * One bounded notice naming the stop and the recovery action. The evidence is
+ * bounded to the room the recovery sentence leaves, so truncation can never cut
+ * the one instruction the notice exists for.
+ */
 function stopNotice(stop: { readonly cause: StopCause; readonly detail: string }): string {
-  return `Goal continuity stopped automatic continuation: ${stop.detail}. The goal stays active and unchanged. Send a message with what to do next, or resume with /goal resume.`
+  const header = 'Goal continuity stopped automatic continuation: '
+  const tail = '. The goal stays active and unchanged. '
+  const recovery = 'Send a message with what to do next, or resume with /goal resume.'
+  const room = NOTICE_TEXT_MAX_CHARS - header.length - tail.length - recovery.length
+  return `${header}${bound(stop.detail, Math.max(80, room))}${tail}${recovery}`
 }
 
 /** Every decoded string value in one tool call's serialized arguments. */
@@ -4169,6 +4177,14 @@ export function apply(ctx: Context, config?: Config): void {
     // A user abort follows its own policy, and an aborted goal round already ends
     // through the driver's durable pause, so the evidence never pre-empts it.
     if (userAbort && (goalRound || resolved.resumeAfterUserStop === 'never')) return
+    // A terminal end reason owns its own stop and visible record; a second one
+    // here would deliver two notices and contradict the first one's phase.
+    const hook = hookCause(reason)
+    const terminal =
+      reason.kind === 'max-tokens' ||
+      reason.kind === 'error' ||
+      (hook !== undefined && hook !== 'reset')
+    if (terminal) return
     stopForEvidence(agent, state, turn)
   }
 

@@ -17,6 +17,7 @@ import {
 
 const COMPLETED = { kind: 'completed' }
 const USER_ABORT = { kind: 'aborted', reason: { kind: 'user' } }
+const MAX_TOKENS = { kind: 'max-tokens' }
 const RESET = {
   kind: 'aborted',
   reason: { kind: 'hook', reason: 'loop-guard:reset: repeated line' },
@@ -163,6 +164,43 @@ describe('checkpoint-evidenced continuation', () => {
     await refused.flush()
     expect(countCalls(refused, 'resume')).toBe(1)
   })
+
+  it('keeps a terminal end reason as the single stop and record', async () => {
+    const harness = createHarness()
+    setGoal(harness)
+    turnStart(harness, 1)
+    const goal = harness.goals.goal
+    if (goal === undefined) throw new Error('test goal missing')
+    goalMessage(harness, goal, 1)
+    checkpointCall(harness, { outcome: 'done', next: 'nothing left' })
+    turnEnd(harness, MAX_TOKENS, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    // The token limit owns the outcome: one stop, one notice, and its own record.
+    expect(notices(harness)).not.toContain('declares the objective done')
+    expect(harness.injected).toHaveLength(1)
+    expect(notices(harness)).toContain('token limit')
+    expect(harness.goals.goal?.phase).toBe('blocked')
+  })
+
+  it('keeps the evidence and the recovery action in a bounded notice', async () => {
+    const harness = createHarness()
+    setGoal(harness, { activation: 'disarmed' })
+    turnStart(harness, 1)
+    const goal = harness.goals.goal
+    if (goal === undefined) throw new Error('test goal missing')
+    goalMessage(harness, goal, 1)
+    checkpointCall(harness, continuePlan('user_decision', 'b'.repeat(120), 'n'.repeat(400)))
+    turnEnd(harness, COMPLETED, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    const text = notices(harness)
+    expect(text).toContain('user decision')
+    expect(text).toContain('/goal resume')
+    expect(text.length).toBeLessThanOrEqual(600)
+  })
 })
 
 describe('no-effect round stop', () => {
@@ -214,6 +252,41 @@ describe('no-effect round stop', () => {
 
     expect(notices(harness)).toContain('two consecutive goal rounds')
   })
+
+  it('admits no third round after the no-effect stop', async () => {
+    const harness = createHarness()
+    setGoal(harness)
+    goalRound(harness, 1, COMPLETED)
+    await harness.flush()
+    goalRound(harness, 2, COMPLETED)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    // The driver only admits a round for an armed goal, so the disarm is the stop.
+    expect(harness.goals.goal?.activation).toBe('disarmed')
+    expect(harness.goals.goal?.phase).toBe('active')
+
+    // A round the driver managed to admit anyway resumes nothing afterwards.
+    goalRound(harness, 3, COMPLETED)
+    harness.emitStatus('idle')
+    await harness.flush()
+    expect(countCalls(harness, 'resume')).toBe(0)
+    expect(harness.goals.goal?.phase).toBe('active')
+  })
+
+  it('stops after two consecutive reset-aborted no-effect rounds', async () => {
+    const harness = createHarness()
+    setGoal(harness)
+    goalRound(harness, 1, RESET)
+    harness.emitStatus('idle')
+    await harness.flush()
+    goalRound(harness, 2, RESET)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    expect(notices(harness)).toContain('two consecutive goal rounds')
+    expect(harness.goals.goal?.phase).toBe('active')
+  })
 })
 
 describe('user abort precedence', () => {
@@ -255,5 +328,37 @@ describe('user abort precedence', () => {
     await harness.flush()
 
     expect(countCalls(harness, 'resume')).toBe(1)
+  })
+
+  it('lets the strict policy Stop own the notice even with a stopping plan', async () => {
+    const harness = createHarness()
+    setGoal(harness)
+    turnStart(harness, 1)
+    checkpointCall(harness, { outcome: 'done', next: 'nothing left' })
+    turnEnd(harness, USER_ABORT, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    // The policy owns this stop, so no second evidence notice is delivered.
+    expect(harness.injected).toHaveLength(1)
+    expect(notices(harness)).toContain('suppressed automatic continuation')
+    expect(notices(harness)).not.toContain('declares the objective done')
+    expect(countCalls(harness, 'disarm')).toBe(1)
+    expect(harness.goals.goal?.phase).toBe('active')
+  })
+
+  it('stops an opt-in policy Stop when the plan stops continuation', async () => {
+    const harness = createHarness({ config: { resumeAfterUserStop: 'non-goal' } })
+    setGoal(harness)
+    turnStart(harness, 1)
+    driverDisarm(harness)
+    checkpointCall(harness, { outcome: 'done', next: 'nothing left' })
+    turnEnd(harness, USER_ABORT, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    expect(countCalls(harness, 'resume')).toBe(0)
+    expect(notices(harness)).toContain('declares the objective done')
+    expect(harness.goals.goal?.phase).toBe('active')
   })
 })

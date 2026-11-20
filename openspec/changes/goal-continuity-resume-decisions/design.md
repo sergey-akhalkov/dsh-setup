@@ -98,7 +98,7 @@ The ordering of one settled goal round:
 | --- | --- | --- |
 | Read | every settled goal round | build the turn evidence and read the latest fresh plan |
 | Count | every settled goal round | update the no-effect count from that turn's evidence; the counter resets with the suppression in the same `user/message` handler |
-| Stop | a fresh plan stops it, or two no-effect rounds | disarm an armed goal, suppress, record one notice, change no phase; a user-aborted goal round keeps the driver's pause instead (D7) |
+| Stop | a fresh plan stops it, or two no-effect rounds, on a recoverable end reason | disarm an armed goal, suppress, record one notice, change no phase; a user-aborted goal round keeps the driver's pause instead (D7) |
 | Resume | evidence allows and the goal is disarmed | resume with the plan's next action, or the decision request when there is no plan |
 | Continue | evidence allows and the goal is armed | nothing; the driver continues and the counter stays at zero |
 
@@ -111,6 +111,8 @@ The ordering of one settled goal round:
 | `AgentState` | one counter field, reset with the suppression |
 
 The decision is computed once per settled turn and reused by both the stop path and `reconcile`, so the resume budget, the cap extension, and the notices keep a single decision point. A stop is a suppression in the existing sense: it survives until a direct user message clears it.
+
+A terminal end reason — a final or unrecognized hook cause, the token limit, or an agent error — is not a continuation question: it already owns one stop, one notice, and a visible record, and it may block the goal. The evidence stop therefore yields to it instead of adding a second, contradictory notice; the round is still counted and its plan is still evidence for the next settled turn. The same precedence covers a user abort, handled in D7.
 
 ### D7. A user abort outranks the evidence stop, and the policy decides the non-goal case
 
