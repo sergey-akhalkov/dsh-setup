@@ -52,7 +52,9 @@ The option is kept rather than deleted because `resolveConfig` rejects unknown f
 
 ### D2. Continuation reads the plan the plugin itself forces
 
-At every settled turn of an active goal, before any continuation decision, the supervisor reads the session's latest **successful** `work_checkpoint` plan at or before that turn. Freshness is two turns: a plan recorded in the settled turn or the turn before it counts, anything older does not.
+At every settled turn of an active goal, before any continuation decision, the supervisor reads the session's latest **successful** `work_checkpoint` plan at or before that turn. Freshness is two turns *and* a message boundary: a plan recorded in the settled turn or the turn before it counts, anything older does not, and a plan recorded before the most recent direct user message counts for nothing.
+
+The message boundary is what makes the documented recovery work. When the user answers a `user_decision` bottleneck, their message invalidates the plan that asked the question, so the next resume is the evidence-free one that asks for a decision again — instead of the same stop replaying on a plan the user has already answered.
 
 - `outcome: done` → withhold.
 - `outcome: continue` with a `user_decision` bottleneck → withhold.
@@ -96,7 +98,7 @@ The ordering of one settled goal round:
 | --- | --- | --- |
 | Read | every settled goal round | build the turn evidence and read the latest fresh plan |
 | Count | every settled goal round | update the no-effect count from that turn's evidence; the counter resets with the suppression in the same `user/message` handler |
-| Stop | a fresh plan stops it, or two no-effect rounds | disarm an armed goal, suppress, record one notice, change no phase |
+| Stop | a fresh plan stops it, or two no-effect rounds | disarm an armed goal, suppress, record one notice, change no phase; a user-aborted goal round keeps the driver's pause instead (D7) |
 | Resume | evidence allows and the goal is disarmed | resume with the plan's next action, or the decision request when there is no plan |
 | Continue | evidence allows and the goal is armed | nothing; the driver continues and the counter stays at zero |
 
@@ -110,7 +112,11 @@ The ordering of one settled goal round:
 
 The decision is computed once per settled turn and reused by both the stop path and `reconcile`, so the resume budget, the cap extension, and the notices keep a single decision point. A stop is a suppression in the existing sense: it survives until a direct user message clears it.
 
-### D7. Notices carry their reason
+### D7. A user abort outranks the evidence stop
+
+A user abort of a goal round already ends that turn through the driver's pause, and the retained pause-prevention rule forbids disarming for a user abort. The evidence stop therefore does not disarm such a round: the pause is the durable record of the user's decision, the evidence and the no-effect count are still recorded, and the stop applies from the next settled round. A user abort of a turn that is not a goal round leaves no driver pause, so there the stop disarms an armed goal and suppresses the resume — which is the incident's exact shape, a Stop on a notification-driven turn while the goal was still live.
+
+### D8. Notices carry their reason
 
 The existing bound (`NOTICE_TEXT_MAX_CHARS`) stays. A resume notice names the cause, the retry count, and the next action taken from D2 or D4. A stop notice names the evidence read (the plan's outcome and bottleneck, or the no-effect round count) and the user action that continues work. The generic sentence is removed rather than reworded, because a notice that names no next action is what produced the invented work.
 
@@ -122,6 +128,7 @@ The existing bound (`NOTICE_TEXT_MAX_CHARS`) stays. A resume notice names the ca
 - **A long read-only investigation round looks no-effect** → it counts only when the round also records no plan; the response is one notice, not a block; two consecutive occurrences are needed.
 - **The checkpoint close gate might not fire in a deployed build** → see Open Questions. D4 is the safe fallback: with no plan the supervisor asks for a decision instead of resuming blindly, so the change degrades to a weaker but safe behaviour, never to the observed one.
 - **A plan is the model's self-report** → bounded by the freshness window and by D5; a wrong `continue` costs one round, after which its own next action is on the record and the notice names it.
+- **The message boundary can discard a still-valid plan** → after the user answers, one round runs on the evidence-free rule and asks for a decision, and a fresh plan follows; the boundary only ever discards evidence that the user's own message predates.
 
 ## Migration Plan
 

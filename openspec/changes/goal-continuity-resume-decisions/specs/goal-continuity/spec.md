@@ -173,7 +173,7 @@ After the pause prevention, the supervisor SHALL resume the active disarmed goal
 
 ### Requirement: Reset at the round cap
 
-When the active disarmed goal has `roundsStarted` at or above `maxGoalRounds` and no continuation rule stops it, the supervisor SHALL extend `maxGoalRounds` by the configured extension under the per-goal extension budget before resuming. When the extension budget or the hard total cap is exhausted it MUST NOT resume and SHALL block the goal with `continuity-stopped` and a bounded reason.
+When the active disarmed goal has `roundsStarted` at or above `maxGoalRounds` and no continuation rule stops it, the supervisor SHALL extend `maxGoalRounds` by the configured extension under the per-goal extension budget before resuming. When no continuation rule stops it and the extension budget or the hard total cap is exhausted, it MUST NOT resume and SHALL block the goal with `continuity-stopped` and a bounded reason.
 
 #### Scenario: Reset on the last permitted round
 
@@ -187,19 +187,24 @@ When the active disarmed goal has `roundsStarted` at or above `maxGoalRounds` an
 
 #### Scenario: No extension capacity at the cap
 
-- **WHEN** a recoverable reset leaves an active disarmed goal at its cap and the extension budget or the hard total cap is exhausted
+- **WHEN** a recoverable reset leaves an active disarmed goal at its cap, no continuation rule stops it, and the extension budget or the hard total cap is exhausted
 - **THEN** the supervisor blocks the goal with `continuity-stopped` and the reason
 
 ## ADDED Requirements
 
 ### Requirement: Continuation evidence
 
-Before deciding continuation, the supervisor SHALL read the session's latest successful `work_checkpoint` plan at or before the settled turn, treating a plan recorded in the settled turn or the turn before it as fresh. It SHALL make that decision at every settled turn of an active goal, whatever the goal's activation. A stale, absent, or unreadable plan is no evidence. Reading the evidence MUST NOT change the goal phase.
+Before deciding continuation, the supervisor SHALL read the latest successful `work_checkpoint` plan recorded after the most recent direct user message and at or before the settled turn, counting a plan from that turn or the one before it. The decision runs at every settled turn of an active goal, whatever its activation. A plan older than that message, stale, absent, or unreadable is no evidence. Reading it MUST NOT change the goal phase.
 
 #### Scenario: Armed goal is decided too
 
 - **WHEN** a goal round of an armed goal settles
 - **THEN** the supervisor reads the continuation evidence for that turn before the driver can admit the next round
+
+#### Scenario: A user answer invalidates the earlier plan
+
+- **WHEN** the user sends a direct message and no new plan is recorded afterwards
+- **THEN** a plan from before that message is not evidence for the next settled turn, and the unevidenced rule applies instead
 
 #### Scenario: Stale plan is no evidence
 
@@ -218,7 +223,7 @@ Before deciding continuation, the supervisor SHALL read the session's latest suc
 
 ### Requirement: Evidence stops automatic continuation
 
-A fresh plan with `outcome: done`, or with `outcome: continue` and a bottleneck whose `action` is `user_decision`, MUST stop automatic continuation: the supervisor disarms an armed goal, resumes no disarmed goal, and records one notice. Nothing else in the plan stops it. This rule MUST NOT change the goal phase.
+A fresh plan with `outcome: done`, or with `outcome: continue` and a bottleneck whose `action` is `user_decision`, MUST stop automatic continuation: the supervisor disarms an armed goal, resumes no disarmed goal, and records one notice. A user-aborted goal round is the exception: its driver pause is the stop record. Nothing else in the plan stops it. This rule MUST NOT change the goal phase.
 
 #### Scenario: Done plan stops an armed goal
 
@@ -265,7 +270,7 @@ A resume with no fresh plan SHALL deliver a notice that requires the next round 
 
 ### Requirement: No-effect round stop
 
-A goal round is no-effect when it produced no successful write, no worker start, and no successful `work_checkpoint`. The count covers every settled goal round, whatever its end reason. Two consecutive no-effect rounds MUST stop automatic continuation: the supervisor disarms an armed goal, resumes no disarmed goal, and records one notice. An effective round or a direct user message SHALL reset the count. The rule MUST NOT change the goal phase.
+A goal round is no-effect when it made no successful write, no worker start, and no successful `work_checkpoint`. Every settled round counts, whatever its end reason. Two consecutive no-effect rounds MUST stop continuation: disarm an armed goal, resume no disarmed one, record one notice. A user-aborted goal round is the exception: its driver pause is the stop record. An effective round or a direct message resets the count, and the phase MUST NOT change.
 
 #### Scenario: First no-effect round is tolerated
 
@@ -291,3 +296,17 @@ A goal round is no-effect when it produced no successful write, no worker start,
 
 - **WHEN** the user sends a direct message
 - **THEN** the no-effect count is zero
+
+### Requirement: User abort outranks a continuation stop
+
+A user abort of a goal round ends that turn through the driver's pause, which is the durable record of the user's decision. A continuation stop MUST NOT disarm such a round and MUST NOT pre-empt that pause; the evidence and the no-effect count are still recorded, and the stop applies to the next settled round instead. A user abort of a turn that is not a goal round leaves no driver pause, so an armed goal is disarmed and the resume is suppressed.
+
+#### Scenario: User Stop on a no-effect goal round keeps its pause
+
+- **WHEN** the second consecutive no-effect round is a goal round the user aborted
+- **THEN** the supervisor disarms nothing, the driver records the pause, and the count and evidence are still recorded
+
+#### Scenario: User Stop on a non-goal turn stops an armed goal
+
+- **WHEN** the user aborts a turn that is not a goal round while the goal is armed
+- **THEN** the supervisor disarms the goal and suppresses the resume, and the phase stays active
