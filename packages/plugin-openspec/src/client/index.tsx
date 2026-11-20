@@ -1623,7 +1623,7 @@ function ChangeCard(props: {
   readonly t: Translate
   readonly now?: Date
   readonly archived?: boolean
-  /** The engine's live reviews of this change; the card merges them into its review line. */
+  /** The engine's live reviews of this change; the card merges them into its labels row. */
   readonly live?: readonly ReviewLiveEntry[]
   /** An archive action is in flight for this row. */
   readonly archiving?: boolean
