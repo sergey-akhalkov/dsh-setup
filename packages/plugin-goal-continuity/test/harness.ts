@@ -283,6 +283,9 @@ export async function flush(): Promise<void> {
 export function createHarness(options: HarnessOptions = {}): Harness {
   const ctx = new Context()
   const sessionId = `session-${randomUUID()}`
+  // The supervisor and the checkpoint gate read the committed log; the harness
+  // keeps every emitted event so those reads see the history the host would.
+  const events: unknown[] = []
   const session = {
     id: sessionId,
     header: {
@@ -292,6 +295,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
       isSeeded: false,
       ...options.header,
     },
+    snapshotEvents: () => events,
   } as unknown as Session
   const injected: UserMessage[] = []
   const followups: UserMessage[] = []
@@ -338,6 +342,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     steers,
     mountedAt,
     emitSession(event: unknown): void {
+      events.push(event)
       ctx.emit('session/event', session, event as SessionEvent)
     },
     emitStatus(status: 'idle' | 'running'): void {
@@ -416,4 +421,75 @@ export function noticeText(message: UserMessage): string {
 
 export function countCalls(harness: Harness, name: string): number {
   return harness.goals.calls.filter((call) => call === name).length
+}
+
+/** Append one tool call and its result to the session log. */
+export function toolCall(
+  harness: Harness,
+  name: string,
+  args: Record<string, unknown>,
+  options: { isError?: boolean; turn?: number } = {},
+): void {
+  const callId = `call-${randomUUID()}`
+  const turn = options.turn ?? 1
+  harness.emitSession({
+    type: 'tool/call',
+    seq: 1,
+    time: Date.now(),
+    data: { turn, step: 1, callId, name, arguments: JSON.stringify(args) },
+  })
+  harness.emitSession({
+    type: 'tool/result',
+    seq: 1,
+    time: Date.now(),
+    data: {
+      turn,
+      step: 1,
+      message: {
+        role: 'tool',
+        source: { kind: 'tool', callId },
+        toolCallId: callId,
+        content: [{ type: 'text', text: options.isError === true ? 'failed' : 'ok' }],
+        isError: options.isError === true,
+      },
+    },
+  })
+}
+
+/** Append one work checkpoint call; arguments stay raw so a test can send junk. */
+export function checkpointCall(
+  harness: Harness,
+  args: Record<string, unknown> | string,
+  options: { isError?: boolean; turn?: number } = {},
+): void {
+  const callId = `call-${randomUUID()}`
+  const turn = options.turn ?? 1
+  harness.emitSession({
+    type: 'tool/call',
+    seq: 1,
+    time: Date.now(),
+    data: {
+      turn,
+      step: 1,
+      callId,
+      name: 'work_checkpoint',
+      arguments: typeof args === 'string' ? args : JSON.stringify(args),
+    },
+  })
+  harness.emitSession({
+    type: 'tool/result',
+    seq: 1,
+    time: Date.now(),
+    data: {
+      turn,
+      step: 1,
+      message: {
+        role: 'tool',
+        source: { kind: 'tool', callId },
+        toolCallId: callId,
+        content: [{ type: 'text', text: options.isError === true ? 'failed' : 'recorded' }],
+        isError: options.isError === true,
+      },
+    },
+  })
 }

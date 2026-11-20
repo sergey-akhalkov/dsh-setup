@@ -144,6 +144,34 @@ no model call and consumes none. Every step that allows an unverified proposal (
 a visible notice naming the policy. An `allow` policy is the only way an unverified block or
 question can take effect.
 
+## Continuation decisions
+
+Automatic continuation is a decision, not a reflex. Before it resumes a goal, the supervisor reads
+the session's latest successful `work_checkpoint` plan and requires three things.
+
+- **A user Stop ends continuation.** The shipped `resumeAfterUserStop` default is `never`: a user
+  abort suppresses automatic resumes until the next direct user message, and it disarms an armed goal
+  so the driver cannot admit another round on its own. `non-goal` stays available as an opt-in that
+  submits the same Stop to the evidence rules instead of stopping unconditionally.
+- **Evidence decides.** A fresh plan (recorded in the settled turn or the turn before it, and after
+  the most recent direct user message) with `outcome: done`, or with a `user_decision` bottleneck,
+  stops continuation: an armed goal is disarmed, a disarmed one is not resumed, and one bounded
+  notice names the plan. Any other fresh plan supplies the resume notice's next action. A stale,
+  absent, or unreadable plan is no evidence. The goal phase never changes, so a direct message or
+  `/goal resume` continues the work.
+- **Two no-effect rounds end continuation.** A goal round that made no successful write, no worker
+  start, and no successful checkpoint is a no-effect round; every settled goal round counts whatever
+  its end reason. The second one in a row stops continuation the same way. An effective round or a
+  direct user message resets the count.
+- **A user abort outranks the evidence stop.** A user-aborted goal round already ends through the
+  driver's durable pause, so the plugin never disarms it; the evidence and the count are still
+  recorded and the stop applies from the next settled round.
+
+With no fresh plan at all, the one resume names the decision instead of pushing: the notice requires
+the next round to make a concrete step or record a `work_checkpoint` declaring `done` or a
+`user_decision` bottleneck. The generic instruction to "continue the current objective" is gone,
+because a notice that names no next action is what produced invented work.
+
 ## Work checkpoints
 
 A work checkpoint is one structured, machine-checkable decision recorded at a substantial pause and
@@ -418,6 +446,7 @@ separate log or storage surface is written.
 ```yaml
 - id: dsh-setup-goal-continuity
   config:
+    resumeAfterUserStop: never
     blockReview:
       enabled: true
       reviewQuestions: true
@@ -445,6 +474,9 @@ separate log or storage surface is written.
 
 - `checkpoint.enabled: false` disables only the checkpoint tool, the trigger, and the close and
   parallel gates; continuity supervision and the review gate still run.
+- `resumeAfterUserStop: never` (default) ends automatic continuation on any user Stop;
+  `resumeAfterUserStop: non-goal` re-arms after a Stop on a turn that is not a goal round, still
+  subject to the continuation evidence.
 - `checkpoint.minToolCalls` raises or lowers the pause threshold; `checkpoint.requireWrite: false`
   also checkpoints a read-only turn.
 - `checkpoint.stepInterval` (default 40, integer 1–1000) sets the mid-turn request interval and the

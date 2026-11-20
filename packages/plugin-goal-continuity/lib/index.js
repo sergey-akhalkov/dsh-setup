@@ -324,6 +324,12 @@ function causeLabel(cause) {
             return 'a parent cancellation';
         case 'round-limit':
             return 'the round limit';
+        case 'checkpoint-done':
+            return 'the last work checkpoint declaring the objective done';
+        case 'checkpoint-user-decision':
+            return 'the last work checkpoint naming a user decision';
+        case 'no-effect-rounds':
+            return 'two consecutive goal rounds without effect';
     }
 }
 /** Bound one string without splitting a multi-byte code point. */
@@ -1895,6 +1901,89 @@ function checkpointPlan(evidence, workspace) {
         return undefined;
     }
 }
+/** Consecutive no-effect goal rounds that end automatic continuation. */
+const NO_EFFECT_ROUND_LIMIT = 2;
+/**
+ * The latest successful `work_checkpoint` plan that may decide a settled turn:
+ * recorded after the most recent direct user message and in that turn or the one
+ * before it. A plan the user's own message predates is answered evidence, not input.
+ */
+function latestCheckpointPlan(agent, settledTurn) {
+    const events = sessionEvents(agent);
+    let lastDirect = -1;
+    let turn = 0;
+    const pending = new Map();
+    let last;
+    for (const [index, event] of events.entries()) {
+        if (event.type === 'turn/start') {
+            turn = event.data.turn;
+            continue;
+        }
+        if (event.type === 'user/message') {
+            if (event.data.source.kind === 'user')
+                lastDirect = index;
+            continue;
+        }
+        if (event.type === 'tool/call') {
+            if (event.data.name !== CHECKPOINT_TOOL)
+                continue;
+            pending.set(String(event.data.callId), {
+                turn,
+                index,
+                arguments: event.data.arguments,
+            });
+            continue;
+        }
+        if (event.type !== 'tool/result')
+            continue;
+        const callId = String(event.data.message.toolCallId);
+        const call = pending.get(callId);
+        if (call === undefined)
+            continue;
+        pending.delete(callId);
+        // A refused call proves no plan; only a successful one may withhold or resume.
+        if (event.data.message.isError !== true)
+            last = call;
+    }
+    if (last === undefined)
+        return undefined;
+    if (last.index <= lastDirect)
+        return undefined;
+    if (last.turn < settledTurn - 1 || last.turn > settledTurn)
+        return undefined;
+    try {
+        const input = parseCheckpointInput(JSON.parse(last.arguments));
+        return {
+            outcome: input.outcome,
+            next: bound(input.next, MAX_CHECKPOINT_NEXT_CHARS),
+            ...(input.bottleneck === undefined
+                ? {}
+                : { bottleneckAction: input.bottleneck.action, bottleneckId: input.bottleneck.id }),
+        };
+    }
+    catch {
+        return undefined;
+    }
+}
+/** The stop one fresh plan supports, or undefined when it permits continuation. */
+function planStop(plan) {
+    if (plan.outcome === 'done') {
+        return {
+            cause: 'checkpoint-done',
+            detail: 'the last work checkpoint declares the objective done',
+        };
+    }
+    if (plan.bottleneckAction !== 'user_decision')
+        return undefined;
+    return {
+        cause: 'checkpoint-user-decision',
+        detail: `the last work checkpoint names bottleneck "${plan.bottleneckId ?? 'unnamed'}" as a user decision; next: ${plan.next}`,
+    };
+}
+/** One bounded notice naming the stop and the user action that continues work. */
+function stopNotice(stop) {
+    return `Goal continuity stopped automatic continuation: ${stop.detail}. The goal stays active and unchanged. Send a message with what to do next, or resume with /goal resume.`;
+}
 /** Every decoded string value in one tool call's serialized arguments. */
 function argumentStrings(text) {
     let value;
@@ -2708,6 +2797,7 @@ export function apply(ctx, config) {
                 turn: null,
                 goalRound: false,
                 resumes: 0,
+                noEffect: 0,
                 extensions: new Map(),
                 suppression: null,
                 restartPending: false,
@@ -2807,10 +2897,12 @@ export function apply(ctx, config) {
             return 'failed';
         state.resumes += 1;
         const remaining = resolved.maxSessionResumes - state.resumes;
+        const next = state.turn === null ? undefined : latestCheckpointPlan(agent, state.turn)?.next;
+        const recommendation = next ?? 'make one concrete step, or record a work_checkpoint with outcome done or a user_decision bottleneck';
         const action = extension === undefined
             ? `resumed the goal after ${causeLabel(cause)}`
             : `extended the round cap from ${extension.from} to ${extension.to} (extension ${extension.used} of ${resolved.maxRoundExtensions}) and resumed the goal after ${causeLabel(cause)}`;
-        deliverNotice(agent, `Goal continuity ${action}. Automatic resume ${state.resumes} of ${resolved.maxSessionResumes} for this session; ${remaining} remain. Next: continue the current objective.`, `goal-continuity: ${extension === undefined ? 'resumed' : 'extended and resumed'} after ${causeLabel(cause)}`);
+        deliverNotice(agent, `Goal continuity ${action}. Automatic resume ${state.resumes} of ${resolved.maxSessionResumes} for this session; ${remaining} remain. Next: ${recommendation}.`, `goal-continuity: ${extension === undefined ? 'resumed' : 'extended and resumed'} after ${causeLabel(cause)}`);
         return 'resumed';
     }
     /** Edit the round cap, retrying once on a stale revision. */
@@ -3032,6 +3124,8 @@ export function apply(ctx, config) {
             return;
         if (state.suppression !== null)
             return;
+        if (state.turn !== null && stopForEvidence(agent, state, state.turn))
+            return;
         const named = cause ?? 'in-process-disarm';
         if (state.resumes >= resolved.maxSessionResumes) {
             stopForBudget(agent, state, goal, named);
@@ -3053,10 +3147,60 @@ export function apply(ctx, config) {
         state.observed = true;
         schedule(agent, state, 'restart');
     }
+    /** Apply the evidence stop for one settled turn; true when continuation stopped. */
+    function stopForEvidence(agent, state, turn) {
+        const plan = latestCheckpointPlan(agent, turn);
+        const stop = (plan === undefined ? undefined : planStop(plan)) ??
+            (state.noEffect >= NO_EFFECT_ROUND_LIMIT
+                ? {
+                    cause: 'no-effect-rounds',
+                    detail: 'two consecutive goal rounds made no write, no worker start, and no checkpoint',
+                }
+                : undefined);
+        // Reading the goal is a service call; evidence that stops nothing reads nothing.
+        if (stop === undefined)
+            return false;
+        const goal = readGoal(agent);
+        if (goal === undefined || goal.phase !== 'active')
+            return false;
+        state.suppression = { cause: stop.cause, terminal: false, detail: stop.detail };
+        // Disarming is what reaches a goal that needs no resume: the driver admits
+        // its next round by itself. The phase stays active, so a message continues.
+        if (goal.activation === 'armed') {
+            try {
+                ctx.goals.disarm(agent);
+            }
+            catch {
+                // Fail open: the suppression still stops every resume.
+            }
+        }
+        deliverNotice(agent, stopNotice(stop), `goal-continuity: stopped after ${causeLabel(stop.cause)}`);
+        return true;
+    }
+    /** Count one settled goal round and stop continuation the evidence does not support. */
+    function applyContinuationDecision(agent, state, goalRound, reason) {
+        if (state.turn === null)
+            return;
+        const turn = state.turn;
+        const userAbort = reason.kind === 'aborted' && reason.reason.kind === 'user';
+        if (goalRound) {
+            const evidence = checkpointEvidence(agent, turn, workspaceFor(ctx, agent), state.shellOutcomes);
+            const effective = evidence.written.length > 0 ||
+                evidence.workers.length > 0 ||
+                evidence.checkpoint !== undefined;
+            state.noEffect = effective ? 0 : state.noEffect + 1;
+        }
+        // A user abort follows its own policy, and an aborted goal round already ends
+        // through the driver's durable pause, so the evidence never pre-empts it.
+        if (userAbort && (goalRound || resolved.resumeAfterUserStop === 'never'))
+            return;
+        stopForEvidence(agent, state, turn);
+    }
     function handleTurnEnd(agent, state, reason) {
         const goalRound = state.goalRound;
         state.goalRound = false;
         state.checkpointTurn = undefined;
+        applyContinuationDecision(agent, state, goalRound, reason);
         const hook = hookCause(reason);
         if (hook !== undefined) {
             const cause = hook === 'reset' ? 'reset' : hook === 'final' ? 'final-hook' : 'unknown-hook';
@@ -3090,6 +3234,15 @@ export function apply(ctx, config) {
                     };
                     const goal = readGoal(agent);
                     if (goal !== undefined && goal.phase === 'active') {
+                        // The Stop must reach a goal that continues without a resume.
+                        if (goal.activation === 'armed') {
+                            try {
+                                ctx.goals.disarm(agent);
+                            }
+                            catch {
+                                // Fail open: the suppression still stops every resume.
+                            }
+                        }
                         deliverNotice(agent, 'Goal continuity suppressed automatic continuation after your Stop on a turn that was not a goal round. Next: send a message to clear the suppression, or pause the goal with /goal pause to stop it explicitly.', 'goal-continuity: suppressed after user Stop');
                     }
                     schedule(agent, state, 'user-stop-never');
@@ -3149,6 +3302,7 @@ export function apply(ctx, config) {
                 else if (event.data.source.kind === 'user') {
                     state.suppression = null;
                     state.cause = null;
+                    state.noEffect = 0;
                 }
                 return;
             case 'turn/end':
