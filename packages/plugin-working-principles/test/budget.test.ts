@@ -18,9 +18,9 @@ const sectionBytes = Buffer.byteLength(`${contract}${alwaysOnFooter()}`, 'utf8')
 const contractBytes = Buffer.byteLength(contract, 'utf8')
 const estimatedTokens = sectionBytes / 4
 
-const BUDGET_TOKENS = 1500
+const BUDGET_TOKENS = 1600
 const MINIMUM_BYTES = 3200
-const MAXIMUM_BYTES = 5850
+const MAXIMUM_BYTES = 6200
 
 describe('always-on contract budget', () => {
   it('stays inside the documented per-step budget', () => {
@@ -33,6 +33,13 @@ describe('always-on contract budget', () => {
   it('stays within the reviewed contract size range', () => {
     expect(contractBytes).toBeGreaterThanOrEqual(MINIMUM_BYTES)
     expect(contractBytes).toBeLessThanOrEqual(MAXIMUM_BYTES)
+  })
+
+  it('states the quiz rule for a user decision', () => {
+    expect(contract).toContain('`ask_user_question` tool')
+    expect(contract).toContain('(Recommended)')
+    expect(contract).toContain('its plus and its minus')
+    expect(contract).toContain('upside is marginal')
   })
 
   it('names no invocation the Harness does not provide', () => {

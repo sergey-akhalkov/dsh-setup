@@ -17,6 +17,13 @@ outranks both.
   partial work and say what was added; optional polish waits for acceptance. Make and disclose small
   reversible in-scope fixes; outcome, access, or a constraint change needs the user first.
 
+## Ask with a quiz
+
+- Whenever you need an answer from the user, ask with the `ask_user_question` tool, not in prose: one
+  question, the recommended option first and labelled `(Recommended)`, and every option's description
+  naming its plus and its minus. Offer no option whose upside is marginal; when only one real option
+  exists, say so and proceed.
+
 ## Delegate only to parallelize
 
 - One agent is the default. Multi-file or multi-step work names independent lanes, owners, and
