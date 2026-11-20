@@ -170,6 +170,25 @@ bounded budget, and records a visible `continuity-stopped` block on real stops. 
 non-waking (`agent.inject`); the supervisor never starts a turn, forks the driver, or calls the
 model.
 
+Automatic continuation is a decision, not a reflex. A user Stop ends it by default, and the
+supervisor otherwise reads the session's latest successful `work_checkpoint` plan before it resumes:
+
+- a fresh plan (recorded in the settled turn or the one before it, and after the most recent direct
+  user message) that declares `outcome: done`, or names a `user_decision` bottleneck, stops the run:
+  an armed goal is **disarmed** so the driver admits no further round, a disarmed one is not resumed,
+  and one bounded notice names the plan. The goal phase never changes, so a message or `/goal resume`
+  continues;
+- a plan that stops nothing supplies the resume notice's next action; with no readable plan the
+  resumed notice requires a concrete step or a `work_checkpoint` plan instead of instructing the
+  agent to continue;
+- two consecutive no-effect goal rounds — no write, no worker start, no checkpoint, whatever the end
+  reason — stop the run the same way; an effective round or a direct user message resets the count;
+- a user-aborted goal round is the exception: it already ends through the driver's durable pause, so
+  the supervisor never disarms it.
+
+`resumeAfterUserStop: never` (the shipped default) applies the first rule to a Stop on any turn;
+`non-goal` stays an opt-in that submits the same Stop to the evidence rules.
+
 The same row makes one bounded, read-only review call and delivers the work-checkpoint capability:
 
 - a **user-decision review** gates both a proposed `blocked` update and an `ask_user_question` call
