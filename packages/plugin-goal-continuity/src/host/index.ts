@@ -192,7 +192,7 @@ export const DEFAULT_CHECKPOINT_CONFIG: ResolvedCheckpointConfig = Object.freeze
 export const DEFAULT_CONFIG: ResolvedConfig = Object.freeze({
   enabled: true,
   resumeAfterRestart: false,
-  resumeAfterUserStop: 'non-goal',
+  resumeAfterUserStop: 'never',
   maxSessionResumes: 20,
   roundExtension: 1000,
   maxRoundExtensions: 2,

@@ -246,15 +246,15 @@ describe('user abort policy', () => {
   })
 
   it('re-arms after a non-goal Stop with the non-goal policy', async () => {
-    const harness = createHarness()
+    const harness = createHarness({ config: { resumeAfterUserStop: 'non-goal' } })
     setGoal(harness)
     await nonGoalAbort(harness, USER_ABORT)
     expect(countCalls(harness, 'resume')).toBe(1)
     expect(harness.injected).toHaveLength(1)
   })
 
-  it('suppresses a non-goal Stop with the never policy until a direct message', async () => {
-    const harness = createHarness({ config: { resumeAfterUserStop: 'never' } })
+  it('suppresses a non-goal Stop by default until a direct message', async () => {
+    const harness = createHarness()
     setGoal(harness)
     await nonGoalAbort(harness, USER_ABORT)
     expect(countCalls(harness, 'resume')).toBe(0)

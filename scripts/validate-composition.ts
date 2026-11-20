@@ -260,7 +260,7 @@ function main(): number {
       const goalContinuityDefaults = [
         'enabled: true',
         'resumeAfterRestart: false',
-        'resumeAfterUserStop: non-goal',
+        'resumeAfterUserStop: never',
         'maxSessionResumes: 20',
         'roundExtension: 1000',
         'maxRoundExtensions: 2',

@@ -51,7 +51,7 @@ describe('goal continuity configuration', () => {
     expect(DEFAULT_CONFIG).toEqual({
       enabled: true,
       resumeAfterRestart: false,
-      resumeAfterUserStop: 'non-goal',
+      resumeAfterUserStop: 'never',
       maxSessionResumes: 20,
       roundExtension: 1000,
       maxRoundExtensions: 2,

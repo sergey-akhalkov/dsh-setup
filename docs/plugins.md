@@ -185,7 +185,7 @@ The same row makes one bounded, read-only review call and delivers the work-chec
   declares parallel remaining work, requires a tagged worker start or a serial reason. The request is
   non-waking, and the record stays local under `.dsh/work-checkpoints/`.
 
-The row ships enabled with `resumeAfterRestart: false`, `resumeAfterUserStop: non-goal`,
+The row ships enabled with `resumeAfterRestart: false`, `resumeAfterUserStop: never`,
 `maxSessionResumes: 20`, `roundExtension: 1000`, `maxRoundExtensions: 2`, `hardMaxGoalRounds: 5000`,
 `blockReview.enabled: true`, `blockReview.reviewQuestions: true`, and `checkpoint.enabled: true`. The
 checkpoint defaults to `minToolCalls: 4`, `requireWrite: true`, `maxBlocks: 3`, `enforceParallel:
