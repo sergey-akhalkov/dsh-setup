@@ -184,7 +184,10 @@ supervisor otherwise reads the session's latest successful `work_checkpoint` pla
 - two consecutive no-effect goal rounds — no write, no worker start, no checkpoint, whatever the end
   reason — stop the run the same way; an effective round or a direct user message resets the count;
 - a user-aborted goal round is the exception: it already ends through the driver's durable pause, so
-  the supervisor never disarms it.
+  the supervisor never disarms it;
+- the rules apply to a recoverable end; a token limit, an agent error, or a final or unrecognized hook
+  cancellation keeps its own single notice and record, may block the goal, and the evidence stop
+  yields to it while the round still counts.
 
 `resumeAfterUserStop: never` (the shipped default) applies the first rule to a Stop on any turn;
 `non-goal` stays an opt-in that submits the same Stop to the evidence rules.

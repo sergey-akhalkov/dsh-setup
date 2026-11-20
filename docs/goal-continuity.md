@@ -166,6 +166,11 @@ the session's latest successful `work_checkpoint` plan and requires three things
 - **A user abort outranks the evidence stop.** A user-aborted goal round already ends through the
   driver's durable pause, so the plugin never disarms it; the evidence and the count are still
   recorded and the stop applies from the next settled round.
+- **A terminal end reason keeps its own stop.** A token limit, an agent error, or a final or
+  unrecognized hook cancellation is not a continuation question: it keeps its own single notice and
+  visible record, and it may block the goal. The evidence stop and the no-effect stop yield to it, so
+  no second notice contradicts the first, and the round still counts with its plan still evidence for
+  the next settled round.
 
 With no fresh plan at all, the one resume names the decision instead of pushing: the notice requires
 the next round to make a concrete step or record a `work_checkpoint` declaring `done` or a

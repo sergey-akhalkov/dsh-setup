@@ -361,4 +361,64 @@ describe('user abort precedence', () => {
     expect(notices(harness)).toContain('declares the objective done')
     expect(harness.goals.goal?.phase).toBe('active')
   })
+
+  it('disarms an armed opt-in goal when the plan stops continuation', async () => {
+    const harness = createHarness({ config: { resumeAfterUserStop: 'non-goal' } })
+    setGoal(harness)
+    turnStart(harness, 1)
+    checkpointCall(harness, { outcome: 'done', next: 'nothing left' })
+    turnEnd(harness, USER_ABORT, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    expect(countCalls(harness, 'disarm')).toBe(1)
+    expect(countCalls(harness, 'resume')).toBe(0)
+    expect(notices(harness)).toContain('declares the objective done')
+    expect(harness.goals.goal?.activation).toBe('disarmed')
+    expect(harness.goals.goal?.phase).toBe('active')
+  })
+
+  it('lets the opt-in policy resume on a permissive plan after a Stop', async () => {
+    const harness = createHarness({ config: { resumeAfterUserStop: 'non-goal' } })
+    setGoal(harness)
+    turnStart(harness, 1)
+    driverDisarm(harness)
+    checkpointCall(harness, continuePlan('worker_start', 'impl', 'add the resolver test'))
+    turnEnd(harness, USER_ABORT, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    expect(countCalls(harness, 'resume')).toBe(1)
+    expect(notices(harness)).toContain('add the resolver test')
+  })
+
+  it('leaves an armed opt-in goal running on a permissive plan after a Stop', async () => {
+    const harness = createHarness({ config: { resumeAfterUserStop: 'non-goal' } })
+    setGoal(harness)
+    turnStart(harness, 1)
+    checkpointCall(harness, continuePlan('worker_start', 'impl', 'add the resolver test'))
+    turnEnd(harness, USER_ABORT, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    expect(countCalls(harness, 'disarm')).toBe(0)
+    expect(countCalls(harness, 'resume')).toBe(0)
+    expect(harness.goals.goal?.activation).toBe('armed')
+    expect(harness.goals.goal?.phase).toBe('active')
+  })
+
+  it('keeps the strict policy stop on a permissive plan after a Stop', async () => {
+    const harness = createHarness()
+    setGoal(harness)
+    turnStart(harness, 1)
+    checkpointCall(harness, continuePlan('worker_start', 'impl', 'add the resolver test'))
+    turnEnd(harness, USER_ABORT, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    expect(countCalls(harness, 'disarm')).toBe(1)
+    expect(countCalls(harness, 'resume')).toBe(0)
+    expect(notices(harness)).toContain('suppressed automatic continuation')
+    expect(notices(harness)).not.toContain('add the resolver test')
+  })
 })
