@@ -86,7 +86,7 @@ The count lives in the plugin's per-agent state beside the resume budget, is in 
 
 ### D6. The decision runs at every settled goal turn, and a stop disarms
 
-`reconcile` returns as soon as the goal's activation is not `disarmed`; the supervisor has only ever driven a disarmed goal. That is enough for a *resume* and not enough for a *stop*: the driver admits the next round of an armed goal by itself, and the existing `checkpoint-goal` harness shows a second goal round starting with no goal-service call at all. A stop decided only on the disarmed path would never reach the loop the incident is about.
+`reconcile` returns as soon as the goal's activation is not `disarmed`; the supervisor has only ever driven a disarmed goal. That is enough for a *resume* and not enough for a *stop*: the driver admits the next round of an armed goal by itself, and the existing harness in `packages/plugin-goal-continuity/test/checkpoint-goal.test.ts` (`closes the round and the next goal round sees the checkpoint`) starts a second goal round with no goal-service call at all. A stop decided only on the disarmed path would never reach the loop the incident is about.
 
 So the stop is expressed with the lever that reaches that loop: `disarm`. An armed active goal that the evidence stops is disarmed, which is the same action the existing pause prevention already takes before the driver's idle settlement. The phase stays `active`, so a direct message or an explicit resume continues the work; nothing is paused, blocked, or completed.
 
@@ -95,7 +95,7 @@ The ordering of one settled goal round:
 | Step | Condition | Action |
 | --- | --- | --- |
 | Read | every settled goal round | build the turn evidence and read the latest fresh plan |
-| Count | every settled goal round | update the no-effect count from that turn's evidence |
+| Count | every settled goal round | update the no-effect count from that turn's evidence; the counter resets with the suppression in the same `user/message` handler |
 | Stop | a fresh plan stops it, or two no-effect rounds | disarm an armed goal, suppress, record one notice, change no phase |
 | Resume | evidence allows and the goal is disarmed | resume with the plan's next action, or the decision request when there is no plan |
 | Continue | evidence allows and the goal is armed | nothing; the driver continues and the counter stays at zero |
