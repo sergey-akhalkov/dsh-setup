@@ -3479,7 +3479,7 @@ describe('turn-close lane dispatch', () => {
     expect(persistedRuns.map((run) => run.id)).toEqual([runId])
   })
 
-  it('names a failed lane start in the whole-scope refusal and starts the lane on the next close', async () => {
+  it('names a settled whole-scope verdict and a failed lane start, and starts the lane on the next close', async () => {
     const workspace = await gitGateWorkspace(`# Tasks
 
 ## 1. Engine (lane 1, owns \`src/**\`)
@@ -3496,9 +3496,40 @@ describe('turn-close lane dispatch', () => {
     await gateWrite(host, 'openspec/changes/auth/proposal.md')
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { currentSpecDigest, reviewDigest } = await import('../src/host/evidence.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    // A settled non-PASS whole-scope attempt refuses the close. The canonical
-    // current PASS keeps the spec-review trigger out of this fixture.
+    // A settled FINDINGS at the current digest refuses the close; the canonical
+    // PASS seeded by the host is replaced so the trigger case does not mask it.
+    const specDigest = await currentSpecDigest(workspace, 'auth')
+    if (specDigest === undefined) throw new Error('the change digest is missing')
+    const digest = reviewDigest({ scope: 'whole', specDigest })
+    const recordPath = '.dsh/workflows/records/spec-review/auth/spec.json'
+    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(workspace, recordPath),
+      `${JSON.stringify({
+        rule: 'spec-review',
+        change: 'auth',
+        phase: 'spec',
+        scope: 'whole',
+        digest,
+        verdict: 'FINDINGS',
+        findings: [
+          {
+            severity: 'P1',
+            class: 'missing-test',
+            title: 'No regression',
+            evidence: 'the change has no test',
+            fix: 'add the test',
+          },
+        ],
+        target: { provider: 'codex-subagent' },
+        reviewer: 'codex',
+        time: '2026-11-20T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
     const attempted = runs.createRun({
       definition: 'spec-review',
       trigger: 'turn.stopping',
@@ -3506,33 +3537,23 @@ describe('turn-close lane dispatch', () => {
       workspace,
       context: { name: 'auth' },
       steps: ['review'],
-      id: 'run-whole-scope-error',
+      id: 'run-whole-scope-findings',
       now: 1_000,
     })
     await runs.writeRun(
       workspace,
       runs.settleStep(attempted, 'review', 'done', {
         at: 1_100,
-        evidence: {
-          kind: 'record',
-          path: '.dsh/workflows/records/spec-review/auth/attempt.json',
-        },
+        evidence: { kind: 'record', path: recordPath, digest },
       }),
       auth,
     )
-    const recordDir = join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth')
-    await mkdir(recordDir, { recursive: true })
-    await writeFile(
-      join(recordDir, 'attempt.json'),
-      `${JSON.stringify({ verdict: 'ERROR' })}\n`,
-      'utf8',
-    )
     // The due lane start's own run write fails, so its start returns not-ok
-    // while the whole-scope review step is what refuses the close.
+    // while the settled whole-scope verdict is what refuses the close.
     runStoreFaults.syncWriteFile = 'simulated run-store write failure'
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const refusal = steered(host)
-    expect(refusal).toContain('last settled on a ERROR record')
+    expect(refusal).toContain('settled on FINDINGS')
     expect(refusal).toContain('simulated run-store write failure')
     expect(await taskRuns(workspace)).toHaveLength(0)
     // The next close retries the unit once the write fault is gone.
@@ -3540,6 +3561,316 @@ describe('turn-close lane dispatch', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     await waitFor(async () => (await taskRuns(workspace)).length === 2)
     expect((await taskRuns(workspace)).map((run) => run.context.section).sort()).toEqual(['1', '2'])
+  })
+
+  it('keeps a settled whole-scope FINDINGS due and starts one round only after the digest moves', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks
+
+## 1. Engine
+
+- [ ] 1.1 Later engine task
+`)
+    const host = await engineGateHost(workspace)
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { currentSpecDigest, reviewDigest } = await import('../src/host/evidence.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const specDigest = await currentSpecDigest(workspace, 'auth')
+    if (specDigest === undefined) throw new Error('the change digest is missing')
+    const digest = reviewDigest({ scope: 'whole', specDigest })
+    const recordPath = '.dsh/workflows/records/spec-review/auth/spec.json'
+    await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(workspace, recordPath),
+      `${JSON.stringify({
+        rule: 'spec-review',
+        change: 'auth',
+        phase: 'spec',
+        scope: 'whole',
+        digest,
+        verdict: 'FINDINGS',
+        findings: [
+          {
+            severity: 'P1',
+            class: 'missing-test',
+            title: 'No regression',
+            evidence: 'the change has no test',
+            fix: 'add the test',
+          },
+        ],
+        target: { provider: 'codex-subagent' },
+        reviewer: 'codex',
+        time: '2026-11-20T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
+    const attempted = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['review'],
+      id: 'run-settled-findings',
+      now: 1_000,
+    })
+    await runs.writeRun(
+      workspace,
+      runs.settleStep(attempted, 'review', 'blocked', {
+        at: 1_100,
+        evidence: { kind: 'record', path: recordPath, digest },
+      }),
+      auth,
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(steered(host)).toContain('settled on FINDINGS')
+    // The next close starts no round: the record and the step stay unchanged.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    const unchanged = JSON.parse(await readFile(join(workspace, recordPath), 'utf8')) as {
+      verdict: string
+    }
+    expect(unchanged.verdict).toBe('FINDINGS')
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-settled-findings', auth)
+    expect(stored?.steps[0]?.state).toBe('blocked')
+    expect(await taskRuns(workspace)).toHaveLength(0)
+    // A changed reviewed digest makes the round eligible: the next close starts
+    // exactly one round, which fails here because the host has no reviewer.
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'design.md'),
+      '# Design\n\nA changed decision.\n',
+      'utf8',
+    )
+    await gateWrite(host, 'openspec/changes/auth/design.md')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+    await waitFor(async () => {
+      const record = JSON.parse(await readFile(join(workspace, recordPath), 'utf8')) as {
+        verdict?: string
+      }
+      return record.verdict === 'ERROR'
+    })
+  })
+
+  it('suppresses a settled whole-scope trigger and refuses a foreign verdict without a local run', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks
+
+## 1. Engine
+
+- [ ] 1.1 Later engine task
+`)
+    const host = await engineGateHost(workspace)
+    // Attribute the change to this session without moving its artifacts.
+    await gateWrite(host, 'openspec/changes/auth/design.md')
+    const { currentSpecDigest, reviewDigest } = await import('../src/host/evidence.ts')
+    const specDigest = await currentSpecDigest(workspace, 'auth')
+    if (specDigest === undefined) throw new Error('the change digest is missing')
+    const digest = reviewDigest({ scope: 'whole', specDigest })
+    const recordPath = '.dsh/workflows/records/spec-review/auth/spec.json'
+    await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(workspace, recordPath),
+      `${JSON.stringify({
+        rule: 'spec-review',
+        change: 'auth',
+        phase: 'spec',
+        scope: 'whole',
+        digest,
+        verdict: 'FINDINGS',
+        findings: [
+          {
+            severity: 'P0',
+            class: 'state-persistence',
+            title: 'Lost write',
+            evidence: 'the write is not persisted',
+            fix: 'persist it',
+          },
+        ],
+        target: { provider: 'codex-subagent' },
+        reviewer: 'codex',
+        time: '2026-11-20T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(steered(host)).toContain('settled on FINDINGS')
+    // The trigger is suppressed instead of starting a reviewer-less run.
+    const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    const rows = (await readFile(journalFile, 'utf8').catch(() => ''))
+      .trim()
+      .split('\n')
+      .filter((line) => line !== '')
+      .flatMap((line) => {
+        try {
+          return (JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }).triggers ?? []
+        } catch {
+          return []
+        }
+      })
+      .filter((row) => row.id === 'definition:spec-review')
+    expect(
+      rows.some(
+        (row) =>
+          row.reason === 'run-suppressed' &&
+          String(row.detail).includes('settled on FINDINGS') &&
+          String(row.detail).includes('start a fresh round'),
+      ),
+    ).toBe(true)
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    expect(
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+        (entry) => entry.definition.id === 'spec-review',
+      ),
+    ).toHaveLength(0)
+  })
+
+  it('refuses a settled lane FINDINGS and starts one round after a task joins the lane', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks
+
+- [x] 0.1 Already reviewed
+
+## 1. Engine (lane 1, owns \`src/**\`)
+
+- [x] 1.1 First engine task
+- [x] 1.2 Second engine task
+- [ ] 1.3 Third engine task
+`)
+    const host = await engineGateHost(workspace)
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const { sectionRecordId, taskIdOf, taskSections } = await import('../src/host/tasks.ts')
+    const { sectionReviewDigest } = await import('../src/host/review.ts')
+    const { reviewInputTree } = await import('../src/host/review-snapshot.ts')
+    const { defaultGit } = await import('../src/host/git.ts')
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    // Attribute the change to this session so its due lanes are evaluated.
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    // A historical per-task PASS: a later write must not make it due again.
+    const passedId = taskIdOf('Already reviewed')
+    await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'task-review',
+        'auth',
+        'tasks',
+        `${passedId}.json`,
+      ),
+      `${JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId: passedId,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-20T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
+    const specDigest = await currentSpecDigest(workspace, 'auth')
+    if (specDigest === undefined) throw new Error('the change digest is missing')
+    const plan = await readFile(join(changeDir, 'tasks.md'), 'utf8')
+    const section = taskSections(plan).find((entry) => entry.key === '1')
+    if (section === undefined) throw new Error('the lane section is missing')
+    const recordId = sectionRecordId(section.key)
+    const sectionReview = {
+      key: section.key,
+      title: section.title,
+      recordId,
+      covered: section.covered.map((task) => ({
+        id: task.id,
+        number: task.number,
+        text: task.text,
+      })),
+      unchecked: [],
+    }
+    const tree = await reviewInputTree(
+      workspace,
+      { dir: changeDir },
+      defaultGit,
+      AbortSignal.timeout(60_000),
+    )
+    const digest = sectionReviewDigest(sectionReview, specDigest, tree)
+    await writeFile(
+      join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'task-review',
+        'auth',
+        'tasks',
+        `${recordId}.json`,
+      ),
+      `${JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId: recordId,
+        section: section.key,
+        sectionTitle: section.title,
+        taskIds: sectionReview.covered.map((task) => task.id),
+        digest,
+        verdict: 'FINDINGS',
+        findings: [
+          {
+            severity: 'P1',
+            class: 'missing-test',
+            title: 'No lane test',
+            evidence: 'the lane has no test',
+            fix: 'add the test',
+          },
+        ],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-20T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(steered(host)).toContain('settled on FINDINGS')
+    expect(steered(host)).toContain('start a fresh round')
+    expect(await taskRuns(workspace)).toHaveLength(0)
+    // A newly checked task expands the lane's coverage and makes one round due.
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      `# Tasks
+
+- [x] 0.1 Already reviewed
+
+## 1. Engine (lane 1, owns \`src/**\`)
+
+- [x] 1.1 First engine task
+- [x] 1.2 Second engine task
+- [x] 1.3 Third engine task
+`,
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await waitFor(async () => (await taskRuns(workspace)).length === 1)
+    const started = await taskRuns(workspace)
+    const first = started[0]
+    expect(first?.context.section).toBe(section.key)
+    const startedIds: string[] = []
+    if (Array.isArray(first?.context.taskIds)) {
+      for (const id of first.context.taskIds) if (typeof id === 'string') startedIds.push(id)
+    }
+    expect(startedIds.sort()).toEqual(
+      [...sectionReview.covered.map((task) => task.id), taskIdOf('Third engine task')].sort(),
+    )
+    // The historical task PASS starts no round of its own.
+    expect(started.some((run) => run.context.taskId === passedId)).toBe(false)
   })
 })
 

@@ -620,28 +620,37 @@ async function recordCheck(evidence, context, item) {
         }
     }
     // An explicit task start also refuses to reuse a local PASS whose portable
-    // approval is missing or rejected; the executor must re-review it.
+    // approval is missing or rejected; the executor must re-review it. A section
+    // record approves every covered checked task one by one, so every one of
+    // those approvals must match — never one keyed by the synthetic section id.
     if (context.values.explicitReview === true &&
         record.verdict === 'PASS' &&
         record.scope === 'task' &&
         typeof record.taskId === 'string') {
         const approvalChange = change?.text ?? (typeof record.change === 'string' ? record.change : undefined);
-        const approval = approvalChange === undefined
-            ? undefined
-            : readPortableApproval(context.workspace, approvalChange, record.taskId);
-        const approvalTarget = (approval?.target ?? {});
+        const covered = record.section !== undefined && Array.isArray(record.taskIds)
+            ? record.taskIds.filter((entry) => typeof entry === 'string')
+            : [record.taskId];
         const recordTarget = (record.target ?? {});
-        const matching = approval !== undefined &&
-            approval.rule === record.rule &&
-            approval.change === approvalChange &&
-            approval.taskId === record.taskId &&
-            approval.verdict === 'PASS' &&
-            (binding?.provider === undefined || approvalTarget.provider === binding.provider) &&
-            (binding?.model === undefined || approvalTarget.model === binding.model) &&
-            (binding?.provider === undefined || recordTarget.provider === binding.provider) &&
-            (binding?.model === undefined || recordTarget.model === binding.model);
-        if (!matching) {
-            return mismatch('an explicit task review start needs the matching portable approval; dispatch a new review', path.text, item);
+        const matchesApproval = (taskId) => {
+            if (approvalChange === undefined)
+                return false;
+            const approval = readPortableApproval(context.workspace, approvalChange, taskId);
+            const approvalTarget = (approval?.target ?? {});
+            return (approval !== undefined &&
+                approval.rule === record.rule &&
+                approval.change === approvalChange &&
+                approval.taskId === taskId &&
+                approval.verdict === 'PASS' &&
+                (binding?.provider === undefined || approvalTarget.provider === binding.provider) &&
+                (binding?.model === undefined || approvalTarget.model === binding.model) &&
+                (binding?.provider === undefined || recordTarget.provider === binding.provider) &&
+                (binding?.model === undefined || recordTarget.model === binding.model));
+        };
+        if (covered.length === 0 || !covered.every(matchesApproval)) {
+            return mismatch(record.section !== undefined
+                ? 'an explicit section review start needs the matching portable approval of every covered task; dispatch a new review'
+                : 'an explicit task review start needs the matching portable approval; dispatch a new review', path.text, item);
         }
     }
     // An explicit review start reopens an earlier ERROR so a retry can dispatch a

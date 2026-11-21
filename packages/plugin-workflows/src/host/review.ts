@@ -16,6 +16,7 @@ import { type EvidenceContext, reviewDigest, verifyEvidence } from './evidence.j
 import type { SubagentRunner, SubagentRunResult } from './executors.js'
 import { isInside } from './fs-change.js'
 import { defaultGit, type GitRunner, repositoryRoot } from './git.js'
+import { localRecordError } from './projection.js'
 import { classifyFailure, type FailureClass } from './review-queue.js'
 import { setRunStatus, settleStep, type WorkflowRun } from './runs.js'
 
@@ -1413,6 +1414,147 @@ async function settleFromRecord(
     reason,
     evidence: { kind: 'record', path: recordPath, digest: record.digest },
     ...(typeof record.failureClass === 'string' ? { failureClass: record.failureClass } : {}),
+  })
+}
+
+/** One stored verdict that settles its review unit for the round it reviewed. */
+export interface SettledReviewRound {
+  readonly record: ReviewRecord
+  readonly verdict: ReviewVerdict
+  readonly digest: string
+  readonly recordPath: string
+  /** The checked task ids the round covered; empty for a whole-scope unit. */
+  readonly covered: readonly string[]
+}
+
+/** Failure classes that discarded their verdict: retryable, never a settled round. */
+const DISCARDED_REVIEW_FAILURES: ReadonlySet<string> = new Set([
+  'reviewed-inputs-changed',
+  'queue-internal-error',
+])
+
+/**
+ * The settled round of one review unit, read from the record at the path the
+ * unit publishes to. It is well-formed and binds the verdict to the digest of
+ * the round it reviewed; a section record covers exactly the unit's checked
+ * task set. A discarded-input or queue-fault ERROR carries no verdict and does
+ * not settle. `digests` may be lazy so an absent record costs no git work.
+ */
+export async function readSettledReviewRound(input: {
+  readonly workspace: string
+  readonly definition: Definition
+  readonly step: Step
+  readonly change: string
+  /** The task or section record id; absent for a whole-scope unit. */
+  readonly recordId?: string
+  /** Every digest the unit's current round would record; any match settles it. */
+  readonly digests: readonly string[] | (() => Promise<readonly string[]>)
+  /** The checked-task set a section record must cover. */
+  readonly covered?: readonly string[]
+}): Promise<SettledReviewRound | undefined> {
+  const spec = input.step.review
+  if (spec === undefined) return undefined
+  let recordPath: string
+  try {
+    recordPath = localReviewRecordPath({
+      definition: reviewStoreOf(input.definition, input.step),
+      change: input.change,
+      scope: spec.scope,
+      ...(spec.phase === undefined ? {} : { phase: spec.phase }),
+      ...(input.recordId === undefined ? {} : { taskId: input.recordId }),
+    })
+  } catch {
+    return undefined
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readFile(join(input.workspace, recordPath), 'utf8'))
+  } catch {
+    return undefined
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  if (localRecordError(raw as Record<string, unknown>) !== undefined) return undefined
+  const record = raw as ReviewRecord
+  if (record.change !== input.change || record.scope !== spec.scope) return undefined
+  if (record.rule !== reviewIdentityOf(input.definition, input.step)) return undefined
+  if (spec.scope === 'task' && record.taskId !== input.recordId) return undefined
+  if (record.verdict === 'ERROR' && DISCARDED_REVIEW_FAILURES.has(record.failureClass ?? '')) {
+    return undefined
+  }
+  if (record.section !== undefined) {
+    if (input.covered === undefined) return undefined
+    const covered = [...(record.taskIds ?? [])].sort().join('\u0000')
+    if (covered !== [...input.covered].sort().join('\u0000')) return undefined
+  }
+  const digests = typeof input.digests === 'function' ? await input.digests() : input.digests
+  if (!digests.includes(record.digest)) return undefined
+  return {
+    record,
+    verdict: record.verdict,
+    digest: record.digest,
+    recordPath,
+    covered: record.taskIds ?? (record.taskId === undefined ? [] : [record.taskId]),
+  }
+}
+
+/**
+ * Settle a review step from a verdict its unit already stored. A matching PASS
+ * settles done when the step's contract accepts it; a FINDINGS settles blocked
+ * and an ERROR settles failed, both naming the verdict, the digest, the record,
+ * and the explicit fresh-round remedy. An already settled step is returned
+ * unchanged so a repeated close writes nothing.
+ */
+export async function settleStoredReviewRound(input: {
+  readonly run: WorkflowRun
+  readonly definition: Definition
+  readonly step: Step
+  readonly context: EvidenceContext
+  readonly settled: SettledReviewRound
+  readonly now: number
+}): Promise<WorkflowRun> {
+  const { run, step, context, settled } = input
+  const existing = run.steps.find((entry) => entry.id === step.id)
+  const carries =
+    existing?.evidence?.kind === 'record' &&
+    existing.evidence.path === settled.recordPath &&
+    existing.evidence.digest === settled.digest
+  const evidence = { kind: 'record', path: settled.recordPath, digest: settled.digest }
+  if (settled.verdict === 'PASS') {
+    const declared = step.evidence ?? { kind: 'declaration' }
+    const check = await verifyEvidence(passContractOf(declared) ?? declared, context)
+    const accepted =
+      check.ok &&
+      check.evidence.path === settled.recordPath &&
+      check.evidence.digest === settled.digest
+    if (accepted) {
+      if (existing?.state === 'done' && carries) return run
+      return settleStep(run, step.id, 'done', { at: input.now, evidence: check.evidence })
+    }
+    if (existing?.state === 'blocked' && carries) return run
+    const detail = check.ok ? 'the verified evidence is not this record' : check.failure.detail
+    return settleStep(run, step.id, 'blocked', {
+      at: input.now,
+      reason: `the stored PASS at ${settled.recordPath} does not satisfy the step: ${detail.slice(0, 160)}`,
+      evidence,
+    })
+  }
+  const remedy = `fix the findings so the reviewed digest moves, or start a fresh round with workflows(action: "start", definitionId: "${input.definition.id}", change: "${settled.record.change}")`
+  if (settled.verdict === 'FINDINGS') {
+    if (existing?.state === 'blocked' && carries) return run
+    return settleStep(run, step.id, 'blocked', {
+      at: input.now,
+      reason: `the review settled on FINDINGS (${String(settled.record.findings.length)} P0/P1) at digest ${settled.digest} (record ${settled.recordPath}); ${remedy}`,
+      evidence,
+    })
+  }
+  if (existing?.state === 'failed' && carries) return run
+  const failureClass = settled.record.failureClass
+  const detail = settled.record.error === undefined ? '' : `: ${settled.record.error.slice(0, 160)}`
+  return settleStep(run, step.id, 'failed', {
+    at: input.now,
+    reason: `the review settled on ERROR${failureClass === undefined ? '' : ` (${failureClass})`} at digest ${settled.digest} (record ${settled.recordPath})${detail}; ${remedy}`,
+    evidence,
+    ...(failureClass === undefined ? {} : { failureClass }),
   })
 }
 

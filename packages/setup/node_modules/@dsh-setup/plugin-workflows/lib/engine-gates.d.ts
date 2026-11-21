@@ -2,8 +2,10 @@ import type { Definition } from './definitions.js';
 import { type ToolCallObservation } from './evidence.js';
 import { type LaneParityLane } from './gates.js';
 import { type GitRunner } from './git.js';
-import { type ReviewUnit, type ReviewUnitTextOptions } from './parity.js';
+import { type ReviewUnit, type ReviewUnitSettlement, type ReviewUnitTextOptions } from './parity.js';
 export type { ReviewUnit };
+/** Resolve one due unit's stored non-PASS verdict, or undefined when none is settled. */
+export type ReviewUnitSettlementResolver = (change: string, unit: ReviewUnit) => Promise<ReviewUnitSettlement | undefined>;
 /**
  * The engine-owned gates: work progress, lane assignment, and goal completion.
  * Their decisions are the parity tables (`evaluateProgressParity`,
@@ -58,12 +60,14 @@ export declare function taskReviewEvidence(workspace: string, change: string, ta
  * `FINDINGS` or `ERROR` record keeps the unit due. Undefined when the plan is
  * unreadable.
  */
-export declare function reviewUnits(workspace: string, change: string): Promise<ReviewUnit[] | undefined>;
+export declare function reviewUnits(workspace: string, change: string, settledOf?: ReviewUnitSettlementResolver): Promise<ReviewUnit[] | undefined>;
 /**
  * The one-line lane unit: the section key with its covered and missing task
  * numbers (or the single task), the live runs that already cover it, and the
  * start action that covers the rest. Lane-first: only a PASS clears a unit, so
  * the text names a PASS where the review step's own evidence accepts ERROR too.
+ * A settled non-PASS unit names its verdict, digest, and record instead of a
+ * missing PASS, and its remedy is the explicit fresh round.
  * The completion coverage keeps its portable-approval formatter in parity.ts.
  */
 export declare function reviewUnitText(change: string, unit: ReviewUnit, options?: ReviewUnitTextOptions): string;

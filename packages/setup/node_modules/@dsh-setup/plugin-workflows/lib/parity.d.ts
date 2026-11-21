@@ -130,6 +130,14 @@ export interface ReviewUnit {
     readonly covered: readonly NumberedTaskLine[];
     /** The covered checked tasks without a matching PASS/ERROR record, in file order. */
     readonly missing: readonly NumberedTaskLine[];
+    /** A non-PASS verdict the unit already settled at its current round. */
+    readonly settled?: ReviewUnitSettlement;
+}
+/** A settled non-PASS verdict: no reviewer starts until the round moves. */
+export interface ReviewUnitSettlement {
+    readonly verdict: 'FINDINGS' | 'ERROR';
+    readonly digest: string;
+    readonly recordPath: string;
 }
 /** One open task-review run the review-unit text may point at. */
 export interface ReviewUnitRun {

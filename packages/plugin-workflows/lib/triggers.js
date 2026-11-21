@@ -217,6 +217,16 @@ export function obligationDedupeKey(definition, trigger, event, capture) {
         }
     }
 }
+/**
+ * Whether a definition's event kind and filters already match an event. Only
+ * the cheap trigger match runs: conditions, applicability, and dedupe are not
+ * evaluated, so a caller can decide whether to gather per-definition facts.
+ */
+export function triggerEventMatches(definition, event) {
+    if (definition.trigger.kind !== event.kind)
+        return false;
+    return filterMismatch(definition.trigger, event).mismatch === undefined;
+}
 /** Evaluate one definition's trigger against one event. Pure and contained. */
 export function evaluateDefinitionTrigger(definition, event, context) {
     const trigger = definition.trigger;

@@ -213,7 +213,7 @@ async function taskReviewPass(workspace, change, taskId) {
  * `FINDINGS` or `ERROR` record keeps the unit due. Undefined when the plan is
  * unreadable.
  */
-export async function reviewUnits(workspace, change) {
+export async function reviewUnits(workspace, change, settledOf) {
     const plan = await readPlan(workspace, change);
     if (plan === undefined)
         return undefined;
@@ -241,16 +241,20 @@ export async function reviewUnits(workspace, change) {
         const absent = section.covered.filter((task) => missing.has(task.id));
         if (absent.length === 0)
             continue;
-        units.push({
+        const unit = {
             section: { key: section.key, title: section.title },
             covered: section.covered,
             missing: absent,
-        });
+        };
+        const settled = settledOf === undefined ? undefined : await settledOf(change, unit);
+        units.push(settled === undefined ? unit : { ...unit, settled });
     }
     for (const task of checked) {
         if (!missing.has(task.id) || sectioned.has(task.id))
             continue;
-        units.push({ covered: [task], missing: [task] });
+        const unit = { covered: [task], missing: [task] };
+        const settled = settledOf === undefined ? undefined : await settledOf(change, unit);
+        units.push(settled === undefined ? unit : { ...unit, settled });
     }
     return units;
 }
@@ -299,26 +303,38 @@ function coversUnit(run, unit) {
  * numbers (or the single task), the live runs that already cover it, and the
  * start action that covers the rest. Lane-first: only a PASS clears a unit, so
  * the text names a PASS where the review step's own evidence accepts ERROR too.
+ * A settled non-PASS unit names its verdict, digest, and record instead of a
+ * missing PASS, and its remedy is the explicit fresh round.
  * The completion coverage keeps its portable-approval formatter in parity.ts.
  */
 export function reviewUnitText(change, unit, options = {}) {
     const rule = options.rule ?? 'task-review';
+    const settled = unit.settled;
     // Only a run covering the unit as it is now is pending; a run created before a
     // newly checked task does not cover the expanded lane.
     const pending = (options.openRuns ?? []).filter((run) => run.change === change && coversUnit(run, unit));
     const names = pending.map((run) => `"${run.id}"`).join(', ');
-    const action = (selector) => pending.length === 0
-        ? `; start it with workflows(action: "start", definitionId: "${rule}", change: "${change}", ${selector})`
-        : `; the live review run${pending.length === 1 ? '' : 's'} ${names} cover${pending.length === 1 ? 's' : ''} it, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`;
+    const action = (selector) => settled !== undefined
+        ? `; fix the findings so the reviewed digest moves, or start a fresh round with workflows(action: "start", definitionId: "${rule}", change: "${change}", ${selector})`
+        : pending.length === 0
+            ? `; start it with workflows(action: "start", definitionId: "${rule}", change: "${change}", ${selector})`
+            : `; the live review run${pending.length === 1 ? '' : 's'} ${names} cover${pending.length === 1 ? 's' : ''} it, so continue ${pending.length === 1 ? 'that run' : 'those runs'} instead of a new start`;
     const section = unit.section;
+    const settledNote = settled === undefined
+        ? undefined
+        : `is settled on ${settled.verdict} at digest ${settled.digest.slice(0, 12)}… (record ${settled.recordPath})`;
     if (section === undefined) {
         const task = unit.missing[0];
         if (task === undefined)
             return `change "${change}" has no outstanding review unit`;
-        const head = `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS`;
+        const head = settledNote === undefined
+            ? `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS`
+            : `task "${task.number} ${task.text}" (${task.id}) ${settledNote}`;
         return clampUnitText(head, action(`task: "${task.id}"`));
     }
-    const head = `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) is one lane unit; covered checked tasks ${boundedNumbers(unit.covered)}; missing a ${rule} PASS: ${boundedNumbers(unit.missing)}`;
+    const head = settledNote === undefined
+        ? `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) is one lane unit; covered checked tasks ${boundedNumbers(unit.covered)}; missing a ${rule} PASS: ${boundedNumbers(unit.missing)}`
+        : `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) ${settledNote}; covered checked tasks ${boundedNumbers(unit.covered)}`;
     return clampUnitText(head, action(`section: "${section.key}"`));
 }
 /**
@@ -333,11 +349,21 @@ export function reviewUnitSummary(change, unit, options = {}) {
         ? ''
         : `; live run${pending.length === 1 ? '' : 's'} ${pending.map((run) => `"${run.id}"`).join(', ')} cover${pending.length === 1 ? 's' : ''} it`;
     const section = unit.section;
+    const settled = unit.settled;
+    const settledNote = settled === undefined
+        ? undefined
+        : `settled on ${settled.verdict} at digest ${settled.digest.slice(0, 12)}… (record ${settled.recordPath}); start a fresh round explicitly only after fixing it`;
     if (section === undefined) {
         const task = unit.missing[0];
         if (task === undefined)
             return `change "${change}" has no outstanding review unit`;
+        if (settledNote !== undefined) {
+            return `change "${change}" task "${clipped(task.number + ' ' + task.text, 40)}" (${task.id}): ${settledNote}`;
+        }
         return `change "${change}" task "${clipped(task.number + ' ' + task.text, 40)}" (${task.id}): no ${rule} PASS${live}`;
+    }
+    if (settledNote !== undefined) {
+        return `change "${change}" section "${clipped(section.key, 40)}": covered ${boundedNumbers(unit.covered)}; ${settledNote}`;
     }
     return `change "${change}" section "${clipped(section.key, 40)}": covered ${boundedNumbers(unit.covered)}; missing a ${rule} PASS: ${boundedNumbers(unit.missing)}${live}`;
 }

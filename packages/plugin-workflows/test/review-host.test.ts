@@ -84,6 +84,46 @@ function reviewDefinition(): ReturnType<typeof validateDefinition> {
   })
 }
 
+/** A whole-scope review definition that settles a stored FINDINGS/PASS round. */
+function settlementDefinition(): ReturnType<typeof validateDefinition> {
+  return validateDefinition({
+    v: 1,
+    id: 'settle-spec-review',
+    name: 'Settle spec review',
+    version: 1,
+    trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+    settings: {
+      allowModelStart: true,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+      gate: 'review',
+      gateIdentity: 'settle-spec-review',
+    },
+    steps: [
+      {
+        id: 'review',
+        title: 'Review the whole change spec',
+        executor: 'review',
+        review: { target: 'codex', instruction: 'review-spec', scope: 'whole', phase: 'spec' },
+        evidence: {
+          kind: 'record',
+          rule: 'settle-spec-review',
+          change: '{name}',
+          phase: 'spec',
+          scope: 'whole',
+          verdicts: ['PASS', 'ERROR'],
+          digest: 'current',
+          path: '.dsh/workflows/records/settle-spec-review/{name}/spec.json',
+        },
+        next: 'end',
+        blockTurnClose: true,
+      },
+    ],
+  })
+}
+
 /** A git-backed change whose only task is present but unchecked in the snapshot. */
 async function gitWorkspace(): Promise<string> {
   const workspace = await tempWorkspace()
@@ -821,9 +861,16 @@ describe('native review host admission', () => {
     await writeRun(workspace, run, auth)
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const settled = await readAuthenticatedRun(workspace, run.id, auth)
-    // A stored ERROR no longer settles a fresh whole-scope round: the run keeps
-    // its review step open while the reviewer it starts delivers the verdict.
-    expect(settled?.steps[0]?.state).toBe('open')
+    // A stored terminal ERROR at the current digest settles the step failed: no
+    // new reviewer starts for the same snapshot, and the reason names the verdict.
+    expect(settled?.steps[0]?.state).toBe('failed')
+    expect(settled?.steps[0]?.reason).toContain('settled on ERROR (timeout)')
+    // Give a stray reviewer publication the chance to appear before asserting none did.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const record = JSON.parse(await readFile(join(recordDir, 'spec.json'), 'utf8')) as {
+      verdict: string
+    }
+    expect(record.verdict).toBe('ERROR')
   })
 
   it.each(['FINDINGS', 'PASS'] as const)(
@@ -1357,4 +1404,200 @@ describe('section review publication through the host', () => {
       unregister()
     }
   })
+})
+
+describe('review round settlement', () => {
+  it('settles an explicit start on FINDINGS and starts no reviewer on later closes', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const definition = settlementDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'FINDINGS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const run = createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth', explicitReview: true },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, run, auth)
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'settle-spec-review',
+        'auth',
+        'spec.json',
+      )
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.digests.length === 1)
+      host.releases[0]?.()
+      await waitFor(
+        async () =>
+          (JSON.parse(await readFile(recordPath, 'utf8').catch(() => '{}')) as { verdict?: string })
+            .verdict === 'FINDINGS',
+      )
+      const stepState = async (): Promise<string | undefined> =>
+        (await readAuthenticatedRun(workspace, run.id, auth))?.steps[0]?.state
+      await waitFor(async () => (await stepState()) === 'blocked')
+      // The explicit round's verdict settles every later automatic close: the
+      // close is refused with the verdict and starts no second reviewer.
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      const steers = host.steers.join('\n')
+      expect(steers).toContain('settled on FINDINGS')
+      expect(steers).toContain('start a fresh round')
+      expect(await stepState()).toBe('blocked')
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(host.releases).toHaveLength(1)
+      expect(host.digests).toHaveLength(1)
+    } finally {
+      unregister()
+    }
+  })
+
+  it('reuses a stored section PASS through its covered approvals without a reviewer', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await sectionWorkspace()
+    const definition = reviewDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const recordId = sectionRecordId(SECTION.key)
+      const digest = 'c'.repeat(64)
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        definition.id,
+        'auth',
+        'tasks',
+        `${recordId}.json`,
+      )
+      await mkdir(join(recordPath, '..'), { recursive: true })
+      await writeFile(
+        recordPath,
+        `${JSON.stringify({
+          definition: definition.id,
+          rule: definition.id,
+          change: 'auth',
+          phase: 'task',
+          scope: 'task',
+          taskId: recordId,
+          section: SECTION.key,
+          sectionTitle: SECTION.title,
+          taskIds: SECTION_IDS,
+          digest,
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          reviewer: 'codex',
+          time: '2026-01-01T00:00:00.000Z',
+        })}\n`,
+        'utf8',
+      )
+      for (const taskId of SECTION_IDS) {
+        await writeFile(
+          join(workspace, 'openspec', 'changes', 'auth', 'reviews', `${taskId}.json`),
+          `${JSON.stringify({
+            rule: definition.id,
+            change: 'auth',
+            scope: 'task',
+            taskId,
+            digest,
+            verdict: 'PASS',
+            findings: [],
+            target: { provider: 'codex-subagent' },
+            time: '2026-01-01T00:00:00.000Z',
+          })}\n`,
+          'utf8',
+        )
+      }
+      const run = createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: {
+          name: 'auth',
+          taskId: recordId,
+          section: SECTION.key,
+          sectionTitle: SECTION.title,
+          taskIds: SECTION_IDS,
+          explicitReview: true,
+        },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, run, auth)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      // The old check looked for an approval keyed by the synthetic section id
+      // and blocked this reuse; the covered approvals now settle the step.
+      expect(host.digests).toHaveLength(0)
+      const settled = await readAuthenticatedRun(workspace, run.id, auth)
+      expect(settled?.steps[0]?.state).toBe('done')
+    } finally {
+      unregister()
+    }
+  })
+
+  it.each(['FINDINGS', 'PASS'] as const)(
+    'settles a section %s record published from the live fallback',
+    async (verdict) => {
+      process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+      const workspace = await sectionWorkspace()
+      // The project's own negation keeps `.dsh` unignored after the automatic
+      // exclude rule, so the snapshot is refused and the review uses the live
+      // worktree under the mutation guard.
+      await writeFile(join(workspace, '.gitignore'), '.dsh/\n!.dsh/\n', 'utf8')
+      const definition = reviewDefinition()
+      const unregister = definitionsRegistry.register({
+        source: 'workflows-test',
+        definitions: [definition],
+      })
+      const host = delayedReviewHost(workspace, verdict)
+      try {
+        apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+        const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+        const { runId, recordPath } = await startSectionRun(workspace, definition)
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+        await waitFor(() => host.digests.length === 1)
+        host.releases[0]?.()
+        await waitFor(
+          async () => (await readFile(recordPath, 'utf8').catch(() => undefined)) !== undefined,
+        )
+        const record = JSON.parse(await readFile(recordPath, 'utf8')) as {
+          readonly verdict: string
+          readonly worktreeDigest?: string
+        }
+        expect(record.verdict).toBe(verdict)
+        // No snapshot could be built: the record binds the live worktree digest.
+        expect(record.worktreeDigest).toBeDefined()
+        const stepState = async (): Promise<string | undefined> =>
+          (await readAuthenticatedRun(workspace, runId, auth))?.steps[0]?.state
+        await waitFor(async () => (await stepState()) !== 'open')
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        expect(host.digests).toHaveLength(1)
+      } finally {
+        unregister()
+      }
+    },
+  )
 })

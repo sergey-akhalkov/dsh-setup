@@ -104,6 +104,12 @@ export interface DefinitionEvaluationContext {
  * the turn, the path and content hash, the call id, or the captured name.
  */
 export declare function obligationDedupeKey(definition: string, trigger: DefinitionTrigger, event: DefinitionEvent, capture?: string): string | undefined;
+/**
+ * Whether a definition's event kind and filters already match an event. Only
+ * the cheap trigger match runs: conditions, applicability, and dedupe are not
+ * evaluated, so a caller can decide whether to gather per-definition facts.
+ */
+export declare function triggerEventMatches(definition: Definition, event: DefinitionEvent): boolean;
 /** Evaluate one definition's trigger against one event. Pure and contained. */
 export declare function evaluateDefinitionTrigger(definition: Definition, event: DefinitionEvent, context: DefinitionEvaluationContext): DefinitionEvaluation;
 export interface StartRunOutcome {

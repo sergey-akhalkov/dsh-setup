@@ -493,6 +493,90 @@ describe('record and tool evidence', () => {
     }
   })
 
+  it('validates every covered task approval for an explicit section start', async () => {
+    const workspace = await tempWorkspace()
+    const recordId = 'a'.repeat(16)
+    const covered = ['0123456789abcdef', 'fedcba9876543210']
+    const digest = 'c'.repeat(64)
+    await writeJson(workspace, `.dsh/workflows/records/task-review/auth/tasks/${recordId}.json`, {
+      definition: 'task-review',
+      rule: 'task-review',
+      change: 'auth',
+      phase: 'task',
+      scope: 'task',
+      taskId: recordId,
+      section: '1',
+      sectionTitle: '1. Compose the profile',
+      taskIds: covered,
+      digest,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-01-01T00:00:00.000Z',
+    })
+    const approval = (taskId: string): Record<string, unknown> => ({
+      rule: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId,
+      digest,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-01-01T00:00:00.000Z',
+    })
+    const evidence: Evidence = {
+      kind: 'record',
+      rule: 'task-review',
+      change: '{name}',
+      scope: 'task',
+      task: '{taskId}',
+      verdicts: ['PASS'],
+      path: '.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json',
+    }
+    const explicit = {
+      name: 'auth',
+      taskId: recordId,
+      taskIds: covered,
+      explicitReview: true,
+    }
+    // The approval is never keyed by the synthetic section record id.
+    const missing = await verifyEvidence(evidence, { workspace, values: explicit })
+    expect(missing).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
+    if (!missing.ok) expect(missing.failure.detail).toMatch(/every covered task/u)
+    for (const taskId of covered) {
+      await writeJson(workspace, `openspec/changes/auth/reviews/${taskId}.json`, approval(taskId))
+    }
+    expect((await verifyEvidence(evidence, { workspace, values: explicit })).ok).toBe(true)
+    await rm(join(workspace, 'openspec', 'changes', 'auth', 'reviews', `${covered[1]}.json`))
+    const partial = await verifyEvidence(evidence, { workspace, values: explicit })
+    expect(partial).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
+    // A per-task record still validates its own approval.
+    const perTask = covered[0] as string
+    await writeJson(workspace, `.dsh/workflows/records/task-review/auth/tasks/${perTask}.json`, {
+      definition: 'task-review',
+      rule: 'task-review',
+      change: 'auth',
+      phase: 'task',
+      scope: 'task',
+      taskId: perTask,
+      digest,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-01-01T00:00:00.000Z',
+    })
+    await writeJson(workspace, `openspec/changes/auth/reviews/${perTask}.json`, approval(perTask))
+    expect(
+      (
+        await verifyEvidence(evidence, {
+          workspace,
+          values: { name: 'auth', taskId: perTask, explicitReview: true },
+        })
+      ).ok,
+    ).toBe(true)
+  })
+
   it('accepts a checkpoint record and refuses a non-checkpoint file', async () => {
     const workspace = await tempWorkspace()
     const checkpointPath = `.dsh/work-checkpoints/${'a'.repeat(16)}/3.json`

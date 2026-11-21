@@ -46,6 +46,7 @@ import {
   type LaneDecision,
   pruneLaneDecisions,
   type ReviewUnit,
+  type ReviewUnitSettlementResolver,
   reviewRunSteer,
   reviewUnitSummary,
   reviewUnits,
@@ -115,10 +116,12 @@ import { issueCompletionReceipt, listReceipts } from './receipts.js'
 import { definitionsRegistry, type WorkflowsDefinitionsService } from './registry.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
+  DEFAULT_REVIEW_TIMEOUT_MS,
   InputMutationError,
   provisionalReviewSteps,
   type ReviewerMap,
   type ReviewRunInput,
+  readSettledReviewRound,
   recordReviewFailure,
   resolveReviewer,
   resolveReviewers,
@@ -128,8 +131,10 @@ import {
   reviewPhase,
   reviewUnitKey,
   type SectionReview,
+  type SettledReviewRound,
   sectionReviewDigest,
   settleDuplicateReviewAttempt,
+  settleStoredReviewRound,
   TASK_ID_PATTERN,
 } from './review.js'
 import { supersedeInterruptedReviews } from './review-restart.js'
@@ -200,6 +205,7 @@ import {
   obligationDedupeKey,
   type StartRunOutcome,
   type Trigger,
+  triggerEventMatches,
 } from './triggers.js'
 import { attributedChangeNames } from './write-attribution.js'
 
@@ -768,6 +774,173 @@ function liveUnitRuns(
 }
 
 /**
+ * The whole-scope review step of a definition, when it has one; a task-scope
+ * review is a lane unit, not a whole-scope one.
+ */
+function wholeScopeReviewStepOf(definition: Definition): Step | undefined {
+  if (definition.settings.gate !== 'review') return undefined
+  const step = definition.steps.find((entry) => entry.executor === 'review')
+  return step === undefined || step.review?.scope === 'task' ? undefined : step
+}
+
+/** The refusal of a whole-scope unit settled on a non-PASS verdict: verdict, digest, record, remedies. */
+function settledWholeScopeText(
+  definition: Definition,
+  change: string,
+  settled: SettledReviewRound,
+): string {
+  const remedy = `fix the findings so the reviewed digest moves, or start a fresh round with workflows(action: "start", definitionId: "${definition.id}", change: "${change}")`
+  if (settled.verdict === 'FINDINGS') {
+    return `the ${definition.id} review is settled on FINDINGS (${String(settled.record.findings.length)} P0/P1) at digest ${settled.digest} (record ${settled.recordPath}); ${remedy}`
+  }
+  if (settled.verdict === 'ERROR') {
+    const failureClass = settled.record.failureClass
+    const detail =
+      settled.record.error === undefined ? '' : `: ${settled.record.error.slice(0, 160)}`
+    return `the ${definition.id} review is settled on ERROR${failureClass === undefined ? '' : ` (${failureClass})`} at digest ${settled.digest} (record ${settled.recordPath})${detail}; ${remedy}`
+  }
+  return `the ${definition.id} review is settled on PASS at digest ${settled.digest} (record ${settled.recordPath})`
+}
+
+/** The `run-suppressed` detail of a settled whole-scope review trigger. */
+function settledWholeScopeSuppression(
+  definition: Definition,
+  change: string,
+  settled: SettledReviewRound,
+): string {
+  // `digest: <hash>` keeps the journal's credential-shape scanner from reading
+  // the verdict line as an HTTP Digest credential and redacting the whole row;
+  // "digest <word>" would match it, so the remedy does not repeat that shape.
+  return `the ${definition.id} review is settled on ${settled.verdict} (digest: ${settled.digest}, record: ${settled.recordPath}); fix the findings and re-review, or start a fresh round with workflows(action: "start", definitionId: "${definition.id}", change: "${change}")`
+}
+
+/**
+ * The stored verdict of one whole-scope unit at its live prepared digest:
+ * `currentSpecDigest` plus the reviewed input tree when the record binds the
+ * worktree, the artifact digest alone for a spec unit. The record is read
+ * before the digest is computed, so an unreviewed unit pays no git work.
+ */
+async function settledWholeScopeOf(
+  workspace: string,
+  definition: Definition,
+  step: Step,
+  change: string,
+  timeoutMs: number,
+): Promise<SettledReviewRound | undefined> {
+  if (!CHANGE_NAME.test(change)) return undefined
+  const bindsWorktree =
+    step.evidence?.kind === 'record' && step.evidence.digest === 'current-worktree'
+  const digests = async (): Promise<readonly string[]> => {
+    const specDigest = await currentSpecDigest(workspace, change)
+    if (specDigest === undefined) return []
+    if (!bindsWorktree) return [specDigest]
+    const tree = await reviewInputTree(
+      workspace,
+      { dir: join(workspace, 'openspec', 'changes', change) },
+      defaultGit,
+      AbortSignal.timeout(timeoutMs),
+    ).catch(() => undefined)
+    return tree === undefined ? [] : [reviewDigest({ scope: 'whole', specDigest, tree })]
+  }
+  return readSettledReviewRound({ workspace, definition, step, change, digests })
+}
+
+/**
+ * The task or section unit settlement resolver: the shared live digests are
+ * computed once per change, and each unit's record is read first, so a unit
+ * without a record costs no git work. A whole-scope record is not a lane verdict.
+ */
+function taskUnitSettlementOf(
+  workspace: string,
+  definition: Definition,
+  step: Step,
+  timeoutMs: number,
+): ReviewUnitSettlementResolver {
+  interface Shared {
+    readonly specDigest?: string
+    readonly tree?: string
+    readonly liveTree?: string
+  }
+  const cache = new Map<string, Shared>()
+  const shared = async (change: string): Promise<Shared> => {
+    const cached = cache.get(change)
+    if (cached !== undefined) return cached
+    const specDigest = await currentSpecDigest(workspace, change)
+    const changeDir = join(workspace, 'openspec', 'changes', change)
+    const tree = await reviewInputTree(
+      workspace,
+      { dir: changeDir },
+      defaultGit,
+      AbortSignal.timeout(timeoutMs),
+    ).catch(() => undefined)
+    const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+    const value: Shared = {
+      ...(specDigest === undefined ? {} : { specDigest }),
+      ...(tree === undefined ? {} : { tree }),
+      ...(liveTree === undefined ? {} : { liveTree }),
+    }
+    cache.set(change, value)
+    return value
+  }
+  return async (change, unit) => {
+    if (!CHANGE_NAME.test(change)) return undefined
+    const recordId =
+      unit.section === undefined ? unit.missing[0]?.id : sectionRecordId(unit.section.key)
+    if (recordId === undefined) return undefined
+    const section: SectionReview | undefined =
+      unit.section === undefined
+        ? undefined
+        : {
+            key: unit.section.key,
+            title: unit.section.title,
+            recordId,
+            covered: unit.covered.map((task) => ({
+              id: task.id,
+              number: task.number,
+              text: task.text,
+            })),
+            unchecked: [],
+          }
+    const digests = async (): Promise<readonly string[]> => {
+      const live = await shared(change)
+      if (live.specDigest === undefined) return []
+      const values = new Set<string>()
+      const add = (tree?: string): void => {
+        values.add(
+          section === undefined
+            ? reviewDigest({
+                scope: 'task',
+                specDigest: live.specDigest as string,
+                ...(tree === undefined ? {} : { tree }),
+                artifactDigest: live.specDigest,
+              })
+            : sectionReviewDigest(section, live.specDigest as string, tree),
+        )
+      }
+      add(live.tree)
+      add(live.liveTree)
+      add(undefined)
+      return [...values]
+    }
+    const settled = await readSettledReviewRound({
+      workspace,
+      definition,
+      step,
+      change,
+      recordId,
+      digests,
+      ...(section === undefined ? {} : { covered: section.covered.map((task) => task.id) }),
+    })
+    if (settled === undefined || settled.verdict === 'PASS') return undefined
+    return {
+      verdict: settled.verdict,
+      digest: settled.digest,
+      recordPath: settled.recordPath,
+    }
+  }
+}
+
+/**
  * The owned review obligation of one review run at the turn close: every due
  * unit with the live review covering it, and a ready start steer for a unit
  * that has none. A whole-scope review is its own unit.
@@ -782,6 +955,7 @@ async function reviewCloseStatus(
   liveReview: boolean,
   dispatchFailure?: string,
   siblingLiveRunId?: string,
+  timeoutMs = DEFAULT_REVIEW_TIMEOUT_MS,
 ): Promise<ReviewCloseInput | undefined> {
   // The review gate applies once the pipeline reached its review step. An
   // earlier open step keeps the ordinary steering path (still uncapped).
@@ -821,10 +995,31 @@ async function reviewCloseStatus(
       }
       if (verdict !== undefined && verdict !== 'PASS') {
         if (siblingLiveRunId !== undefined) return successorLive()
+        // A settled round surfaces with its verdict, digest, record, and the two
+        // remedies instead of promising a restart the settlement will not start.
+        // A current PASS at the unit's path settles it even when this run's
+        // recorded evidence named another record.
+        const settled = await settledWholeScopeOf(workspace, definition, step, change, timeoutMs)
+        if (settled?.verdict === 'PASS') return undefined
         return {
           uncovered: [
-            `the ${definition.id} review step "${step.id}" last settled on a ${verdict} record; only a PASS ends the review, so the next close starts a new round`,
+            settled === undefined
+              ? `the ${definition.id} review step "${step.id}" last settled on a ${verdict} record; only a PASS ends the review, so the next close starts a new round`
+              : settledWholeScopeText(definition, change, settled),
           ],
+          live: [],
+          ...(dispatchFailure === undefined ? {} : { failure: dispatchFailure }),
+        }
+      }
+    }
+    if (state === 'blocked') {
+      // A whole-scope FINDINGS settles the step blocked; its own verdict keeps
+      // the close refused with the record and the explicit fresh-round remedy.
+      const settled = await settledWholeScopeOf(workspace, definition, step, change, timeoutMs)
+      if (settled !== undefined && settled.verdict !== 'PASS') {
+        if (siblingLiveRunId !== undefined) return successorLive()
+        return {
+          uncovered: [settledWholeScopeText(definition, change, settled)],
           live: [],
           ...(dispatchFailure === undefined ? {} : { failure: dispatchFailure }),
         }
@@ -832,6 +1027,14 @@ async function reviewCloseStatus(
     }
     if (state === 'failed') {
       if (siblingLiveRunId !== undefined) return successorLive()
+      const settled = await settledWholeScopeOf(workspace, definition, step, change, timeoutMs)
+      if (settled !== undefined && settled.verdict !== 'PASS') {
+        return {
+          uncovered: [settledWholeScopeText(definition, change, settled)],
+          live: [],
+          ...(dispatchFailure === undefined ? {} : { failure: dispatchFailure }),
+        }
+      }
       return {
         uncovered: [
           `the ${definition.id} review step "${step.id}" failed${reason === undefined ? '' : `: ${reason.slice(0, 200)}`}; the next close starts the next round`,
@@ -851,7 +1054,11 @@ async function reviewCloseStatus(
     if (siblingLiveRunId !== undefined) return { uncovered: [], live: [siblingLiveRunId] }
     return undefined
   }
-  const units = await reviewUnits(workspace, change)
+  const units = await reviewUnits(
+    workspace,
+    change,
+    taskUnitSettlementOf(workspace, definition, step, timeoutMs),
+  )
   if (units === undefined) return undefined
   const rule = reviewerBinding(workspace)?.taskRule
   const live: string[] = []
@@ -2009,8 +2216,38 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       for (const definitionEvent of definitionEventsOf(input, event, workspace)) {
         for (const [changeIndex, currentChange] of evaluationChanges.entries()) {
           const conditionDecision = await conditionsFor(definitionEvent, currentChange)
+          const candidates = changeIndex === 0 ? workspaceDefinitions : conditionalOnlyDefinitions
+          // A settled whole-scope unit starts no reviewer. Gather the settlement
+          // only for active review definitions this event already matches, then
+          // suppress the definition for the event and record why; an ordinary
+          // event pays no digest work.
+          const suppressed = new Map<
+            string,
+            { readonly change: string; readonly settled: SettledReviewRound }
+          >()
+          for (const definition of candidates) {
+            if (definition.trigger.mode === 'shadow') continue
+            const suppressedStep = wholeScopeReviewStepOf(definition)
+            if (suppressedStep === undefined) continue
+            if (!triggerEventMatches(definition, definitionEvent)) continue
+            const suppressedChange =
+              definitionEvent.name ??
+              (definition.trigger.condition === undefined ? undefined : currentChange)
+            if (suppressedChange === undefined) continue
+            const settled = await settledWholeScopeOf(
+              workspace,
+              definition,
+              suppressedStep,
+              suppressedChange,
+              reviewTimeoutMs,
+            )
+            if (settled !== undefined)
+              suppressed.set(definition.id, { change: suppressedChange, settled })
+          }
           const rows = evaluateDefinitions(
-            changeIndex === 0 ? workspaceDefinitions : conditionalOnlyDefinitions,
+            suppressed.size === 0
+              ? candidates
+              : candidates.filter((definition) => !suppressed.has(definition.id)),
             definitionEvent,
             {
               // A newly checked task must reach the per-task live-run guard even
@@ -2221,6 +2458,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               },
             },
           )
+          for (const [definitionId, entry] of suppressed) {
+            const definition = candidates.find((candidate) => candidate.id === definitionId)
+            if (definition === undefined) continue
+            rows.push({
+              definition: definitionId,
+              trigger: definition.trigger.kind,
+              matched: true,
+              reason: 'run-suppressed',
+              detail: settledWholeScopeSuppression(definition, entry.change, entry.settled),
+            })
+          }
           for (const row of rows) {
             definitionRows.push({
               id: `definition:${row.definition}`,
@@ -3542,7 +3790,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         return { state: 'waiting', waitingOn: covering.id }
       }
     }
-    const reason = run.reason === undefined ? '' : run.reason.slice(0, 200)
+    // A settled step's reason names its verdict; an orphan has no executor, so
+    // the step's own reason is the readable cause of the pending obligation.
+    const reason = (run.reason ?? stored.reason ?? '').slice(0, 200)
     return { state: 'orphaned', ...(reason === '' ? {} : { reason }) }
   }
   /**
@@ -3742,6 +3992,82 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ? {}
             : { section: sectionValue ?? section }),
         })
+        const recordId = section?.recordId ?? task?.id
+        // A stored verdict settles this unit before any reviewer starts: a
+        // whole-scope unit at its live prepared digest, a task or section unit at
+        // the digest its snapshot (or fallback) would record. See the round
+        // comparison in `readSettledReviewRound`.
+        const reviewScope = spec.scope
+        const roundDigests = async (): Promise<readonly string[]> => {
+          const snapshotTree =
+            reviewScope === 'task' || bindsWorktree
+              ? await reviewInputTree(
+                  workspace,
+                  { dir: changeDir },
+                  defaultGit,
+                  AbortSignal.timeout(reviewTimeoutMs),
+                ).catch(() => undefined)
+              : undefined
+          if (reviewScope !== 'task') {
+            return [
+              reviewDigest({
+                scope: 'whole',
+                specDigest,
+                ...(snapshotTree === undefined ? {} : { tree: snapshotTree }),
+              }),
+            ]
+          }
+          const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined)
+          const values = new Set<string>()
+          const add = (tree?: string): void => {
+            values.add(
+              sectionValue === undefined
+                ? reviewDigest({
+                    scope: 'task',
+                    specDigest,
+                    ...(tree === undefined ? {} : { tree }),
+                    artifactDigest: specDigest,
+                  })
+                : sectionReviewDigest(sectionValue, specDigest, tree),
+            )
+          }
+          add(snapshotTree)
+          add(liveTree)
+          add(undefined)
+          return [...values]
+        }
+        const storedRound = await readSettledReviewRound({
+          workspace,
+          definition: reviewDefinition,
+          step,
+          change,
+          ...(recordId === undefined ? {} : { recordId }),
+          digests: roundDigests,
+          ...(sectionValue === undefined
+            ? {}
+            : { covered: sectionValue.covered.map((entry) => entry.id) }),
+        })
+        if (storedRound !== undefined) {
+          // An explicit start bypasses the settlement only until its own round
+          // publishes a verdict; once the step carries that verdict every later
+          // advance settles from it.
+          const stored = reviewRun.steps.find((entry) => entry.id === step.id)
+          const carries =
+            stored?.evidence?.kind === 'record' &&
+            stored.evidence.path === storedRound.recordPath &&
+            stored.evidence.digest === storedRound.digest
+          if (reviewRun.context.explicitReview !== true || carries) {
+            const settledRun = await settleStoredReviewRound({
+              run: reviewRun,
+              definition: reviewDefinition,
+              step,
+              context,
+              settled: storedRound,
+              now: journal.time(),
+            })
+            return settledRun
+          }
+        }
         const failurePrepared = async (): Promise<ReviewRunInput['prepared']> => {
           const liveTree =
             spec.scope === 'task' || bindsWorktree
@@ -3808,7 +4134,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         // The admission identity is the single task id or the section record id;
         // the digest keeps two section contents apart.
-        const recordId = section?.recordId ?? task?.id
         let startEpoch = mutationEpochs.get(workspace) ?? 0
         const reviewRule = reviewIdentityOf(reviewDefinition, step)
         // The pre-snapshot admission identity names the reviewed worktree
@@ -5287,6 +5612,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           if (stopped()) return
           const taskReview = definitions.find((entry) => entry.id === 'task-review')
           if (taskReview === undefined) return
+          const taskReviewStep = taskReview.steps.find((entry) => entry.executor === 'review')
+          if (taskReviewStep === undefined) return
+          const settledUnitOf = taskUnitSettlementOf(
+            workspace,
+            taskReview,
+            taskReviewStep,
+            reviewTimeoutMs,
+          )
           const taskIdsOf = (values: Readonly<Record<string, unknown>>): string[] =>
             Array.isArray(values.taskIds)
               ? values.taskIds.filter((id): id is string => typeof id === 'string')
@@ -5322,9 +5655,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             // is per change: two changes with the same task text review apart.
             const startedCovered = new Set<string>()
             if (stopped()) return
-            const units = (await reviewUnits(workspace, change)) ?? []
+            const units = (await reviewUnits(workspace, change, settledUnitOf)) ?? []
             for (const unit of units) {
               if (stopped()) return
+              // A unit its own stored verdict settles starts no reviewer; the
+              // close surface names it instead.
+              if (unit.settled !== undefined) continue
               if (unit.covered.some((task) => startedCovered.has(task.id))) continue
               // A normal section identity dispatches one run over every checked
               // task, so it is covered only by a single run naming all of them —
@@ -5544,12 +5880,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // review is still pending; the pre-advance list would present a just
           // settled ERROR as pending.
           const currentRuns = runs.map((entry) => advanced.get(entry.id) ?? entry)
-          // A settled step or a foreign session's idle run is not a live review:
-          // only this session's pending runs and genuinely live reviewers cover
-          // a unit, so an abandoned session can never stall the loop.
-          const reviewOpenRuns = pendingReviewRuns(currentRuns, definitions).filter(
-            (entry) => entry.session === sessionId || reviewLive(entry),
-          )
+          const currentRunsById = new Map(currentRuns.map((entry) => [entry.id, entry]))
+          // A pending step is live only while the executor holds it, its
+          // admission is in flight, or it waits on a live covering review; a
+          // blocked run with no executor is not coverage and must not make the
+          // waiting close.
+          const reviewOpenRuns = pendingReviewRuns(currentRuns, definitions).filter((entry) => {
+            if (reviewLive(entry)) return true
+            const run = currentRunsById.get(entry.id)
+            return (
+              run !== undefined &&
+              reviewLivenessOf(workspace, run, definitions)?.state === 'waiting'
+            )
+          })
           // A run containing an owned review step is gated by its due units:
           // while every due unit has a live review the close waits instead of
           // refusing, and no refusal budget ever releases it (design D3/D9).
@@ -5559,6 +5902,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             resolveOwnership(definition, legacy.installed, legacy.enabled).steps.some(
               (entry) => entry.id === reviewStep.id && entry.ownership === 'own',
             )
+          // A live successor of the same whole-scope unit covers it, but this run
+          // is never its own successor: a settled step still held by the
+          // scheduler's teardown is not a reason to wait.
+          const liveUnitRun =
+            reviewStep === undefined || reviewStep.review?.scope === 'task'
+              ? undefined
+              : reviewScheduler?.liveUnit({
+                  workspace,
+                  rule: reviewIdentityOf(definition, reviewStep),
+                  change: String(current.context.name),
+                  phase: reviewPhase(reviewStep.review?.scope ?? 'whole', reviewStep.review?.phase),
+                })
           const review =
             reviewOwned && reviewStep !== undefined && typeof current.context.name === 'string'
               ? await reviewCloseStatus(
@@ -5570,17 +5925,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   reviewOpenRuns,
                   reviewScheduler?.liveRunById(current.id) !== undefined,
                   dispatchFailure,
-                  reviewStep.review?.scope === 'task'
-                    ? undefined
-                    : reviewScheduler?.liveUnit({
-                        workspace,
-                        rule: reviewIdentityOf(definition, reviewStep),
-                        change: current.context.name,
-                        phase: reviewPhase(
-                          reviewStep.review?.scope ?? 'whole',
-                          reviewStep.review?.phase,
-                        ),
-                      })?.id,
+                  liveUnitRun?.id === current.id ? undefined : liveUnitRun?.id,
+                  reviewTimeoutMs,
                 )
               : undefined
           const completion =
@@ -5674,6 +6020,69 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           }
           if (owner !== undefined && run.id === owner.id) {
             mainStepOwners.delete(sessionId)
+          }
+        }
+        // A settled whole-scope non-PASS verdict refuses the close even when this
+        // session owns no review run for it: the unit is still due, and no
+        // reviewer starts until the reviewed digest or coverage moves or a fresh
+        // round is explicitly requested.
+        if (!refusedThisClose && !stopped()) {
+          const involved = await involvedChangesOf(workspace, sessionId, payload.turn)
+          for (const definition of definitions) {
+            const settledStep = wholeScopeReviewStepOf(definition)
+            if (settledStep === undefined) continue
+            for (const name of [...involved].sort()) {
+              if (!CHANGE_NAME.test(name) || archivedChanges.has(name)) continue
+              const liveUnit = reviewScheduler?.liveUnit({
+                workspace,
+                rule: reviewIdentityOf(definition, settledStep),
+                change: name,
+                phase: reviewPhase('whole', settledStep.review?.phase),
+              })
+              if (liveUnit !== undefined) continue
+              const settled = await settledWholeScopeOf(
+                workspace,
+                definition,
+                settledStep,
+                name,
+                reviewTimeoutMs,
+              )
+              if (settled === undefined || settled.verdict === 'PASS') continue
+              steer(`the close is refused: ${settledWholeScopeText(definition, name, settled)}`)
+              refusedThisClose = true
+              break
+            }
+            if (refusedThisClose) break
+          }
+          // A settled lane unit refuses too: its start is suppressed, so no
+          // local review run exists to surface the verdict through.
+          const taskSettlement = definitions.find((entry) => entry.id === 'task-review')
+          const taskSettlementStep = taskSettlement?.steps.find(
+            (entry) => entry.executor === 'review',
+          )
+          if (
+            !refusedThisClose &&
+            taskSettlement !== undefined &&
+            taskSettlementStep !== undefined
+          ) {
+            const settledUnitOf = taskUnitSettlementOf(
+              workspace,
+              taskSettlement,
+              taskSettlementStep,
+              reviewTimeoutMs,
+            )
+            const rule = reviewerBinding(workspace)?.taskRule
+            for (const name of [...involved].sort()) {
+              if (!CHANGE_NAME.test(name) || archivedChanges.has(name)) continue
+              const units = (await reviewUnits(workspace, name, settledUnitOf)) ?? []
+              const settledUnit = units.find((entry) => entry.settled !== undefined)
+              if (settledUnit === undefined) continue
+              steer(
+                `the close is refused: rule "${rule ?? 'task-review'}": ${reviewUnitText(name, settledUnit, { ...(rule === undefined ? {} : { rule }) })}`,
+              )
+              refusedThisClose = true
+              break
+            }
           }
         }
         // A due unit whose start failed is refused, never released: the next

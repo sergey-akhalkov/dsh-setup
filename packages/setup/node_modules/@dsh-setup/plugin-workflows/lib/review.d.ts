@@ -378,6 +378,49 @@ export declare function passContractOf(evidence: Evidence): RecordEvidence | und
  * matches the step contract keeps the close blocked.
  */
 export declare function provisionalReviewSteps(run: WorkflowRun, definition: Definition, context: EvidenceContext): Promise<ReadonlySet<string>>;
+/** One stored verdict that settles its review unit for the round it reviewed. */
+export interface SettledReviewRound {
+    readonly record: ReviewRecord;
+    readonly verdict: ReviewVerdict;
+    readonly digest: string;
+    readonly recordPath: string;
+    /** The checked task ids the round covered; empty for a whole-scope unit. */
+    readonly covered: readonly string[];
+}
+/**
+ * The settled round of one review unit, read from the record at the path the
+ * unit publishes to. It is well-formed and binds the verdict to the digest of
+ * the round it reviewed; a section record covers exactly the unit's checked
+ * task set. A discarded-input or queue-fault ERROR carries no verdict and does
+ * not settle. `digests` may be lazy so an absent record costs no git work.
+ */
+export declare function readSettledReviewRound(input: {
+    readonly workspace: string;
+    readonly definition: Definition;
+    readonly step: Step;
+    readonly change: string;
+    /** The task or section record id; absent for a whole-scope unit. */
+    readonly recordId?: string;
+    /** Every digest the unit's current round would record; any match settles it. */
+    readonly digests: readonly string[] | (() => Promise<readonly string[]>);
+    /** The checked-task set a section record must cover. */
+    readonly covered?: readonly string[];
+}): Promise<SettledReviewRound | undefined>;
+/**
+ * Settle a review step from a verdict its unit already stored. A matching PASS
+ * settles done when the step's contract accepts it; a FINDINGS settles blocked
+ * and an ERROR settles failed, both naming the verdict, the digest, the record,
+ * and the explicit fresh-round remedy. An already settled step is returned
+ * unchanged so a repeated close writes nothing.
+ */
+export declare function settleStoredReviewRound(input: {
+    readonly run: WorkflowRun;
+    readonly definition: Definition;
+    readonly step: Step;
+    readonly context: EvidenceContext;
+    readonly settled: SettledReviewRound;
+    readonly now: number;
+}): Promise<WorkflowRun>;
 /**
  * The duplicate admission settlement: a review attempt the scheduler rejected
  * because a live run already covers the unit is terminal. It settles cancelled

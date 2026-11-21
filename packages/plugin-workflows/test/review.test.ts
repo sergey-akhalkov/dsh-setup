@@ -22,6 +22,7 @@ import {
   portableApprovalPath,
   type ReviewFinding,
   type ReviewRecord,
+  readSettledReviewRound,
   renderReviewPrompt,
   resolveReviewer,
   resolveReviewers,
@@ -30,6 +31,7 @@ import {
   type SectionReview,
   sectionReviewDigest,
   settleDuplicateReviewAttempt,
+  settleStoredReviewRound,
   writeLocalReviewRecord,
   writePortableApproval,
   writeReviewFileAtomic,
@@ -40,7 +42,7 @@ import {
   reviewInputTree,
 } from '../src/host/review-snapshot.ts'
 import { createRun } from '../src/host/runs.ts'
-import { taskIdOf } from '../src/host/tasks.ts'
+import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
 
 const TASK_ID = '0123456789abcdef'
 const DIGEST = 'a'.repeat(64)
@@ -178,6 +180,76 @@ function taskRecordPath(): string {
     change: 'auth',
     scope: 'task',
     taskId: TASK_ID,
+  })
+}
+
+async function writeRecordFile(root: string, path: string, value: unknown): Promise<void> {
+  const file = join(root, path)
+  await mkdir(join(file, '..'), { recursive: true })
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
+/** A settled task record carrying the shipped task-review identity. */
+function settledTaskRecord(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
+  return {
+    definition: 'task-review',
+    rule: 'task-review',
+    change: 'auth',
+    phase: 'task',
+    scope: 'task',
+    taskId: TASK_ID,
+    digest: TASK_DIGEST,
+    verdict: 'FINDINGS',
+    findings: [testFinding()],
+    target: { provider: 'codex-subagent' },
+    reviewer: 'codex',
+    time: '2026-11-20T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+/** The shipped whole-spec review definition. */
+function wholeDefinition(): Definition {
+  return validateDefinition({
+    v: 1,
+    id: 'spec-review',
+    name: 'Whole-spec review',
+    version: 1,
+    trigger: { kind: 'turn.stopping', match: {}, mode: 'active', dedupe: 'turn' },
+    settings: {
+      allowModelStart: true,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+      gate: 'review',
+      gateIdentity: 'spec-review',
+    },
+    steps: [
+      {
+        id: 'review',
+        title: 'Review the whole change spec',
+        executor: 'review',
+        review: {
+          target: 'codex',
+          instruction: 'review-spec',
+          scope: 'whole',
+          phase: 'spec',
+        },
+        evidence: {
+          kind: 'record',
+          rule: 'spec-review',
+          change: '{name}',
+          phase: 'spec',
+          scope: 'whole',
+          verdicts: ['PASS', 'ERROR'],
+          digest: 'current',
+          path: '.dsh/workflows/records/spec-review/{name}/spec.json',
+        },
+        next: 'end',
+        blockTurnClose: true,
+      },
+    ],
   })
 }
 
@@ -2492,5 +2564,266 @@ describe('duplicate review settlement', () => {
     })
     // The settlement is pure: it writes no PASS/ERROR record of any kind.
     expect(settled.steps.find((step) => step.id === 'review')?.evidence).toBeUndefined()
+  })
+})
+
+describe('settled review round', () => {
+  it('accepts a task record at its round digest and rejects another digest', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    await writeRecordFile(root, taskRecordPath(), settledTaskRecord())
+    const matched = await readSettledReviewRound({
+      workspace: root,
+      definition,
+      step,
+      change: 'auth',
+      recordId: TASK_ID,
+      digests: [TASK_DIGEST],
+    })
+    expect(matched).toMatchObject({
+      verdict: 'FINDINGS',
+      digest: TASK_DIGEST,
+      recordPath: taskRecordPath(),
+      covered: [TASK_ID],
+    })
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId: TASK_ID,
+        digests: [focusedDigest(TREE_AFTER)],
+      }),
+    ).toBeUndefined()
+  })
+
+  it('accepts a fallback record at the live worktree digest', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const fallback = focusedDigest(TREE_BEFORE)
+    await writeRecordFile(root, taskRecordPath(), settledTaskRecord({ digest: fallback }))
+    const settled = await readSettledReviewRound({
+      workspace: root,
+      definition,
+      step,
+      change: 'auth',
+      recordId: TASK_ID,
+      digests: async () => [TASK_DIGEST, fallback],
+    })
+    expect(settled?.digest).toBe(fallback)
+  })
+
+  it('rejects a section record whose covered set changed', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const sectionKey = '1'
+    const recordId = sectionRecordId(sectionKey)
+    const covered = ['0123456789abcdef', 'fedcba9876543210']
+    const section: SectionReview = {
+      key: sectionKey,
+      title: '1. Compose the profile',
+      recordId,
+      covered: covered.map((id, index) => ({
+        id,
+        number: `1.${String(index + 1)}`,
+        text: `Task ${String(index + 1)}`,
+      })),
+      unchecked: [],
+    }
+    const digest = sectionReviewDigest(section, DIGEST, TREE_BEFORE)
+    await writeRecordFile(
+      root,
+      localReviewRecordPath({
+        definition: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: recordId,
+      }),
+      {
+        ...settledTaskRecord({ digest }),
+        taskId: recordId,
+        section: sectionKey,
+        sectionTitle: section.title,
+        taskIds: covered,
+      },
+    )
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId,
+        digests: [digest],
+        covered,
+      }),
+    ).toMatchObject({ digest, covered })
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId,
+        digests: [digest],
+        covered: covered.slice(0, 1),
+      }),
+    ).toBeUndefined()
+  })
+
+  it('rejects a malformed record and a stale whole-scope record', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = wholeDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const path = '.dsh/workflows/records/spec-review/auth/spec.json'
+    await writeRecordFile(root, path, { verdict: 'FINDINGS' })
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        digests: [DIGEST],
+      }),
+    ).toBeUndefined()
+    await writeRecordFile(root, path, {
+      ...settledTaskRecord({ digest: DIGEST, verdict: 'FINDINGS' }),
+      definition: 'spec-review',
+      rule: 'spec-review',
+      phase: 'spec',
+      scope: 'whole',
+      taskId: undefined,
+    })
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        digests: ['d'.repeat(64)],
+      }),
+    ).toBeUndefined()
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        digests: [DIGEST],
+      }),
+    ).toMatchObject({ verdict: 'FINDINGS', digest: DIGEST })
+  })
+})
+
+describe('stored verdict settlement', () => {
+  it('settles FINDINGS blocked and a second settlement writes nothing', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const run = baseRun(definition)
+    const settled = {
+      record: settledTaskRecord(),
+      verdict: 'FINDINGS' as const,
+      digest: TASK_DIGEST,
+      recordPath: taskRecordPath(),
+      covered: [TASK_ID],
+    }
+    const context = { workspace: root, values: { name: 'auth', taskId: TASK_ID } }
+    const blocked = await settleStoredReviewRound({
+      run,
+      definition,
+      step,
+      context,
+      settled,
+      now: 2_000,
+    })
+    const stored = blocked.steps.find((entry) => entry.id === 'review')
+    expect(stored).toMatchObject({ state: 'blocked', evidence: { path: taskRecordPath() } })
+    expect(stored?.reason).toContain('FINDINGS')
+    expect(stored?.reason).toContain('start a fresh round')
+    expect(
+      await settleStoredReviewRound({
+        run: blocked,
+        definition,
+        step,
+        context,
+        settled,
+        now: 3_000,
+      }),
+    ).toBe(blocked)
+  })
+
+  it('settles a terminal ERROR failed with its class', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const failed = await settleStoredReviewRound({
+      run: baseRun(definition),
+      definition,
+      step,
+      context: { workspace: root, values: { name: 'auth', taskId: TASK_ID } },
+      settled: {
+        record: settledTaskRecord({
+          verdict: 'ERROR',
+          findings: [],
+          failureClass: 'timeout',
+          error: 'the reviewer timed out',
+        }),
+        verdict: 'ERROR',
+        digest: TASK_DIGEST,
+        recordPath: taskRecordPath(),
+        covered: [TASK_ID],
+      },
+      now: 2_000,
+    })
+    expect(failed.steps.find((entry) => entry.id === 'review')).toMatchObject({
+      state: 'failed',
+      failureClass: 'timeout',
+      reason: expect.stringContaining('ERROR (timeout)'),
+    })
+  })
+
+  it('settles a matching PASS done when the step contract accepts it', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    await writeRecordFile(
+      root,
+      taskRecordPath(),
+      settledTaskRecord({ verdict: 'PASS', findings: [] }),
+    )
+    const done = await settleStoredReviewRound({
+      run: baseRun(definition),
+      definition,
+      step,
+      context: { workspace: root, values: { name: 'auth', taskId: TASK_ID } },
+      settled: {
+        record: settledTaskRecord({ verdict: 'PASS', findings: [] }),
+        verdict: 'PASS',
+        digest: TASK_DIGEST,
+        recordPath: taskRecordPath(),
+        covered: [TASK_ID],
+      },
+      now: 2_000,
+    })
+    expect(done.steps.find((entry) => entry.id === 'review')).toMatchObject({ state: 'done' })
   })
 })
