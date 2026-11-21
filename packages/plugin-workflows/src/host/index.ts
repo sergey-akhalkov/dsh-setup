@@ -190,6 +190,7 @@ import {
   type TaskSection,
   taskLanes,
   taskOf,
+  taskSections,
 } from './tasks.js'
 import { executeWorkflowsTool, type ReviewLiveness, type WorkflowsToolHost } from './tools.js'
 import {
@@ -3672,18 +3673,34 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const reviewStarting = new Map<string, WorkflowRun>()
   const reviewLive = (run: { readonly id: string }): boolean =>
     reviewStarting.has(run.id) || reviewScheduler.liveRunById(run.id) !== undefined
-  /** A review of the same definition and change whose admission is still in flight. */
+  /** A review of the same workspace, unit identity, and change whose admission is in flight. */
   const startingReviewUnitId = (
+    workspace: string,
     definition: Definition,
+    step: Step,
     change: string,
+    definitions: readonly Definition[],
     exclude?: string,
-  ): string | undefined =>
-    [...reviewStarting.values()].find(
-      (entry) =>
-        entry.id !== exclude &&
-        entry.definition.id === definition.id &&
-        entry.context.name === change,
-    )?.id
+  ): string | undefined => {
+    const rule = reviewIdentityOf(definition, step)
+    const phase = reviewPhase(step.review?.scope ?? 'whole', step.review?.phase)
+    return [...reviewStarting.values()].find((entry) => {
+      if (
+        entry.id === exclude ||
+        entry.workspaceKey !== workspace ||
+        entry.context.name !== change
+      ) {
+        return false
+      }
+      const entryDefinition = definitions.find((candidate) => candidate.id === entry.definition.id)
+      const entryStep = entryDefinition?.steps.find((candidate) => candidate.executor === 'review')
+      if (entryDefinition === undefined || entryStep === undefined) return false
+      return (
+        reviewIdentityOf(entryDefinition, entryStep) === rule &&
+        reviewPhase(entryStep.review?.scope ?? 'whole', entryStep.review?.phase) === phase
+      )
+    })?.id
+  }
   /** A unit checkout being prepared, keyed by workspace and unit key, until admission. */
   const preparedUnits = new Map<string, string>()
   /** A run whose review step is still open: its reviewer start may be in flight. */
@@ -4005,9 +4022,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             return settledRun
           }
         } else if (sectionValue !== undefined) {
-          // An older section run that already published its round retires when a
-          // newer round covers its checked tasks plus an expanded set. A fresh
-          // explicit run with no published evidence still dispatches its review.
+          // An older section run retires when a newer round covers its checked
+          // tasks plus an expanded set and the live plan itself grew beyond the
+          // run's submitted coverage. A fresh run — expanded or shrunk — always
+          // matches the current plan and still dispatches its review. This does
+          // not depend on the step evidence, which the intake clears when it
+          // reopens a done review for a changed shared record.
           const widenedRound = await readSettledReviewRound({
             workspace,
             definition: reviewDefinition,
@@ -4017,17 +4037,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             settlingRunId: reviewRun.id,
             ...(recordedRoundDigest === undefined ? {} : { roundDigest: recordedRoundDigest }),
           })
-          const stored = reviewRun.steps.find((entry) => entry.id === step.id)
-          const published =
-            widenedRound !== undefined &&
-            stored?.evidence?.kind === 'record' &&
-            stored.evidence.path === widenedRound.recordPath
-          if (
-            published &&
+          const planSection = taskSections(await readTasksPlan(workspace, change)).find(
+            (entry) => entry.key === section?.key,
+          )
+          const planCovered = (planSection?.covered ?? []).map((entry) => entry.id)
+          const obsolete =
             widenedRound !== undefined &&
             widenedRound.covered.length > sectionValue.covered.length &&
-            sectionValue.covered.every((task) => widenedRound.covered.includes(task.id))
-          ) {
+            sectionValue.covered.every((task) => widenedRound.covered.includes(task.id)) &&
+            planCovered.length > sectionValue.covered.length &&
+            sectionValue.covered.every((task) => planCovered.includes(task.id))
+          if (obsolete) {
             const reason =
               'the section coverage expanded; the newer round covers this run’s checked tasks and carries the verdict'
             return setRunStatus(
@@ -5881,8 +5901,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   phase: reviewPhase(reviewStep.review?.scope ?? 'whole', reviewStep.review?.phase),
                 })
           const siblingUnitRunId =
-            (liveUnitRun?.id === current.id ? undefined : liveUnitRun?.id) ??
-            startingReviewUnitId(definition, String(current.context.name), current.id)
+            reviewStep === undefined
+              ? undefined
+              : ((liveUnitRun?.id === current.id ? undefined : liveUnitRun?.id) ??
+                startingReviewUnitId(
+                  workspace,
+                  definition,
+                  reviewStep,
+                  String(current.context.name),
+                  definitions,
+                  current.id,
+                ))
           const review =
             reviewOwned && reviewStep !== undefined && typeof current.context.name === 'string'
               ? await reviewCloseStatus(
@@ -6014,7 +6043,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               })
               // An explicit retry preparing its snapshot is a live admission
               // even before the scheduler holds it: the close waits, not refuses.
-              if (liveUnit !== undefined || startingReviewUnitId(definition, name) !== undefined) {
+              if (
+                liveUnit !== undefined ||
+                startingReviewUnitId(workspace, definition, settledStep, name, definitions) !==
+                  undefined
+              ) {
                 continue
               }
               const settled = await settledWholeScopeOf(
