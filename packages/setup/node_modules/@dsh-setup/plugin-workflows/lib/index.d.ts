@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
+import { type Definition, type Step } from './definitions.js';
 import { type ObservedEvent } from './evaluate.js';
 import { type JournalInput } from './journal.js';
 import { type DefinitionEvent } from './triggers.js';
@@ -34,6 +35,22 @@ export interface ResolvedCheckpointApplicability {
     readonly enforceParallel: boolean;
 }
 export declare const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability;
+/** One review run whose admission may still be in flight for a unit. */
+export interface StartingReview {
+    readonly id: string;
+    readonly workspaceKey: string;
+    readonly definition: {
+        readonly id: string;
+    };
+    readonly context: Readonly<Record<string, unknown>>;
+}
+/**
+ * The first in-flight review admission for the same workspace, change, and
+ * scheduler unit identity (resolved rule plus phase), excluding one run id.
+ * The rule is resolved, so a definition that shares the canonical whole-spec
+ * identity matches the built-in review, and another workspace never matches.
+ */
+export declare function startingReviewUnitIdOf(entries: Iterable<StartingReview>, workspace: string, definition: Definition, step: Step, change: string, definitions: readonly Definition[], exclude?: string): string | undefined;
 /**
  * Register the recorder. Every listener is observe-only: it never calls
  * `agent.steer`, `agent.inject`, or a tool, and a thrown observation is

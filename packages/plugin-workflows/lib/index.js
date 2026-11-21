@@ -487,6 +487,30 @@ function wholeScopeReviewStepOf(definition) {
     const step = definition.steps.find((entry) => entry.executor === 'review');
     return step === undefined || step.review?.scope === 'task' ? undefined : step;
 }
+/**
+ * The first in-flight review admission for the same workspace, change, and
+ * scheduler unit identity (resolved rule plus phase), excluding one run id.
+ * The rule is resolved, so a definition that shares the canonical whole-spec
+ * identity matches the built-in review, and another workspace never matches.
+ */
+export function startingReviewUnitIdOf(entries, workspace, definition, step, change, definitions, exclude) {
+    const rule = reviewIdentityOf(definition, step);
+    const phase = reviewPhase(step.review?.scope ?? 'whole', step.review?.phase);
+    for (const entry of entries) {
+        if (entry.id === exclude || entry.workspaceKey !== workspace || entry.context.name !== change) {
+            continue;
+        }
+        const entryDefinition = definitions.find((candidate) => candidate.id === entry.definition.id);
+        const entryStep = entryDefinition?.steps.find((candidate) => candidate.executor === 'review');
+        if (entryDefinition === undefined || entryStep === undefined)
+            continue;
+        if (reviewIdentityOf(entryDefinition, entryStep) === rule &&
+            reviewPhase(entryStep.review?.scope ?? 'whole', entryStep.review?.phase) === phase) {
+            return entry.id;
+        }
+    }
+    return undefined;
+}
 /** The refusal of a whole-scope unit settled on a non-PASS verdict: verdict, digest, record, remedies. */
 function settledWholeScopeText(definition, change, settled) {
     const remedy = `fix the findings so the reviewed digest moves, or start a fresh round with workflows(action: "start", definitionId: "${definition.id}", change: "${change}")`;
@@ -3022,23 +3046,7 @@ export function apply(ctx, config = {}) {
     const reviewStarting = new Map();
     const reviewLive = (run) => reviewStarting.has(run.id) || reviewScheduler.liveRunById(run.id) !== undefined;
     /** A review of the same workspace, unit identity, and change whose admission is in flight. */
-    const startingReviewUnitId = (workspace, definition, step, change, definitions, exclude) => {
-        const rule = reviewIdentityOf(definition, step);
-        const phase = reviewPhase(step.review?.scope ?? 'whole', step.review?.phase);
-        return [...reviewStarting.values()].find((entry) => {
-            if (entry.id === exclude ||
-                entry.workspaceKey !== workspace ||
-                entry.context.name !== change) {
-                return false;
-            }
-            const entryDefinition = definitions.find((candidate) => candidate.id === entry.definition.id);
-            const entryStep = entryDefinition?.steps.find((candidate) => candidate.executor === 'review');
-            if (entryDefinition === undefined || entryStep === undefined)
-                return false;
-            return (reviewIdentityOf(entryDefinition, entryStep) === rule &&
-                reviewPhase(entryStep.review?.scope ?? 'whole', entryStep.review?.phase) === phase);
-        })?.id;
-    };
+    const startingReviewUnitId = (workspace, definition, step, change, definitions, exclude) => startingReviewUnitIdOf(reviewStarting.values(), workspace, definition, step, change, definitions, exclude);
     /** A unit checkout being prepared, keyed by workspace and unit key, until admission. */
     const preparedUnits = new Map();
     /** A run whose review step is still open: its reviewer start may be in flight. */

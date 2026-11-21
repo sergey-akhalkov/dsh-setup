@@ -262,6 +262,9 @@ export async function reviewUnits(workspace, change, settledOf) {
 const MAX_UNIT_NUMBERS = 20;
 /** The unit-text bound: the steer note and the status both deliver it. */
 const MAX_UNIT_TEXT = 470;
+/** A settled unit's refusal also names its verdict, digest, and record; the
+ * full section selector in the action can be long, so it gets a larger bound. */
+const MAX_SETTLED_UNIT_TEXT = 900;
 function boundedNumbers(tasks) {
     const shown = tasks
         .slice(0, MAX_UNIT_NUMBERS)
@@ -278,6 +281,13 @@ function clipped(text, maximum) {
 /** Keep the action whole: the head may lose its tail, the remedy never does. */
 function clampUnitText(head, action) {
     const room = MAX_UNIT_TEXT - action.length;
+    return head.length <= room
+        ? `${head}${action}`
+        : `${head.slice(0, Math.max(0, room - 1))}…${action}`;
+}
+/** Keep the settlement diagnostics and the whole action under their own bound. */
+function clampSettledUnitText(head, action) {
+    const room = MAX_SETTLED_UNIT_TEXT - action.length;
     return head.length <= room
         ? `${head}${action}`
         : `${head.slice(0, Math.max(0, room - 1))}…${action}`;
@@ -332,12 +342,18 @@ export function reviewUnitText(change, unit, options = {}) {
         const head = settledNote === undefined
             ? `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS`
             : `task (${task.id}) ${settledNote}; "${clipped(task.text, 80)}"`;
-        return clampUnitText(head, action(`task: "${task.id}"`));
+        const selector = `task: "${task.id}"`;
+        return settled === undefined
+            ? clampUnitText(head, action(selector))
+            : clampSettledUnitText(head, action(selector));
     }
     const head = settledNote === undefined
         ? `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) is one lane unit; covered checked tasks ${boundedNumbers(unit.covered)}; missing a ${rule} PASS: ${boundedNumbers(unit.missing)}`
         : `section "${clipped(section.key, 40)}" ${settledNote}; "${clipped(section.title, 60)}"; covered checked tasks ${boundedNumbers(unit.covered)}`;
-    return clampUnitText(head, action(`section: "${section.key}"`));
+    const selector = `section: "${section.key}"`;
+    return settled === undefined
+        ? clampUnitText(head, action(selector))
+        : clampSettledUnitText(head, action(selector));
 }
 /**
  * The compact status form of one due unit: every due lane fits the delivered

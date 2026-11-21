@@ -28,7 +28,8 @@ vi.mock('../src/host/parity.ts', async (importOriginal) => {
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { auditActive } from '../../../scripts/reviews-check.ts'
-import { apply, definitionEventsOf, inject } from '../src/host/index.ts'
+import { validateDefinition } from '../src/host/definitions.ts'
+import { apply, definitionEventsOf, inject, startingReviewUnitIdOf } from '../src/host/index.ts'
 import { definitionsRegistry } from '../src/host/registry.ts'
 
 // The real profile installs the OpenSpec plugin beside the engine; these host
@@ -11656,5 +11657,113 @@ describe('agent archive integration review requirement', () => {
     const stale = await archive('archive-stale-integration')
     expect(stale?.kind).toBe('deny')
     expect(stale?.reason).toContain('integration-review')
+  })
+})
+
+describe('preparing-review unit identity', () => {
+  function reviewStepDefinition(input: {
+    readonly id: string
+    readonly gateIdentity: string
+    readonly gate: 'review' | 'intake'
+    readonly rule: string
+  }) {
+    return validateDefinition({
+      v: 1,
+      id: input.id,
+      name: input.id,
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: true,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        gate: input.gate,
+        ...(input.gate === 'review' ? { gateIdentity: input.gateIdentity } : {}),
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Review',
+          executor: 'review',
+          review: { target: 'codex', instruction: 'review-spec', scope: 'whole', phase: 'spec' },
+          evidence: {
+            kind: 'record',
+            rule: input.rule,
+            change: '{name}',
+            phase: 'spec',
+            scope: 'whole',
+            verdicts: ['PASS', 'ERROR'],
+            digest: 'current',
+            path: `.dsh/workflows/records/${input.rule}/{name}/spec.json`,
+          },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    })
+  }
+
+  it('matches one workspace and the shared spec-review unit across definitions', async () => {
+    const builtin = reviewStepDefinition({
+      id: 'spec-review',
+      gateIdentity: 'spec-review',
+      gate: 'review',
+      rule: 'spec-review',
+    })
+    const intake = reviewStepDefinition({
+      id: 'change-intake',
+      gateIdentity: 'intake',
+      gate: 'intake',
+      rule: 'spec-review',
+    })
+    const definitions = [builtin, intake]
+    const step = builtin.steps[0]
+    if (step === undefined) throw new Error('review step missing')
+    const entries = [
+      {
+        id: 'run-other-workspace',
+        workspaceKey: '/workspace-b',
+        definition: { id: 'spec-review' },
+        context: { name: 'auth' },
+      },
+      {
+        id: 'run-shared-identity',
+        workspaceKey: '/workspace-a',
+        definition: { id: 'change-intake' },
+        context: { name: 'auth' },
+      },
+    ]
+    // Another workspace with the same definition and change never matches.
+    expect(
+      startingReviewUnitIdOf(entries, '/workspace-a', builtin, step, 'auth', [builtin]),
+    ).toBeUndefined()
+    // The shared whole-spec identity does match across the two definitions.
+    expect(
+      startingReviewUnitIdOf(entries, '/workspace-a', builtin, step, 'auth', definitions),
+    ).toBe('run-shared-identity')
+    expect(
+      startingReviewUnitIdOf(
+        entries,
+        '/workspace-a',
+        intake,
+        intake.steps[0]!,
+        'auth',
+        definitions,
+      ),
+    ).toBe('run-shared-identity')
+    // The run excluded as the settling run is not its own predecessor.
+    expect(
+      startingReviewUnitIdOf(
+        entries,
+        '/workspace-a',
+        builtin,
+        step,
+        'auth',
+        definitions,
+        'run-shared-identity',
+      ),
+    ).toBeUndefined()
   })
 })

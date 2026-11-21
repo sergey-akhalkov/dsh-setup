@@ -785,6 +785,48 @@ function wholeScopeReviewStepOf(definition: Definition): Step | undefined {
   return step === undefined || step.review?.scope === 'task' ? undefined : step
 }
 
+/** One review run whose admission may still be in flight for a unit. */
+export interface StartingReview {
+  readonly id: string
+  readonly workspaceKey: string
+  readonly definition: { readonly id: string }
+  readonly context: Readonly<Record<string, unknown>>
+}
+
+/**
+ * The first in-flight review admission for the same workspace, change, and
+ * scheduler unit identity (resolved rule plus phase), excluding one run id.
+ * The rule is resolved, so a definition that shares the canonical whole-spec
+ * identity matches the built-in review, and another workspace never matches.
+ */
+export function startingReviewUnitIdOf(
+  entries: Iterable<StartingReview>,
+  workspace: string,
+  definition: Definition,
+  step: Step,
+  change: string,
+  definitions: readonly Definition[],
+  exclude?: string,
+): string | undefined {
+  const rule = reviewIdentityOf(definition, step)
+  const phase = reviewPhase(step.review?.scope ?? 'whole', step.review?.phase)
+  for (const entry of entries) {
+    if (entry.id === exclude || entry.workspaceKey !== workspace || entry.context.name !== change) {
+      continue
+    }
+    const entryDefinition = definitions.find((candidate) => candidate.id === entry.definition.id)
+    const entryStep = entryDefinition?.steps.find((candidate) => candidate.executor === 'review')
+    if (entryDefinition === undefined || entryStep === undefined) continue
+    if (
+      reviewIdentityOf(entryDefinition, entryStep) === rule &&
+      reviewPhase(entryStep.review?.scope ?? 'whole', entryStep.review?.phase) === phase
+    ) {
+      return entry.id
+    }
+  }
+  return undefined
+}
+
 /** The refusal of a whole-scope unit settled on a non-PASS verdict: verdict, digest, record, remedies. */
 function settledWholeScopeText(
   definition: Definition,
@@ -3681,26 +3723,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     change: string,
     definitions: readonly Definition[],
     exclude?: string,
-  ): string | undefined => {
-    const rule = reviewIdentityOf(definition, step)
-    const phase = reviewPhase(step.review?.scope ?? 'whole', step.review?.phase)
-    return [...reviewStarting.values()].find((entry) => {
-      if (
-        entry.id === exclude ||
-        entry.workspaceKey !== workspace ||
-        entry.context.name !== change
-      ) {
-        return false
-      }
-      const entryDefinition = definitions.find((candidate) => candidate.id === entry.definition.id)
-      const entryStep = entryDefinition?.steps.find((candidate) => candidate.executor === 'review')
-      if (entryDefinition === undefined || entryStep === undefined) return false
-      return (
-        reviewIdentityOf(entryDefinition, entryStep) === rule &&
-        reviewPhase(entryStep.review?.scope ?? 'whole', entryStep.review?.phase) === phase
-      )
-    })?.id
-  }
+  ): string | undefined =>
+    startingReviewUnitIdOf(
+      reviewStarting.values(),
+      workspace,
+      definition,
+      step,
+      change,
+      definitions,
+      exclude,
+    )
   /** A unit checkout being prepared, keyed by workspace and unit key, until admission. */
   const preparedUnits = new Map<string, string>()
   /** A run whose review step is still open: its reviewer start may be in flight. */
