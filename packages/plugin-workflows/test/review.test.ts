@@ -2660,6 +2660,76 @@ describe('settled review round', () => {
     ).toMatchObject({ verdict: 'PASS', digest: newer })
   })
 
+  it('validates a foreign record against its publishing run', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const newer = focusedDigest(TREE_AFTER)
+    await writeRecordFile(
+      root,
+      taskRecordPath(),
+      settledTaskRecord({ runId: 'run-foreign', digest: newer }),
+    )
+    const runPath = join(root, '.dsh', 'workflows', 'runs', 'run-foreign.json')
+    await mkdir(join(runPath, '..'), { recursive: true })
+    const runWith = async (digest: string): Promise<void> =>
+      writeFile(
+        runPath,
+        `${JSON.stringify({
+          id: 'run-foreign',
+          steps: [
+            {
+              id: 'review',
+              state: 'blocked',
+              evidence: { kind: 'record', path: taskRecordPath(), digest },
+            },
+          ],
+        })}\n`,
+        'utf8',
+      )
+    // The publisher's durable step says another digest: the record is not its round.
+    await runWith(TASK_DIGEST)
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId: TASK_ID,
+        settlingRunId: 'run-settling',
+        roundDigest: TASK_DIGEST,
+      }),
+    ).toBeUndefined()
+    // A matching foreign publication settles the older run.
+    await runWith(newer)
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId: TASK_ID,
+        settlingRunId: 'run-settling',
+        roundDigest: TASK_DIGEST,
+      }),
+    ).toMatchObject({ digest: newer })
+    // A pruned publisher leaves the record authoritative.
+    await rm(runPath)
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId: TASK_ID,
+        settlingRunId: 'run-settling',
+        roundDigest: TASK_DIGEST,
+      }),
+    ).toMatchObject({ digest: newer })
+  })
+
   it('keeps a task record settled after an unrelated later write', async () => {
     const root = await workspace()
     roots.push(root)
@@ -2724,7 +2794,8 @@ describe('settled review round', () => {
         covered,
       }),
     ).toMatchObject({ digest, covered })
-    // A later expanded round covers an older run's smaller set...
+    // The unit's checked-task set must match the record exactly: a reduced
+    // coverage (or a record that misses a checked task) is due again.
     expect(
       await readSettledReviewRound({
         workspace: root,
@@ -2734,8 +2805,7 @@ describe('settled review round', () => {
         recordId,
         covered: covered.slice(0, 1),
       }),
-    ).toMatchObject({ digest })
-    // ...but a record that misses a checked task of the unit does not cover it.
+    ).toBeUndefined()
     expect(
       await readSettledReviewRound({
         workspace: root,

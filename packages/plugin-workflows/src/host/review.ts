@@ -1435,16 +1435,41 @@ export interface SettledReviewRound {
  */
 const TERMINAL_ERROR_CLASS = 'invalid-output'
 
+/** One round the publishing run recorded on its review step, when its run file is readable. */
+async function publishingRoundEvidence(
+  workspace: string,
+  runId: string,
+  stepId: string,
+): Promise<{ readonly path?: string; readonly digest?: string } | undefined> {
+  if (!/^[A-Za-z0-9._-]+$/u.test(runId) || runId.includes('..')) return undefined
+  try {
+    const raw = JSON.parse(
+      await readFile(join(workspace, '.dsh', 'workflows', 'runs', `${runId}.json`), 'utf8'),
+    ) as { steps?: unknown }
+    if (!Array.isArray(raw.steps)) return undefined
+    const step = raw.steps.find(
+      (entry) =>
+        typeof entry === 'object' && entry !== null && (entry as { id?: unknown }).id === stepId,
+    ) as { evidence?: { kind?: unknown; path?: unknown; digest?: unknown } } | undefined
+    if (step?.evidence?.kind !== 'record') return undefined
+    return {
+      ...(typeof step.evidence.path === 'string' ? { path: step.evidence.path } : {}),
+      ...(typeof step.evidence.digest === 'string' ? { digest: step.evidence.digest } : {}),
+    }
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * The settled round of one review unit, read from the record at the path the
  * unit publishes to. It is well-formed and belongs to the unit. A whole-scope
  * verdict binds the digest the unit would prepare now (`digests`), because only
  * a changed plan or worktree makes it due again. A task or section verdict is
- * historical: it stays settled after later writes, so the record at the unit's
- * path is authoritative for as long as its coverage matches. A section verdict
- * must carry its section metadata and exactly the covered task ids. The same
- * publishing run must still carry the digest it recorded on its step; a newer
- * run's record for the same unit settles from its own verdict.
+ * historical: it stays settled after later writes, and its coverage must equal
+ * the unit's checked-task set exactly. The publishing run must still carry the
+ * digest it recorded on its step — the settling run from its own step, another
+ * run from its readable run file (a pruned run leaves the record authoritative).
  * Only an `ERROR` whose attempt produced unusable output is terminal; a start,
  * transport, or discarded-input failure carries no verdict and does not settle.
  * `digests` may be lazy so an absent record costs no git work.
@@ -1494,23 +1519,32 @@ export async function readSettledReviewRound(input: {
   if (record.verdict === 'ERROR' && record.failureClass !== TERMINAL_ERROR_CLASS) return undefined
   if (spec.scope === 'task') {
     // A task or section verdict is historical: the record at the unit's path is
-    // authoritative after later writes; coverage identifies the unit after task
-    // text or ticks change. The publishing run still has to match the digest it
-    // recorded for this round; a newer run's record for the unit replaces it.
-    if (
-      input.settlingRunId !== undefined &&
-      record.runId === input.settlingRunId &&
-      input.roundDigest !== undefined &&
-      record.digest !== input.roundDigest
-    ) {
-      return undefined
+    // authoritative after later writes, and its coverage must equal the unit's
+    // checked-task set exactly. The publishing run must still carry the digest
+    // it recorded for the round: the settling run from its own step, another
+    // run from its run file when readable.
+    if (input.settlingRunId !== undefined) {
+      if (record.runId === input.settlingRunId) {
+        if (input.roundDigest !== undefined && record.digest !== input.roundDigest) return undefined
+      } else if (record.runId !== undefined) {
+        const published = await publishingRoundEvidence(
+          input.workspace,
+          record.runId,
+          input.step.id,
+        )
+        if (
+          published !== undefined &&
+          ((published.path !== undefined && published.path !== recordPath) ||
+            (published.digest !== undefined && published.digest !== record.digest))
+        ) {
+          return undefined
+        }
+      }
     }
     if (input.covered !== undefined) {
       if (record.taskIds === undefined) return undefined
-      // A later expanded round covers an older run's smaller set; a record that
-      // misses any checked task of the unit does not cover it.
-      const recorded = new Set(record.taskIds)
-      if (!input.covered.every((id) => recorded.has(id))) return undefined
+      const covered = [...record.taskIds].sort().join('\u0000')
+      if (covered !== [...input.covered].sort().join('\u0000')) return undefined
     }
   } else {
     if (input.digests === undefined) return undefined

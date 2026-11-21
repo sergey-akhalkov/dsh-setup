@@ -3021,6 +3021,10 @@ export function apply(ctx, config = {}) {
      */
     const reviewStarting = new Map();
     const reviewLive = (run) => reviewStarting.has(run.id) || reviewScheduler.liveRunById(run.id) !== undefined;
+    /** A review of the same definition and change whose admission is still in flight. */
+    const startingReviewUnitId = (definition, change, exclude) => [...reviewStarting.values()].find((entry) => entry.id !== exclude &&
+        entry.definition.id === definition.id &&
+        entry.context.name === change)?.id;
     /** A unit checkout being prepared, keyed by workspace and unit key, until admission. */
     const preparedUnits = new Map();
     /** A run whose review step is still open: its reviewer start may be in flight. */
@@ -3284,16 +3288,6 @@ export function apply(ctx, config = {}) {
                         : { covered: sectionValue.covered.map((entry) => entry.id) }),
                 });
                 if (storedRound !== undefined) {
-                    // A newer round that covers this section run's checked tasks plus an
-                    // expanded set supersedes it: the older run retires instead of
-                    // dispatching its smaller coverage again or overwriting the record.
-                    const settledCovered = new Set(storedRound.covered);
-                    if (sectionValue !== undefined &&
-                        storedRound.covered.length > sectionValue.covered.length &&
-                        sectionValue.covered.every((task) => settledCovered.has(task.id))) {
-                        const reason = 'the section coverage expanded; the newer round covers this run’s checked tasks and carries the verdict';
-                        return setRunStatus(settleStep(reviewRun, step.id, 'cancelled', { at: journal.time(), reason }), 'cancelled', journal.time(), reason);
-                    }
                     // An explicit start bypasses the settlement only until its own round
                     // publishes a verdict; once its step carries a record at the unit
                     // path, the normal settlement applies to every later advance — even
@@ -3310,6 +3304,31 @@ export function apply(ctx, config = {}) {
                             now: journal.time(),
                         });
                         return settledRun;
+                    }
+                }
+                else if (sectionValue !== undefined) {
+                    // An older section run that already published its round retires when a
+                    // newer round covers its checked tasks plus an expanded set. A fresh
+                    // explicit run with no published evidence still dispatches its review.
+                    const widenedRound = await readSettledReviewRound({
+                        workspace,
+                        definition: reviewDefinition,
+                        step,
+                        change,
+                        ...(recordId === undefined ? {} : { recordId }),
+                        settlingRunId: reviewRun.id,
+                        ...(recordedRoundDigest === undefined ? {} : { roundDigest: recordedRoundDigest }),
+                    });
+                    const stored = reviewRun.steps.find((entry) => entry.id === step.id);
+                    const published = widenedRound !== undefined &&
+                        stored?.evidence?.kind === 'record' &&
+                        stored.evidence.path === widenedRound.recordPath;
+                    if (published &&
+                        widenedRound !== undefined &&
+                        widenedRound.covered.length > sectionValue.covered.length &&
+                        sectionValue.covered.every((task) => widenedRound.covered.includes(task.id))) {
+                        const reason = 'the section coverage expanded; the newer round covers this run’s checked tasks and carries the verdict';
+                        return setRunStatus(settleStep(reviewRun, step.id, 'cancelled', { at: journal.time(), reason }), 'cancelled', journal.time(), reason);
                     }
                 }
                 const failurePrepared = async () => {
@@ -4933,7 +4952,8 @@ export function apply(ctx, config = {}) {
                     resolveOwnership(definition, legacy.installed, legacy.enabled).steps.some((entry) => entry.id === reviewStep.id && entry.ownership === 'own');
                 // A live successor of the same whole-scope unit covers it, but this run
                 // is never its own successor: a settled step still held by the
-                // scheduler's teardown is not a reason to wait.
+                // scheduler's teardown is not a reason to wait. An in-flight admission
+                // before the scheduler holds it counts as coverage too.
                 const liveUnitRun = reviewStep === undefined || reviewStep.review?.scope === 'task'
                     ? undefined
                     : reviewScheduler?.liveUnit({
@@ -4942,8 +4962,10 @@ export function apply(ctx, config = {}) {
                         change: String(current.context.name),
                         phase: reviewPhase(reviewStep.review?.scope ?? 'whole', reviewStep.review?.phase),
                     });
+                const siblingUnitRunId = (liveUnitRun?.id === current.id ? undefined : liveUnitRun?.id) ??
+                    startingReviewUnitId(definition, String(current.context.name), current.id);
                 const review = reviewOwned && reviewStep !== undefined && typeof current.context.name === 'string'
-                    ? await reviewCloseStatus(workspace, current.context.name, definition, reviewStep, current, reviewOpenRuns, reviewScheduler?.liveRunById(current.id) !== undefined, dispatchFailure, liveUnitRun?.id === current.id ? undefined : liveUnitRun?.id, reviewTimeoutMs)
+                    ? await reviewCloseStatus(workspace, current.context.name, definition, reviewStep, current, reviewOpenRuns, reviewScheduler?.liveRunById(current.id) !== undefined, dispatchFailure, siblingUnitRunId, reviewTimeoutMs)
                     : undefined;
                 const completion = definition.id === 'task-review' && typeof current.context.name === 'string'
                     ? taskReviewCompletion(workspace, current.context.name, { openRuns: reviewOpenRuns })
@@ -5040,8 +5062,11 @@ export function apply(ctx, config = {}) {
                             change: name,
                             phase: reviewPhase('whole', settledStep.review?.phase),
                         });
-                        if (liveUnit !== undefined)
+                        // An explicit retry preparing its snapshot is a live admission
+                        // even before the scheduler holds it: the close waits, not refuses.
+                        if (liveUnit !== undefined || startingReviewUnitId(definition, name) !== undefined) {
                             continue;
+                        }
                         const settled = await settledWholeScopeOf(workspace, definition, settledStep, name, reviewTimeoutMs);
                         if (settled === undefined || settled.verdict === 'PASS')
                             continue;

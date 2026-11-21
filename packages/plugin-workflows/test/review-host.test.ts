@@ -1885,6 +1885,85 @@ describe('review round settlement', () => {
     }
   })
 
+  it('dispatches an explicit round after the section coverage shrinks', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await sectionWorkspace()
+    const definition = reviewDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const recordId = sectionRecordId(SECTION.key)
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        definition.id,
+        'auth',
+        'tasks',
+        `${recordId}.json`,
+      )
+      await mkdir(join(recordPath, '..'), { recursive: true })
+      await writeFile(
+        recordPath,
+        `${JSON.stringify({
+          definition: definition.id,
+          rule: definition.id,
+          change: 'auth',
+          phase: 'task',
+          scope: 'task',
+          taskId: recordId,
+          section: SECTION.key,
+          sectionTitle: SECTION.title,
+          taskIds: SECTION_IDS,
+          digest: 'c'.repeat(64),
+          verdict: 'FINDINGS',
+          findings: [
+            {
+              severity: 'P1',
+              class: 'missing-test',
+              title: 'A finding',
+              evidence: 'evidence',
+              fix: 'fix it',
+            },
+          ],
+          target: { provider: 'codex-subagent' },
+          reviewer: 'codex',
+          time: '2026-01-01T00:00:00.000Z',
+        })}\n`,
+        'utf8',
+      )
+      // Shrink the section: the older record covers a third task no longer checked.
+      await writeFile(
+        join(workspace, 'openspec', 'changes', 'auth', 'tasks.md'),
+        `# Tasks\n\n## ${SECTION.title}\n\n- [x] 1.1 ${SECTION_TASKS[0]}\n- [x] 1.2 ${SECTION_TASKS[1]}\n- [ ] 1.3 ${SECTION_TASKS[2]}\n`,
+        'utf8',
+      )
+      const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+        | {
+            execute: (
+              args: Record<string, unknown>,
+              context: { agent: unknown },
+            ) => Promise<{ text?: string }>
+          }
+        | undefined
+      const started = await tool?.execute(
+        { action: 'start', definitionId: definition.id, change: 'auth', section: SECTION.key },
+        { agent: host.agent },
+      )
+      expect(started?.text).toContain('started')
+      // The reduced unit is not settled from the larger record: one reviewer runs.
+      await waitFor(() => host.digests.length === 1)
+      expect(host.releases).toHaveLength(1)
+    } finally {
+      unregister()
+    }
+  })
+
   it('settles a unit before the scheduler enqueue', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await gitWorkspace()

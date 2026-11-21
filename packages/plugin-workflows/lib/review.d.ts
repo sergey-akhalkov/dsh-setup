@@ -392,11 +392,10 @@ export interface SettledReviewRound {
  * unit publishes to. It is well-formed and belongs to the unit. A whole-scope
  * verdict binds the digest the unit would prepare now (`digests`), because only
  * a changed plan or worktree makes it due again. A task or section verdict is
- * historical: it stays settled after later writes, so the record at the unit's
- * path is authoritative for as long as its coverage matches. A section verdict
- * must carry its section metadata and exactly the covered task ids. The same
- * publishing run must still carry the digest it recorded on its step; a newer
- * run's record for the same unit settles from its own verdict.
+ * historical: it stays settled after later writes, and its coverage must equal
+ * the unit's checked-task set exactly. The publishing run must still carry the
+ * digest it recorded on its step — the settling run from its own step, another
+ * run from its readable run file (a pruned run leaves the record authoritative).
  * Only an `ERROR` whose attempt produced unusable output is terminal; a start,
  * transport, or discarded-input failure carries no verdict and does not settle.
  * `digests` may be lazy so an absent record costs no git work.
