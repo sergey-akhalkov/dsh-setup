@@ -3836,6 +3836,7 @@ describe('turn-close lane dispatch', () => {
       auth,
     )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(steered(host)).toContain('due review unit(s)')
     expect(steered(host)).toContain('settled on FINDINGS')
     expect(steered(host)).toContain('start a fresh round')
     expect(await taskRuns(workspace)).toHaveLength(1)
@@ -3872,6 +3873,84 @@ describe('turn-close lane dispatch', () => {
     )
     // The historical task PASS starts no round of its own.
     expect(started.some((run) => run.context.taskId === passedId)).toBe(false)
+    // Once the expanded round publishes its verdict, the older blocked run
+    // settles from that record instead of dispatching its smaller set again.
+    await waitFor(async () => {
+      const record = JSON.parse(
+        await readFile(
+          join(
+            workspace,
+            '.dsh',
+            'workflows',
+            'records',
+            'task-review',
+            'auth',
+            'tasks',
+            `${recordId}.json`,
+          ),
+          'utf8',
+        ).catch(() => '{}'),
+      ) as { readonly taskIds?: unknown[] }
+      return Array.isArray(record.taskIds) && record.taskIds.length === 3
+    })
+    await writeFile(
+      join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'task-review',
+        'auth',
+        'tasks',
+        `${recordId}.json`,
+      ),
+      `${JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId: recordId,
+        section: section.key,
+        sectionTitle: section.title,
+        taskIds: [...startedIds],
+        digest: 'd'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-20T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 4 })
+    await waitFor(async () => {
+      const stored = await runs.readAuthenticatedRun(workspace, 'run-lane-blocked', auth)
+      return stored?.steps[0]?.state === 'cancelled'
+    })
+    expect(await taskRuns(workspace)).toHaveLength(2)
+  })
+
+  it('names the start action of an unsettled due lane', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks
+
+## 1. First lane (lane 1, owns \`src/**\`)
+
+- [x] 1.1 First lane task
+
+## 2. Second lane (lane 2, owns \`docs/**\`)
+
+- [x] 2.1 Second lane task
+- [ ] 2.2 Later lane task
+`)
+    const host = await engineGateHost(workspace)
+    // Attribute the change to this session so its due lanes are evaluated.
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('due review unit(s)')
+    // An unsettled uncovered unit keeps the ordinary start action.
+    expect(text).toContain(
+      'workflows(action: "start", definitionId: "task-review", change: "auth", section: "2")',
+    )
   })
 })
 

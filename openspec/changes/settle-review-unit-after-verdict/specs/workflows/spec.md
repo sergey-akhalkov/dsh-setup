@@ -9,6 +9,11 @@ verdict on its review step, and the engine MUST NOT start another reviewer for t
 unit's reviewed digest and covered checked-task set still match the verdict's. A matching digest
 `PASS` MUST NOT be re-reviewed. A settled verdict is not liveness.
 
+#### Scenario: A lane verdict is historical
+
+- **WHEN** a later write changes the worktree after a task or section verdict was published
+- **THEN** the verdict still settles the unit at the digest its publishing run recorded, and only a changed covered checked-task set, a changed task text, or an explicit fresh round makes the unit due again
+
 #### Scenario: Verdict settles its unit
 
 - **WHEN** a review returns `FINDINGS` for the unit's current digest
@@ -112,8 +117,10 @@ A review SHALL compute the scope digest, run the resolved reviewer with the bund
 change, task, and digest context, accept one fenced JSON verdict echoing the digest, and write an atomic
 record with the definition, scope, task id when task-scoped, digest, verdict, findings, reviewer
 identity, time, and reviewing session. `PASS` MUST require zero P0/P1 findings; a matching
-`PASS`/`FINDINGS`/`ERROR` record at the unit's current digest MUST be reused instead of starting a
-reviewer, and a stale whole-scope record MUST be ignored.
+`PASS`/`FINDINGS`/`ERROR` record at the round's recorded digest MUST be reused instead of starting a
+reviewer, and a stale whole-scope record MUST be ignored. Only an `ERROR` whose attempt produced
+unusable output is terminal; a start, transport, or discarded-input failure carries no verdict and is
+retried.
 
 #### Scenario: Passing review
 

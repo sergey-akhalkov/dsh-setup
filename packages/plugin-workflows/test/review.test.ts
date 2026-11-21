@@ -2607,6 +2607,59 @@ describe('settled review round', () => {
     ).toMatchObject({ verdict: 'PASS', digest: newer })
   })
 
+  it('requires the settling run to carry its recorded round digest', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    await writeRecordFile(
+      root,
+      taskRecordPath(),
+      settledTaskRecord({ runId: 'run-a', digest: TASK_DIGEST }),
+    )
+    const newer = focusedDigest(TREE_AFTER)
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId: TASK_ID,
+        settlingRunId: 'run-a',
+        roundDigest: newer,
+      }),
+    ).toBeUndefined()
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId: TASK_ID,
+        settlingRunId: 'run-a',
+        roundDigest: TASK_DIGEST,
+      }),
+    ).toMatchObject({ digest: TASK_DIGEST })
+    // A newer run's record for the same unit settles the older run too.
+    await writeRecordFile(
+      root,
+      taskRecordPath(),
+      settledTaskRecord({ runId: 'run-b', digest: newer, verdict: 'PASS', findings: [] }),
+    )
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId: TASK_ID,
+        settlingRunId: 'run-a',
+        roundDigest: TASK_DIGEST,
+      }),
+    ).toMatchObject({ verdict: 'PASS', digest: newer })
+  })
+
   it('keeps a task record settled after an unrelated later write', async () => {
     const root = await workspace()
     roots.push(root)
@@ -2671,6 +2724,7 @@ describe('settled review round', () => {
         covered,
       }),
     ).toMatchObject({ digest, covered })
+    // A later expanded round covers an older run's smaller set...
     expect(
       await readSettledReviewRound({
         workspace: root,
@@ -2679,6 +2733,17 @@ describe('settled review round', () => {
         change: 'auth',
         recordId,
         covered: covered.slice(0, 1),
+      }),
+    ).toMatchObject({ digest })
+    // ...but a record that misses a checked task of the unit does not cover it.
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId,
+        covered: [...covered, '1111111111111111'],
       }),
     ).toBeUndefined()
     // A record that drops its section metadata cannot cover a section unit.

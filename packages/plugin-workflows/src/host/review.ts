@@ -1442,8 +1442,10 @@ const TERMINAL_ERROR_CLASS = 'invalid-output'
  * a changed plan or worktree makes it due again. A task or section verdict is
  * historical: it stays settled after later writes, so the record at the unit's
  * path is authoritative for as long as its coverage matches. A section verdict
- * must carry its section metadata and exactly the covered task ids. Only an
- * `ERROR` whose attempt produced unusable output is terminal; a start,
+ * must carry its section metadata and exactly the covered task ids. The same
+ * publishing run must still carry the digest it recorded on its step; a newer
+ * run's record for the same unit settles from its own verdict.
+ * Only an `ERROR` whose attempt produced unusable output is terminal; a start,
  * transport, or discarded-input failure carries no verdict and does not settle.
  * `digests` may be lazy so an absent record costs no git work.
  */
@@ -1456,6 +1458,10 @@ export async function readSettledReviewRound(input: {
   readonly recordId?: string
   /** Every digest a whole-scope unit's current round would record. */
   readonly digests?: readonly string[] | (() => Promise<readonly string[]>)
+  /** The run being settled; its own record must carry the recorded round digest. */
+  readonly settlingRunId?: string
+  /** The task/section round digest the settling run recorded on its step. */
+  readonly roundDigest?: string
   /** The checked-task set the unit covers; a task or section record must match it. */
   readonly covered?: readonly string[]
 }): Promise<SettledReviewRound | undefined> {
@@ -1489,11 +1495,22 @@ export async function readSettledReviewRound(input: {
   if (spec.scope === 'task') {
     // A task or section verdict is historical: the record at the unit's path is
     // authoritative after later writes; coverage identifies the unit after task
-    // text or ticks change. A newer publication for the same unit replaces it.
+    // text or ticks change. The publishing run still has to match the digest it
+    // recorded for this round; a newer run's record for the unit replaces it.
+    if (
+      input.settlingRunId !== undefined &&
+      record.runId === input.settlingRunId &&
+      input.roundDigest !== undefined &&
+      record.digest !== input.roundDigest
+    ) {
+      return undefined
+    }
     if (input.covered !== undefined) {
       if (record.taskIds === undefined) return undefined
-      const covered = [...record.taskIds].sort().join('\u0000')
-      if (covered !== [...input.covered].sort().join('\u0000')) return undefined
+      // A later expanded round covers an older run's smaller set; a record that
+      // misses any checked task of the unit does not cover it.
+      const recorded = new Set(record.taskIds)
+      if (!input.covered.every((id) => recorded.has(id))) return undefined
     }
   } else {
     if (input.digests === undefined) return undefined

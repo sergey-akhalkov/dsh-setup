@@ -1496,6 +1496,16 @@ describe('review round settlement', () => {
       expect(status?.text).toContain('review orphaned')
       expect(status?.text).toContain('FINDINGS')
       // An explicit start for the settled unit dispatches exactly one reviewer.
+      await writeFile(
+        join(workspace, 'openspec', 'changes', 'auth', 'design.md'),
+        '# Design\n\nA changed decision.\n',
+        'utf8',
+      )
+      const firstRecordDigest = (
+        JSON.parse(await readFile(recordPath, 'utf8')) as {
+          readonly digest: string
+        }
+      ).digest
       const started = await tool?.execute(
         { action: 'start', definitionId: definition.id, change: 'auth' },
         { agent: host.agent },
@@ -1503,6 +1513,21 @@ describe('review round settlement', () => {
       expect(started?.text).toContain('started')
       await waitFor(() => host.releases.length === 2)
       expect(host.digests).toHaveLength(2)
+      // The second explicit round publishes at the new digest; the older
+      // explicit run must not re-arm its bypass against the replaced record.
+      host.releases[1]?.()
+      await waitFor(async () => {
+        const record = JSON.parse(await readFile(recordPath, 'utf8')) as {
+          readonly digest: string
+        }
+        return record.digest !== firstRecordDigest
+      })
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 4 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(host.releases).toHaveLength(2)
+      expect(host.digests).toHaveLength(2)
+      const settled = await readAuthenticatedRun(workspace, run.id, auth)
+      expect(settled?.steps[0]?.state).toBe('blocked')
     } finally {
       unregister()
     }

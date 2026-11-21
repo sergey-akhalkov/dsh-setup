@@ -3933,6 +3933,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             : { section: sectionValue ?? section }),
         })
         const recordId = section?.recordId ?? task?.id
+        const storedStep = reviewRun.steps.find((entry) => entry.id === step.id)
+        const recordedRoundDigest =
+          storedStep?.evidence?.kind === 'record' ? storedStep.evidence.digest : undefined
         // A stored verdict settles this unit before any reviewer starts. A
         // whole-scope round is due only at its live prepared digest; a task or
         // section round is historical and is matched by the record at the unit's
@@ -3960,21 +3963,43 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           step,
           change,
           ...(recordId === undefined ? {} : { recordId }),
-          ...(spec.scope === 'task' ? {} : { digests: wholeDigests }),
+          ...(spec.scope === 'task'
+            ? {
+                settlingRunId: reviewRun.id,
+                ...(recordedRoundDigest === undefined ? {} : { roundDigest: recordedRoundDigest }),
+              }
+            : { digests: wholeDigests }),
           ...(sectionValue === undefined
             ? {}
             : { covered: sectionValue.covered.map((entry) => entry.id) }),
         })
         if (storedRound !== undefined) {
+          // A newer round that covers this section run's checked tasks plus an
+          // expanded set supersedes it: the older run retires instead of
+          // dispatching its smaller coverage again or overwriting the record.
+          const settledCovered = new Set(storedRound.covered)
+          if (
+            sectionValue !== undefined &&
+            storedRound.covered.length > sectionValue.covered.length &&
+            sectionValue.covered.every((task) => settledCovered.has(task.id))
+          ) {
+            const reason =
+              'the section coverage expanded; the newer round covers this run’s checked tasks and carries the verdict'
+            return setRunStatus(
+              settleStep(reviewRun, step.id, 'cancelled', { at: journal.time(), reason }),
+              'cancelled',
+              journal.time(),
+              reason,
+            )
+          }
           // An explicit start bypasses the settlement only until its own round
-          // publishes a verdict; once the step carries that verdict every later
-          // advance settles from it.
+          // publishes a verdict; once its step carries a record at the unit
+          // path, the normal settlement applies to every later advance — even
+          // when another round later replaced the shared record.
           const stored = reviewRun.steps.find((entry) => entry.id === step.id)
-          const carries =
-            stored?.evidence?.kind === 'record' &&
-            stored.evidence.path === storedRound.recordPath &&
-            stored.evidence.digest === storedRound.digest
-          if (reviewRun.context.explicitReview !== true || carries) {
+          const published =
+            stored?.evidence?.kind === 'record' && stored.evidence.path === storedRound.recordPath
+          if (reviewRun.context.explicitReview !== true || published) {
             const settledRun = await settleStoredReviewRound({
               run: reviewRun,
               definition: reviewDefinition,
