@@ -978,8 +978,8 @@ describe('the review unit steer', () => {
     expect(text.length).toBeLessThanOrEqual(900)
   })
 
-  it('keeps a settled section verdict and its long selector under the bound', () => {
-    const long = 'Section '.repeat(40).trim()
+  it('keeps a settled section verdict and a near-limit selector intact', () => {
+    const long = 'Section '.repeat(90).trim()
     const task = { id: '0123456789abcdef', number: '1.1', text: 'Task', checked: true }
     const unit: ReviewUnit = {
       section: { key: long, title: long },
@@ -998,7 +998,7 @@ describe('the review unit steer', () => {
       'record .dsh/workflows/records/task-review/change-a/tasks/0123456789abcdef.json',
     )
     expect(text).toContain(`section: "${long}"`)
-    expect(text.length).toBeLessThanOrEqual(900)
+    expect(text.length).toBeLessThanOrEqual(5000)
   })
 
   it('points the status line at a live section run instead of a new start', async () => {

@@ -345,8 +345,9 @@ const MAX_UNIT_NUMBERS = 20
 /** The unit-text bound: the steer note and the status both deliver it. */
 const MAX_UNIT_TEXT = 470
 /** A settled unit's refusal also names its verdict, digest, and record; the
- * full section selector in the action can be long, so it gets a larger bound. */
-const MAX_SETTLED_UNIT_TEXT = 900
+ * full section selector in the action is supported up to the 4096-byte run
+ * context, so the bound only guards against an impossible total. */
+const MAX_SETTLED_UNIT_TEXT = 5_000
 
 function boundedNumbers(tasks: readonly NumberedTaskLine[]): string {
   const shown = tasks
