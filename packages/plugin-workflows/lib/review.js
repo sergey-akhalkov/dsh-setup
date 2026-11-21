@@ -1666,12 +1666,13 @@ async function approvalSatisfies(workspace, record, taskId) {
 /**
  * A published verdict consumes the run's explicit-start bypass: the request
  * asked for this round, and a later replacement of the shared record must not
- * re-arm it after the intake reopens the step.
+ * re-arm it after the intake reopens the step. The flag that keeps the covered
+ * approval validation active stays set, so a missing approval keeps blocking.
  */
 export function consumeReviewRequest(run) {
-    if (run.context.explicitReview !== true)
+    if (run.context.explicitReview !== true || run.context.explicitReviewConsumed === true)
         return run;
-    return { ...run, context: { ...run.context, explicitReview: false } };
+    return { ...run, context: { ...run.context, explicitReviewConsumed: true } };
 }
 /**
  * Publish one settled attempt: write the ERROR record or the verdict record

@@ -2250,11 +2250,12 @@ async function approvalSatisfies(
 /**
  * A published verdict consumes the run's explicit-start bypass: the request
  * asked for this round, and a later replacement of the shared record must not
- * re-arm it after the intake reopens the step.
+ * re-arm it after the intake reopens the step. The flag that keeps the covered
+ * approval validation active stays set, so a missing approval keeps blocking.
  */
 export function consumeReviewRequest(run: WorkflowRun): WorkflowRun {
-  if (run.context.explicitReview !== true) return run
-  return { ...run, context: { ...run.context, explicitReview: false } }
+  if (run.context.explicitReview !== true || run.context.explicitReviewConsumed === true) return run
+  return { ...run, context: { ...run.context, explicitReviewConsumed: true } }
 }
 
 /**

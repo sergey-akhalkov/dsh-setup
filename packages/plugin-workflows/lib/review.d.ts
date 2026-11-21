@@ -475,7 +475,8 @@ export declare function beginReviewAttempt(input: ReviewRunInput): Promise<Revie
 /**
  * A published verdict consumes the run's explicit-start bypass: the request
  * asked for this round, and a later replacement of the shared record must not
- * re-arm it after the intake reopens the step.
+ * re-arm it after the intake reopens the step. The flag that keeps the covered
+ * approval validation active stays set, so a missing approval keeps blocking.
  */
 export declare function consumeReviewRequest(run: WorkflowRun): WorkflowRun;
 /**

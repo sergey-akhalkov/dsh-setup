@@ -1885,6 +1885,98 @@ describe('review round settlement', () => {
     }
   })
 
+  it('keeps a published section PASS blocked while a covered approval is missing', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await sectionWorkspace()
+    const host = delayedReviewHost(workspace, 'PASS')
+    apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+    // Keep the change incomplete so the integration trigger stays out of this
+    // fixture; the section coverage is unchanged.
+    const planPath = join(workspace, 'openspec', 'changes', 'auth', 'tasks.md')
+    await writeFile(planPath, `${await readFile(planPath, 'utf8')}\n- [ ] 9.9 Later task\n`, 'utf8')
+    const definition = definitionsRegistry.installed('task-review')?.definition
+    if (definition === undefined) throw new Error('the shipped task review is missing')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const recordId = sectionRecordId(SECTION.key)
+    const recordPath = `.dsh/workflows/records/task-review/auth/tasks/${recordId}.json`
+    const digest = 'e'.repeat(64)
+    await mkdir(join(workspace, recordPath, '..'), { recursive: true })
+    await writeFile(
+      join(workspace, recordPath),
+      `${JSON.stringify({
+        definition: 'task-review',
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId: recordId,
+        section: SECTION.key,
+        sectionTitle: SECTION.title,
+        taskIds: SECTION_IDS,
+        digest,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        reviewer: 'codex',
+        time: '2026-01-01T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
+    // Only two of the three covered approvals exist.
+    for (const taskId of SECTION_IDS.slice(0, 2)) {
+      await writeFile(
+        join(workspace, 'openspec', 'changes', 'auth', 'reviews', `${taskId}.json`),
+        `${JSON.stringify({
+          rule: 'task-review',
+          change: 'auth',
+          scope: 'task',
+          taskId,
+          digest,
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: '2026-01-01T00:00:00.000Z',
+        })}\n`,
+        'utf8',
+      )
+    }
+    const run = createRun({
+      definition: 'task-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: recordId,
+        section: SECTION.key,
+        sectionTitle: SECTION.title,
+        taskIds: SECTION_IDS,
+        explicitReview: true,
+      },
+      steps: ['review', 'complete-review'],
+      now: 1_000,
+    })
+    // The run's own round published the record before this advance.
+    await writeRun(
+      workspace,
+      settleStep(run, 'review', 'blocked', {
+        at: 1_100,
+        evidence: { kind: 'record', path: recordPath, digest },
+      }),
+      auth,
+    )
+    const stepState = async (): Promise<string | undefined> =>
+      (await readAuthenticatedRun(workspace, run.id, auth))?.steps[0]?.state
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(await stepState()).toBe('blocked')
+    // A second close must not accept the PASS through the consumed bypass.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(await stepState()).toBe('blocked')
+    expect(host.digests).toHaveLength(0)
+  })
+
   it('dispatches an explicit round after the section coverage shrinks', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await sectionWorkspace()

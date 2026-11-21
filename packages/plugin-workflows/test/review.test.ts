@@ -341,7 +341,9 @@ describe('runReviewStep', () => {
     }
     const result = await invoke(root, runnerFor(PASS_TEXT), { run: explicitRun })
     expect(result.error).toBeUndefined()
-    expect(result.run.context.explicitReview).toBe(false)
+    // The bypass is consumed, but the covered-approval validation stays armed.
+    expect(result.run.context.explicitReview).toBe(true)
+    expect(result.run.context.explicitReviewConsumed).toBe(true)
   })
 
   it('writes the local record and the committed approval for a task PASS', async () => {

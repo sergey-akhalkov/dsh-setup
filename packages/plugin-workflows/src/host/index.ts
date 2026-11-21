@@ -4042,11 +4042,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // An explicit start bypasses the settlement only until its own round
           // publishes a verdict; once its step carries a record at the unit
           // path, the normal settlement applies to every later advance — even
-          // when another round later replaced the shared record.
+          // when another round later replaced the shared record. The consumed
+          // marker leaves the covered-approval validation active.
           const stored = reviewRun.steps.find((entry) => entry.id === step.id)
           const published =
             stored?.evidence?.kind === 'record' && stored.evidence.path === storedRound.recordPath
-          if (reviewRun.context.explicitReview !== true || published) {
+          const explicitPending =
+            reviewRun.context.explicitReview === true &&
+            reviewRun.context.explicitReviewConsumed !== true
+          if (!explicitPending || published) {
             const settledRun = await settleStoredReviewRound({
               run: reviewRun,
               definition: reviewDefinition,
