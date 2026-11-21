@@ -1668,7 +1668,7 @@ async function writeErrorRecord(
   // An accepted ERROR is usable evidence for an intermediate close: settle the
   // step from the record and let the gate refuse a PASS-dependent close. The
   // run names the failure and the next action; it never approves.
-  const run = await settleFromRecord(input, failed, written.path, now)
+  const run = consumeReviewRequest(await settleFromRecord(input, failed, written.path, now))
   return { run, record: failed, recordPath: written.path, error }
 }
 /** The review identity every attempt carries before a verdict exists. */
@@ -2248,6 +2248,16 @@ async function approvalSatisfies(
 }
 
 /**
+ * A published verdict consumes the run's explicit-start bypass: the request
+ * asked for this round, and a later replacement of the shared record must not
+ * re-arm it after the intake reopens the step.
+ */
+export function consumeReviewRequest(run: WorkflowRun): WorkflowRun {
+  if (run.context.explicitReview !== true) return run
+  return { ...run, context: { ...run.context, explicitReview: false } }
+}
+
+/**
  * Publish one settled attempt: write the ERROR record or the verdict record
  * (and the committed approval first for a task PASS), then settle the step from
  * its own evidence. Only the scheduler's settled attempt reaches this.
@@ -2342,7 +2352,7 @@ export async function publishReviewOutcome(
       error: local.error,
     }
   }
-  const run = await settleFromRecord(input, published, local.path, now)
+  const run = consumeReviewRequest(await settleFromRecord(input, published, local.path, now))
   return { run, record: published, recordPath: local.path }
 }
 

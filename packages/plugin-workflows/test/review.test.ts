@@ -331,6 +331,19 @@ describe('runReviewStep', () => {
     expect(result.record?.error).toContain('src/engine.ts')
     expect(result.run.steps[0]?.state).not.toBe('done')
   })
+  it('consumes an explicit start once the round publishes its verdict', async () => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = taskDefinition()
+    const explicitRun = {
+      ...baseRun(definition),
+      context: { name: 'auth', taskId: TASK_ID, explicitReview: true },
+    }
+    const result = await invoke(root, runnerFor(PASS_TEXT), { run: explicitRun })
+    expect(result.error).toBeUndefined()
+    expect(result.run.context.explicitReview).toBe(false)
+  })
+
   it('writes the local record and the committed approval for a task PASS', async () => {
     const root = await workspace()
     roots.push(root)

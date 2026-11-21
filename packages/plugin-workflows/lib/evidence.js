@@ -586,12 +586,15 @@ async function recordCheck(evidence, context, item) {
     }
     // A section record binds the submitted checked-task set: the section key
     // keeps the path stable, so a changed coverage must not reuse the old verdict.
+    // The set is order-independent: a tasks.md reorder with the same tasks still
+    // matches, so the settled PASS is not reopened by a stable verdict.
     if (record.section !== undefined && Array.isArray(record.taskIds)) {
         const submitted = Array.isArray(context.values.taskIds)
             ? context.values.taskIds.filter((entry) => typeof entry === 'string')
             : undefined;
         const covered = record.taskIds.filter((entry) => typeof entry === 'string');
-        if (submitted === undefined || submitted.join('\u0000') !== covered.join('\u0000')) {
+        const sorted = (ids) => [...ids].sort().join('\u0000');
+        if (submitted === undefined || sorted(submitted) !== sorted(covered)) {
             return mismatch('the section record covers a different checked task set', path.text, item);
         }
     }

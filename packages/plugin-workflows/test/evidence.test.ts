@@ -548,6 +548,15 @@ describe('record and tool evidence', () => {
       await writeJson(workspace, `openspec/changes/auth/reviews/${taskId}.json`, approval(taskId))
     }
     expect((await verifyEvidence(evidence, { workspace, values: explicit })).ok).toBe(true)
+    // A tasks.md reorder with the same covered set is not a coverage change.
+    expect(
+      (
+        await verifyEvidence(evidence, {
+          workspace,
+          values: { ...explicit, taskIds: [...covered].reverse() },
+        })
+      ).ok,
+    ).toBe(true)
     await rm(join(workspace, 'openspec', 'changes', 'auth', 'reviews', `${covered[1]}.json`))
     const partial = await verifyEvidence(evidence, { workspace, values: explicit })
     expect(partial).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })

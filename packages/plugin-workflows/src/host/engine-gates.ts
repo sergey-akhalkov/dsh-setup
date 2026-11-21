@@ -430,7 +430,7 @@ export function reviewUnitText(
   const settledNote =
     settled === undefined
       ? undefined
-      : `is settled on ${settled.verdict} at digest ${settled.digest.slice(0, 12)}… (record ${settled.recordPath})`
+      : `is settled on ${settled.verdict}${settled.failureClass === undefined ? '' : ` (${settled.failureClass})`} at digest ${settled.digest.slice(0, 12)}… (record ${settled.recordPath})`
   if (section === undefined) {
     const task = unit.missing[0]
     if (task === undefined) return `change "${change}" has no outstanding review unit`

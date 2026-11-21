@@ -1001,6 +1001,24 @@ describe('the review unit steer', () => {
     expect(text.length).toBeLessThanOrEqual(5000)
   })
 
+  it('names a settled ERROR class in the lane diagnostic', () => {
+    const task = { id: '0123456789abcdef', number: '1.1', text: 'Task', checked: true }
+    const unit: ReviewUnit = {
+      covered: [task],
+      missing: [task],
+      settled: {
+        verdict: 'ERROR',
+        digest: 'd'.repeat(64),
+        recordPath: '.dsh/workflows/records/task-review/change-a/tasks/0123456789abcdef.json',
+        failureClass: 'invalid-output',
+      },
+    }
+    const text = reviewUnitText('change-a', unit)
+    expect(text).toContain('settled on ERROR (invalid-output)')
+    expect(text).toContain('digest dddddddddddd…')
+    expect(text).toContain('start a fresh round')
+  })
+
   it('points the status line at a live section run instead of a new start', async () => {
     const root = await workspace(SECTIONED_PLAN)
     const unit = await firstUnit(root)

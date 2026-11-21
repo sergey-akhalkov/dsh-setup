@@ -3804,8 +3804,27 @@ describe('turn-close lane dispatch', () => {
             fix: 'add the test',
           },
         ],
+        // Published by another session's run: the settlement validates the
+        // record against that run's durable round evidence.
+        runId: 'run-session-2',
         target: { provider: 'codex-subagent' },
         time: '2026-11-20T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
+    const foreignRunPath = join(workspace, '.dsh', 'workflows', 'runs', 'run-session-2.json')
+    await mkdir(join(foreignRunPath, '..'), { recursive: true })
+    await writeFile(
+      foreignRunPath,
+      `${JSON.stringify({
+        id: 'run-session-2',
+        steps: [
+          {
+            id: 'review',
+            state: 'blocked',
+            evidence: { kind: 'record', path: recordPath, digest: recordDigest },
+          },
+        ],
       })}\n`,
       'utf8',
     )
@@ -3928,6 +3947,46 @@ describe('turn-close lane dispatch', () => {
       return stored?.steps[0]?.state === 'cancelled'
     })
     expect(await taskRuns(workspace)).toHaveLength(2)
+  })
+
+  it('names a settled lane ERROR class without a local run', async () => {
+    const workspace = await gitGateWorkspace(`# Tasks
+
+- [x] 1.1 Lane error task
+- [ ] 1.2 Later task
+`)
+    const host = await engineGateHost(workspace)
+    // Attribute the change to this session so its due lanes are evaluated.
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const taskId = taskIdOf('Lane error task')
+    const recordPath = `.dsh/workflows/records/task-review/auth/tasks/${taskId}.json`
+    await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks'), {
+      recursive: true,
+    })
+    await writeFile(
+      join(workspace, recordPath),
+      `${JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        digest: 'e'.repeat(64),
+        verdict: 'ERROR',
+        findings: [],
+        failureClass: 'invalid-output',
+        error: 'the reviewer returned prose only',
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-20T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const text = steered(host)
+    expect(text).toContain('settled on ERROR (invalid-output)')
+    expect(text).toContain('start a fresh round')
+    expect(await taskRuns(workspace)).toHaveLength(0)
   })
 
   it('names the start action of an unsettled due lane', async () => {

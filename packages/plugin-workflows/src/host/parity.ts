@@ -772,6 +772,8 @@ export interface ReviewUnitSettlement {
   readonly verdict: 'FINDINGS' | 'ERROR'
   readonly digest: string
   readonly recordPath: string
+  /** The terminal ERROR's failure class, when the verdict is `ERROR`. */
+  readonly failureClass?: string
 }
 
 /** One open task-review run the review-unit text may point at. */

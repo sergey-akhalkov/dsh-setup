@@ -473,6 +473,12 @@ export interface ReviewAttemptHandle {
  */
 export declare function beginReviewAttempt(input: ReviewRunInput): Promise<ReviewAttemptHandle>;
 /**
+ * A published verdict consumes the run's explicit-start bypass: the request
+ * asked for this round, and a later replacement of the shared record must not
+ * re-arm it after the intake reopens the step.
+ */
+export declare function consumeReviewRequest(run: WorkflowRun): WorkflowRun;
+/**
  * Publish one settled attempt: write the ERROR record or the verdict record
  * (and the committed approval first for a task PASS), then settle the step from
  * its own evidence. Only the scheduler's settled attempt reaches this.

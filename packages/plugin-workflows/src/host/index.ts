@@ -116,6 +116,7 @@ import { issueCompletionReceipt, listReceipts } from './receipts.js'
 import { definitionsRegistry, type WorkflowsDefinitionsService } from './registry.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
+  consumeReviewRequest,
   DEFAULT_REVIEW_TIMEOUT_MS,
   InputMutationError,
   provisionalReviewSteps,
@@ -918,6 +919,9 @@ function taskUnitSettlementOf(
       verdict: settled.verdict,
       digest: settled.digest,
       recordPath: settled.recordPath,
+      ...(settled.record.failureClass === undefined
+        ? {}
+        : { failureClass: settled.record.failureClass }),
     }
   }
 }
@@ -4051,7 +4055,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               settled: storedRound,
               now: journal.time(),
             })
-            return settledRun
+            return consumeReviewRequest(settledRun)
           }
         } else if (sectionValue !== undefined) {
           // An older section run retires when a newer round covers its checked

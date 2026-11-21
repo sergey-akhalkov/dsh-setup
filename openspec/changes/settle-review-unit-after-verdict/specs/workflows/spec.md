@@ -64,8 +64,8 @@ by a host restart, cancelled, or a failed start — MUST NOT count as a settled 
 
 #### Scenario: Explicit start begins a fresh round
 
-- **WHEN** a user or the model calls `workflows start` for a settled unit
-- **THEN** one round starts for that unit and no automatic path is required
+- **WHEN** a user or the model calls `workflows start` for a unit settled on `FINDINGS` or a terminal `ERROR`
+- **THEN** one round starts for that unit and no automatic path is required; a unit settled on a matching `PASS` still reuses that record instead of re-reviewing it
 
 #### Scenario: An explicit start settles after its verdict
 

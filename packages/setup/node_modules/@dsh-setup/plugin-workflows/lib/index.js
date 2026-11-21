@@ -29,7 +29,7 @@ import { registerActiveRunsContext } from './prompt.js';
 import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { definitionsRegistry } from './registry.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { DEFAULT_REVIEW_TIMEOUT_MS, InputMutationError, provisionalReviewSteps, readSettledReviewRound, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, reviewUnitKey, sectionReviewDigest, settleDuplicateReviewAttempt, settleStoredReviewRound, TASK_ID_PATTERN, } from './review.js';
+import { consumeReviewRequest, DEFAULT_REVIEW_TIMEOUT_MS, InputMutationError, provisionalReviewSteps, readSettledReviewRound, recordReviewFailure, resolveReviewer, resolveReviewers, resolveReviewQueue, resolveReviewTimeout, reviewDigest, reviewPhase, reviewUnitKey, sectionReviewDigest, settleDuplicateReviewAttempt, settleStoredReviewRound, TASK_ID_PATTERN, } from './review.js';
 import { supersedeInterruptedReviews } from './review-restart.js';
 import { ReviewScheduler } from './review-scheduler.js';
 import { changedInputPaths, createReviewSnapshot, discardReviewSnapshot, reviewedInputs, reviewInputTree, signatureHash, specInputs, } from './review-snapshot.js';
@@ -579,6 +579,9 @@ function taskUnitSettlementOf(workspace, definition, step) {
             verdict: settled.verdict,
             digest: settled.digest,
             recordPath: settled.recordPath,
+            ...(settled.record.failureClass === undefined
+                ? {}
+                : { failureClass: settled.record.failureClass }),
         };
     };
 }
@@ -3325,7 +3328,7 @@ export function apply(ctx, config = {}) {
                             settled: storedRound,
                             now: journal.time(),
                         });
-                        return settledRun;
+                        return consumeReviewRequest(settledRun);
                     }
                 }
                 else if (sectionValue !== undefined) {
