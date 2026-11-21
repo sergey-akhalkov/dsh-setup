@@ -344,6 +344,12 @@ export function triggerEventMatches(definition: Definition, event: DefinitionEve
   return filterMismatch(definition.trigger, event).mismatch === undefined
 }
 
+/** The change name a definition's own path or command template captures, if any. */
+export function triggerCapture(definition: Definition, event: DefinitionEvent): string | undefined {
+  if (definition.trigger.kind !== event.kind) return undefined
+  return filterMismatch(definition.trigger, event).capture
+}
+
 /** Evaluate one definition's trigger against one event. Pure and contained. */
 export function evaluateDefinitionTrigger(
   definition: Definition,

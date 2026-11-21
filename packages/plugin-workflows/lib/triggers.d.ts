@@ -110,6 +110,8 @@ export declare function obligationDedupeKey(definition: string, trigger: Definit
  * evaluated, so a caller can decide whether to gather per-definition facts.
  */
 export declare function triggerEventMatches(definition: Definition, event: DefinitionEvent): boolean;
+/** The change name a definition's own path or command template captures, if any. */
+export declare function triggerCapture(definition: Definition, event: DefinitionEvent): string | undefined;
 /** Evaluate one definition's trigger against one event. Pure and contained. */
 export declare function evaluateDefinitionTrigger(definition: Definition, event: DefinitionEvent, context: DefinitionEvaluationContext): DefinitionEvaluation;
 export interface StartRunOutcome {

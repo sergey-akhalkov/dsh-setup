@@ -327,14 +327,16 @@ export function reviewUnitText(change, unit, options = {}) {
         const task = unit.missing[0];
         if (task === undefined)
             return `change "${change}" has no outstanding review unit`;
+        // The settlement note leads the head: a long task text is what clampUnitText
+        // truncates, never the verdict, digest, or record the refusal must name.
         const head = settledNote === undefined
             ? `task "${task.number} ${task.text}" (${task.id}) has no ${rule} PASS`
-            : `task "${task.number} ${task.text}" (${task.id}) ${settledNote}`;
+            : `task (${task.id}) ${settledNote}; "${clipped(task.text, 80)}"`;
         return clampUnitText(head, action(`task: "${task.id}"`));
     }
     const head = settledNote === undefined
         ? `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) is one lane unit; covered checked tasks ${boundedNumbers(unit.covered)}; missing a ${rule} PASS: ${boundedNumbers(unit.missing)}`
-        : `section "${clipped(section.key, 40)}" (${clipped(section.title, 60)}) ${settledNote}; covered checked tasks ${boundedNumbers(unit.covered)}`;
+        : `section "${clipped(section.key, 40)}" ${settledNote}; "${clipped(section.title, 60)}"; covered checked tasks ${boundedNumbers(unit.covered)}`;
     return clampUnitText(head, action(`section: "${section.key}"`));
 }
 /**

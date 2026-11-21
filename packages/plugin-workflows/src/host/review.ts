@@ -1427,18 +1427,25 @@ export interface SettledReviewRound {
   readonly covered: readonly string[]
 }
 
-/** Failure classes that discarded their verdict: retryable, never a settled round. */
-const DISCARDED_REVIEW_FAILURES: ReadonlySet<string> = new Set([
-  'reviewed-inputs-changed',
-  'queue-internal-error',
-])
+/**
+ * Only an ERROR whose attempt produced output the reviewer contract could not
+ * accept is terminal. A start or transport failure (`child-limit`,
+ * `provider-not-started`, `timeout`, queue faults) and a discarded-input ERROR
+ * carry no verdict, so they never settle a round and the next close retries it.
+ */
+const TERMINAL_ERROR_CLASS = 'invalid-output'
 
 /**
  * The settled round of one review unit, read from the record at the path the
- * unit publishes to. It is well-formed and binds the verdict to the digest of
- * the round it reviewed; a section record covers exactly the unit's checked
- * task set. A discarded-input or queue-fault ERROR carries no verdict and does
- * not settle. `digests` may be lazy so an absent record costs no git work.
+ * unit publishes to. It is well-formed and belongs to the unit. A whole-scope
+ * verdict binds the digest the unit would prepare now (`digests`), because only
+ * a changed plan or worktree makes it due again. A task or section verdict is
+ * historical: it stays settled after later writes, so the record at the unit's
+ * path is authoritative for as long as its coverage matches. A section verdict
+ * must carry its section metadata and exactly the covered task ids. Only an
+ * `ERROR` whose attempt produced unusable output is terminal; a start,
+ * transport, or discarded-input failure carries no verdict and does not settle.
+ * `digests` may be lazy so an absent record costs no git work.
  */
 export async function readSettledReviewRound(input: {
   readonly workspace: string
@@ -1447,9 +1454,9 @@ export async function readSettledReviewRound(input: {
   readonly change: string
   /** The task or section record id; absent for a whole-scope unit. */
   readonly recordId?: string
-  /** Every digest the unit's current round would record; any match settles it. */
-  readonly digests: readonly string[] | (() => Promise<readonly string[]>)
-  /** The checked-task set a section record must cover. */
+  /** Every digest a whole-scope unit's current round would record. */
+  readonly digests?: readonly string[] | (() => Promise<readonly string[]>)
+  /** The checked-task set the unit covers; a task or section record must match it. */
   readonly covered?: readonly string[]
 }): Promise<SettledReviewRound | undefined> {
   const spec = input.step.review
@@ -1478,16 +1485,21 @@ export async function readSettledReviewRound(input: {
   if (record.change !== input.change || record.scope !== spec.scope) return undefined
   if (record.rule !== reviewIdentityOf(input.definition, input.step)) return undefined
   if (spec.scope === 'task' && record.taskId !== input.recordId) return undefined
-  if (record.verdict === 'ERROR' && DISCARDED_REVIEW_FAILURES.has(record.failureClass ?? '')) {
-    return undefined
+  if (record.verdict === 'ERROR' && record.failureClass !== TERMINAL_ERROR_CLASS) return undefined
+  if (spec.scope === 'task') {
+    // A task or section verdict is historical: the record at the unit's path is
+    // authoritative after later writes; coverage identifies the unit after task
+    // text or ticks change. A newer publication for the same unit replaces it.
+    if (input.covered !== undefined) {
+      if (record.taskIds === undefined) return undefined
+      const covered = [...record.taskIds].sort().join('\u0000')
+      if (covered !== [...input.covered].sort().join('\u0000')) return undefined
+    }
+  } else {
+    if (input.digests === undefined) return undefined
+    const digests = typeof input.digests === 'function' ? await input.digests() : input.digests
+    if (!digests.includes(record.digest)) return undefined
   }
-  if (record.section !== undefined) {
-    if (input.covered === undefined) return undefined
-    const covered = [...(record.taskIds ?? [])].sort().join('\u0000')
-    if (covered !== [...input.covered].sort().join('\u0000')) return undefined
-  }
-  const digests = typeof input.digests === 'function' ? await input.digests() : input.digests
-  if (!digests.includes(record.digest)) return undefined
   return {
     record,
     verdict: record.verdict,

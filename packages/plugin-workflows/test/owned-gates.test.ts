@@ -956,6 +956,28 @@ describe('the review unit steer', () => {
     )
   })
 
+  it('keeps a settled verdict, digest, and action when the task text is long', () => {
+    const long = 'x'.repeat(315)
+    const task = { id: '0123456789abcdef', number: '1.1', text: long, checked: true }
+    const unit: ReviewUnit = {
+      covered: [task],
+      missing: [task],
+      settled: {
+        verdict: 'FINDINGS',
+        digest: 'd'.repeat(64),
+        recordPath: '.dsh/workflows/records/task-review/change-a/tasks/0123456789abcdef.json',
+      },
+    }
+    const text = reviewUnitText('change-a', unit)
+    expect(text).toContain('settled on FINDINGS')
+    expect(text).toContain('digest dddddddddddd…')
+    expect(text).toContain(
+      'record .dsh/workflows/records/task-review/change-a/tasks/0123456789abcdef.json',
+    )
+    expect(text).toContain('start a fresh round')
+    expect(text.length).toBeLessThanOrEqual(470)
+  })
+
   it('points the status line at a live section run instead of a new start', async () => {
     const root = await workspace(SECTIONED_PLAN)
     const unit = await firstUnit(root)

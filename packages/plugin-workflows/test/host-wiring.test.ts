@@ -3740,30 +3740,27 @@ describe('turn-close lane dispatch', () => {
 - [ ] 1.3 Third engine task
 `)
     const host = await engineGateHost(workspace)
-    const { currentSpecDigest } = await import('../src/host/evidence.ts')
     const { sectionRecordId, taskIdOf, taskSections } = await import('../src/host/tasks.ts')
-    const { sectionReviewDigest } = await import('../src/host/review.ts')
-    const { reviewInputTree } = await import('../src/host/review-snapshot.ts')
-    const { defaultGit } = await import('../src/host/git.ts')
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
     // Attribute the change to this session so its due lanes are evaluated.
     await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    const recordsDir = join(
+      workspace,
+      '.dsh',
+      'workflows',
+      'records',
+      'task-review',
+      'auth',
+      'tasks',
+    )
+    await mkdir(recordsDir, { recursive: true })
     // A historical per-task PASS: a later write must not make it due again.
     const passedId = taskIdOf('Already reviewed')
-    await mkdir(join(workspace, '.dsh', 'workflows', 'records', 'task-review', 'auth', 'tasks'), {
-      recursive: true,
-    })
     await writeFile(
-      join(
-        workspace,
-        '.dsh',
-        'workflows',
-        'records',
-        'task-review',
-        'auth',
-        'tasks',
-        `${passedId}.json`,
-      ),
+      join(recordsDir, `${passedId}.json`),
       `${JSON.stringify({
         rule: 'task-review',
         change: 'auth',
@@ -3778,41 +3775,14 @@ describe('turn-close lane dispatch', () => {
       })}\n`,
       'utf8',
     )
-    const specDigest = await currentSpecDigest(workspace, 'auth')
-    if (specDigest === undefined) throw new Error('the change digest is missing')
     const plan = await readFile(join(changeDir, 'tasks.md'), 'utf8')
     const section = taskSections(plan).find((entry) => entry.key === '1')
     if (section === undefined) throw new Error('the lane section is missing')
     const recordId = sectionRecordId(section.key)
-    const sectionReview = {
-      key: section.key,
-      title: section.title,
-      recordId,
-      covered: section.covered.map((task) => ({
-        id: task.id,
-        number: task.number,
-        text: task.text,
-      })),
-      unchecked: [],
-    }
-    const tree = await reviewInputTree(
-      workspace,
-      { dir: changeDir },
-      defaultGit,
-      AbortSignal.timeout(60_000),
-    )
-    const digest = sectionReviewDigest(sectionReview, specDigest, tree)
+    const recordDigest = 'c'.repeat(64)
+    const recordPath = `.dsh/workflows/records/task-review/auth/tasks/${recordId}.json`
     await writeFile(
-      join(
-        workspace,
-        '.dsh',
-        'workflows',
-        'records',
-        'task-review',
-        'auth',
-        'tasks',
-        `${recordId}.json`,
-      ),
+      join(recordsDir, `${recordId}.json`),
       `${JSON.stringify({
         rule: 'task-review',
         change: 'auth',
@@ -3821,8 +3791,8 @@ describe('turn-close lane dispatch', () => {
         taskId: recordId,
         section: section.key,
         sectionTitle: section.title,
-        taskIds: sectionReview.covered.map((task) => task.id),
-        digest,
+        taskIds: section.covered.map((task) => task.id),
+        digest: recordDigest,
         verdict: 'FINDINGS',
         findings: [
           {
@@ -3838,10 +3808,41 @@ describe('turn-close lane dispatch', () => {
       })}\n`,
       'utf8',
     )
+    // A local blocked run with no executor exercises the close's own task
+    // branch: it is not live coverage, so the settled verdict surfaces instead
+    // of a silent waiting close.
+    const blocked = runs.createRun({
+      definition: 'task-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: {
+        name: 'auth',
+        taskId: recordId,
+        section: section.key,
+        sectionTitle: section.title,
+        taskIds: section.covered.map((task) => task.id),
+      },
+      steps: ['review', 'complete-review'],
+      id: 'run-lane-blocked',
+      now: 1_000,
+    })
+    await runs.writeRun(
+      workspace,
+      runs.settleStep(blocked, 'review', 'blocked', {
+        at: 1_100,
+        evidence: { kind: 'record', path: recordPath, digest: recordDigest },
+      }),
+      auth,
+    )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(steered(host)).toContain('settled on FINDINGS')
     expect(steered(host)).toContain('start a fresh round')
-    expect(await taskRuns(workspace)).toHaveLength(0)
+    expect(await taskRuns(workspace)).toHaveLength(1)
+    // An unrelated later write does not reopen the lane verdict.
+    await writeFile(join(workspace, 'README.md'), 'an unrelated write\n', 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(await taskRuns(workspace)).toHaveLength(1)
     // A newly checked task expands the lane's coverage and makes one round due.
     await writeFile(
       join(changeDir, 'tasks.md'),
@@ -3857,17 +3858,17 @@ describe('turn-close lane dispatch', () => {
 `,
       'utf8',
     )
-    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
-    await waitFor(async () => (await taskRuns(workspace)).length === 1)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+    await waitFor(async () => (await taskRuns(workspace)).length === 2)
     const started = await taskRuns(workspace)
-    const first = started[0]
+    const first = started.find((run) => run.id !== 'run-lane-blocked')
     expect(first?.context.section).toBe(section.key)
     const startedIds: string[] = []
     if (Array.isArray(first?.context.taskIds)) {
       for (const id of first.context.taskIds) if (typeof id === 'string') startedIds.push(id)
     }
     expect(startedIds.sort()).toEqual(
-      [...sectionReview.covered.map((task) => task.id), taskIdOf('Third engine task')].sort(),
+      [...section.covered.map((task) => task.id), taskIdOf('Third engine task')].sort(),
     )
     // The historical task PASS starts no round of its own.
     expect(started.some((run) => run.context.taskId === passedId)).toBe(false)

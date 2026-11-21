@@ -38,7 +38,7 @@ import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, incre
 import { hostSubagentRunner as buildSubagentRunner } from './subagent-adapter.js';
 import { checkedTaskIds, findTaskOf, isTaskChecked, numberedTasks, resolveTaskSection, sectionCoverage, sectionRecordId, taskLanes, taskOf, } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
-import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, forgetSettledTriggerKey, intentDedupeKey, obligationDedupeKey, triggerEventMatches, } from './triggers.js';
+import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, forgetSettledTriggerKey, intentDedupeKey, obligationDedupeKey, triggerCapture, triggerEventMatches, } from './triggers.js';
 import { attributedChangeNames } from './write-attribution.js';
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows';
@@ -529,75 +529,25 @@ async function settledWholeScopeOf(workspace, definition, step, change, timeoutM
     return readSettledReviewRound({ workspace, definition, step, change, digests });
 }
 /**
- * The task or section unit settlement resolver: the shared live digests are
- * computed once per change, and each unit's record is read first, so a unit
- * without a record costs no git work. A whole-scope record is not a lane verdict.
+ * The task or section unit settlement resolver. A lane verdict is historical:
+ * it settles the unit as long as the record is well-formed for its record path
+ * and, for a section, covers exactly the unit's checked-task set. A later write
+ * never reopens it, and an absent record costs no git work.
  */
-function taskUnitSettlementOf(workspace, definition, step, timeoutMs) {
-    const cache = new Map();
-    const shared = async (change) => {
-        const cached = cache.get(change);
-        if (cached !== undefined)
-            return cached;
-        const specDigest = await currentSpecDigest(workspace, change);
-        const changeDir = join(workspace, 'openspec', 'changes', change);
-        const tree = await reviewInputTree(workspace, { dir: changeDir }, defaultGit, AbortSignal.timeout(timeoutMs)).catch(() => undefined);
-        const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
-        const value = {
-            ...(specDigest === undefined ? {} : { specDigest }),
-            ...(tree === undefined ? {} : { tree }),
-            ...(liveTree === undefined ? {} : { liveTree }),
-        };
-        cache.set(change, value);
-        return value;
-    };
+function taskUnitSettlementOf(workspace, definition, step) {
     return async (change, unit) => {
         if (!CHANGE_NAME.test(change))
             return undefined;
         const recordId = unit.section === undefined ? unit.missing[0]?.id : sectionRecordId(unit.section.key);
         if (recordId === undefined)
             return undefined;
-        const section = unit.section === undefined
-            ? undefined
-            : {
-                key: unit.section.key,
-                title: unit.section.title,
-                recordId,
-                covered: unit.covered.map((task) => ({
-                    id: task.id,
-                    number: task.number,
-                    text: task.text,
-                })),
-                unchecked: [],
-            };
-        const digests = async () => {
-            const live = await shared(change);
-            if (live.specDigest === undefined)
-                return [];
-            const values = new Set();
-            const add = (tree) => {
-                values.add(section === undefined
-                    ? reviewDigest({
-                        scope: 'task',
-                        specDigest: live.specDigest,
-                        ...(tree === undefined ? {} : { tree }),
-                        artifactDigest: live.specDigest,
-                    })
-                    : sectionReviewDigest(section, live.specDigest, tree));
-            };
-            add(live.tree);
-            add(live.liveTree);
-            add(undefined);
-            return [...values];
-        };
         const settled = await readSettledReviewRound({
             workspace,
             definition,
             step,
             change,
             recordId,
-            digests,
-            ...(section === undefined ? {} : { covered: section.covered.map((task) => task.id) }),
+            ...(unit.section === undefined ? {} : { covered: unit.covered.map((task) => task.id) }),
         });
         if (settled === undefined || settled.verdict === 'PASS')
             return undefined;
@@ -717,7 +667,7 @@ async function reviewCloseStatus(workspace, change, definition, step, run, openR
             return { uncovered: [], live: [siblingLiveRunId] };
         return undefined;
     }
-    const units = await reviewUnits(workspace, change, taskUnitSettlementOf(workspace, definition, step, timeoutMs));
+    const units = await reviewUnits(workspace, change, taskUnitSettlementOf(workspace, definition, step));
     if (units === undefined)
         return undefined;
     const rule = reviewerBinding(workspace)?.taskRule;
@@ -1734,6 +1684,7 @@ export function apply(ctx, config = {}) {
                         if (!triggerEventMatches(definition, definitionEvent))
                             continue;
                         const suppressedChange = definitionEvent.name ??
+                            triggerCapture(definition, definitionEvent) ??
                             (definition.trigger.condition === undefined ? undefined : currentChange);
                         if (suppressedChange === undefined)
                             continue;
@@ -3298,40 +3249,21 @@ export function apply(ctx, config = {}) {
                         : { section: sectionValue ?? section }),
                 });
                 const recordId = section?.recordId ?? task?.id;
-                // A stored verdict settles this unit before any reviewer starts: a
-                // whole-scope unit at its live prepared digest, a task or section unit at
-                // the digest its snapshot (or fallback) would record. See the round
-                // comparison in `readSettledReviewRound`.
-                const reviewScope = spec.scope;
-                const roundDigests = async () => {
-                    const snapshotTree = reviewScope === 'task' || bindsWorktree
+                // A stored verdict settles this unit before any reviewer starts. A
+                // whole-scope round is due only at its live prepared digest; a task or
+                // section round is historical and is matched by the record at the unit's
+                // path and the covered checked-task set. See `readSettledReviewRound`.
+                const wholeDigests = async () => {
+                    const snapshotTree = bindsWorktree
                         ? await reviewInputTree(workspace, { dir: changeDir }, defaultGit, AbortSignal.timeout(reviewTimeoutMs)).catch(() => undefined)
                         : undefined;
-                    if (reviewScope !== 'task') {
-                        return [
-                            reviewDigest({
-                                scope: 'whole',
-                                specDigest,
-                                ...(snapshotTree === undefined ? {} : { tree: snapshotTree }),
-                            }),
-                        ];
-                    }
-                    const liveTree = await worktreeDigest(workspace, defaultGit).catch(() => undefined);
-                    const values = new Set();
-                    const add = (tree) => {
-                        values.add(sectionValue === undefined
-                            ? reviewDigest({
-                                scope: 'task',
-                                specDigest,
-                                ...(tree === undefined ? {} : { tree }),
-                                artifactDigest: specDigest,
-                            })
-                            : sectionReviewDigest(sectionValue, specDigest, tree));
-                    };
-                    add(snapshotTree);
-                    add(liveTree);
-                    add(undefined);
-                    return [...values];
+                    return [
+                        reviewDigest({
+                            scope: 'whole',
+                            specDigest,
+                            ...(snapshotTree === undefined ? {} : { tree: snapshotTree }),
+                        }),
+                    ];
                 };
                 const storedRound = await readSettledReviewRound({
                     workspace,
@@ -3339,7 +3271,7 @@ export function apply(ctx, config = {}) {
                     step,
                     change,
                     ...(recordId === undefined ? {} : { recordId }),
-                    digests: roundDigests,
+                    ...(spec.scope === 'task' ? {} : { digests: wholeDigests }),
                     ...(sectionValue === undefined
                         ? {}
                         : { covered: sectionValue.covered.map((entry) => entry.id) }),
@@ -4736,7 +4668,7 @@ export function apply(ctx, config = {}) {
                 const taskReviewStep = taskReview.steps.find((entry) => entry.executor === 'review');
                 if (taskReviewStep === undefined)
                     return;
-                const settledUnitOf = taskUnitSettlementOf(workspace, taskReview, taskReviewStep, reviewTimeoutMs);
+                const settledUnitOf = taskUnitSettlementOf(workspace, taskReview, taskReviewStep);
                 const taskIdsOf = (values) => Array.isArray(values.taskIds)
                     ? values.taskIds.filter((id) => typeof id === 'string')
                     : typeof values.taskId === 'string'
@@ -5078,9 +5010,10 @@ export function apply(ctx, config = {}) {
             // round is explicitly requested.
             if (!refusedThisClose && !stopped()) {
                 const involved = await involvedChangesOf(workspace, sessionId, payload.turn);
+                const ownedReviewStep = (definition, step) => resolveOwnership(definition, legacy.installed, legacy.enabled).steps.some((entry) => entry.id === step.id && entry.ownership === 'own');
                 for (const definition of definitions) {
                     const settledStep = wholeScopeReviewStepOf(definition);
-                    if (settledStep === undefined)
+                    if (settledStep === undefined || !ownedReviewStep(definition, settledStep))
                         continue;
                     for (const name of [...involved].sort()) {
                         if (!CHANGE_NAME.test(name) || archivedChanges.has(name))
@@ -5104,19 +5037,36 @@ export function apply(ctx, config = {}) {
                         break;
                 }
                 // A settled lane unit refuses too: its start is suppressed, so no
-                // local review run exists to surface the verdict through.
+                // local review run exists to surface the verdict through. A unit an
+                // explicit retry already covers stays a silent waiting close.
                 const taskSettlement = definitions.find((entry) => entry.id === 'task-review');
                 const taskSettlementStep = taskSettlement?.steps.find((entry) => entry.executor === 'review');
                 if (!refusedThisClose &&
                     taskSettlement !== undefined &&
-                    taskSettlementStep !== undefined) {
-                    const settledUnitOf = taskUnitSettlementOf(workspace, taskSettlement, taskSettlementStep, reviewTimeoutMs);
+                    taskSettlementStep !== undefined &&
+                    ownedReviewStep(taskSettlement, taskSettlementStep)) {
+                    const settledUnitOf = taskUnitSettlementOf(workspace, taskSettlement, taskSettlementStep);
                     const rule = reviewerBinding(workspace)?.taskRule;
+                    const currentRuns = runs.map((entry) => advanced.get(entry.id) ?? entry);
+                    const taskOpenRuns = currentRuns
+                        .filter((entry) => entry.definition.id === 'task-review' &&
+                        (reviewLive(entry) ||
+                            reviewLivenessOf(workspace, entry, definitions)?.state === 'waiting'))
+                        .map((entry) => ({
+                        id: entry.id,
+                        change: String(entry.context.name ?? ''),
+                        context: entry.context,
+                    }));
                     for (const name of [...involved].sort()) {
                         if (!CHANGE_NAME.test(name) || archivedChanges.has(name))
                             continue;
                         const units = (await reviewUnits(workspace, name, settledUnitOf)) ?? [];
-                        const settledUnit = units.find((entry) => entry.settled !== undefined);
+                        const settledUnit = units.find((entry) => {
+                            if (entry.settled === undefined)
+                                return false;
+                            const covered = liveUnitRuns(name, entry, taskOpenRuns, sectionUnitIdentity(name, entry) !== undefined);
+                            return covered.length === 0;
+                        });
                         if (settledUnit === undefined)
                             continue;
                         steer(`the close is refused: rule "${rule ?? 'task-review'}": ${reviewUnitText(name, settledUnit, { ...(rule === undefined ? {} : { rule }) })}`);

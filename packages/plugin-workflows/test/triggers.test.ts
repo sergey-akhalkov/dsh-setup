@@ -13,6 +13,8 @@ import {
   type IntentClassification,
   loadCatalog,
   obligationDedupeKey,
+  triggerCapture,
+  triggerEventMatches,
   validateCatalog,
 } from '../src/host/triggers.ts'
 
@@ -718,6 +720,73 @@ it('captures the name from a path glob and passes it to the run start', () => {
   )
   expect(rows[0]).toMatchObject({ matched: true, reason: 'run-created', capture: 'auth' })
   expect(captures).toEqual(['auth'])
+})
+
+describe('trigger capture for a settlement pre-pass', () => {
+  it('captures the change a path trigger names and matches its event kind and filter', () => {
+    const definition = validateDefinition({
+      v: 1,
+      id: 'path-review',
+      name: 'Path review',
+      version: 1,
+      trigger: {
+        kind: 'fs.change',
+        match: { path: 'openspec/changes/{name}/design.md' },
+        mode: 'active',
+        dedupe: 'path+content-hash',
+      },
+      settings: {
+        allowModelStart: true,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        gate: 'review',
+        gateIdentity: 'path-review',
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Review',
+          executor: 'review',
+          review: { target: 'codex', instruction: 'review-spec', scope: 'whole', phase: 'spec' },
+          evidence: {
+            kind: 'record',
+            rule: 'path-review',
+            change: '{name}',
+            phase: 'spec',
+            scope: 'whole',
+            verdicts: ['PASS', 'ERROR'],
+            digest: 'current',
+            path: '.dsh/workflows/records/path-review/{name}/spec.json',
+          },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    })
+    const event: DefinitionEvent = {
+      kind: 'fs.change',
+      subject: 'openspec/changes/auth/design.md',
+      path: 'openspec/changes/auth/design.md',
+    }
+    expect(triggerEventMatches(definition, event)).toBe(true)
+    expect(triggerCapture(definition, event)).toBe('auth')
+    expect(
+      triggerEventMatches(definition, {
+        kind: 'fs.change',
+        subject: 'openspec/changes/auth/tasks.md',
+        path: 'openspec/changes/auth/tasks.md',
+      }),
+    ).toBe(false)
+    expect(
+      triggerCapture(definition, {
+        kind: 'fs.change',
+        subject: 'openspec/changes/auth/tasks.md',
+        path: 'openspec/changes/auth/tasks.md',
+      }),
+    ).toBeUndefined()
+  })
 })
 
 describe('settled trigger keys', () => {

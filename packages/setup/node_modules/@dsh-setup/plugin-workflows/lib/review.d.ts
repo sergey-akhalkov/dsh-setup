@@ -389,10 +389,15 @@ export interface SettledReviewRound {
 }
 /**
  * The settled round of one review unit, read from the record at the path the
- * unit publishes to. It is well-formed and binds the verdict to the digest of
- * the round it reviewed; a section record covers exactly the unit's checked
- * task set. A discarded-input or queue-fault ERROR carries no verdict and does
- * not settle. `digests` may be lazy so an absent record costs no git work.
+ * unit publishes to. It is well-formed and belongs to the unit. A whole-scope
+ * verdict binds the digest the unit would prepare now (`digests`), because only
+ * a changed plan or worktree makes it due again. A task or section verdict is
+ * historical: it stays settled after later writes, so the record at the unit's
+ * path is authoritative for as long as its coverage matches. A section verdict
+ * must carry its section metadata and exactly the covered task ids. Only an
+ * `ERROR` whose attempt produced unusable output is terminal; a start,
+ * transport, or discarded-input failure carries no verdict and does not settle.
+ * `digests` may be lazy so an absent record costs no git work.
  */
 export declare function readSettledReviewRound(input: {
     readonly workspace: string;
@@ -401,9 +406,9 @@ export declare function readSettledReviewRound(input: {
     readonly change: string;
     /** The task or section record id; absent for a whole-scope unit. */
     readonly recordId?: string;
-    /** Every digest the unit's current round would record; any match settles it. */
-    readonly digests: readonly string[] | (() => Promise<readonly string[]>);
-    /** The checked-task set a section record must cover. */
+    /** Every digest a whole-scope unit's current round would record. */
+    readonly digests?: readonly string[] | (() => Promise<readonly string[]>);
+    /** The checked-task set the unit covers; a task or section record must match it. */
     readonly covered?: readonly string[];
 }): Promise<SettledReviewRound | undefined>;
 /**

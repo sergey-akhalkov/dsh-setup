@@ -160,6 +160,8 @@ interface FakeHost {
   readonly injected: number[]
   /** Turns started by claiming a queued gate message. */
   readonly resumedTurns: number[]
+  /** The model tool definitions the host registered (the `workflows` tool). */
+  readonly toolDefinitions: Array<Record<string, unknown>>
   /** The gate messages still queued for the agent to claim. */
   pendingCount(): number
   /** What the agent loop does next: claim one queued message and start its turn. */
@@ -173,6 +175,7 @@ function fakeHost(workspace: string, reviewer: ScriptedReviewer, withReviewer = 
   const removed: string[] = []
   const injected: number[] = []
   const resumedTurns: number[] = []
+  const toolDefinitions: Array<Record<string, unknown>> = []
   // A real pending inbox: a steer queues its message id, a claim starts a turn,
   // and a removal deletes exactly that queued message.
   const queued = new Map<string, unknown>()
@@ -216,7 +219,13 @@ function fakeHost(workspace: string, reviewer: ScriptedReviewer, withReviewer = 
       }
       if (name === 'connection') return { fetch: { register: () => () => {} } }
       if (name === 'tools') {
-        return { get: () => undefined, register: () => () => {} }
+        return {
+          get: () => undefined,
+          register: (definition: unknown) => {
+            toolDefinitions.push(definition as Record<string, unknown>)
+            return () => {}
+          },
+        }
       }
       if (name === 'commands') return { register: () => () => {} }
       if (name === 'systemPrompt') return { context: () => () => {} }
@@ -236,7 +245,10 @@ function fakeHost(workspace: string, reviewer: ScriptedReviewer, withReviewer = 
       listeners.set(name, list)
       return () => {}
     },
-    effect: () => () => {},
+    effect(callback: () => () => void): () => void {
+      callback()
+      return () => {}
+    },
   }
   return {
     ctx,
@@ -245,6 +257,7 @@ function fakeHost(workspace: string, reviewer: ScriptedReviewer, withReviewer = 
     removed,
     injected,
     resumedTurns,
+    toolDefinitions,
     pendingCount: () => queued.size,
     claimInbox: () => (agent.inbox.claim as () => unknown)(),
     emit: async (name, ...args) => {
@@ -376,8 +389,10 @@ describe('local acceptance: the lane review loop', () => {
       (JSON.parse(await readFile(integrationRecord, 'utf8')) as { verdict: string }).verdict,
     ).toBe('PASS')
 
-    // Close 2: a code fix leaves lane one due at the same unit key, and the
-    // integration PASS is now stale against the changed worktree.
+    // Close 2: the lane FINDINGS is historical — a code fix does not restart it;
+    // the close refuses with the verdict and the documented explicit remedy. The
+    // integration PASS is now stale against the changed worktree and starts one
+    // round of its own.
     const laneOneKey = firstRound.find((entry) => entry.key.endsWith(':section:1'))?.key
     await writeFile(join(workspace, 'src', 'lane.txt'), 'lane one fixed\n', 'utf8')
     await waitFor(
@@ -386,12 +401,34 @@ describe('local acceptance: the lane review loop', () => {
           .length === 0,
     )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
-    await waitFor(() => reviewer.activations.length >= 6, 60_000)
+    await waitFor(() => reviewer.activations.length >= 5, 60_000)
     const secondRound = reviewer.activations.slice(firstRound.length)
-    const laneOneAgain = secondRound.find((entry) => entry.key === laneOneKey && entry.round === 2)
+    expect(secondRound.filter((entry) => entry.key === laneOneKey)).toHaveLength(0)
+    const refusal = host.steers
+      .map((message) => (message.content ?? []).map((block) => block.text ?? '').join(''))
+      .join('\n')
+    expect(refusal).toContain('settled on FINDINGS')
+    expect(refusal).toContain('start a fresh round')
+    // The documented remedy starts exactly one fresh lane round on its unit key.
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          execute: (
+            args: Record<string, unknown>,
+            context: { agent: unknown },
+          ) => Promise<{ text?: string }>
+        }
+      | undefined
+    const started = await tool?.execute(
+      { action: 'start', definitionId: 'task-review', change: CHANGE, section: '1' },
+      { agent: host.agent },
+    )
+    expect(started?.text).toContain('started')
+    await waitFor(() => reviewer.activations.length >= 6, 60_000)
+    const laneOneAgain = reviewer.activations.find(
+      (entry) => entry.key === laneOneKey && entry.round === 2,
+    )
     expect(laneOneAgain).toBeDefined()
     expect(laneOneAgain?.key).toBe(laneOneKey)
-    expect(host.steers).toHaveLength(0)
     laneOneAgain?.release()
     secondRound
       .find((entry) => entry.key.endsWith(':whole:integration') && entry.round === 2)
@@ -453,6 +490,7 @@ describe('local acceptance: the lane review loop', () => {
 
     // A user stop wins over the close: the aborted close starts nothing.
     const beforeStop = reviewer.activations.length
+    const steersBeforeStop = host.steers.length
     const controller = new AbortController()
     controller.abort()
     await host.emit('agent/turn-stopping', {
@@ -461,7 +499,7 @@ describe('local acceptance: the lane review loop', () => {
       signal: controller.signal,
     })
     expect(reviewer.activations).toHaveLength(beforeStop)
-    expect(host.steers).toHaveLength(0)
+    expect(host.steers).toHaveLength(steersBeforeStop)
     expect(host.injected).toHaveLength(0)
     report.scenarios.push({
       scenario: 'lane review loop',

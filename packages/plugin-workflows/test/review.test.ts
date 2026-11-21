@@ -2568,7 +2568,7 @@ describe('duplicate review settlement', () => {
 })
 
 describe('settled review round', () => {
-  it('accepts a task record at its round digest and rejects another digest', async () => {
+  it('takes the newest record at the unit path as the settled round', async () => {
     const root = await workspace()
     roots.push(root)
     const definition = taskDefinition()
@@ -2581,7 +2581,6 @@ describe('settled review round', () => {
       step,
       change: 'auth',
       recordId: TASK_ID,
-      digests: [TASK_DIGEST],
     })
     expect(matched).toMatchObject({
       verdict: 'FINDINGS',
@@ -2589,6 +2588,14 @@ describe('settled review round', () => {
       recordPath: taskRecordPath(),
       covered: [TASK_ID],
     })
+    // A newer publication for the same unit replaces the settled verdict; the
+    // older run must not keep dispatching reviewers behind it.
+    const newer = focusedDigest(TREE_AFTER)
+    await writeRecordFile(
+      root,
+      taskRecordPath(),
+      settledTaskRecord({ digest: newer, verdict: 'PASS', findings: [] }),
+    )
     expect(
       await readSettledReviewRound({
         workspace: root,
@@ -2596,17 +2603,17 @@ describe('settled review round', () => {
         step,
         change: 'auth',
         recordId: TASK_ID,
-        digests: [focusedDigest(TREE_AFTER)],
       }),
-    ).toBeUndefined()
+    ).toMatchObject({ verdict: 'PASS', digest: newer })
   })
 
-  it('accepts a fallback record at the live worktree digest', async () => {
+  it('keeps a task record settled after an unrelated later write', async () => {
     const root = await workspace()
     roots.push(root)
     const definition = taskDefinition()
     const step = definition.steps[0]
     if (step === undefined) throw new Error('test step missing')
+    // The record binds the old round; the live worktree has since moved.
     const fallback = focusedDigest(TREE_BEFORE)
     await writeRecordFile(root, taskRecordPath(), settledTaskRecord({ digest: fallback }))
     const settled = await readSettledReviewRound({
@@ -2615,12 +2622,12 @@ describe('settled review round', () => {
       step,
       change: 'auth',
       recordId: TASK_ID,
-      digests: async () => [TASK_DIGEST, fallback],
+      // No live digest is consulted for task scope.
     })
     expect(settled?.digest).toBe(fallback)
   })
 
-  it('rejects a section record whose covered set changed', async () => {
+  it('rejects a section record with changed coverage or missing metadata', async () => {
     const root = await workspace()
     roots.push(root)
     const definition = taskDefinition()
@@ -2641,22 +2648,19 @@ describe('settled review round', () => {
       unchecked: [],
     }
     const digest = sectionReviewDigest(section, DIGEST, TREE_BEFORE)
-    await writeRecordFile(
-      root,
-      localReviewRecordPath({
-        definition: 'task-review',
-        change: 'auth',
-        scope: 'task',
-        taskId: recordId,
-      }),
-      {
-        ...settledTaskRecord({ digest }),
-        taskId: recordId,
-        section: sectionKey,
-        sectionTitle: section.title,
-        taskIds: covered,
-      },
-    )
+    const recordPath = localReviewRecordPath({
+      definition: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId: recordId,
+    })
+    await writeRecordFile(root, recordPath, {
+      ...settledTaskRecord({ digest }),
+      taskId: recordId,
+      section: sectionKey,
+      sectionTitle: section.title,
+      taskIds: covered,
+    })
     expect(
       await readSettledReviewRound({
         workspace: root,
@@ -2664,7 +2668,6 @@ describe('settled review round', () => {
         step,
         change: 'auth',
         recordId,
-        digests: [digest],
         covered,
       }),
     ).toMatchObject({ digest, covered })
@@ -2675,8 +2678,58 @@ describe('settled review round', () => {
         step,
         change: 'auth',
         recordId,
-        digests: [digest],
         covered: covered.slice(0, 1),
+      }),
+    ).toBeUndefined()
+    // A record that drops its section metadata cannot cover a section unit.
+    await writeRecordFile(root, recordPath, settledTaskRecord({ digest, taskId: recordId }))
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        recordId,
+        covered,
+      }),
+    ).toBeUndefined()
+  })
+
+  it.each([
+    'child-limit',
+    'provider-not-started',
+    'config',
+    'permission',
+    'timeout',
+    'unknown',
+    'queue-full',
+    'queue-timeout',
+    'queue-internal-error',
+    'reviewed-inputs-changed',
+  ])('does not settle a verdict-less %s ERROR', async (failureClass) => {
+    const root = await workspace()
+    roots.push(root)
+    const definition = wholeDefinition()
+    const step = definition.steps[0]
+    if (step === undefined) throw new Error('test step missing')
+    const path = '.dsh/workflows/records/spec-review/auth/spec.json'
+    await writeRecordFile(root, path, {
+      ...settledTaskRecord({ digest: DIGEST, verdict: 'ERROR', findings: [] }),
+      definition: 'spec-review',
+      rule: 'spec-review',
+      phase: 'spec',
+      scope: 'whole',
+      taskId: undefined,
+      failureClass,
+      error: 'the attempt ended without a verdict',
+    })
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        digests: [DIGEST],
       }),
     ).toBeUndefined()
   })
@@ -2689,6 +2742,26 @@ describe('settled review round', () => {
     if (step === undefined) throw new Error('test step missing')
     const path = '.dsh/workflows/records/spec-review/auth/spec.json'
     await writeRecordFile(root, path, { verdict: 'FINDINGS' })
+    expect(
+      await readSettledReviewRound({
+        workspace: root,
+        definition,
+        step,
+        change: 'auth',
+        digests: [DIGEST],
+      }),
+    ).toBeUndefined()
+    // A start or transport failure carries no verdict: it never settles a round.
+    await writeRecordFile(root, path, {
+      ...settledTaskRecord({ digest: DIGEST, verdict: 'ERROR', findings: [] }),
+      definition: 'spec-review',
+      rule: 'spec-review',
+      phase: 'spec',
+      scope: 'whole',
+      taskId: undefined,
+      failureClass: 'child-limit',
+      error: 'subagent limit reached',
+    })
     expect(
       await readSettledReviewRound({
         workspace: root,
@@ -2782,8 +2855,8 @@ describe('stored verdict settlement', () => {
         record: settledTaskRecord({
           verdict: 'ERROR',
           findings: [],
-          failureClass: 'timeout',
-          error: 'the reviewer timed out',
+          failureClass: 'invalid-output',
+          error: 'the reviewer returned prose only',
         }),
         verdict: 'ERROR',
         digest: TASK_DIGEST,
@@ -2794,8 +2867,8 @@ describe('stored verdict settlement', () => {
     })
     expect(failed.steps.find((entry) => entry.id === 'review')).toMatchObject({
       state: 'failed',
-      failureClass: 'timeout',
-      reason: expect.stringContaining('ERROR (timeout)'),
+      failureClass: 'invalid-output',
+      reason: expect.stringContaining('ERROR (invalid-output)'),
     })
   })
 

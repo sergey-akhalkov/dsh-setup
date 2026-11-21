@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "settle-review-unit-after-verdict",
+  "scope": "task",
+  "taskId": "0accf8f6ecda5049",
+  "digest": "73152f56d5287c3dab99accd6ee253fe02072872a5376f9039737988c89967c4",
+  "worktreeDigest": "e918e7e19cf58ec811715332aafe30ae4dd2c1e036b2e7b7e39dd94f39f10cce",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-21T19:36:01.270Z"
+}

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { validateDefinition } from '../src/host/definitions.ts'
 import { currentSpecDigest, reviewDigest } from '../src/host/evidence.ts'
 import { SOFT_SETTLEMENT } from '../src/host/gates.ts'
@@ -13,8 +13,15 @@ import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
 import { issueAdoptionReceipt, readReceipt } from '../src/host/receipts.ts'
 import { definitionsRegistry } from '../src/host/registry.ts'
+import { ReviewScheduler } from '../src/host/review-scheduler.ts'
 import { reviewInputTree } from '../src/host/review-snapshot.ts'
-import { createRun, readAuthenticatedRun, settleStep, writeRun } from '../src/host/runs.ts'
+import {
+  createRun,
+  listAuthenticatedRuns,
+  readAuthenticatedRun,
+  settleStep,
+  writeRun,
+} from '../src/host/runs.ts'
 import { sectionRecordId, taskIdOf } from '../src/host/tasks.ts'
 
 /**
@@ -154,6 +161,8 @@ interface DelayedReviewHost {
   readonly releases: Array<() => void>
   /** The steer texts the host sent to the session-1 agent. */
   readonly steers: string[]
+  /** The model tool definitions the host registered (the `workflows` tool). */
+  readonly toolDefinitions: Array<Record<string, unknown>>
   /** Resolves when a released activation is disposed, i.e. teardown is confirmed. */
   readonly disposed: Promise<void>
   emit(name: string, ...args: unknown[]): Promise<unknown>
@@ -173,6 +182,7 @@ function delayedReviewHost(workspace: string, verdict: 'PASS' | 'FINDINGS'): Del
   const digests: string[] = []
   const releases: Array<() => void> = []
   const steers: string[] = []
+  const toolDefinitions: Array<Record<string, unknown>> = []
   let confirmDispose: (() => void) | undefined
   const disposed = new Promise<void>((resolve) => {
     confirmDispose = resolve
@@ -251,6 +261,15 @@ function delayedReviewHost(workspace: string, verdict: 'PASS' | 'FINDINGS'): Del
         }
       }
       if (name === 'systemPrompt') return { context: () => () => {} }
+      if (name === 'tools') {
+        return {
+          get: () => undefined,
+          register: (definition: unknown) => {
+            toolDefinitions.push(definition as Record<string, unknown>)
+            return () => {}
+          },
+        }
+      }
       return undefined
     },
     provide: () => {},
@@ -260,14 +279,17 @@ function delayedReviewHost(workspace: string, verdict: 'PASS' | 'FINDINGS'): Del
       listeners.set(name, list)
       return () => {}
     },
-    effect: () => () => {},
+    effect(callback: () => () => void): () => void {
+      callback()
+      return () => {}
+    },
   }
   const emit = async (name: string, ...args: unknown[]): Promise<unknown> => {
     let result: unknown
     for (const listener of listeners.get(name) ?? []) result = await listener(...args)
     return result
   }
-  return { ctx, agent, digests, releases, steers, disposed, emit }
+  return { ctx, agent, digests, releases, steers, toolDefinitions, disposed, emit }
 }
 
 describe('native review host admission', () => {
@@ -844,7 +866,7 @@ describe('native review host admission', () => {
     await mkdir(recordDir, { recursive: true })
     await writeFile(
       join(recordDir, 'spec.json'),
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'ERROR', digest: reviewDigest({ scope: 'whole', specDigest: digest }), findings: [], failureClass: 'timeout', error: 'the reviewer timed out', time: '2026-11-17T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'ERROR', digest: reviewDigest({ scope: 'whole', specDigest: digest }), findings: [], failureClass: 'invalid-output', error: 'the reviewer returned prose only', time: '2026-11-17T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
       'utf8',
     )
     const host = delayedReviewHost(workspace, 'PASS')
@@ -864,7 +886,7 @@ describe('native review host admission', () => {
     // A stored terminal ERROR at the current digest settles the step failed: no
     // new reviewer starts for the same snapshot, and the reason names the verdict.
     expect(settled?.steps[0]?.state).toBe('failed')
-    expect(settled?.steps[0]?.reason).toContain('settled on ERROR (timeout)')
+    expect(settled?.steps[0]?.reason).toContain('settled on ERROR (invalid-output)')
     // Give a stray reviewer publication the chance to appear before asserting none did.
     await new Promise((resolve) => setTimeout(resolve, 200))
     const record = JSON.parse(await readFile(join(recordDir, 'spec.json'), 'utf8')) as {
@@ -1460,6 +1482,27 @@ describe('review round settlement', () => {
       await new Promise((resolve) => setTimeout(resolve, 200))
       expect(host.releases).toHaveLength(1)
       expect(host.digests).toHaveLength(1)
+      const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+        | {
+            execute: (
+              args: Record<string, unknown>,
+              context: { agent: unknown },
+            ) => Promise<{ text?: string }>
+          }
+        | undefined
+      // The status keeps the existing orphaned token and names the verdict in
+      // the step reason; no new liveness token appears.
+      const status = await tool?.execute({ action: 'status', runId: run.id }, { agent: host.agent })
+      expect(status?.text).toContain('review orphaned')
+      expect(status?.text).toContain('FINDINGS')
+      // An explicit start for the settled unit dispatches exactly one reviewer.
+      const started = await tool?.execute(
+        { action: 'start', definitionId: definition.id, change: 'auth' },
+        { agent: host.agent },
+      )
+      expect(started?.text).toContain('started')
+      await waitFor(() => host.releases.length === 2)
+      expect(host.digests).toHaveLength(2)
     } finally {
       unregister()
     }
@@ -1600,4 +1643,292 @@ describe('review round settlement', () => {
       }
     },
   )
+
+  it('settles a stored fallback PASS without a reviewer', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await sectionWorkspace()
+    await writeFile(join(workspace, '.gitignore'), '.dsh/\n!.dsh/\n', 'utf8')
+    const definition = reviewDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const recordId = sectionRecordId(SECTION.key)
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        definition.id,
+        'auth',
+        'tasks',
+        `${recordId}.json`,
+      )
+      await mkdir(join(recordPath, '..'), { recursive: true })
+      await writeFile(
+        recordPath,
+        `${JSON.stringify({
+          definition: definition.id,
+          rule: definition.id,
+          change: 'auth',
+          phase: 'task',
+          scope: 'task',
+          taskId: recordId,
+          section: SECTION.key,
+          sectionTitle: SECTION.title,
+          taskIds: SECTION_IDS,
+          digest: 'e'.repeat(64),
+          worktreeDigest: 'f'.repeat(64),
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          reviewer: 'codex',
+          time: '2026-01-01T00:00:00.000Z',
+        })}\n`,
+        'utf8',
+      )
+      const run = createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: {
+          name: 'auth',
+          taskId: recordId,
+          section: SECTION.key,
+          sectionTitle: SECTION.title,
+          taskIds: SECTION_IDS,
+        },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, run, auth)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      // The fallback PASS record settles the unit without a second reviewer.
+      expect(host.digests).toHaveLength(0)
+      const settled = await readAuthenticatedRun(workspace, run.id, auth)
+      expect(settled?.steps[0]?.state).toBe('done')
+    } finally {
+      unregister()
+    }
+  })
+
+  it('starts exactly one whole-scope round after the reviewed digest moves', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const definition = settlementDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const specDigest = await currentSpecDigest(workspace, 'auth')
+      if (specDigest === undefined) throw new Error('the change digest is missing')
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'settle-spec-review',
+        'auth',
+        'spec.json',
+      )
+      await mkdir(join(recordPath, '..'), { recursive: true })
+      await writeFile(
+        recordPath,
+        `${JSON.stringify({
+          definition: definition.id,
+          rule: definition.id,
+          change: 'auth',
+          phase: 'spec',
+          scope: 'whole',
+          digest: reviewDigest({ scope: 'whole', specDigest }),
+          verdict: 'FINDINGS',
+          findings: [
+            {
+              severity: 'P1',
+              class: 'missing-test',
+              title: 'No test',
+              evidence: 'the change has no test',
+              fix: 'add the test',
+            },
+          ],
+          target: { provider: 'codex-subagent' },
+          reviewer: 'codex',
+          time: '2026-01-01T00:00:00.000Z',
+        })}\n`,
+        'utf8',
+      )
+      const run = createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, run, auth)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      expect(host.steers.join('\n')).toContain('settled on FINDINGS')
+      expect(host.digests).toHaveLength(0)
+      // The reviewed artifacts move: exactly one round becomes eligible.
+      await writeFile(
+        join(workspace, 'openspec', 'changes', 'auth', 'design.md'),
+        '# Design\n\nA changed decision.\n',
+        'utf8',
+      )
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      await waitFor(() => host.digests.length === 1)
+      // A live round is the waiting close and starts no second reviewer.
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(host.digests).toHaveLength(1)
+      host.releases[0]?.()
+      await waitFor(async () => {
+        const stored = await readAuthenticatedRun(workspace, run.id, auth)
+        return stored?.steps[0]?.state !== 'open'
+      })
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 4 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(host.digests).toHaveLength(1)
+    } finally {
+      unregister()
+    }
+  })
+
+  it('supersedes a verdict-less interrupted round with one fresh reviewer', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const host = delayedReviewHost(workspace, 'PASS')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const predecessor = createRun({
+        definition: 'spec-review',
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['review'],
+        id: 'run-interrupted-predecessor',
+        now: 1_000,
+      })
+      await writeRun(
+        workspace,
+        { ...predecessor, status: 'interrupted', reason: 'interrupted by a host restart' },
+        auth,
+      )
+      // Attribute the change to this session so the trigger evaluates it.
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: 'call-attributed-write',
+          name: 'write',
+          arguments: { file_path: 'openspec/changes/auth/design.md' },
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await waitFor(() => host.digests.length === 1)
+      const runs = await listAuthenticatedRuns(workspace, auth)
+      const reviewRuns = runs.filter((entry) => entry.definition.id === 'spec-review')
+      expect(reviewRuns).toHaveLength(2)
+      const storedPredecessor = reviewRuns.find((entry) => entry.id === predecessor.id)
+      expect(storedPredecessor?.status).toBe('cancelled')
+      expect(storedPredecessor?.reason).toContain('superseded')
+      const successor = reviewRuns.find((entry) => entry.id !== predecessor.id)
+      expect(successor).toBeDefined()
+      // The interrupted attempt carries no verdict: no record was synthesized.
+      expect(
+        await readFile(
+          join(workspace, '.dsh', 'workflows', 'records', 'spec-review', 'auth', 'spec.json'),
+          'utf8',
+        ).catch(() => undefined),
+      ).toBeUndefined()
+    } finally {
+      host.releases[0]?.()
+    }
+  })
+
+  it('settles a unit before the scheduler enqueue', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitWorkspace()
+    const definition = settlementDefinition()
+    const unregister = definitionsRegistry.register({
+      source: 'workflows-test',
+      definitions: [definition],
+    })
+    const host = delayedReviewHost(workspace, 'PASS')
+    const enqueue = vi.spyOn(ReviewScheduler.prototype, 'enqueue')
+    try {
+      apply(host.ctx as never, { reviewers: { codex: { provider: 'codex-subagent' } } })
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const specDigest = await currentSpecDigest(workspace, 'auth')
+      if (specDigest === undefined) throw new Error('the change digest is missing')
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'workflows',
+        'records',
+        'settle-spec-review',
+        'auth',
+        'spec.json',
+      )
+      await mkdir(join(recordPath, '..'), { recursive: true })
+      await writeFile(
+        recordPath,
+        `${JSON.stringify({
+          definition: definition.id,
+          rule: definition.id,
+          change: 'auth',
+          phase: 'spec',
+          scope: 'whole',
+          digest: reviewDigest({ scope: 'whole', specDigest }),
+          verdict: 'FINDINGS',
+          findings: [
+            {
+              severity: 'P1',
+              class: 'missing-test',
+              title: 'No test',
+              evidence: 'the change has no test',
+              fix: 'add the test',
+            },
+          ],
+          target: { provider: 'codex-subagent' },
+          reviewer: 'codex',
+          time: '2026-01-01T00:00:00.000Z',
+        })}\n`,
+        'utf8',
+      )
+      const run = createRun({
+        definition: definition.id,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['review'],
+        now: 1_000,
+      })
+      await writeRun(workspace, run, auth)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      expect(host.steers.join('\n')).toContain('settled on FINDINGS')
+      expect(enqueue).not.toHaveBeenCalled()
+      expect(host.digests).toHaveLength(0)
+      const stored = await readAuthenticatedRun(workspace, run.id, auth)
+      expect(stored?.steps[0]?.state).toBe('blocked')
+    } finally {
+      enqueue.mockRestore()
+      unregister()
+    }
+  })
 })
