@@ -2424,7 +2424,16 @@ describe('task-review runtime from a tasks.md change', () => {
           }
         | undefined
       expect(tool).toBeDefined()
-      await tool?.execute({ action: 'resume', runId: runB.id }, { agent: host.agent })
+      // The resume is fenced until the disposed session's cleanup lands; the
+      // tool promises "retry" rather than committing into a stale generation.
+      await waitFor(async () => {
+        try {
+          await tool?.execute({ action: 'resume', runId: runB.id }, { agent: host.agent })
+          return true
+        } catch {
+          return false
+        }
+      })
       release()
       await closing
       const settledB = await runs.readAuthenticatedRun(workspace, runB.id, auth)
