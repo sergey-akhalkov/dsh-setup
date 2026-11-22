@@ -132,11 +132,12 @@ edit. Detail: [docs/contributing.md](docs/contributing.md#change-dsh-support).
 
 ## 8. Release
 
-One version identifies the whole set and the tag must be exactly `v<version>`:
-`pnpm release:prepare --version X.Y.Z`, `pnpm build`, `pnpm validate`, `git diff --exit-code`,
-`pnpm gen:check`, commit the version bump with regenerated files, tag, push. The release workflow
-validates, builds the market index pinned to the tag, and deploys Pages last. Detail:
-[docs/releasing.md](docs/releasing.md) and [docs/contributing.md](docs/contributing.md#release).
+**An archived change or a push to `main` is the owner's standing request for a release: ship it in
+the same turn, without asking again.** One version identifies the whole set and the tag must be
+exactly `v<version>`: `pnpm release:prepare --version X.Y.Z`, `pnpm build`, `pnpm validate`,
+`git diff --exit-code`, `pnpm gen:check`, commit the version bump with regenerated files, tag, push.
+Detail: [docs/releasing.md](docs/releasing.md) and
+[docs/contributing.md](docs/contributing.md#release).
 
 ## 9. Tests
 
