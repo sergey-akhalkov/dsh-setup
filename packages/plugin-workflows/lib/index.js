@@ -284,8 +284,12 @@ function rawArchiveAction(command) {
 /** A character that makes the command more than one simple command, outside quotes. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: a control byte, `;`, or `#` is structure
 const BARE_STRUCTURE = /[\u0000-\u001f`;&|><#$()\\]/u;
-/** A smart quote PowerShell treats as a regular quote. */
-const SMART_QUOTE = /[\u2018-\u201d]/u;
+/** PowerShell's alternate single-quote characters, which open or close a string. */
+const SMART_SINGLE = /[\u2018-\u201b]/u;
+/** PowerShell's alternate double-quote characters, which open or close a string. */
+const SMART_DOUBLE = /[\u201c-\u201f]/u;
+/** A double-quoted body that Bash or PowerShell evaluates while it reads it. */
+const EVALUATED = /[\\`]|\$[({[]/u;
 /** Whether one word is the bare token `text`, with no quoted fragment. */
 function isBareWord(word, text) {
     return word !== undefined && word.quoted.length === 0 && word.bare.toLowerCase() === text;
@@ -298,10 +302,10 @@ function wordText(word) {
  * Split one simple command into words, or return undefined when the text
  * carries shell structure outside quotes. A bare control character, escape,
  * substitution, comment, smart quote, or parenthesized subexpression is
- * structure, as is a doubled quote or, inside double quotes, a backslash or
- * backtick, because each one moves a quote boundary in one supported shell. The
- * caller then keeps the fail-closed scan; a quoted body is skipped as one
- * region.
+ * structure, as is a doubled quote, a here-string opener, or, inside double
+ * quotes, a backslash or backtick, because each one moves a quote boundary in
+ * one supported shell. The caller then keeps the fail-closed scan; a quoted
+ * body is skipped as one region.
  */
 function simpleWords(command) {
     const words = [];
@@ -319,19 +323,25 @@ function simpleWords(command) {
     for (let index = 0; index < command.length; index += 1) {
         const char = command[index] ?? '';
         if (char === '"' || char === "'") {
+            // A `@"` or `@'` opener starts a PowerShell here-string, whose end this
+            // scanner does not model.
+            if (command[index - 1] === '@')
+                return undefined;
             const close = command.indexOf(char, index + 1);
             if (close < 0)
                 return undefined;
             const body = command.slice(index + 1, close);
-            // A doubled quote escapes in the other shell. Inside double quotes a
-            // backslash escapes in Bash and a backtick escapes or a smart double quote
-            // terminates in PowerShell; a single-quoted body is literal in both
-            // shells except for its own smart quote.
-            if (body.includes(char + char))
+            // A quote repeated straight after its close is the other shell's escape,
+            // and the body search cannot see it, so the raw next character decides.
+            if (command[close + 1] === char)
                 return undefined;
-            if (char === '"' && /[\\`\u201c\u201d]/u.test(body))
+            // Inside double quotes a backslash or a backtick escapes, an expansion
+            // substitutes, and a PowerShell alternate double quote ends the string, so
+            // the region is unreadable. A single-quoted body is literal in both shells
+            // except for its own alternate quotes.
+            if (char === '"' && (EVALUATED.test(body) || SMART_DOUBLE.test(body)))
                 return undefined;
-            if (char === "'" && /[\u2018\u2019]/u.test(body))
+            if (char === "'" && SMART_SINGLE.test(body))
                 return undefined;
             start ??= index;
             quoted.push({ quote: char, start: index, end: close + 1, body });
@@ -342,8 +352,9 @@ function simpleWords(command) {
             flush(index);
             continue;
         }
-        if (BARE_STRUCTURE.test(char) || SMART_QUOTE.test(char))
+        if (BARE_STRUCTURE.test(char) || SMART_SINGLE.test(char) || SMART_DOUBLE.test(char)) {
             return undefined;
+        }
         start ??= index;
         bare += char;
     }
@@ -352,11 +363,11 @@ function simpleWords(command) {
 }
 /** Whether a quoted value is literal text in both shells. */
 function proseValue(value) {
-    // A double-quoted body is evaluated: a backslash moves its boundary, and a
-    // backtick, `$(`, `${`, or `$[` substitutes or expands. A plain variable
+    // A double-quoted body is evaluated: a backslash moves its boundary, a
+    // backtick escapes, and `$(`, `${`, and `$[` expand. A plain variable
     // reference and a literal dollar sign are data. A single-quoted body is
     // literal in both shells.
-    return value.quote === "'" || !/[\\`]|\$[({[]/u.test(value.body);
+    return value.quote === "'" || !EVALUATED.test(value.body);
 }
 /**
  * Mask the value of a verified `git commit -m`/`--message` or `gh pr create
@@ -405,6 +416,9 @@ function maskMessageArguments(command) {
         const base = equal < 0 ? name : name.slice(0, equal);
         if (!options.has(base))
             continue;
+        // Only the long forms carry an attached `=` value.
+        if (equal >= 0 && !base.startsWith('--'))
+            return command;
         const value = word.quoted[0];
         if (equal >= 0) {
             // `--message=value`: one quoted value directly after the `=`, and nothing

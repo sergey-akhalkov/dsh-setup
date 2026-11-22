@@ -9944,6 +9944,13 @@ describe('archive gate message data', () => {
       // A PowerShell escape or a smart-quote delimiter moves the real boundary.
       'git commit --author "a`" -m "; openspec archive auth --yes; # "',
       'git commit -m "safe \u201d; openspec archive auth --yes; # "',
+      "git commit -m 'safe \u201b; openspec archive auth --yes; # '",
+      "git commit -m 'safe \u201a; openspec archive auth --yes; # '",
+      'git commit -m "safe \u201e; openspec archive auth --yes; # "',
+      // A substitution in another double-quoted argument can nest an option.
+      `git commit --author "$(Write-Output " -m '$(openspec archive auth --yes)' ")"`,
+      // A here-string is not a region this scanner can bound.
+      'git commit --author @"open" -m "openspec archive auth"',
       // Bash brace substitution is evaluated text, not prose.
       'git commit -m "${| openspec archive auth; }"',
       'git commit -m "${ openspec archive auth; }"',
@@ -9953,6 +9960,9 @@ describe('archive gate message data', () => {
       // A bare backslash escapes outside quotes, and a quoted `--` is still the marker.
       "git commit --author a\\'x' -m '$(openspec archive auth)' 'z\\'",
       'git commit --"" -m "openspec archive auth"',
+      // A doubled quote escapes in the other shell, and only long forms take `=`.
+      `git commit --author 'A''B <a@example.com>' -m 'openspec archive auth'`,
+      'git commit -m="openspec archive auth"',
     ]) {
       const result = await gate(host, command)
       expect(result.kind, command).toBe('deny')
@@ -9966,6 +9976,7 @@ describe('archive gate message data', () => {
     for (const command of [
       "git commit -m 'openspec archive notes\\temp'",
       "git commit -m 'openspec archive uses `code`'",
+      "git commit -m 'openspec archive uses \u201csmart\u201d quotes'",
       'git commit -m "openspec archive doesn\u2019t run"',
       'git commit -m "openspec archive fix" -- README.md',
     ]) {
