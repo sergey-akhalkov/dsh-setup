@@ -619,7 +619,9 @@ function proseValue(value: QuotedValue): boolean {
  * `--` marker. Another program, prefix, subcommand, option, or quoted fragment,
  * a short option's attached value, an unquoted, unterminated, concatenated, or
  * evaluated value, and any other shell structure leave the whole command
- * unmasked: the fail-closed scan stays as today.
+ * unmasked: the fail-closed scan stays as today. The shipped rule, its accepted
+ * false positives, and the rationale live in docs/workflows.md, "Pre-execute
+ * archive".
  */
 function maskMessageArguments(command: string): string {
   const words = simpleWords(command)
