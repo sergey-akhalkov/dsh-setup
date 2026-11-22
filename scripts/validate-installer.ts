@@ -44,7 +44,11 @@ function shell(command: string, args: string[], env: NodeJS.ProcessEnv, timeout 
   // composition check runs the CLI. The child's stdin is the null device: a
   // CI runner has no interactive terminal, so a package-manager or plugin
   // prompt must fail fast there instead of waiting on an open pipe.
-  const line = [command, ...args.map((arg) => `"${arg.replaceAll('"', '\\"')}"`)].join(' ')
+  // An absolute executable path with a space (the running Node binary under
+  // `Program Files`) needs quoting; a command line such as `pnpm dlx ...` does
+  // not, and quoting it would turn it into one missing path.
+  const executable = command.includes(' ') && existsSync(command) ? `"${command}"` : command
+  const line = [executable, ...args.map((arg) => `"${arg.replaceAll('"', '\\"')}"`)].join(' ')
   const result = spawnSync(line, {
     shell: true,
     cwd: rootDir,
@@ -985,6 +989,105 @@ function main(): number {
         }
       }
     })
+
+    // The English catalog adapter must resolve from the installed profile, not
+    // only from a synthetic directory: load the vendored plugin copy and read the
+    // entry the skills list would show, then read the same code copied away from
+    // the profile, where no upstream package exists.
+    step(
+      'the installed English catalog adapter resolves, and disappears without the upstream',
+      () => {
+        if (!versions.installBundles.git.some((spec) => spec.includes('huashu-design'))) {
+          console.log('       no huashu-design git bundle is declared; skipped')
+          return
+        }
+        const adapter = join(
+          profileDir,
+          'node_modules',
+          '@dsh-setup',
+          'setup',
+          'node_modules',
+          '@dsh-setup',
+          'plugin-huashu-design',
+          'lib',
+          'index.js',
+        )
+        if (!existsSync(adapter)) {
+          throw new Error('the installed setup does not vendor the catalog adapter')
+        }
+        interface Entry {
+          count: number
+          name?: string
+          rank?: number
+          english?: boolean
+          base?: string
+          directive?: boolean
+        }
+        const probeDir = mkdtempSync(join(tmpRoot, 'installer-adapter-'))
+        const probe = join(probeDir, 'probe.mjs')
+        writeFileSync(
+          probe,
+          [
+            "import { pathToFileURL } from 'node:url'",
+            'const plugin = await import(pathToFileURL(process.argv[2]).href)',
+            'const providers = []',
+            'plugin.apply({ skills: { registerProvider: (create) => providers.push(create()) } })',
+            'const candidates = await providers[0].list()',
+            'const candidate = candidates[0]',
+            'const definition = candidate === undefined ? undefined : await providers[0].get(candidate, {})',
+            'console.log(JSON.stringify({',
+            '  count: candidates.length,',
+            '  name: candidate?.name,',
+            '  rank: candidate?.rank,',
+            '  english: candidate === undefined ? false : !/[\\u3400-\\u9fff]/u.test(candidate.description),',
+            '  base: candidate?.resourceBase?.path,',
+            '  directive: definition === undefined ? false : definition.content.includes("the upstream instruction in this skill is written in Chinese"),',
+            '}))',
+          ].join('\n'),
+        )
+        const readEntry = (target: string, profile: string): Entry => {
+          const result = shell(process.execPath, [probe, target], {
+            ...env,
+            DSH_PROFILE_DIR: profile,
+            DSH_HOME: '',
+            DSH_PROFILE: '',
+          })
+          if (result.status !== 0) throw fail(result)
+          return JSON.parse(result.stdout.trim()) as Entry
+        }
+        try {
+          const installed = readEntry(adapter, profileDir)
+          if (installed.count !== 1) {
+            throw new Error(`the installed adapter lists ${String(installed.count)} candidate(s)`)
+          }
+          if (installed.name !== 'huashu-design') {
+            throw new Error(`the installed adapter lists ${String(installed.name)}`)
+          }
+          if (installed.english !== true) {
+            throw new Error('the installed catalog description is not English')
+          }
+          // Lower wins: above a user skill (500), below the bundled root (600).
+          if ((installed.rank ?? 0) <= 500 || (installed.rank ?? 0) >= 600) {
+            throw new Error(`unexpected catalog rank ${String(installed.rank)}`)
+          }
+          if (installed.directive !== true) {
+            throw new Error('the loaded body lacks the English directive')
+          }
+          if (installed.base === undefined || !existsSync(installed.base)) {
+            throw new Error('the catalog base directory does not exist')
+          }
+
+          const detached = join(probeDir, 'detached.mjs')
+          cpSync(adapter, detached)
+          const absent = readEntry(detached, probeDir)
+          if (absent.count !== 0) {
+            throw new Error('the adapter lists an entry without the upstream package')
+          }
+        } finally {
+          cleanup(probeDir)
+        }
+      },
+    )
 
     const bundlesBefore = readBundles(manifestPath)
     step('a second installer run is a no-op', () => {

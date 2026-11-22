@@ -155,10 +155,23 @@ describe('huashu-design English catalog adapter', () => {
     const candidate = (await provider.list())[0]
     if (candidate === undefined) throw new Error('no candidate')
     const definition = await provider.get(candidate, {})
+    // Spelled out rather than read from the module, so removing the directive
+    // or emptying it fails here instead of agreeing with itself.
+    const expectedDirective = [
+      '',
+      '',
+      '---',
+      '',
+      "DeepSeek Harness adapter: the upstream instruction in this skill is written in Chinese and remains the authority for the work. Talk to the user in the user's own language, and write the deliverable's own copy in English unless the user asks for another language. Relative paths in the instruction resolve against this skill's base directory, which holds the upstream `references/`, `assets/`, and `scripts/`.",
+    ].join('\n')
+    expect(plugin.ADAPTER_NOTE).toBe(expectedDirective)
     expect(definition?.content.startsWith('\r\n# 花叔Design')).toBe(true)
     expect(definition?.content).not.toContain('花叔Design——用HTML做高保真原型')
-    expect(definition?.content.endsWith(plugin.ADAPTER_NOTE)).toBe(true)
+    expect(definition?.content.endsWith(expectedDirective)).toBe(true)
     expect(definition?.content).toContain('正文。')
+    expect(expectedDirective).toContain('written in Chinese')
+    expect(expectedDirective).toContain("user's own language")
+    expect(expectedDirective).toContain('copy in English')
   })
 
   it('resolves the base directory to the installed package so relative paths work', async () => {

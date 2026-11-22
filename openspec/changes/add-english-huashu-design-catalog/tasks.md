@@ -18,3 +18,23 @@ travel together, and `packages/setup/**` is a shared hot path.
 
 - [x] 3.1 Verify the checkout's full gate: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm gen:check`
 - [x] 3.2 Verify the installed behavior in a throwaway profile: with the upstream bundle installed, the catalog resolves the English description and the loaded body ends with the directive; with the upstream removed, the entry disappears; `pnpm dogfood` stays green
+
+## Verification record
+
+Executed on 2026-11-22 against this change's tree, at `37e4164` plus the review fixes:
+
+| Command | Result |
+| --- | --- |
+| `pnpm typecheck` | pass — `tsc -p tsconfig.check.json`, no errors |
+| `pnpm lint` | pass — 506 files checked, 21 warnings and 22 infos, no errors |
+| `pnpm test` | pass — 171 files, 3175 tests |
+| `pnpm validate:repo` | pass — 1386 files, 19 plugin packages, no problems |
+| `pnpm validate:composition` | pass — the setup bundle composes on DSH 0.2.2-rc.2 |
+| `pnpm gen:check` | pass — 686 generated files match 19 plugins |
+| `pnpm validate:installer` | pass — including `the installed English catalog adapter resolves, and disappears without the upstream`: the installed vendored copy lists one English entry at rank 550 with the directive appended and a base directory that exists, and the same code copied outside the profile lists nothing |
+| `pnpm dogfood` | pass — installer round-trip against a copy of the `desktop` profile; the live profile and the running Harness were not touched |
+
+The throwaway-profile probe that first surfaced the linked-checkout gap ran against a profile whose
+setup was added by path: the adapter listed nothing because the linked module sits outside the profile
+tree. The profile anchors (`DSH_PROFILE_DIR`, then `DSH_HOME`/`DSH_PROFILE`) were added for that case,
+the unit test covers both, and the acceptance step above now asserts the installed layout.

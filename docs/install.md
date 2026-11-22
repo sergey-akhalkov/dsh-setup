@@ -218,8 +218,11 @@ ships no upstream bytes — it reads the installed package and lists nothing whe
 absent, and a local user or project skill with the same name still wins. The manual itself stays
 Chinese; nothing in it needs your reading.
 
-To move the pin, change the commit in `dsh.json` and in `install.ps1`'s `$GitBundles`, then run
-`pnpm validate:repo`.
+To move the pin, change the commit in `dsh.json` and in `install.ps1`'s `$GitBundles`, compare the
+new upstream SKILL.md frontmatter with the English description in
+`packages/plugin-huashu-design/src/host/index.ts`, and re-sync that description, its trigger words,
+and the skill name if they changed — the adapter is the catalog entry, so a pin bump that leaves it
+behind shows the previous scope — then run `pnpm build`, `pnpm gen`, and `pnpm validate:repo`.
 
 ## Manual install
 
