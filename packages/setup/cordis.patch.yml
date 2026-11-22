@@ -84,6 +84,8 @@
           includeHistory: false
           includeAttachments: false
           importOnEmpty: false
+    - id: dsh-setup-huashu-design
+      name: "@dsh-setup/plugin-huashu-design"
     - id: dsh-setup-loop-guard
       name: "@dsh-setup/plugin-loop-guard"
       config:

@@ -208,6 +208,16 @@ Screenshots, PPTX export, and MP4 rendering need a Chromium that Playwright can 
 `npx playwright install chromium` — plus `ffmpeg` for video audio. The bundle's Node dependencies
 (`playwright`, `pptxgenjs`, `pdf-lib`) arrive with the install.
 
+The catalog entry is English. The upstream skill is Chinese-only: its catalog line and its trigger
+words are Chinese, so an English or Russian request would not route to it. The setup mounts
+`@dsh-setup/plugin-huashu-design`, which wins the `huashu-design` name with a rank between a user
+skill and the bundled root: the skills list shows an English description and English trigger words,
+and loading returns the installed upstream manual unchanged plus an English directive to talk in the
+user's language and write the deliverable's own copy in English unless asked otherwise. The adapter
+ships no upstream bytes — it reads the installed package and lists nothing when that bundle is
+absent, and a local user or project skill with the same name still wins. The manual itself stays
+Chinese; nothing in it needs your reading.
+
 To move the pin, change the commit in `dsh.json` and in `install.ps1`'s `$GitBundles`, then run
 `pnpm validate:repo`.
 

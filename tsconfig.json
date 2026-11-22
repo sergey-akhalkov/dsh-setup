@@ -6,6 +6,7 @@
     { "path": "./packages/plugin-exploratory-testing" },
     { "path": "./packages/plugin-goal-continuity" },
     { "path": "./packages/plugin-hindsight" },
+    { "path": "./packages/plugin-huashu-design" },
     { "path": "./packages/plugin-loop-guard" },
     { "path": "./packages/plugin-mcp-lazy" },
     { "path": "./packages/plugin-nuphus-mcp" },

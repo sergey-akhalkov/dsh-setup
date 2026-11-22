@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-huashu-design.
+- insert:
+    - id: dsh-setup-huashu-design
+      name: "@dsh-setup/plugin-huashu-design"

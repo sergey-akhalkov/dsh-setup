@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Huashu Design (English catalog)",
+    "description": "English catalog entry and working-language directive for the pinned third-party huashu-design skill (MIT, by 花叔). The catalog lists an English description and English trigger words, and the loaded body keeps the upstream Chinese manual and adds an English directive; the entry disappears when the upstream bundle is not installed."
+  }
+}
