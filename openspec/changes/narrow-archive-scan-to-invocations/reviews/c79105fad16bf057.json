@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "narrow-archive-scan-to-invocations",
+  "scope": "task",
+  "taskId": "c79105fad16bf057",
+  "digest": "3ba35389e47482d183be238e83e0777ed8e632c27ce9cd288e79e90cec5597bf",
+  "worktreeDigest": "57cae617285d4f655fa692999539b833c6b954a9e5d9c2dff89f56761139f702",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-22T14:25:04.930Z"
+}
