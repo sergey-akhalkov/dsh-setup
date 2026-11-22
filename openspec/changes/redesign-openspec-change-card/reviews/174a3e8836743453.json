@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "redesign-openspec-change-card",
+  "scope": "task",
+  "taskId": "174a3e8836743453",
+  "digest": "ff4a1866f80f4ea159f311f1875223f4b2400cb9e3172fdfd2a2e92276da2bf3",
+  "worktreeDigest": "b931f8c1cc66a777fc013040d2c3a4cc9a80d20133221a728b3399e645e642f8",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-22T19:47:05.516Z"
+}

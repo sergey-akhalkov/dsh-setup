@@ -23,9 +23,9 @@ tail. Groups run in order.
 
 ## 3. Generated output and gate (serial tail; owns packages/plugin-openspec/lib/**, packages/setup/**)
 
-- [ ] 3.1 Run `pnpm build` and `pnpm gen`, then commit the rebuilt `packages/plugin-openspec/lib/**` and the regenerated `packages/setup/node_modules/@dsh-setup/plugin-openspec/**`; verify `pnpm gen:check` passes and `git diff --exit-code` is clean after a second `pnpm build`
-- [ ] 3.2 Run `pnpm check`; verify typecheck, lint, build and the whole test suite pass with no generated drift
-- [ ] 3.3 Run `pnpm validate:repo` and `pnpm validate:composition`; verify both pass with the regenerated vendored tree
+- [x] 3.1 Run `pnpm build` and `pnpm gen`, then commit the rebuilt `packages/plugin-openspec/lib/**` and the regenerated `packages/setup/node_modules/@dsh-setup/plugin-openspec/**`; verify `pnpm gen:check` passes and `git diff --exit-code` is clean after a second `pnpm build`
+- [x] 3.2 Run `pnpm check`; verify typecheck, lint, build and the whole test suite pass with no generated drift
+- [x] 3.3 Run `pnpm validate:repo` and `pnpm validate:composition`; verify both pass with the regenerated vendored tree
 
 ## 4. Live acceptance (verification only; owns no source path)
 
