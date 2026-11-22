@@ -303,9 +303,9 @@ function wordText(word) {
  * carries shell structure outside quotes. A bare control character, escape,
  * substitution, comment, smart quote, or parenthesized subexpression is
  * structure, as is a doubled quote, a here-string opener, or, inside double
- * quotes, a backslash or backtick, because each one moves a quote boundary in
- * one supported shell. The caller then keeps the fail-closed scan; a quoted
- * body is skipped as one region.
+ * quotes, a backslash, a backtick, an expansion, or an alternate double quote,
+ * because each one moves a quote boundary in one supported shell. The caller
+ * then keeps the fail-closed scan; a quoted body is skipped as one region.
  */
 function simpleWords(command) {
     const words = [];
@@ -372,12 +372,12 @@ function proseValue(value) {
 /**
  * Mask the value of a verified `git commit -m`/`--message` or `gh pr create
  * --body` option, so the fall-back scan reads a commit message as prose instead
- * of shell structure. Among the verified pair's options, only a quoted value of
- * the option outside a quoted region is masked: the word after the option, or
- * one directly after its `=`. Another program, prefix, subcommand, or option, a
- * quoted fragment in any of those positions, an unquoted, unterminated,
- * concatenated, or evaluated value, and any other shell structure leave the
- * whole command unmasked: the fail-closed scan stays as today.
+ * of shell structure. Only a quoted value of a verified option is masked: the
+ * word after it, or one directly after a long option's `=`, and only before a
+ * `--` marker. Another program, prefix, subcommand, option, or quoted fragment,
+ * a short option's attached value, an unquoted, unterminated, concatenated, or
+ * evaluated value, and any other shell structure leave the whole command
+ * unmasked: the fail-closed scan stays as today.
  */
 function maskMessageArguments(command) {
     const words = simpleWords(command);
