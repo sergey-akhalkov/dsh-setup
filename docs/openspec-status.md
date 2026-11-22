@@ -1101,3 +1101,26 @@ task approvals plus whole-spec and integration `PASS`, and `pnpm validate:instal
 are green on DSH 0.2.2-rc.2 and the installed CLI. The change is archived as
 `2026-11-22-add-huashu-design-bundle` with the `portable-setup` delta synced (`Pinned third-party
 bundle installation`); the owner release follows.
+
+## add-english-huashu-design-catalog (2026-11-22)
+
+**The third-party skill reads English in the catalog.** The pinned `huashu-design` skill is
+Chinese-only, so its catalog line and trigger words never routed an English or Russian request. The
+new `@dsh-setup/plugin-huashu-design` registers the same skill name at rank 550 — below a project or
+user skill (500) and above the filesystem provider's bundled root (600) — with an English description
+and English trigger words, and loads the installed upstream body unchanged, with its frontmatter
+removed, followed by a separated English directive to talk in the user's language and write the
+deliverable's copy in English. It ships no upstream bytes: the package is resolved from the profile
+(this module first, then `DSH_PROFILE_DIR`, then `DSH_HOME`/`DSH_PROFILE`, which covers a linked
+checkout) and the entry disappears when it is absent.
+
+**Review rounds and evidence.** The first rounds returned five findings — display metadata without the
+pinned version, a directive test that agreed with itself, the pin-update procedure missing the
+description re-sync, gate results unrecorded, and acceptance that never exercised the real registry or
+a physical removal. The fixes mount the shipped `@deepseek-ai/dsh-skill` registry in a real context
+(with the exported `BUNDLED_SKILL_RANK` and a user-rank candidate), remove the upstream from the
+throwaway profile while the installed adapter stays and assert the entry disappears, and record every
+gate result with its numbers. `7ff3395`..`4f6559e` carry the work; the re-run gives 7/7 task approvals
+plus whole-spec and integration `PASS`. The change is archived as
+`2026-11-22-add-english-huashu-design-catalog` with the `packaged-skills` delta synced (`English
+catalog adapter for a Chinese-only third-party skill`); the owner release follows.
