@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-huashu-design-bundle",
+  "scope": "task",
+  "taskId": "e4e8a6c3c971b6ed",
+  "digest": "bc6d9c2236a8b0aa9e6bf612248f24d3aa885ae91e8d0770d866467bf937530f",
+  "worktreeDigest": "3635e36f924a08e58e30a9bc806357789477ce92a425d9ac87be8cc94fea3ac4",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-22T15:48:52.567Z"
+}
