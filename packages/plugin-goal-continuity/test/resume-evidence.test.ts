@@ -139,6 +139,24 @@ describe('checkpoint-evidenced continuation', () => {
     expect(notices(harness)).not.toContain('declares the objective done')
   })
 
+  it('treats a plan an answered question predates as no evidence', async () => {
+    const harness = createHarness()
+    setGoal(harness, { activation: 'disarmed' })
+    turnStart(harness, 1)
+    const goal = harness.goals.goal
+    if (goal === undefined) throw new Error('test goal missing')
+    goalMessage(harness, goal, 1)
+    checkpointCall(harness, continuePlan('user_decision', 'pick-a', 'wait for the answer'))
+    toolCall(harness, 'ask_user_question', { questions: [{ id: 'pick-a', question: 'Which?' }] })
+    turnEnd(harness, COMPLETED, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    // The answer arrives as a tool result, so the stop must not replay for it.
+    expect(countCalls(harness, 'resume')).toBe(1)
+    expect(notices(harness)).not.toContain('pick-a')
+  })
+
   it('treats an unreadable or refused checkpoint as no evidence', async () => {
     const unreadable = createHarness()
     setGoal(unreadable, { activation: 'disarmed' })

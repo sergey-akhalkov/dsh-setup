@@ -1436,8 +1436,10 @@ function shellOutcomeOf(result) {
         !runnerFailed;
     return clean ? 'success' : 'failure';
 }
-/** The tool the model calls to record its decision. */
+/** Tool the model calls to record its decision. */
 const CHECKPOINT_TOOL = 'work_checkpoint';
+/** Tool whose successful result is a user answer, not a turn-closing event. */
+const ASK_USER_QUESTION_TOOL = 'ask_user_question';
 /** Local checkpoint records; machine-local scratch and never a tracked file. */
 const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints');
 /** Bounds for the record fields, the observed evidence, and the request. */
@@ -1905,14 +1907,16 @@ function checkpointPlan(evidence, workspace) {
 const NO_EFFECT_ROUND_LIMIT = 2;
 /**
  * The latest successful `work_checkpoint` plan that may decide a settled turn:
- * recorded after the most recent direct user message and in that turn or the one
- * before it. A plan the user's own message predates is answered evidence, not input.
+ * recorded after the most recent user signal and in that turn or the one before
+ * it. A plan the user's own message or answer predates is answered evidence, not
+ * input, so a decision the user already supplied cannot replay as a stop.
  */
 function latestCheckpointPlan(agent, settledTurn) {
     const events = sessionEvents(agent);
-    let lastDirect = -1;
+    let lastUserSignal = -1;
     let turn = 0;
     const pending = new Map();
+    const questions = new Set();
     let last;
     for (const [index, event] of events.entries()) {
         if (event.type === 'turn/start') {
@@ -1921,10 +1925,12 @@ function latestCheckpointPlan(agent, settledTurn) {
         }
         if (event.type === 'user/message') {
             if (event.data.source.kind === 'user')
-                lastDirect = index;
+                lastUserSignal = index;
             continue;
         }
         if (event.type === 'tool/call') {
+            if (event.data.name === ASK_USER_QUESTION_TOOL)
+                questions.add(String(event.data.callId));
             if (event.data.name !== CHECKPOINT_TOOL)
                 continue;
             pending.set(String(event.data.callId), {
@@ -1937,6 +1943,12 @@ function latestCheckpointPlan(agent, settledTurn) {
         if (event.type !== 'tool/result')
             continue;
         const callId = String(event.data.message.toolCallId);
+        // An answered question is a user signal too; a cancelled or failed one is not.
+        if (questions.delete(callId)) {
+            if (event.data.message.isError !== true)
+                lastUserSignal = index;
+            continue;
+        }
         const call = pending.get(callId);
         if (call === undefined)
             continue;
@@ -1947,7 +1959,7 @@ function latestCheckpointPlan(agent, settledTurn) {
     }
     if (last === undefined)
         return undefined;
-    if (last.index <= lastDirect)
+    if (last.index <= lastUserSignal)
         return undefined;
     if (last.turn < settledTurn - 1 || last.turn > settledTurn)
         return undefined;

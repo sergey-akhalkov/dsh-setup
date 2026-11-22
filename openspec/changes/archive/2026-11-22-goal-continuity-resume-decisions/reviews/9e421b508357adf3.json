@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "goal-continuity-resume-decisions",
+  "scope": "task",
+  "taskId": "9e421b508357adf3",
+  "digest": "eec33606eb64fb768aa708036e706880139a9985bc933a04c1112ee9952fe621",
+  "worktreeDigest": "a0d28a8d790a3b68b63cad4b9e3088c1502e88b4055143242dd984b8afcb696e",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-21T23:34:26.973Z"
+}

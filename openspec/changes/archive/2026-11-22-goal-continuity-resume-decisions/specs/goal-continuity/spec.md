@@ -194,7 +194,7 @@ When the active disarmed goal has `roundsStarted` at or above `maxGoalRounds` an
 
 ### Requirement: Continuation evidence
 
-Before deciding continuation, the supervisor SHALL read the latest successful `work_checkpoint` plan recorded after the most recent direct user message and at or before the settled turn, counting a plan from that turn or the one before it. The decision runs at every settled turn of an active goal, whatever its activation. A plan older than that message, stale, absent, or unreadable is no evidence. Reading it MUST NOT change the goal phase.
+Before deciding continuation, the supervisor SHALL read the latest successful `work_checkpoint` plan recorded after the most recent user signal (a direct message or an answered `ask_user_question`) and at or before the settled turn, counting a plan from that turn or the one before. The decision runs at every settled turn of an active goal, whatever its activation. An older, stale, absent, or unreadable plan is no evidence, and reading it MUST NOT change the goal phase.
 
 #### Scenario: Armed goal is decided too
 
@@ -205,6 +205,11 @@ Before deciding continuation, the supervisor SHALL read the latest successful `w
 
 - **WHEN** the user sends a direct message and no new plan is recorded afterwards
 - **THEN** a plan from before that message is not evidence for the next settled turn, and the unevidenced rule applies instead
+
+#### Scenario: An answered question invalidates the plan that asked it
+
+- **WHEN** a plan names a `user_decision` bottleneck and the model asks through `ask_user_question` and receives an answer
+- **THEN** that plan is not evidence for the next settled turn, so the decision the user supplied cannot replay as a stop
 
 #### Scenario: Stale plan is no evidence
 
