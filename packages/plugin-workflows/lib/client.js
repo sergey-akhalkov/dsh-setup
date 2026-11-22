@@ -13821,6 +13821,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/review-mark.tsx
+    var import_dsh_client_ui_primitives10 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react8 = require("react");
 
     // packages/plugin-workflows/src/client/review-mark-view.ts
@@ -14003,13 +14004,7 @@ window.__ModuleLoader__.load({
     }
     var MARK_CSS = `
     .dsh-wf-review-mark { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: none; }
-    .dsh-wf-review-ring { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid var(--dsw-alias-label-secondary); border-radius: 50%; }
-    .dsh-wf-review-ring-live { border-top-color: transparent; animation: dsh-wf-review-spin 900ms linear infinite; }
-    .dsh-wf-review-ring-waiting { border-style: dashed; }
-    @keyframes dsh-wf-review-spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) {
-      .dsh-wf-review-ring-live { animation: none; border-top-color: var(--dsw-alias-label-secondary); }
-    }
+    .dsh-wf-review-ring { box-sizing: border-box; width: 14px; height: 14px; border: 2px dashed var(--dsw-alias-label-secondary); border-radius: 50%; }
     `;
     function SidebarReviewMark(props) {
       const entries = useLiveReviews(props.sessionId);
@@ -14026,24 +14021,18 @@ window.__ModuleLoader__.load({
           title: view.tooltip,
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("style", { children: MARK_CSS }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
-              "span",
-              {
-                className: `dsh-wf-review-ring${view.waiting ? " dsh-wf-review-ring-waiting" : " dsh-wf-review-ring-live"}`,
-                "aria-hidden": "true"
-              }
-            )
+            view.waiting ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-review-ring", "aria-hidden": "true" }) : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives10.StateDot, { state: "ongoing", size: 14 })
           ]
         }
       );
     }
 
     // packages/plugin-workflows/src/client/view.tsx
-    var import_dsh_client_ui_primitives13 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives14 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react10 = require("react");
 
     // packages/plugin-workflows/src/client/overview.tsx
-    var import_dsh_client_ui_primitives11 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives12 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react9 = require("react");
 
     // packages/plugin-workflows/src/client/gates.ts
@@ -14083,7 +14072,7 @@ window.__ModuleLoader__.load({
     ];
 
     // packages/plugin-workflows/src/client/run-history.tsx
-    var import_dsh_client_ui_primitives10 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives11 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime13 = require("react/jsx-runtime");
     function runDot(status) {
       if (status === "running") return "ongoing";
@@ -14125,11 +14114,11 @@ window.__ModuleLoader__.load({
     function StatusLine(props) {
       const { health, t } = props;
       return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-status", "data-state": health.state, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.StateDot, { state: healthDot(health.state) }),
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.StateDot, { state: healthDot(health.state) }),
         /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-status-text", children: t(`health.${health.state}`) }),
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tooltip, { label: statusDetails(health, t), children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Button, { type: "button", variant: "ghost", size: "sm", children: t("status.details") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tooltip, { label: statusDetails(health, t), children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", children: t("status.details") }) }),
         props.onRefresh === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
-          import_dsh_client_ui_primitives10.Button,
+          import_dsh_client_ui_primitives11.Button,
           {
             type: "button",
             variant: "ghost",
@@ -14144,10 +14133,10 @@ window.__ModuleLoader__.load({
     function RunRow(props) {
       const { run, t } = props;
       const started = run.startedAt > 0 ? new Date(run.startedAt).toLocaleString() : t("time.unknown");
-      const relative = run.startedAt > 0 ? relativeLabel((0, import_dsh_client_ui_primitives10.relativeTime)(run.startedAt, props.now), t) : t("time.unknown");
+      const relative = run.startedAt > 0 ? relativeLabel((0, import_dsh_client_ui_primitives11.relativeTime)(run.startedAt, props.now), t) : t("time.unknown");
       const duration = durationText(run.startedAt, run.endedAt);
       return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("li", { className: "dsh-wf-row", "data-row-key": run.id, "data-status": run.status, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
-        import_dsh_client_ui_primitives10.Button,
+        import_dsh_client_ui_primitives11.Button,
         {
           type: "button",
           variant: "toolbar",
@@ -14156,11 +14145,11 @@ window.__ModuleLoader__.load({
           "data-run": run.id,
           onClick: props.onOpen,
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.StateDot, { state: runDot(run.status) }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.StateDot, { state: runDot(run.status) }),
             /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-run-title", children: run.title }),
-            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: run.trigger === void 0 ? t(`runs.source.${run.source}`) : `${t("runs.trigger")}: ${run.trigger}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: run.trigger === void 0 ? t(`runs.source.${run.source}`) : `${t("runs.trigger")}: ${run.trigger}` }),
             /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-run-status", children: t(`runs.status.${run.status}`) }),
-            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tooltip, { label: started, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-time", children: relative }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tooltip, { label: started, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-time", children: relative }) }),
             duration === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-time", "data-duration": duration, children: duration })
           ]
         }
@@ -14173,7 +14162,7 @@ window.__ModuleLoader__.load({
       }
       const now2 = props.now ?? Date.now();
       return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
-        import_dsh_client_ui_primitives10.AnimatedRows,
+        import_dsh_client_ui_primitives11.AnimatedRows,
         {
           className: "dsh-wf-rows",
           role: "list",
@@ -14336,10 +14325,10 @@ window.__ModuleLoader__.load({
       return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ol", { className: "dsh-wf-events", "data-section": "workflow-history", children: rows.map(({ event, evaluations }, index2) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { "data-kind": event.kind, children: [
         /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf-event-head", children: [
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-time", children: formatTime(event.at, t) }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: event.kind }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: event.kind }),
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-subject", children: event.subject }),
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-summary", children: event.summary }),
-          event.truncated ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "warning", children: t("events.truncated") }) : null
+          event.truncated ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "warning", children: t("events.truncated") }) : null
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ul", { className: "dsh-wf-evaluations", "aria-label": t("events.evaluations"), children: evaluations.map((evaluation) => {
           const runId = evaluation.runId === void 0 ? void 0 : projectedRunId(evaluation.runId);
@@ -14355,7 +14344,7 @@ window.__ModuleLoader__.load({
                 evaluation.filter === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-muted", children: evaluation.filter }),
                 evaluation.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-muted", children: evaluation.detail }),
                 runId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
-                  import_dsh_client_ui_primitives11.Button,
+                  import_dsh_client_ui_primitives12.Button,
                   {
                     type: "button",
                     variant: "ghost",
@@ -14376,7 +14365,7 @@ window.__ModuleLoader__.load({
       const { bucket, latest, now: now2, t } = props;
       const definition = bucket.definition;
       return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("li", { className: "dsh-wf-row", "data-row-key": definition.id, children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(
-        import_dsh_client_ui_primitives11.Button,
+        import_dsh_client_ui_primitives12.Button,
         {
           type: "button",
           variant: "toolbar",
@@ -14387,9 +14376,9 @@ window.__ModuleLoader__.load({
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("span", { className: "dsh-wf-card-head", children: [
               /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-run-title", children: definition.name }),
-              definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
-              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` }),
-              definition.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", "data-source": definition.source, children: `${t("definitions.source")}: ${definition.plugin === void 0 ? definition.source : `${definition.source}:${definition.plugin}`}` })
+              definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
+              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` }),
+              definition.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", "data-source": definition.source, children: `${t("definitions.source")}: ${definition.plugin === void 0 ? definition.source : `${definition.source}:${definition.plugin}`}` })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-card-meta", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }) }),
             /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("span", { className: "dsh-wf-card-stats", children: [
@@ -14404,10 +14393,10 @@ window.__ModuleLoader__.load({
               ) }),
               /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-summary", "data-workflow-stats": definition.id, children: runStatsLabel(bucket.stats, t) })
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-card-foot", children: latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.StateDot, { state: runDot(latest.status) }),
+            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-card-foot", children: latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.StateDot, { state: runDot(latest.status) }),
               " ",
-              `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives11.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
+              `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives12.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
             ] }) }) })
           ]
         }
@@ -14436,7 +14425,7 @@ window.__ModuleLoader__.load({
               children: [
                 /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf-group-head", children: [
                   /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h3", { className: "dsh-wf-group-title", children: label }),
-                  group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
+                  group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
                 ] }),
                 /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ul", { className: "dsh-wf-rows", "aria-label": label, children: group.workflows.map((bucket) => {
                   const latest = props.latestRuns === void 0 ? latestRunFor(props.runs, bucket.definition.id) : Object.hasOwn(props.latestRuns, bucket.definition.id) ? props.latestRuns[bucket.definition.id] : void 0;
@@ -14486,8 +14475,8 @@ window.__ModuleLoader__.load({
       return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("li", { className: "dsh-wf-row", "data-gate": gate.gate, children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf-gate-card", children: [
         /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf-card-head", children: [
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-run-title", children: t(gate.titleKey) }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: gate.gate }),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: t("gates.readOnly") })
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: gate.gate }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: t("gates.readOnly") })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("dl", { className: "dsh-wf-gate-facts", children: [
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Fact, { label: t("gates.trigger"), value: t(gate.triggerKey) }),
@@ -14523,8 +14512,8 @@ window.__ModuleLoader__.load({
               /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf-row-head", children: [
                 /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-subject", children: step.title }),
                 /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-chip", children: step.executor }),
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: contract.instruction }),
-                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: contract.scope })
+                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: contract.instruction }),
+                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: contract.scope })
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("dl", { className: "dsh-wf-facts", children: [
                 /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Fact, { label: t("review.prompt"), value: promptSummary(contract, t) }),
@@ -14571,9 +14560,9 @@ window.__ModuleLoader__.load({
       const canvas = document2 === void 0 ? void 0 : workflowCanvasModel(document2, pageRuns, overlayRunId);
       return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("section", { className: "dsh-wf-detail", "data-workflow-page": definitionId, children: [
         /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("workflow.back") }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("workflow.back") }),
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h2", { className: "dsh-wf-detail-title", children: document2?.name ?? definitionId }),
-          document2?.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: `v${String(document2.version)}` })
+          document2?.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Tag, { tone: "quiet", children: `v${String(document2.version)}` })
         ] }),
         props.phase === "loading" ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(LoadingLine, { t }) : props.phase === "error" || document2 === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(ErrorLine, { message: props.message ?? "", t, onRetry: props.onRetry }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(import_jsx_runtime14.Fragment, { children: [
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "dsh-wf-description", "data-section": "workflow-description", children: document2.description === void 0 || document2.description.trim() === "" ? t("workflow.noDescription") : document2.description }),
@@ -14714,7 +14703,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/run-detail.tsx
-    var import_dsh_client_ui_primitives12 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives13 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime15 = require("react/jsx-runtime");
     function evidenceCell(step, session) {
       const ref = step.evidenceRef;
@@ -14722,7 +14711,7 @@ window.__ModuleLoader__.load({
         const raw = ref.ref;
         const name = ref.kind;
         if (raw === void 0) return /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { "data-evidence-kind": name, children: name });
-        const label = raw.includes("/") ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives12.PathLabel, { path: raw }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { children: raw });
+        const label = raw.includes("/") ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives13.PathLabel, { path: raw }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { children: raw });
         if (session !== void 0 && isRecordEvidence(raw)) {
           return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(
             "a",
@@ -14747,7 +14736,7 @@ window.__ModuleLoader__.load({
       }
       if (step.evidence === void 0) return "\u2014";
       if (session === void 0 || !isRecordEvidence(step.evidence)) return step.evidence;
-      return /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("a", { href: evidenceUrl(session, step.evidence), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives12.PathLabel, { path: step.evidence }) });
+      return /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("a", { href: evidenceUrl(session, step.evidence), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives13.PathLabel, { path: step.evidence }) });
     }
     function Fact2(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(import_jsx_runtime15.Fragment, { children: [
@@ -14761,10 +14750,10 @@ window.__ModuleLoader__.load({
       const duration = durationText(run.startedAt, run.endedAt);
       return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("section", { className: "dsh-wf-detail", "data-run-detail": run.id, children: [
         /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives12.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("runs.back") }),
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives13.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("runs.back") }),
           /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("h2", { className: "dsh-wf-detail-title", children: run.title }),
           /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
-            import_dsh_client_ui_primitives12.Tag,
+            import_dsh_client_ui_primitives13.Tag,
             {
               tone: run.status === "failed" ? "danger" : run.status === "done" ? "success" : "neutral",
               children: t(`runs.status.${run.status}`)
@@ -14786,7 +14775,7 @@ window.__ModuleLoader__.load({
         ] }),
         run.record === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("p", { className: "dsh-wf-muted", children: [
           `${t("runs.record")}: `,
-          session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("a", { href: evidenceUrl(session, run.record), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives12.PathLabel, { path: run.record }) })
+          session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("a", { href: evidenceUrl(session, run.record), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives13.PathLabel, { path: run.record }) })
         ] }),
         run.error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "dsh-wf-error", role: "alert", children: run.error }),
         /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("section", { className: "dsh-wf-section", "data-section": "steps", children: [
@@ -14830,7 +14819,7 @@ window.__ModuleLoader__.load({
     }
     function MissingRunPage(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("section", { className: "dsh-wf-detail", "data-state": "missing", role: "status", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives12.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives13.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
         /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "dsh-wf-empty-title", children: props.t("runs.missing") }),
         /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "dsh-wf-muted", children: props.t("runs.missingBody") })
       ] });
@@ -14842,7 +14831,7 @@ window.__ModuleLoader__.load({
           className: "dsh-wf-detail",
           "data-state": props.message === void 0 ? "loading" : "error",
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives12.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(import_dsh_client_ui_primitives13.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
             props.message === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(LoadingLine, { t: props.t }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(ErrorLine, { message: props.message, t: props.t, onRetry: props.onRetry ?? (() => {
             }) })
           ]
@@ -15161,7 +15150,7 @@ window.__ModuleLoader__.load({
             props.refreshError === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(ErrorLine, { message: props.refreshError, t, onRetry: props.onRetryRefresh ?? empty2 }),
             detail ? /* @__PURE__ */ (0, import_jsx_runtime16.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body }) : /* @__PURE__ */ (0, import_jsx_runtime16.jsxs)(import_jsx_runtime16.Fragment, { children: [
               /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
-                import_dsh_client_ui_primitives13.SegmentedControl,
+                import_dsh_client_ui_primitives14.SegmentedControl,
                 {
                   id: "dsh-wf-segments",
                   value: segment,

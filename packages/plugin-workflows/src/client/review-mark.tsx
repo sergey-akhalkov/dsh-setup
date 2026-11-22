@@ -1,3 +1,4 @@
+import { StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { type ReactNode, useEffect, useState } from 'react'
 import { reviewMarkView, sameEntries } from './review-mark-view.ts'
 import {
@@ -7,11 +8,11 @@ import {
 } from './review-store.ts'
 
 /**
- * The session row's review mark: a 14px ring while a review the session owns is
- * starting or running, and a static dashed ring while it waits on a covering
- * review. The seat renders only on an idle row, so it never competes with the
- * turn spinner; the mark is non-interactive and carries its meaning in the
- * accessible name and the tooltip. A reduced-motion preference stops the spin.
+ * The session row's review mark: the shell's own ongoing state dot while a review
+ * the session owns is starting or running, and a static dashed ring while it
+ * waits on a covering review. The seat renders only on an idle row, so it never
+ * competes with the turn spinner; the mark is non-interactive and carries its
+ * meaning in the accessible name and the tooltip.
  */
 
 const store = createLiveReviewStore(
@@ -34,13 +35,7 @@ export function useLiveReviews(sessionId: string | undefined): readonly LiveRevi
 
 const MARK_CSS = `
 .dsh-wf-review-mark { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: none; }
-.dsh-wf-review-ring { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid var(--dsw-alias-label-secondary); border-radius: 50%; }
-.dsh-wf-review-ring-live { border-top-color: transparent; animation: dsh-wf-review-spin 900ms linear infinite; }
-.dsh-wf-review-ring-waiting { border-style: dashed; }
-@keyframes dsh-wf-review-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) {
-  .dsh-wf-review-ring-live { animation: none; border-top-color: var(--dsw-alias-label-secondary); }
-}
+.dsh-wf-review-ring { box-sizing: border-box; width: 14px; height: 14px; border: 2px dashed var(--dsw-alias-label-secondary); border-radius: 50%; }
 `
 
 /** The `sidebar.session.row.leading` occupant: absent unless this session holds a review. */
@@ -61,10 +56,11 @@ export function SidebarReviewMark(props: {
       title={view.tooltip}
     >
       <style>{MARK_CSS}</style>
-      <span
-        className={`dsh-wf-review-ring${view.waiting ? ' dsh-wf-review-ring-waiting' : ' dsh-wf-review-ring-live'}`}
-        aria-hidden="true"
-      />
+      {view.waiting ? (
+        <span className="dsh-wf-review-ring" aria-hidden="true" />
+      ) : (
+        <StateDot state="ongoing" size={14} />
+      )}
     </span>
   )
 }
