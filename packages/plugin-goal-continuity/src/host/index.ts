@@ -4154,11 +4154,15 @@ export function apply(ctx: Context, config?: Config): void {
         // Fail open: the suppression still stops every resume.
       }
     }
-    deliverNotice(
-      agent,
-      stopNotice(stop),
-      `goal-continuity: stopped after ${causeLabel(stop.cause)}`,
-    )
+    // A notice injected inside the turn/end dispatch never reaches the inbox; the
+    // resume notice, delivered from the deferred reconcile microtask, does.
+    queueMicrotask(() => {
+      deliverNotice(
+        agent,
+        stopNotice(stop),
+        `goal-continuity: stopped after ${causeLabel(stop.cause)}`,
+      )
+    })
     return true
   }
 

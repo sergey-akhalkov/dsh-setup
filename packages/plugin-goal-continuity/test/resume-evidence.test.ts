@@ -60,11 +60,14 @@ describe('checkpoint-evidenced continuation', () => {
     goalMessage(harness, goal, 1)
     checkpointCall(harness, { outcome: 'done', next: 'nothing left' })
     turnEnd(harness, COMPLETED, 1)
+    // The decision is synchronous; the notice waits for the dispatch to settle,
+    // because an inject inside the turn/end handler is dropped by the host.
+    expect(countCalls(harness, 'disarm')).toBe(1)
+    expect(harness.injected).toHaveLength(0)
     harness.emitStatus('idle')
     await harness.flush()
 
     expect(notices(harness)).toContain('declares the objective done')
-    expect(countCalls(harness, 'disarm')).toBe(1)
     expect(countCalls(harness, 'resume')).toBe(0)
     expect(harness.goals.goal?.phase).toBe('active')
     expect(harness.goals.goal?.activation).toBe('disarmed')
