@@ -448,3 +448,58 @@ export function parseArchiveCommand(
   }
   return undefined
 }
+
+/** The OpenSpec 1.15.0 top-level commands that never archive a change. */
+const NON_ARCHIVE_SUBCOMMANDS = new Set([
+  'new',
+  'validate',
+  'status',
+  'show',
+  'list',
+  'instructions',
+  'context',
+  'view',
+  'schemas',
+  'templates',
+  'doctor',
+  'change',
+  'spec',
+  'config',
+  'schema',
+  'store',
+  'workset',
+  'init',
+  'update',
+  'install',
+  'feedback',
+  'completion',
+  'help',
+  'version',
+])
+
+/**
+ * Whether one readable command is an `openspec` invocation of a known
+ * non-archive subcommand, so a change name or an artifact id in its argument is
+ * data. A compound command, a shell control, an escape, a substitution, or a
+ * parenthesized subexpression is not readable and keeps the fail-closed scan; a
+ * quoted or flagged `archive` subcommand is not in the set.
+ */
+export function isNonArchiveOpenSpecCommand(command: string): boolean {
+  const trimmed = command.trim()
+  if (isCompound(trimmed)) return false
+  // `isCompound` keeps a parenthesized or array subexpression, which a shell
+  // evaluates before the call.
+  if (/[()]/u.test(trimmed)) return false
+  const tokens = tokenize(trimmed)
+  if (tokens === undefined) return false
+  let index = 0
+  if ((tokens[0] ?? '').toLowerCase() === 'rtk') index = 1
+  else if (
+    (tokens[0] ?? '').toLowerCase() === 'pnpm' &&
+    (tokens[1] ?? '').toLowerCase() === 'exec'
+  ) {
+    index = 2
+  }
+  if ((tokens[index] ?? '').toLowerCase() !== 'openspec') return false
+  return NON_ARCHIVE_SUBCOMMANDS.has((tokens[index + 1] ?? '').toLowerCase())
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CHANGE_NAME,
+  isNonArchiveOpenSpecCommand,
   matchCommandTemplate,
   matchPathTemplate,
   normalizeCommand,
@@ -452,6 +453,40 @@ it.skipIf(process.platform !== 'win32')(
     })
   },
 )
+
+describe('non-archive OpenSpec command predicate', () => {
+  it('accepts a readable non-archive subcommand with an archive-bearing argument', () => {
+    for (const command of [
+      'openspec validate narrow-archive-scan-to-invocations --strict',
+      'openspec "validate" narrow-archive-scan-to-invocations',
+      'rtk openspec status --change narrow-archive-scan-to-invocations',
+      'pnpm exec openspec instructions archive --change auth',
+      'openspec help archive',
+      'OpenSpec show archive',
+    ]) {
+      expect(isNonArchiveOpenSpecCommand(command), command).toBe(true)
+    }
+  })
+
+  it('rejects an archive subcommand, an option before it, and an unreadable command', () => {
+    for (const command of [
+      'openspec archive auth',
+      'openspec "archive" auth',
+      'openspec --store team archive auth',
+      'openspec validate (openspec archive auth)',
+      'openspec validate @(openspec archive auth)',
+      'openspec deploy auth',
+      'openspec validate auth; git status',
+      'openspec validate $(whoami)',
+      'openspec validate au\\th',
+      "bash -c 'openspec validate auth'",
+      'git status',
+      '',
+    ]) {
+      expect(isNonArchiveOpenSpecCommand(command), command).toBe(false)
+    }
+  })
+})
 
 describe('content-agnostic trigger matching', () => {
   it('normalizes the documented prefixes and whitespace', () => {

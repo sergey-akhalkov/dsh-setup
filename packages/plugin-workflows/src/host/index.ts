@@ -20,7 +20,7 @@ import {
   decideArchiveAuthorization,
   type WorkflowsArchiveGateService,
 } from './archive-authorization.js'
-import { CHANGE_NAME, parseArchiveCommand } from './command-parse.js'
+import { CHANGE_NAME, isNonArchiveOpenSpecCommand, parseArchiveCommand } from './command-parse.js'
 import { runWorkflowCommand, type WorkflowCommandHost } from './commands.js'
 import { buildConditionContext, conditionNeedsWorktree, evaluateConditions } from './condition.js'
 import {
@@ -503,6 +503,123 @@ function rawArchiveAction(command: string): 'invocation' | 'move' | undefined {
   const invocation = /\bopenspec\b[\s\S]*\barchive\b/u
   if (invocation.test(merged) || invocation.test(spaced)) return 'invocation'
   return undefined
+}
+
+/** One quoted region of a word: its delimiters, their offsets, and its body. */
+interface QuotedValue {
+  readonly quote: string
+  readonly start: number
+  readonly end: number
+  readonly body: string
+}
+
+/** One whitespace-separated word of a simple command. */
+interface SimpleWord {
+  readonly bare: string
+  readonly quoted: readonly QuotedValue[]
+}
+
+/**
+ * Split one simple command into words, or return undefined when the text
+ * carries shell structure outside quotes. A bare control character, escape,
+ * substitution, or parenthesized subexpression is structure, so the caller
+ * keeps the fail-closed scan; a quoted body is skipped as one region.
+ */
+function simpleWords(command: string): SimpleWord[] | undefined {
+  const words: SimpleWord[] = []
+  let bare = ''
+  let quoted: QuotedValue[] = []
+  const flush = (): void => {
+    if (bare === '' && quoted.length === 0) return
+    words.push({ bare, quoted })
+    bare = ''
+    quoted = []
+  }
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? ''
+    if (char === '"' || char === "'") {
+      const close = command.indexOf(char, index + 1)
+      if (close < 0) return undefined
+      quoted.push({
+        quote: char,
+        start: index,
+        end: close + 1,
+        body: command.slice(index + 1, close),
+      })
+      index = close
+      continue
+    }
+    if (char === ' ' || char === '\t') {
+      flush()
+      continue
+    }
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: a control byte is shell structure
+    if (/[\u0000-\u001f`;&|><\\($)]/u.test(char)) return undefined
+    bare += char
+  }
+  flush()
+  return words
+}
+
+/** Whether a quoted value is literal text in both shells. */
+function proseValue(value: QuotedValue): boolean {
+  // A double-quoted body is evaluated: an escape moves its boundary, and a `$`
+  // or a backtick substitutes. A single-quoted body is literal.
+  return value.quote === "'" || !/[\\$`]/u.test(value.body)
+}
+
+/**
+ * Mask the value of a verified `git commit -m`/`--message` or `gh pr create
+ * --body` option, so the fall-back scan reads a commit message as prose instead
+ * of shell structure. Among the verified pair's options, only a quoted value of
+ * the option outside a quoted region is masked. Another program, subcommand, or
+ * option, an unquoted, unterminated, attached, or evaluated value, and any
+ * other shell structure leave the whole command unmasked: the fail-closed scan
+ * stays as today.
+ */
+function maskMessageArguments(command: string): string {
+  const words = simpleWords(command)
+  if (words === undefined) return command
+  let at = 0
+  if (words[0]?.bare.toLowerCase() === 'rtk') at = 1
+  else if (words[0]?.bare.toLowerCase() === 'pnpm' && words[1]?.bare.toLowerCase() === 'exec')
+    at = 2
+  const head = [at, at + 1, at + 2].map((index) => (words[index]?.bare ?? '').toLowerCase())
+  const options =
+    head[0] === 'git' && head[1] === 'commit'
+      ? new Set(['-m', '--message'])
+      : head[0] === 'gh' && head[1] === 'pr' && head[2] === 'create'
+        ? new Set(['--body'])
+        : undefined
+  if (options === undefined) return command
+  const start = head[0] === 'gh' ? 3 : 2
+  const values: QuotedValue[] = []
+  for (let index = at + start; index < words.length; index += 1) {
+    const word = words[index]
+    if (word === undefined) break
+    const name = word.bare.toLowerCase()
+    const attached = name.endsWith('=') && options.has(name.slice(0, -1))
+    if (!attached && !options.has(name)) continue
+    // The attached form is `--message=value` in one word; the separate form is
+    // the option word and exactly one quoted word after it.
+    if (word.quoted.length > (attached ? 1 : 0)) return command
+    const next = words[index + 1]
+    if (!attached && (next === undefined || next.bare !== '' || next.quoted.length !== 1)) {
+      return command
+    }
+    const value = attached ? word.quoted[0] : next?.quoted[0]
+    if (value === undefined || !proseValue(value)) return command
+    values.push(value)
+    if (!attached) index += 1
+  }
+  if (values.length === 0) return command
+  return values
+    .sort((left, right) => right.start - left.start)
+    .reduce(
+      (masked, value) =>
+        `${masked.slice(0, value.start)}${' '.repeat(value.end - value.start)}${masked.slice(value.end)}`,
+      command,
+    )
 }
 
 /**
@@ -5222,9 +5339,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           )
           // Any archive mention the ordinary parser could not read is refused,
           // even inside quoted text or a comment; a command that mentions no
-          // archive still proceeds.
-          if (archive === undefined) {
-            const mention = rawArchiveAction(command)
+          // archive still proceeds. A message/body value and a readable
+          // non-archive OpenSpec subcommand are data, not an archive mention.
+          if (archive === undefined && !isNonArchiveOpenSpecCommand(command)) {
+            const mention = rawArchiveAction(maskMessageArguments(command))
             if (mention !== undefined) {
               return {
                 kind: 'deny',

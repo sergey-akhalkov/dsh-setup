@@ -53,3 +53,11 @@ export declare function matchPathTemplate(pattern: string, path: string): Trigge
 /** The archive directory a move must target. */
 export declare const ARCHIVE_DIR = "openspec/changes/archive";
 export declare function parseArchiveCommand(command: string, workspace?: string, workdir?: string): ArchiveIntent | undefined;
+/**
+ * Whether one readable command is an `openspec` invocation of a known
+ * non-archive subcommand, so a change name or an artifact id in its argument is
+ * data. A compound command, a shell control, an escape, a substitution, or a
+ * parenthesized subexpression is not readable and keeps the fail-closed scan; a
+ * quoted or flagged `archive` subcommand is not in the set.
+ */
+export declare function isNonArchiveOpenSpecCommand(command: string): boolean;

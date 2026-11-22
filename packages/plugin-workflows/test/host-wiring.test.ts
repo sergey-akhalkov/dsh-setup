@@ -9799,6 +9799,134 @@ describe('archive separator bypass', () => {
   })
 })
 
+describe('archive gate message data', () => {
+  const gateHost = async (): Promise<ReturnType<typeof fakeHost>> => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    return host
+  }
+
+  const gate = async (
+    host: ReturnType<typeof fakeHost>,
+    command: string,
+    agentTool = 'pwsh',
+  ): Promise<{ kind?: string; reason?: string; nextCalled: boolean }> => {
+    let nextCalled = false
+    const decision = (await host.emit(
+      'tools/pre-execute',
+      { agent: host.agent, callId: 'message-data', name: agentTool, arguments: { command } },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )) as { kind?: string; reason?: string } | undefined
+    return { kind: decision?.kind, reason: decision?.reason, nextCalled }
+  }
+
+  it('allows a commit message that names the change path and the archive gate', async () => {
+    const host = await gateHost()
+    for (const agentTool of ['pwsh', 'bash']) {
+      const result = await gate(
+        host,
+        'git commit -m "openspec/changes/auth: the archive gate reads"',
+        agentTool,
+      )
+      expect(result.kind, agentTool).toBe('continue')
+      expect(result.nextCalled, agentTool).toBe(true)
+    }
+  })
+
+  it('allows the long, inline, repeated, and gh body forms', async () => {
+    const host = await gateHost()
+    for (const command of [
+      'git commit --message "openspec/changes/auth: the archive gate reads"',
+      'git commit --message="openspec/changes/auth: the archive gate reads"',
+      'git commit -m "openspec/changes/auth: the archive gate reads" -m "and a second message"',
+      'gh pr create --body "openspec changes: the archive gate reads"',
+    ]) {
+      const result = await gate(host, command)
+      expect(result.kind, command).toBe('continue')
+      expect(result.nextCalled, command).toBe(true)
+    }
+    const unknownProgram = await gate(host, 'acme commit -m "openspec archive auth"')
+    expect(unknownProgram.kind).toBe('deny')
+    expect(unknownProgram.nextCalled).toBe(false)
+  })
+
+  it('allows prose separators inside a message value', async () => {
+    const host = await gateHost()
+    for (const command of [
+      'git commit -m "openspec changes: the archive gate; review && ship > log"',
+      'git commit -m "openspec changes: the archive gate\nand the next line"',
+    ]) {
+      const result = await gate(host, command)
+      expect(result.kind, command).toBe('continue')
+      expect(result.nextCalled, command).toBe(true)
+    }
+  })
+
+  it('allows a readable non-archive OpenSpec subcommand', async () => {
+    const host = await gateHost()
+    for (const command of [
+      'openspec validate narrow-archive-scan-to-invocations --strict',
+      'openspec status --change narrow-archive-scan-to-invocations',
+      'openspec instructions archive --change narrow-archive-scan-to-invocations',
+    ]) {
+      const result = await gate(host, command)
+      expect(result.kind, command).toBe('continue')
+      expect(result.nextCalled, command).toBe(true)
+    }
+  })
+
+  it('refuses an executable archive after a message value', async () => {
+    const host = await gateHost()
+    for (const command of [
+      'git commit -m "openspec/changes/auth: the archive gate reads" ; openspec archive auth',
+      'git commit -m "openspec/changes/auth: the archive gate reads" && git mv openspec/changes/auth "openspec/changes/archive"',
+    ]) {
+      const result = await gate(host, command)
+      expect(result.kind, command).toBe('deny')
+      expect(result.reason, command).toMatch(/could not be parsed safely/u)
+      expect(result.nextCalled, command).toBe(false)
+    }
+  })
+
+  it('refuses a message value the shell evaluates', async () => {
+    for (const [command, agentTool] of [
+      ['git commit -m "$(openspec archive auth)"', 'pwsh'],
+      ['git commit -m "see `openspec archive auth`"', 'bash'],
+      [`git commit -m "a \\" -m '$(openspec archive auth)' \\" b"`, 'bash'],
+    ] as const) {
+      const host = await gateHost()
+      const result = await gate(host, command, agentTool)
+      expect(result.kind, command).toBe('deny')
+      expect(result.reason, command).toMatch(/could not be parsed safely/u)
+      expect(result.nextCalled, command).toBe(false)
+    }
+  })
+
+  it('refuses an option value that is not a verified pair', async () => {
+    const host = await gateHost()
+    for (const command of [
+      `bash -c 'eval "$1"' --message "openspec archive auth"`,
+      `git -c alias.review='!bash -c' review -m 'openspec archive auth'`,
+      'git log -m "openspec archive auth"',
+      'openspec validate (openspec archive auth)',
+      'openspec "archive" auth',
+      'openspec --store team archive auth',
+      'Write-Output "openspec archive auth"',
+    ]) {
+      const result = await gate(host, command)
+      expect(result.kind, command).toBe('deny')
+      expect(result.reason, command).toMatch(/could not be parsed safely/u)
+      expect(result.nextCalled, command).toBe(false)
+    }
+  })
+})
+
 it.skipIf(process.platform !== 'win32')(
   'denies an uppercase archive name without evidence',
   async () => {
