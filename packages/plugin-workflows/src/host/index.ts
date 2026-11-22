@@ -521,18 +521,26 @@ interface SimpleWord {
   readonly end: number
 }
 
+/** A shell quote the scanner does not model: PowerShell also accepts these. */
+const SMART_QUOTE = /[\u2018\u2019\u201c\u201d]/u
+
+/** Whether one word is the bare token `text`, with no quoted fragment. */
+function isBareWord(word: SimpleWord | undefined, text: string): boolean {
+  return word !== undefined && word.quoted.length === 0 && word.bare.toLowerCase() === text
+}
+
 /**
  * Split one simple command into words, or return undefined when the text
  * carries shell structure outside quotes. A bare control character, escape,
- * substitution, comment, end-of-options marker, or parenthesized subexpression
- * is structure, as is a backslash or a doubled quote anywhere, because either
- * one moves a quote boundary in one shell. The caller then keeps the
+ * substitution, comment, or parenthesized subexpression is structure, as is a
+ * backtick, a smart quote, or a doubled or escaped quote anywhere, because each
+ * one moves a quote boundary in one supported shell. The caller then keeps the
  * fail-closed scan; a quoted body is skipped as one region.
  */
 function simpleWords(command: string): SimpleWord[] | undefined {
-  // A backslash escapes in Bash and moves a boundary in either shell, so it
-  // makes every later region uncertain; the whole command stays unmasked.
-  if (command.includes(String.fromCharCode(92))) return undefined
+  // A backtick escapes in PowerShell and a smart quote delimits a string there,
+  // so either one makes every region uncertain; nothing is masked.
+  if (command.includes('`') || SMART_QUOTE.test(command)) return undefined
   const words: SimpleWord[] = []
   let bare = ''
   let quoted: QuotedValue[] = []
@@ -550,8 +558,11 @@ function simpleWords(command: string): SimpleWord[] | undefined {
       const close = command.indexOf(char, index + 1)
       if (close < 0) return undefined
       const body = command.slice(index + 1, close)
-      // A doubled quote is the other shell's escape, so the boundary is uncertain.
+      // A doubled quote is the other shell's escape, so the boundary is uncertain,
+      // and a backslash escapes inside double quotes in Bash. A single-quoted body
+      // is literal in both shells, so its backslashes are data.
       if (body.includes(char + char)) return undefined
+      if (char === '"' && body.includes(String.fromCharCode(92))) return undefined
       start ??= index
       quoted.push({ quote: char, start: index, end: close + 1, body })
       index = close
@@ -572,9 +583,11 @@ function simpleWords(command: string): SimpleWord[] | undefined {
 
 /** Whether a quoted value is literal text in both shells. */
 function proseValue(value: QuotedValue): boolean {
-  // A double-quoted body is evaluated: an escape moves its boundary, and a
-  // backtick or a `$(` substitutes. A variable reference yields data, not code.
-  return value.quote === "'" || !/[\\`]|\$\(/u.test(value.body)
+  // A double-quoted body is evaluated: a backslash moves its boundary, and a
+  // backtick, `$(`, `${`, or `$[` substitutes or expands. A plain variable
+  // reference and a literal dollar sign are data. A single-quoted body is
+  // literal in both shells.
+  return value.quote === "'" || !/[\\`]|\$[({[]/u.test(value.body)
 }
 
 /**
@@ -582,18 +595,17 @@ function proseValue(value: QuotedValue): boolean {
  * --body` option, so the fall-back scan reads a commit message as prose instead
  * of shell structure. Among the verified pair's options, only a quoted value of
  * the option outside a quoted region is masked: the word after the option, or
- * one directly after its `=`. Another program, subcommand, or option, a quoted
- * fragment in the executable position, an unquoted, unterminated, concatenated,
- * or evaluated value, a `--` marker, and any other shell structure leave the
+ * one directly after its `=`. Another program, prefix, subcommand, or option, a
+ * quoted fragment in any of those positions, an unquoted, unterminated,
+ * concatenated, or evaluated value, and any other shell structure leave the
  * whole command unmasked: the fail-closed scan stays as today.
  */
 function maskMessageArguments(command: string): string {
   const words = simpleWords(command)
   if (words === undefined) return command
   let at = 0
-  if (words[0]?.bare.toLowerCase() === 'rtk') at = 1
-  else if (words[0]?.bare.toLowerCase() === 'pnpm' && words[1]?.bare.toLowerCase() === 'exec')
-    at = 2
+  if (isBareWord(words[0], 'rtk')) at = 1
+  else if (isBareWord(words[0], 'pnpm') && isBareWord(words[1], 'exec')) at = 2
   const head = [at, at + 1, at + 2].map((index) => {
     const word = words[index]
     // A quoted fragment in the executable position is not the verified pair.
@@ -606,13 +618,14 @@ function maskMessageArguments(command: string): string {
         ? new Set(['--body'])
         : undefined
   if (options === undefined) return command
-  // `--` ends the options, so a `-m` after it is a positional argument.
-  if (words.some((word) => word.bare === '--')) return command
   const start = head[0] === 'gh' ? 3 : 2
   const values: QuotedValue[] = []
   for (let index = at + start; index < words.length; index += 1) {
     const word = words[index]
     if (word === undefined) break
+    // `--` ends the options: the values found so far are data, and everything
+    // after it stays visible to the scan as positional arguments.
+    if (isBareWord(word, '--')) break
     const name = word.bare.toLowerCase()
     const equal = name.indexOf('=')
     const base = equal < 0 ? name : name.slice(0, equal)

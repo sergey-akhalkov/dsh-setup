@@ -9941,11 +9941,32 @@ describe('archive gate message data', () => {
       // A comment or `--` makes the following `-m` text, not an option.
       'git commit # -m "openspec archive auth"',
       'git commit -- -m "openspec archive auth"',
+      // A PowerShell escape or a smart-quote delimiter moves the real boundary.
+      'git commit --author "a`" -m "; openspec archive auth --yes; # "',
+      'git commit -m "safe \u201d; openspec archive auth --yes; # "',
+      // Bash brace substitution is evaluated text, not prose.
+      'git commit -m "${| openspec archive auth; }"',
+      'git commit -m "${ openspec archive auth; }"',
+      // A prefix token is verified whole, not by its bare fragment.
+      'rtk"evil" git commit -m "openspec archive auth"',
+      'pnpm ex"evil"ec git commit -m "openspec archive auth"',
     ]) {
       const result = await gate(host, command)
       expect(result.kind, command).toBe('deny')
       expect(result.reason, command).toMatch(/could not be parsed safely/u)
       expect(result.nextCalled, command).toBe(false)
+    }
+  })
+
+  it('allows a literal backslash in a single-quoted value and an end-of-options marker', async () => {
+    const host = await gateHost()
+    for (const command of [
+      "git commit -m 'openspec archive notes\\temp'",
+      'git commit -m "openspec archive fix" -- README.md',
+    ]) {
+      const result = await gate(host, command)
+      expect(result.kind, command).toBe('continue')
+      expect(result.nextCalled, command).toBe(true)
     }
   })
 
