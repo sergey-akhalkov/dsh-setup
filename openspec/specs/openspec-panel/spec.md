@@ -55,7 +55,7 @@ segments, with Changes selected on the first open. The Changes segment SHALL lis
 #### Scenario: Row carries the decision facts
 
 - **WHEN** an active change has 4 of 12 tasks done and carries a proposal and a design
-- **THEN** its row shows the name, the in-progress status, the task progress bar with `4/12`, the artifact facts, a one-line purpose, when it was last modified, and its last commit when available
+- **THEN** its row shows the name, the in-progress status, `4/12` in its numeric gutter, the artifact navigation, a two-line purpose, when it was last modified, and no commit fact
 
 #### Scenario: Unfinished first
 
@@ -361,34 +361,42 @@ fresh session SHALL start on Changes.
 
 ### Requirement: Change status, summary, and provenance
 
-Each change row and change header SHALL state a derived status — planning, ready to apply, applying,
-complete, or archived — a task progress bar with completed and total counts, a one-line purpose taken
-from the proposal's Why, the last-modified time, and the last commit when available.
+Each active change row SHALL state a derived status — planning, ready to apply, applying, complete, or
+archived — as a status dot with a short label, the task counts, a purpose taken from the proposal's
+Why clamped to two lines, and the last-modified time, inside the card layout. The change detail header
+SHALL state the derived status, the task counts, the purpose, the last-modified time, and the last
+commit when available. An active change row MUST NOT show commit facts; an archived row keeps the
+archive facts the `Archived changes are browsable` requirement states.
 
 #### Scenario: Planning change
 
 - **WHEN** a change has a proposal but no tasks
-- **THEN** its status reads planning in the attention tone and its progress states that tasks are not written yet
+- **THEN** its status reads planning in the attention colour, its gutter states a dash, and its facts say that tasks are not written yet
 
 #### Scenario: Ready to apply
 
 - **WHEN** a change has tasks and none is done
-- **THEN** its status reads ready to apply in the informational tone and its progress bar is empty
+- **THEN** its status reads ready to apply in the informational colour and its gutter states `0/14`
 
 #### Scenario: Applying
 
 - **WHEN** a change has 4 of 12 tasks done
-- **THEN** its status reads applying and its progress bar shows one third, with `4/12` as text
+- **THEN** its status reads applying and its gutter states `4/12` with no progress bar
 
 #### Scenario: Complete and archived
 
 - **WHEN** a change has all tasks done, and separately when it is archived
-- **THEN** the complete status uses the success tone and the archived status uses the neutral archived treatment with its archive date
+- **THEN** the complete status uses the success colour and the archived status uses the neutral archived treatment with its archive date
+
+#### Scenario: Provenance lives in the detail header
+
+- **WHEN** a change was last touched by commit `a841fd33`
+- **THEN** its active row shows no commit fact and its detail header shows `a841fd33`, the commit date and the subject on demand
 
 #### Scenario: Narrow panel keeps the facts
 
 - **WHEN** the row renders at the narrowest supported width
-- **THEN** the status, progress, purpose and provenance wrap without horizontal scrolling
+- **THEN** the gutter, the facts and the navigation row wrap or stack without horizontal scrolling and without losing a fact
 
 ### Requirement: Archived changes are browsable
 
@@ -523,19 +531,24 @@ block a read on git.
 
 The panel SHALL separate content into visually distinct tiers using the shipped primitives and design
 tokens: a page title, grouped section labels, a card surface with a hairline edge for each change and
-requirement, semantic status colours, a progress bar for task completion, and supporting icons for
-status, commit, and actions. It MUST NOT introduce a literal colour, font size, or spacing value where
-a design token exists, and every interactive row MUST keep the host focus ring.
+requirement, semantic status colours, task counts in a numeric gutter on active change rows, and
+supporting icons for status, commit, and actions. It MUST NOT introduce a literal colour, font size, or
+spacing value where a design token exists, and every interactive row MUST keep the host focus ring.
 
 #### Scenario: Status colours carry meaning
 
 - **WHEN** a status renders as planning, ready, applying, complete, or archived
-- **THEN** its colour comes from the matching semantic tag tone and the same status always uses the same tone
+- **THEN** its colour comes from the matching semantic state token and the same status always uses the same colour
 
 #### Scenario: Cards separate dense content
 
 - **WHEN** a change list, requirement list, or task list renders
 - **THEN** each item is a separate hairline card with its own padding and a heading tier above its supporting facts
+
+#### Scenario: Progress is a count, not a bar
+
+- **WHEN** an active change row renders task progress
+- **THEN** it states the counts as a numeral in the gutter and draws no tracking bar on the row
 
 #### Scenario: Narrow width stays readable
 
@@ -611,12 +624,21 @@ transition refresh is not periodic polling.
 
 ### Requirement: Change-card actions
 
-A change card in the `Changes` list and the change detail header SHALL offer one state-dependent action: `Apply change` while the change is not complete, and `Archive` when every task is done. `Apply change` SHALL only fill the `/openspec-apply-change <name>` draft. `Archive` SHALL be the user's authorization: one archive request, a busy state cleared after success or refusal, and the Host-reported archived address opened only when one exists. The card action MUST NOT open the card.
+A change card for an active change SHALL render both actions the panel can perform — `Apply` and
+`Archive` — and SHALL enable only the one matching the change's task completion: `Apply` while the
+change is not complete, `Archive` once every task is done. The disabled action MUST be inert:
+activating it sends no request and opens nothing. The disabled control SHALL state the reason for its
+own state: `Archive` on an incomplete change states that every task must be complete before archiving,
+and `Apply` on a complete change states that the change is complete. `Apply` SHALL only fill the
+`/openspec-apply-change <name>` draft. `Archive` SHALL be the user's authorization: one archive
+request, a busy state cleared after success or refusal, and the Host-reported archived address opened
+only when one exists. Neither action MUST open the card. The change detail header keeps its single
+state-dependent action.
 
 #### Scenario: Apply on a non-complete change fills the draft
 
-- **WHEN** an active change has 4 of 12 tasks done and the user activates its action
-- **THEN** the action reads `Apply change`, the composer draft becomes `/openspec-apply-change <name>`, and no message is sent
+- **WHEN** an active change has 4 of 12 tasks done and the user activates `Apply` on its card
+- **THEN** the composer draft becomes `/openspec-apply-change <name>`, no message is sent, and the card's `Archive` is disabled
 
 #### Scenario: Archive on a complete change archives it
 
@@ -625,8 +647,18 @@ A change card in the `Changes` list and the change detail header SHALL offer one
 
 #### Scenario: Archive is not offered on an incomplete change
 
-- **WHEN** an active change has pending tasks
-- **THEN** neither its card nor its detail header shows `Archive`, and an archive request for it is refused
+- **WHEN** an active change has pending tasks and the user activates `Archive` on its card
+- **THEN** no archive request is sent, no busy state appears, the change stays active, the disabled control states that every task must be complete, and neither its card nor its detail header offers a usable `Archive`
+
+#### Scenario: Disabled action announces itself
+
+- **WHEN** a card renders a disabled action
+- **THEN** the control's accessible name or description states why it is unavailable for that card's state, and keyboard focus skips no enabled control
+
+#### Scenario: Apply is not offered on a complete change
+
+- **WHEN** an active change has every task done and the user activates `Apply` on its card
+- **THEN** no draft is filled, and the disabled control states that the change is complete
 
 #### Scenario: A refusal keeps the change active
 
@@ -640,7 +672,7 @@ A change card in the `Changes` list and the change detail header SHALL offer one
 
 #### Scenario: The click is the authorization
 
-- **WHEN** the user activates `Archive`
+- **WHEN** the user activates an enabled `Archive`
 - **THEN** no separate question, dialog, or chat command is required, and the Host records the click as the authorization for that archive
 
 #### Scenario: Archived change appears in Archive
@@ -754,3 +786,40 @@ understand the review field MUST keep rendering the row.
 
 - **WHEN** a client that predates the review field reads the change list
 - **THEN** it renders the row unchanged and ignores the field
+
+### Requirement: Change card gutter
+
+A change card for an active change in the `Changes` list SHALL render a fixed-width numeric gutter,
+separated from the card body by a hairline. The gutter SHALL state the completed and total task counts
+over a `tasks` label, or a dash when no tasks are written.
+
+#### Scenario: Counts lead the row
+
+- **WHEN** an active change reports 3 of 12 tasks done
+- **THEN** its gutter states `3/12` above `tasks`, and the body states the name, purpose, facts and navigation
+
+#### Scenario: No tasks written
+
+- **WHEN** an active change has a proposal but no tasks file
+- **THEN** the gutter states a dash instead of a fraction and the facts row states that no tasks are written yet
+
+### Requirement: Change card body
+
+The body of an active change card SHALL state, in order, the change name with its last-modified time,
+the proposal's purpose clamped to two lines, one facts row, and one navigation row carrying the
+artifact entries beside the card's actions. An archived change card SHALL keep its current rendering.
+
+#### Scenario: Purpose stays short
+
+- **WHEN** a proposal's Why runs longer than two lines of the body at the current width
+- **THEN** the purpose shows two lines with a trailing ellipsis and the full text on demand
+
+#### Scenario: Navigation row
+
+- **WHEN** an active change carries a proposal, a design, delta spec requirements and tasks
+- **THEN** one navigation row lists those artifacts beside the card's actions, and choosing an entry opens that artifact
+
+#### Scenario: Archived row keeps its history layout
+
+- **WHEN** a card renders an archived change in the `Archive` segment or in the empty-state recents
+- **THEN** it keeps the current archived rendering — archive date, task completion, purpose and last commit — and offers no action
