@@ -997,7 +997,10 @@ function main(): number {
     step(
       'the installed English catalog adapter resolves, and disappears without the upstream',
       () => {
-        if (!versions.installBundles.git.some((spec) => spec.includes('huashu-design'))) {
+        const spec = versions.installBundles.git.find((candidate) =>
+          candidate.includes('huashu-design'),
+        )
+        if (spec === undefined) {
           console.log('       no huashu-design git bundle is declared; skipped')
           return
         }
@@ -1077,12 +1080,18 @@ function main(): number {
             throw new Error('the catalog base directory does not exist')
           }
 
-          const detached = join(probeDir, 'detached.mjs')
-          cpSync(adapter, detached)
-          const absent = readEntry(detached, probeDir)
+          // Remove the upstream from the same profile while the installed
+          // adapter stays in place: the entry must disappear. The install is
+          // restored afterwards so the next step still exercises a full profile.
+          const upstream = join(profileDir, 'node_modules', 'huashu-design')
+          if (!existsSync(upstream)) throw new Error('the upstream package is not installed')
+          rmSync(upstream, { recursive: true, force: true })
+          const absent = readEntry(adapter, profileDir)
           if (absent.count !== 0) {
             throw new Error('the adapter lists an entry without the upstream package')
           }
+          const restored = shell(cliBase, ['plugin', '--profile', 'ci', 'add', spec], env, 600_000)
+          if (restored.status !== 0) throw fail(restored)
         } finally {
           cleanup(probeDir)
         }

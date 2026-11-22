@@ -23,8 +23,11 @@ the authority for the work. The model reads Chinese; the user never has to.
 
 The adapter must win against the upstream bundled candidate (600) and lose against a project or user
 skill (500 and below), which is the precedence the packaged-skills requirement already promises for
-local overrides. 550 is that gap. A test asserts the inequality rather than the number alone, so a
-future rank change in the harness fails loudly instead of silently inverting precedence.
+local overrides. 550 is that gap. The precedence is verified against the shipped registry itself
+(`@deepseek-ai/dsh-skill`, mounted in a real Cordis context with a bundled-rank candidate and a
+user-rank candidate), not against a stub of the registry, and the test asserts the relation with the
+exported `BUNDLED_SKILL_RANK` rather than the bare number, so a harness rank change fails loudly
+instead of silently inverting precedence.
 
 ### The description is derived metadata, and it is documented as such
 
@@ -37,10 +40,15 @@ scope or triggers must update this text, which `design.md` and the docs state.
 ### Read the upstream at runtime, never ship its bytes
 
 `createRequire(import.meta.url).resolve('huashu-design/package.json')` from the installed plugin
-finds the profile-installed package with the profile's hoisted node linker. The candidate carries that
-directory as its resource base, so the manual's relative `references/`, `assets/`, and `scripts/` paths
-resolve, and the body is read on load, never copied. When the package is absent, `list` returns
-nothing: no dead catalog entry, no error, and no fetch.
+finds the profile-installed package with the profile's hoisted node linker. A profile that links a
+checkout is the one case where this module sits outside the profile tree — the module anchor then
+misses — so `DSH_PROFILE_DIR`, and then `DSH_HOME` with `DSH_PROFILE`, are tried as anchors too; a
+linked checkout is the documented development loop, so the adapter must work there. The candidate
+carries the found directory as its resource base, so the manual's relative `references/`, `assets/`,
+and `scripts/` paths resolve, and the body is read on load, never copied. When the package is absent,
+`list` returns nothing: no dead catalog entry, no error, and no fetch. The acceptance run removes the
+upstream from the throwaway profile while leaving the adapter installed and asserts that the entry
+disappears, then reinstalls it.
 
 ### English directive after the body, separated
 

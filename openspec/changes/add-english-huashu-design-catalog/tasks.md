@@ -27,11 +27,11 @@ Executed on 2026-11-22 against this change's tree, at `37e4164` plus the review 
 | --- | --- |
 | `pnpm typecheck` | pass — `tsc -p tsconfig.check.json`, no errors |
 | `pnpm lint` | pass — 506 files checked, 21 warnings and 22 infos, no errors |
-| `pnpm test` | pass — 171 files, 3175 tests |
-| `pnpm validate:repo` | pass — 1386 files, 19 plugin packages, no problems |
+| `pnpm test` | pass — 171 files, 3177 tests, including the real-registry precedence test (the shipped `@deepseek-ai/dsh-skill` registry resolves the adapter entry over the bundled one and lets a rank-500 user copy win) |
+| `pnpm validate:repo` | pass — 1387 files, 19 plugin packages, no problems |
 | `pnpm validate:composition` | pass — the setup bundle composes on DSH 0.2.2-rc.2 |
 | `pnpm gen:check` | pass — 686 generated files match 19 plugins |
-| `pnpm validate:installer` | pass — including `the installed English catalog adapter resolves, and disappears without the upstream`: the installed vendored copy lists one English entry at rank 550 with the directive appended and a base directory that exists, and the same code copied outside the profile lists nothing |
+| `pnpm validate:installer` | pass — including `the installed English catalog adapter resolves, and disappears without the upstream`: the installed vendored copy lists one English entry at rank 550 with the directive appended and a base directory that exists; the upstream package is then removed from that same profile while the adapter stays, the entry disappears, and the package is reinstalled so the next step runs on a complete profile |
 | `pnpm dogfood` | pass — installer round-trip against a copy of the `desktop` profile; the live profile and the running Harness were not touched |
 
 The throwaway-profile probe that first surfaced the linked-checkout gap ran against a profile whose
