@@ -62,16 +62,18 @@ argument to `$0`/`$1`; the verified pairs cannot, because `commit` and `pr creat
 values as message text.
 
 The mask is one pass. Outside quoted regions it recognizes `-m`, `--message`, or `--body`
-(case-insensitive) followed by an optional `=` for the long forms and a quoted value, and replaces
-the value's characters with spaces. A single-quoted value is masked: it is literal in both shells,
-so a backslash, a backtick, a dollar sign, or a smart apostrophe inside it is data. A double-quoted
-value is masked only when it contains no backslash, no backtick, no smart double quote (U+201C,
-U+201D), none of Bash's `$(`, `${`, or `$[` expansion forms, and its closing quote is the first
-following quote; a plain variable reference and a literal dollar sign stay data. A bare backslash,
-backtick, smart quote, or doubled quote anywhere in the command is structure, as is a here-string, an
-unquoted or unterminated value, and any other uncertain value or boundary: none of them masks
-anything, and the function returns the original unmasked command instead of resuming from a guessed
-quote boundary. An exception never escapes; an unreadable input keeps today's result.
+(case-insensitive) followed by an optional `=` for the long forms only, and a quoted value, and
+replaces the value's characters with spaces. A single-quoted value is masked: it is literal in both
+shells, so a backslash, a backtick, a dollar sign, or a PowerShell alternate double quote
+(U+201C–U+201F) inside it is data; its own alternate single quotes (U+2018–U+201B) end the string, so
+they mask nothing. A double-quoted value is masked only when it contains no backslash, no backtick,
+no `$(`, `${`, or `$[` expansion, no PowerShell alternate double quote (U+201C–U+201F), and its
+closing quote is the first following quote; a plain variable reference and a literal dollar sign stay
+data. A bare backslash, backtick, smart quote (U+2018–U+201F), a doubled quote, a `@"` or `@'`
+here-string opener, an expansion inside any other double-quoted argument, an unquoted or unterminated
+value, and any other uncertain value or boundary mask nothing in the whole command: the function
+returns the original unmasked command instead of resuming from a guessed quote boundary. An
+exception never escapes; an unreadable input keeps today's result.
 
 Safety argument:
 
@@ -81,12 +83,12 @@ Safety argument:
   `bash -c 'eval "$1"' --message "openspec archive auth"` and
   `git -c alias.review='!bash -c' review -m 'openspec archive auth'` keep their original text and
   are refused.
-- A double-quoted value with a backslash, a backtick, a smart double quote, or a `$(`, `${`, or `$[`
-  expansion is not masked, and an uncertain quote boundary abandons the mask for the whole command,
-  so an escaped quote, a PowerShell backtick escape, a smart-quote delimiter, or a Bash brace
+- A double-quoted value with a backslash, a backtick, an expansion, or a PowerShell alternate double
+  quote is not masked, and an uncertain quote boundary abandons the mask for the whole command, so an
+  escaped quote, a PowerShell backtick escape, an alternate-quote delimiter, or a Bash brace
   substitution can no longer be mistaken for the value end and stays visible to the scan.
-- A single-quoted value is literal in both shells, so masking it cannot hide executed text, and its
-  backslashes, backticks, and smart apostrophes stay data.
+- Only a single-quoted value is literal in both shells, and only for the characters neither shell
+  treats as a delimiter there, so masking it cannot hide executed text.
 - The option is recognized only outside quotes and only before a `--` marker, so neither a `-m`
   inside prose nor a positional argument after the marker can start a mask that crosses into real
   code (for example `echo "a -m " ; openspec archive auth`).
