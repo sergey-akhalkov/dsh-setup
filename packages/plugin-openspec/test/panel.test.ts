@@ -233,6 +233,8 @@ const COPY: Record<string, string> = {
   'change.archive': 'Archive',
   'change.archiving': 'Archiving…',
   'change.archiveRefused': 'Archive refused',
+  'change.applyComplete': 'the change is complete',
+  'change.archiveIncomplete': 'every task must be complete before archiving',
   'change.tasks': 'tasks',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
@@ -271,7 +273,7 @@ const COPY: Record<string, string> = {
   'review.specFindings': 'spec findings',
   'review.specError': 'spec error',
   'review.specMissing': 'spec not reviewed',
-  'review.reviewed': 'reviewed',
+  'review.coverage': 'review',
   'review.running': 'spec review running - attempt',
   'review.tasksUnit': 'reviewing tasks',
   'review.integrationUnit': 'integration review running - attempt',
@@ -691,8 +693,16 @@ function cardButtons(tree: unknown): Found[] {
     (node) =>
       (node.type === 'button' || node.type === 'Button' || node.type === 'div') &&
       typeof node.props.className === 'string' &&
-      /(?:^|\s)dsh-openspec-(?:card|history-row)(?:\s|$)/.exec(node.props.className) !== null,
+      /(?:^|\s)dsh-openspec-(?:card|change-row|history-row)(?:\s|$)/.exec(node.props.className) !==
+        null,
   )
+}
+
+/** One native control inside a change row, by its visible label. */
+function rowButton(row: Found, label: string): Found {
+  const found = nodes(row).find((node) => node.type === 'button' && textOf(node) === label)
+  if (found === undefined) throw new Error(`row button ${label} missing`)
+  return found
 }
 
 function buttonByText(tree: unknown, label: string): Found {
@@ -1910,43 +1920,41 @@ describe('OpenSpec root view', () => {
     expect(text).toContain('applying')
     expect(text).toContain('add-auth')
     expect(text).toContain('4/12')
-    expect(text).toContain('10 req')
+    expect(text).toContain('specs 10')
     expect(text).toContain('Add authentication to the product.')
     expect(text).toContain('proposal')
     expect(text).toContain('design')
     expect(text).toContain('specs')
     expect(text).toContain('updated 2h ago')
-    expect(text).toContain('7e87448')
-    expect(text).toContain('2026-10-27')
+    // The active row states no commit fact; the change detail header owns provenance.
+    expect(text).not.toContain('7e87448')
+    expect(text).not.toContain('2026-10-27')
+    const gutter = nodes(card).find((node) => node.props.className === 'dsh-openspec-change-gutter')
+    expect(textOf(gutter)).toContain('4/12')
+    expect(textOf(gutter)).toContain('tasks')
     const head = nodes(card).find((node) => node.props.className === 'dsh-openspec-card-head')
     expect(textOf(head)).toContain('updated 2h ago')
     expect(textOf(head)).not.toContain('4/12')
     const purpose = nodes(card).find((node) =>
       String(node.props.className ?? '').includes('dsh-openspec-purpose-clamp'),
     )
-    expect(String(purpose?.props.className)).toContain('dsh-openspec-purpose-clamp')
-    const phaseTag = typed(tree, 'Tag').find((tag) => tag.props.children === 'applying')
-    expect(phaseTag?.props.tone).toBe('info')
-    // The status tag is the card's only phase marker; no spinner sits beside it.
-    expect(typed(card, 'StateDot')).toHaveLength(0)
-    const progress = nodes(tree).find((node) => node.props.role === 'progressbar')
-    expect(progress?.props['aria-valuenow']).toBe(4)
-    expect(progress?.props['aria-valuemax']).toBe(12)
-    expect(typed(tree, 'Tooltip')[0]?.props.label).toBe('Add authentication to the product.')
+    expect(String(purpose?.props.className)).toContain('dsh-openspec-purpose-two')
+    expect(purpose?.props.title).toBe('Add authentication to the product.')
+    const facts = nodes(card).find((node) => node.props.className === 'dsh-openspec-change-facts')
+    expect(textOf(facts)).toContain('applying')
+    expect(typed(facts, 'StateDot').map((dot) => dot.props.state)).toEqual(['ongoing'])
+    // The count in the gutter is the progress fact; the row draws no tracking bar.
+    expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
   })
 
-  it('links the commit hash to its origin page without leaving the card', () => {
+  it('links the archived commit hash to its origin page without leaving the card', () => {
     const commit = { ...COMMIT, url: 'https://github.com/o/r/commit/7e87448' }
     const tree = RootView(
       rootProps({
+        segment: 'archive',
         changes: {
           phase: 'ready',
-          value: listOf([
-            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
-              phase: 'applying',
-              commit,
-            }),
-          ]),
+          value: listOf([], [{ ...ARCHIVED_ROW, commit }], { archived: 1 }),
         },
         now: NOW,
       }),
@@ -1963,17 +1971,13 @@ describe('OpenSpec root view', () => {
     expect(stops).toEqual(['stopped'])
   })
 
-  it('keeps the commit hash plain when the host has no commit page', () => {
+  it('keeps the archived commit hash plain when the host has no commit page', () => {
     const tree = RootView(
       rootProps({
+        segment: 'archive',
         changes: {
           phase: 'ready',
-          value: listOf([
-            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
-              phase: 'applying',
-              commit: COMMIT,
-            }),
-          ]),
+          value: listOf([], [ARCHIVED_ROW], { archived: 1 }),
         },
         now: NOW,
       }),
@@ -1984,7 +1988,7 @@ describe('OpenSpec root view', () => {
     expect(textOf(card)).toContain('7e87448')
   })
 
-  it('shows the whole Why in the card tooltip and expands it on focus', () => {
+  it('clamps the purpose to two lines with the whole Why on its title', () => {
     const why = 'Add authentication to the product.\n\nSecond paragraph.'
     const tree = RootView(
       rootProps({
@@ -2001,17 +2005,20 @@ describe('OpenSpec root view', () => {
     )
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
-    expect(typed(card, 'Tooltip')[0]?.props.label).toBe(why)
-    expect(typed(card, 'Tooltip')[0]?.props.portal).toBe(true)
     const purpose = nodes(card).find((node) =>
       String(node.props.className ?? '').includes('dsh-openspec-purpose-clamp'),
     )
+    expect(String(purpose?.props.className)).toContain('dsh-openspec-purpose-two')
+    expect(purpose?.props.title).toBe(why)
     expect(purpose?.props.onClick).toBeUndefined()
     expect(String(purpose?.props.className)).not.toContain('purpose-toggle')
+    // The full text rides on the element itself; no extra tooltip anchor is rendered.
+    expect(typed(card, 'Tooltip')).toHaveLength(0)
   })
 
-  it('opens a change at the artifact whose card tag was clicked', () => {
+  it('opens a change at the artifact whose navigation button was clicked', () => {
     const onOpenArtifact = vi.fn()
+    const onOpenChange = vi.fn()
     const tree = RootView(
       rootProps({
         changes: {
@@ -2026,18 +2033,22 @@ describe('OpenSpec root view', () => {
           ]),
         },
         onOpenArtifact,
+        onOpenChange,
       }),
     )
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
-    const link = nodes(card).find(
-      (node) => node.props.className === 'dsh-openspec-artifact-link' && textOf(node) === 'design',
-    )
-    if (link === undefined) throw new Error('artifact link missing')
-    ;(link.props.onClick as (event: { stopPropagation(): void }) => void)({
-      stopPropagation: () => {},
-    })
-    expect(onOpenArtifact).toHaveBeenCalledWith('add-auth', false, 'design')
+    for (const kind of ['proposal', 'design', 'specs', 'tasks'] as const) {
+      const link = rowButton(card, kind)
+      const stop = vi.fn()
+      ;(link.props.onClick as (event: { stopPropagation(): void }) => void)({
+        stopPropagation: stop,
+      })
+      expect(stop).toHaveBeenCalledTimes(1)
+      expect(onOpenArtifact).toHaveBeenLastCalledWith('add-auth', false, kind)
+    }
+    expect(onOpenArtifact).toHaveBeenCalledTimes(4)
+    expect(onOpenChange).not.toHaveBeenCalled()
   })
 
   it('maps planning, complete, and archived cards to their semantic tones', () => {
@@ -2055,10 +2066,16 @@ describe('OpenSpec root view', () => {
         changes: { phase: 'ready', value: listOf([planning, complete]) },
       }),
     )
-    const tags = typed(tree, 'Tag')
-    expect(tags.find((tag) => tag.props.children === 'planning')?.props.tone).toBe('warning')
-    expect(tags.find((tag) => tag.props.children === 'complete')?.props.tone).toBe('success')
-    expect(textOf(tree)).toContain('tasks not written yet')
+    const cards = cardButtons(tree)
+    const planningCard = cards.find((card) => textOf(card).includes('new-idea'))
+    const completeCard = cards.find((card) => textOf(card).includes('done-change'))
+    if (planningCard === undefined || completeCard === undefined) throw new Error('card missing')
+    expect(textOf(planningCard)).toContain('planning')
+    expect(textOf(planningCard)).toContain('tasks not written yet')
+    expect(textOf(planningCard)).toContain('—')
+    expect(typed(planningCard, 'StateDot').map((dot) => dot.props.state)).toEqual(['warning'])
+    expect(typed(completeCard, 'StateDot').map((dot) => dot.props.state)).toEqual(['done'])
+    expect(typed(tree, 'Tag').find((tag) => tag.props.children === 'planning')).toBeUndefined()
     const archivedTree = RootView(
       rootProps({
         segment: 'archive',
@@ -2075,6 +2092,77 @@ describe('OpenSpec root view', () => {
     expect(archivedHeadTags).toContain('archived')
     expect(archivedHeadTags).not.toContain('2026-10-27')
     expect(cardButtons(archivedTree)[0]?.props.className).toContain('dsh-openspec-card-archived')
+  })
+
+  it('keeps the archived row history layout and offers no action', () => {
+    const tree = RootView(
+      rootProps({
+        segment: 'archive',
+        changes: { phase: 'ready', value: listOf([], [ARCHIVED_ROW], { archived: 1 }) },
+        now: NOW,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    expect(String(card.props.className)).toContain('dsh-openspec-card-archived')
+    const text = textOf(card)
+    expect(text).toContain('updated 9d ago')
+    expect(text).toContain('5/5 tasks')
+    expect(text).toContain('Add the admin indicator to the app.')
+    expect(text).toContain('7e87448')
+    // The archived branch keeps its history facts and renders no control at all.
+    expect(nodes(card).filter((node) => node.type === 'button')).toHaveLength(0)
+    expect(text).not.toContain('Apply change')
+    expect(text).not.toContain('Archive')
+    expect(nodes(card).some((node) => node.props.className === 'dsh-openspec-change-gutter')).toBe(
+      false,
+    )
+  })
+
+  it('disables Archive on an incomplete change and names its gate', () => {
+    const onArchiveChange = vi.fn()
+    const working = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, { phase: 'applying' })
+    const tree = RootView(
+      rootProps({
+        changes: { phase: 'ready', value: listOf([working]) },
+        onArchiveChange,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const archive = rowButton(card, 'Archive')
+    expect(archive.props.disabled).toBe(true)
+    expect(archive.props.title).toBe('every task must be complete before archiving')
+    // A disabled action is inert: firing its handler sends no archive request.
+    ;(archive.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: () => {},
+    })
+    expect(onArchiveChange).not.toHaveBeenCalled()
+    expect(rowButton(card, 'Apply change').props.disabled).toBe(false)
+  })
+
+  it('disables Apply on a complete change and states that it is complete', () => {
+    const onApply = vi.fn()
+    const complete = row('done-change', 'complete', 2, 2, EMPTY_PRESENCE, { phase: 'complete' })
+    const tree = RootView(
+      rootProps({
+        changes: { phase: 'ready', value: listOf([complete]) },
+        onApply,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const apply = rowButton(card, 'Apply change')
+    expect(apply.props.disabled).toBe(true)
+    expect(apply.props.title).toBe('the change is complete')
+    // A disabled action is inert: firing its handler fills no draft.
+    ;(apply.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: () => {},
+    })
+    expect(onApply).not.toHaveBeenCalled()
+    const archive = rowButton(card, 'Archive')
+    expect(archive.props.disabled).toBe(false)
+    expect(archive.props.title).toBeUndefined()
   })
 
   it('groups unfinished changes before complete ones', () => {
@@ -3102,9 +3190,7 @@ describe('OpenSpec tab bodies', () => {
         textOf(entry).includes(name),
       )
       if (card === undefined) throw new Error(`card ${name} missing`)
-      const button = typed(card, 'Button').find((entry) => entry.props.children === 'Archive')
-      if (button === undefined) throw new Error(`archive action ${name} missing`)
-      return button
+      return rowButton(card, 'Archive')
     }
     const activate = (button: Found): void => {
       ;(button.props.onClick as (event: { stopPropagation(): void }) => void)({
@@ -3149,8 +3235,7 @@ describe('OpenSpec tab bodies', () => {
       textOf(entry).includes('done-move'),
     )
     if (card === undefined) throw new Error('card missing')
-    const button = typed(card, 'Button').find((entry) => entry.props.children === 'Archive')
-    if (button === undefined) throw new Error('archive action missing')
+    const button = rowButton(card, 'Archive')
     ;(button.props.onClick as (event: { stopPropagation(): void }) => void)({
       stopPropagation: () => {},
     })
@@ -3193,7 +3278,7 @@ describe('OpenSpec tab bodies', () => {
     expect(onOpenChange).toHaveBeenCalledTimes(2)
   })
 
-  it('puts the state action on each card and stops its click from opening the row', () => {
+  it('offers both actions on each card and stops their click from opening the row', () => {
     const onOpenChange = vi.fn()
     const onApply = vi.fn()
     const onArchiveChange = vi.fn()
@@ -3207,21 +3292,26 @@ describe('OpenSpec tab bodies', () => {
         onArchiveChange,
       }),
     )
+    const cards = cardButtons(tree)
+    const doneCard = cards.find((card) => textOf(card).includes('done-change'))
+    const workingCard = cards.find((card) => textOf(card).includes('add-auth'))
+    if (doneCard === undefined || workingCard === undefined) throw new Error('card missing')
+    // Both actions render on both cards; only the state-matching one is enabled.
+    expect(rowButton(doneCard, 'Apply change').props.disabled).toBe(true)
+    expect(rowButton(workingCard, 'Archive').props.disabled).toBe(true)
     const stop = vi.fn()
-    const archiveButton = buttonByText(tree, 'Archive')
+    const archiveButton = rowButton(doneCard, 'Archive')
     ;(archiveButton.props.onClick as (event: { stopPropagation(): void }) => void)({
       stopPropagation: stop,
     })
     expect(stop).toHaveBeenCalledTimes(1)
     expect(onArchiveChange).toHaveBeenCalledWith('done-change')
     expect(onOpenChange).not.toHaveBeenCalled()
-    const applyButton = buttonByText(tree, 'Apply change')
+    const applyButton = rowButton(workingCard, 'Apply change')
     ;(applyButton.props.onClick as (event: { stopPropagation(): void }) => void)({
       stopPropagation: () => {},
     })
     expect(onApply).toHaveBeenCalledWith('add-auth')
-    const doneCard = cardButtons(tree).find((card) => textOf(card).includes('done-change'))
-    if (doneCard === undefined) throw new Error('complete card missing')
     click(doneCard)
     expect(onOpenChange).toHaveBeenCalledWith('done-change', false)
   })
@@ -3232,7 +3322,9 @@ describe('OpenSpec tab bodies', () => {
     const busyTree = RootView(
       rootProps({ changes: list, archiveState: { name: 'done-change', busy: true } }),
     )
-    expect(buttonByText(busyTree, 'Archiving…').props.disabled).toBe(true)
+    const busyCard = cardButtons(busyTree)[0]
+    if (busyCard === undefined) throw new Error('busy card missing')
+    expect(rowButton(busyCard, 'Archiving…').props.disabled).toBe(true)
     const refusedTree = RootView(
       rootProps({
         changes: list,
@@ -3241,7 +3333,9 @@ describe('OpenSpec tab bodies', () => {
     )
     expect(textOf(refusedTree)).toContain('Archive refused')
     expect(textOf(refusedTree)).toContain('the run step is open')
-    expect(buttonByText(refusedTree, 'Archive').props.disabled).toBe(false)
+    const refusedCard = cardButtons(refusedTree)[0]
+    if (refusedCard === undefined) throw new Error('refused card missing')
+    expect(rowButton(refusedCard, 'Archive').props.disabled).toBe(false)
   })
 
   it('dispatches the archived tab address to the archived change body', () => {
@@ -4843,7 +4937,7 @@ describe('OpenSpec panel capability body', () => {
 })
 
 describe('OpenSpec panel visual contract', () => {
-  it('puts one labels row under the two progress bars', () => {
+  it('puts the count in a gutter above one facts row and one navigation row', () => {
     const review: ChangeReviewSummary = {
       spec: {
         verdict: 'PASS',
@@ -4859,10 +4953,14 @@ describe('OpenSpec panel visual contract', () => {
         changes: {
           phase: 'ready',
           value: listOf([
-            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
-              phase: 'applying',
-              review,
-            }),
+            row(
+              'add-auth',
+              'in-progress',
+              4,
+              12,
+              { proposal: true, design: true, tasks: true, specs: 2 },
+              { phase: 'applying', review, requirementCount: 2 },
+            ),
           ]),
         },
         now: NOW,
@@ -4871,30 +4969,39 @@ describe('OpenSpec panel visual contract', () => {
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
     const order = nodes(card)
-    const progress = order.find((node) => node.props.className === 'dsh-openspec-card-progress')
-    const labels = order.find((node) => node.props.className === 'dsh-openspec-card-labels')
-    if (progress === undefined || labels === undefined) throw new Error('card layout missing')
-    expect(order.indexOf(progress)).toBeLessThan(order.indexOf(labels))
-    const bars = nodes(progress).filter((node) => node.props.role === 'progressbar')
-    expect(bars).toHaveLength(2)
-    expect(bars[0]?.props['aria-valuenow']).toBe(4)
-    expect(bars[0]?.props['aria-valuemax']).toBe(12)
-    expect(bars[1]?.props['aria-valuenow']).toBe(10)
-    expect(bars[1]?.props['aria-valuemax']).toBe(16)
-    expect(textOf(progress)).toContain('4/12 tasks')
-    expect(textOf(progress)).toContain('10/16 tasks reviewed')
-    expect(typed(card, 'Tooltip').map((tooltip) => tooltip.props.label)).toContain(
-      'No portable task-review PASS for: 2.3, 4.1',
+    const gutter = order.find((node) => node.props.className === 'dsh-openspec-change-gutter')
+    const facts = order.find((node) => node.props.className === 'dsh-openspec-change-facts')
+    const nav = order.find((node) => node.props.className === 'dsh-openspec-change-nav')
+    if (gutter === undefined || facts === undefined || nav === undefined) {
+      throw new Error('card layout missing')
+    }
+    expect(order.indexOf(gutter)).toBeLessThan(order.indexOf(facts))
+    expect(order.indexOf(facts)).toBeLessThan(order.indexOf(nav))
+    expect(textOf(gutter)).toContain('4/12')
+    expect(textOf(gutter)).toContain('tasks')
+    expect(textOf(facts)).toContain('applying')
+    expect(textOf(facts)).toContain('spec PASS')
+    expect(textOf(facts)).toContain('review 10/16')
+    const coverage = order.find((node) => node.props.className === 'dsh-openspec-change-coverage')
+    expect(coverage?.props.title).toBe('No portable task-review PASS for: 2.3, 4.1')
+    // The gutter count and the coverage word are counts, not tracking bars.
+    expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
+    // One navigation row carries the artifact entries beside both actions.
+    expect(
+      nodes(nav)
+        .filter((node) => node.type === 'button')
+        .map((node) => textOf(node)),
+    ).toEqual(['proposal', 'design', 'specs 2', 'tasks', 'Apply change', 'Archive'])
+    expect(rowButton(card, 'Archive').props.title).toBe(
+      'every task must be complete before archiving',
     )
-    // Labels are the phase and the settled review units, in that order, with no
-    // duplicate phase tag in the card head and no plugin-drawn ring glyph.
-    expect(typed(labels, 'Tag').map((tag) => tag.props.children)).toEqual(['applying', 'spec PASS'])
-    const head = order.find((node) => node.props.className === 'dsh-openspec-card-head')
-    expect(typed(head, 'Tag')).toHaveLength(0)
+    // The verdict word takes its colour from the semantic state tokens.
+    expect(PANEL_CSS).toContain('.dsh-openspec-change-verdict-success')
+    expect(PANEL_CSS).toContain('var(--dsw-alias-state-success-secondary)')
     expect(PANEL_CSS).not.toContain('dsh-openspec-review-ring')
   })
 
-  it('omits the review bar until a task is checked', () => {
+  it('states the review coverage only once a task is checked', () => {
     const tree = RootView(
       rootProps({
         changes: {
@@ -4911,8 +5018,51 @@ describe('OpenSpec panel visual contract', () => {
     )
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
-    expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(1)
+    expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
     expect(textOf(card)).toContain('ready to apply')
+    expect(
+      nodes(card).some((node) => node.props.className === 'dsh-openspec-change-coverage'),
+    ).toBe(false)
+  })
+
+  it('lets a long live-review fact wrap instead of clipping it', () => {
+    const section =
+      '1. Change row markup and styles (owns packages/plugin-openspec/src/client/index.tsx)'
+    const live: ReviewLiveEntry[] = [
+      {
+        session: 's1',
+        runId: 'run-long',
+        change: 'add-auth',
+        definition: 'task-review',
+        unit: 'tasks',
+        label: section,
+        state: 'live',
+        attempt: 1,
+        since: '2026-11-05T16:00:00Z',
+      },
+    ]
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, { phase: 'applying' }),
+          ]),
+        },
+        live: { 'add-auth': live },
+        now: NOW,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const facts = nodes(card).find((node) => node.props.className === 'dsh-openspec-change-facts')
+    // The reviewed unit's own text rides in the facts row, so it must stay whole and wrap.
+    expect(textOf(facts)).toContain(section)
+    const verdict = /\.dsh-openspec-change-verdict \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
+    expect(verdict).toContain('overflow-wrap: anywhere')
+    expect(verdict).not.toContain('nowrap')
+    const phase = /\.dsh-openspec-change-phase \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
+    expect(phase).toContain('white-space: nowrap')
   })
 
   it('maps each phase to one semantic tag tone', () => {

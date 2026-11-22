@@ -206,6 +206,12 @@ window.__ModuleLoader__.load({
       if (phase === "archived") return "quiet";
       return "info";
     }
+    function phaseDot(phase) {
+      if (phase === "planning") return "warning";
+      if (phase === "complete") return "done";
+      if (phase === "archived") return "idle";
+      return "ongoing";
+    }
     function relativeLabel(modified, now = /* @__PURE__ */ new Date()) {
       if (modified === null || modified === void 0) return null;
       const at = new Date(modified).getTime();
@@ -924,6 +930,8 @@ window.__ModuleLoader__.load({
       "change.archive": "Archive",
       "change.archiving": "Archiving\u2026",
       "change.archiveRefused": "Archive refused",
+      "change.applyComplete": "the change is complete",
+      "change.archiveIncomplete": "every task must be complete before archiving",
       "change.tasks": "tasks",
       "change.artifactLabel": "Change artifacts",
       "change.deltas": "delta specs",
@@ -962,7 +970,7 @@ window.__ModuleLoader__.load({
       "review.specFindings": "spec findings",
       "review.specError": "spec error",
       "review.specMissing": "spec not reviewed",
-      "review.reviewed": "reviewed",
+      "review.coverage": "review",
       "review.running": "spec review running - attempt",
       "review.tasksUnit": "reviewing tasks",
       "review.integrationUnit": "integration review running - attempt",
@@ -1810,11 +1818,17 @@ window.__ModuleLoader__.load({
       ] });
     }
     function ChangeCard(props) {
-      const archived = props.archived === true || props.row.archived === true;
-      const phase = archived ? "archived" : phaseOf(props.row);
-      const updated = relativeLabel(props.row.modified, props.now);
-      const review = archived ? [] : reviewUnits(props.row.review, props.live, props.t, props.now);
-      const reviewTasks = archived ? void 0 : props.row.review?.tasks;
+      if (props.archived === true || props.row.archived === true) return archivedChangeCard(props);
+      return activeChangeCard(props);
+    }
+    function activeChangeCard(props) {
+      const { row, t } = props;
+      const phase = phaseOf(row);
+      const complete = isComplete(row);
+      const updated = relativeLabel(row.modified, props.now);
+      const units = reviewUnits(row.review, props.live, t, props.now);
+      const tasks = row.review?.tasks;
+      const purpose = summaryText(row.why ?? row.summary) === null ? null : row.why ?? row.summary;
       return (
         // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
@@ -1822,89 +1836,179 @@ window.__ModuleLoader__.load({
           {
             role: "button",
             tabIndex: 0,
-            className: `dsh-openspec-card${archived ? " dsh-openspec-card-archived" : ""}`,
-            onClick: () => props.onOpen(props.row.name),
+            className: "dsh-openspec-change-row",
+            onClick: () => props.onOpen(row.name),
             onKeyDown: (event) => {
               if (event.target !== event.currentTarget) return;
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
-              props.onOpen(props.row.name);
+              props.onOpen(row.name);
             },
             children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
-                archived ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }) : null,
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
-                updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
-              ] }),
-              summaryText(props.row.why ?? props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.why ?? props.row.summary ?? "", portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.why ?? props.row.summary }) }),
-              props.row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-progress", children: [
-                ProgressBar({
-                  done: props.row.completedTasks,
-                  total: props.row.totalTasks,
-                  t: props.t
-                }),
-                reviewTasks === void 0 || reviewTasks === null || reviewTasks.checked === 0 ? null : ProgressBar({
-                  done: reviewTasks.passed,
-                  total: reviewTasks.checked,
-                  t: props.t,
-                  label: `${String(reviewTasks.passed)}/${String(reviewTasks.checked)} ${props.t("change.tasks")} ${props.t("review.reviewed")}`,
-                  ...reviewTasks.missing.length === 0 ? {} : {
-                    tooltip: `${props.t("review.missingTooltip")}: ${reviewTasks.missing.join(", ")}`
-                  }
-                })
-              ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
-              CardLabels({ phase, units: review, t: props.t }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(
-                  props.row.presence,
-                  props.t,
-                  { requirements: props.row.requirementCount ?? 0 },
-                  props.onOpenArtifact
-                ) }),
-                props.row.commit === void 0 || props.row.commit === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-tail", children: CommitFactView({ commit: props.row.commit }) })
-              ] }),
-              archived ? null : props.onArchive !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-actions", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-gutter", children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                  import_dsh_client_ui_primitives.Button,
+                  "span",
                   {
-                    type: "button",
-                    variant: "outline",
-                    size: "sm",
-                    disabled: props.archiving === true,
-                    onClick: (event) => {
-                      event.stopPropagation();
-                      props.onArchive?.();
-                    },
-                    children: props.archiving === true ? props.t("change.archiving") : props.t("change.archive")
+                    className: `dsh-openspec-change-count${row.totalTasks > 0 ? "" : " dsh-openspec-change-count-none"}`,
+                    children: row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                      String(row.completedTasks),
+                      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-count-total", children: `/${String(row.totalTasks)}` })
+                    ] }) : "\u2014"
                   }
                 ),
-                props.archiveReason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-action-refusal", role: "alert", children: `${props.t("change.archiveRefused")}: ${props.archiveReason}` })
-              ] }) : props.onApply !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-actions", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                import_dsh_client_ui_primitives.Button,
-                {
-                  type: "button",
-                  variant: "outline",
-                  size: "sm",
-                  onClick: (event) => {
-                    event.stopPropagation();
-                    props.onApply?.();
-                  },
-                  children: props.t("change.apply")
-                }
-              ) }) : null
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-body", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: row.name }),
+                  updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${t("change.updated")} ${updated}` })
+                ] }),
+                purpose === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  "span",
+                  {
+                    className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-two",
+                    title: purpose,
+                    children: purpose
+                  }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-facts", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-phase", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.StateDot, { state: phaseDot(phase), size: 6 }),
+                    t(`phase.${phase}`)
+                  ] }),
+                  row.totalTasks > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("change.tasksNotWritten") }),
+                  units.map((unit, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+                    "span",
+                    {
+                      className: `dsh-openspec-change-verdict dsh-openspec-change-verdict-${unit.tone}`,
+                      children: [
+                        unit.spinning === true ? Spinner() : null,
+                        unit.tooltip === void 0 ? unit.label : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: unit.tooltip, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: unit.label }) })
+                      ]
+                    },
+                    `${unit.label}-${String(index)}`
+                  )),
+                  tasks === void 0 || tasks === null || tasks.checked === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                    "span",
+                    {
+                      className: "dsh-openspec-change-coverage",
+                      title: tasks.missing.length === 0 ? void 0 : `${t("review.missingTooltip")}: ${tasks.missing.join(", ")}`,
+                      children: `${t("review.coverage")} ${String(tasks.passed)}/${String(tasks.checked)}`
+                    }
+                  )
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-nav", children: [
+                  changeNav({ row, t, onOpenArtifact: props.onOpenArtifact }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-actions", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                      "button",
+                      {
+                        type: "button",
+                        className: "dsh-openspec-change-action",
+                        disabled: complete || props.onApply === void 0,
+                        ...complete ? { title: t("change.applyComplete") } : {},
+                        onClick: (event) => {
+                          event.stopPropagation();
+                          props.onApply?.();
+                        },
+                        children: t("change.apply")
+                      }
+                    ),
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                      "button",
+                      {
+                        type: "button",
+                        className: "dsh-openspec-change-action",
+                        disabled: !complete || props.archiving === true,
+                        ...complete ? {} : { title: t("change.archiveIncomplete") },
+                        onClick: (event) => {
+                          event.stopPropagation();
+                          props.onArchive?.();
+                        },
+                        children: props.archiving === true ? t("change.archiving") : t("change.archive")
+                      }
+                    )
+                  ] })
+                ] }),
+                props.archiveReason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-action-refusal", role: "alert", children: `${t("change.archiveRefused")}: ${props.archiveReason}` })
+              ] })
             ]
           }
         )
       );
     }
-    function CardLabels(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-labels", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone(props.phase), children: props.t(`phase.${props.phase}`) }),
-        props.units.map((unit, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-review-unit", children: [
-          unit.spinning === true ? Spinner() : null,
-          unit.tooltip === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: unit.tone, children: unit.label }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: unit.tooltip, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: unit.tone, children: unit.label }) })
-        ] }, `${unit.label}-${String(index)}`))
-      ] });
+    function archivedChangeCard(props) {
+      const { row, t } = props;
+      const updated = relativeLabel(row.modified, props.now);
+      const purpose = row.why ?? row.summary;
+      return (
+        // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "div",
+          {
+            role: "button",
+            tabIndex: 0,
+            className: "dsh-openspec-card dsh-openspec-card-archived",
+            onClick: () => props.onOpen(row.name),
+            onKeyDown: (event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              props.onOpen(row.name);
+            },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: row.name }),
+                updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${t("change.updated")} ${updated}` })
+              ] }),
+              summaryText(purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: purpose ?? "", portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: purpose }) }),
+              row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-progress", children: ProgressBar({ done: row.completedTasks, total: row.totalTasks, t }) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: t("change.tasksNotWritten") }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-labels", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone("archived"), children: t("phase.archived") }) }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(
+                  row.presence,
+                  t,
+                  { requirements: row.requirementCount ?? 0 },
+                  props.onOpenArtifact
+                ) }),
+                row.commit === void 0 || row.commit === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-tail", children: CommitFactView({ commit: row.commit }) })
+              ] })
+            ]
+          }
+        )
+      );
+    }
+    function changeNav(props) {
+      const presence = props.row.presence;
+      const facts = [];
+      if (presence.proposal) facts.push({ kind: "proposal", label: props.t("presence.proposal") });
+      if (presence.design) facts.push({ kind: "design", label: props.t("presence.design") });
+      if (presence.specs > 0) {
+        const requirements = props.row.requirementCount ?? 0;
+        const specs = presence.specs === 1 ? props.t("presence.spec") : props.t("presence.specs");
+        facts.push({
+          kind: "specs",
+          label: requirements > 0 ? `${specs} ${String(requirements)}` : specs,
+          ...requirements > 0 ? { title: `${String(requirements)} ${props.t("capability.requirements")}` } : {}
+        });
+      }
+      if (presence.tasks) facts.push({ kind: "tasks", label: props.t("presence.tasks") });
+      return facts.map((fact) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "button",
+        {
+          type: "button",
+          className: "dsh-openspec-change-nav-item",
+          disabled: props.onOpenArtifact === void 0,
+          ...fact.title === void 0 ? {} : { title: fact.title },
+          onClick: (event) => {
+            event.stopPropagation();
+            props.onOpenArtifact?.(fact.kind);
+          },
+          children: fact.label
+        },
+        fact.kind
+      ));
     }
     function CapabilityCard(props) {
       const provenance = props.row.lastChange;
@@ -2584,6 +2688,9 @@ window.__ModuleLoader__.load({
     .dsh-openspec-purpose-one {
       -webkit-line-clamp: 1;
     }
+    .dsh-openspec-purpose-two {
+      -webkit-line-clamp: 2;
+    }
     .dsh-openspec-producer {
       max-width: 100%;
       min-width: 0;
@@ -2613,12 +2720,6 @@ window.__ModuleLoader__.load({
       min-width: 0;
       font: var(--dsw-font-xxs-12);
       color: var(--dsw-alias-label-tertiary);
-    }
-    .dsh-openspec-review-unit {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      min-width: 0;
     }
     .dsh-openspec-artifact-link {
       display: inline-flex;
@@ -2678,12 +2779,135 @@ window.__ModuleLoader__.load({
       gap: 8px;
       min-width: 0;
     }
-    .dsh-openspec-card-actions {
+    .dsh-openspec-change-row {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      box-sizing: border-box;
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--dsw-alias-border-l2);
+      border-radius: var(--dsw-radius-md);
+      background: var(--dsw-alias-bg-layer-1);
+      color: inherit;
+      cursor: pointer;
+      overflow: hidden;
+      transition: background-color 120ms ease, border-color 120ms ease;
+    }
+    .dsh-openspec-change-row:hover {
+      background: var(--dsw-alias-interactive-bg-hover);
+    }
+    /* The numeric margin: one count per row, aligned down the whole list. */
+    .dsh-openspec-change-gutter {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      padding: 10px;
+    }
+    .dsh-openspec-change-count {
+      font: var(--dsw-font-s-strong-14);
+      font-variant-numeric: tabular-nums;
+      color: var(--dsw-alias-label-primary);
+      white-space: nowrap;
+    }
+    .dsh-openspec-change-count-total,
+    .dsh-openspec-change-count-none {
+      font-weight: 400;
+      color: var(--dsw-alias-label-tertiary);
+    }
+    .dsh-openspec-change-gutter-label {
+      font: var(--dsw-font-xxs-12);
+      color: var(--dsw-alias-label-tertiary);
+    }
+    .dsh-openspec-change-body {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      padding: 8px 12px;
+      border-left: 1px solid var(--dsw-alias-border-l1);
+    }
+    .dsh-openspec-change-facts {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 2px 10px;
       min-width: 0;
+      font: var(--dsw-font-xxs-12);
+      font-variant-numeric: tabular-nums;
+      color: var(--dsw-alias-label-tertiary);
+    }
+    .dsh-openspec-change-phase {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    /* A live review names the unit it is reviewing; that text wraps instead of clipping. */
+    .dsh-openspec-change-verdict {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .dsh-openspec-change-verdict-success {
+      color: var(--dsw-alias-state-success-secondary);
+    }
+    .dsh-openspec-change-verdict-warning {
+      color: var(--dsw-alias-state-warn-secondary);
+    }
+    .dsh-openspec-change-verdict-danger {
+      color: var(--dsw-alias-state-error-primary);
+    }
+    .dsh-openspec-change-verdict-info {
+      color: var(--dsw-alias-state-business-primary);
+    }
+    /* Artifact entries and actions are one navigation row: text buttons, hover fill. */
+    .dsh-openspec-change-nav {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 2px;
+      min-width: 0;
+    }
+    .dsh-openspec-change-nav-item,
+    .dsh-openspec-change-action {
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 5px;
+      border: 0;
+      border-radius: var(--dsw-radius-sm);
+      background: none;
+      color: var(--dsw-alias-label-tertiary);
+      font: var(--dsw-font-xxs-12);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .dsh-openspec-change-nav-item:hover,
+    .dsh-openspec-change-action:not(:disabled):hover {
+      background: var(--dsw-alias-interactive-bg-hover);
+      color: var(--dsw-alias-label-primary);
+    }
+    .dsh-openspec-change-actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      margin-left: auto;
+      min-width: 0;
+    }
+    .dsh-openspec-change-action {
+      font: var(--dsw-font-xxs-strong-12);
+      color: var(--dsw-alias-label-secondary);
+    }
+    .dsh-openspec-change-action:disabled {
+      color: var(--dsw-alias-label-caption);
+      cursor: not-allowed;
+    }
+    .dsh-openspec-change-body .dsh-openspec-action-refusal {
+      flex: none;
     }
     .dsh-openspec-action-refusal {
       flex: 1 1 160px;
@@ -2943,6 +3167,7 @@ window.__ModuleLoader__.load({
     }
     @media (prefers-reduced-motion: reduce) {
       .dsh-openspec-card,
+      .dsh-openspec-change-row,
       .dsh-openspec-action-card,
       .dsh-openspec-history-row {
         transition: none;

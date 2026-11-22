@@ -71,12 +71,12 @@ import {
   PROPOSE_DRAFT,
   parseTaskGroups,
   parseTaskLines,
+  phaseDot,
   phaseOf,
   phaseTone,
   type ReadState,
   type Requirement,
   type ReviewLiveEntry,
-  type ReviewUnit,
   ROOT_ADDRESS,
   ROOT_SEGMENTS,
   type RootSegment,
@@ -259,6 +259,8 @@ const EN: Record<string, string> = {
   'change.archive': 'Archive',
   'change.archiving': 'Archiving…',
   'change.archiveRefused': 'Archive refused',
+  'change.applyComplete': 'the change is complete',
+  'change.archiveIncomplete': 'every task must be complete before archiving',
   'change.tasks': 'tasks',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
@@ -297,7 +299,7 @@ const EN: Record<string, string> = {
   'review.specFindings': 'spec findings',
   'review.specError': 'spec error',
   'review.specMissing': 'spec not reviewed',
-  'review.reviewed': 'reviewed',
+  'review.coverage': 'review',
   'review.running': 'spec review running - attempt',
   'review.tasksUnit': 'reviewing tasks',
   'review.integrationUnit': 'integration review running - attempt',
@@ -1617,13 +1619,13 @@ function FilterField(props: {
   )
 }
 
-/** One change card: phase, purpose, progress, review state, provenance, and its one action. */
-function ChangeCard(props: {
+/** Props shared by the two change-card branches. */
+interface ChangeCardProps {
   readonly row: ChangeRow
   readonly t: Translate
   readonly now?: Date
   readonly archived?: boolean
-  /** The engine's live reviews of this change; the card merges them into its labels row. */
+  /** The engine's live reviews of this change; the facts row merges them in. */
   readonly live?: readonly ReviewLiveEntry[]
   /** An archive action is in flight for this row. */
   readonly archiving?: boolean
@@ -1633,144 +1635,237 @@ function ChangeCard(props: {
   onOpenArtifact?(kind: ArtifactKind): void
   onApply?(): void
   onArchive?(): void
-}): ReactNode {
-  const archived = props.archived === true || props.row.archived === true
-  const phase = archived ? 'archived' : phaseOf(props.row)
-  const updated = relativeLabel(props.row.modified, props.now)
-  const review = archived ? [] : reviewUnits(props.row.review, props.live, props.t, props.now)
-  // Settled task-review coverage is the second bar; its missing tasks stay in the tooltip.
-  const reviewTasks = archived ? undefined : props.row.review?.tasks
+}
+
+/** One change card: the active gutter row, or the archived history row. */
+function ChangeCard(props: ChangeCardProps): ReactNode {
+  if (props.archived === true || props.row.archived === true) return archivedChangeCard(props)
+  return activeChangeCard(props)
+}
+
+/** An active change: a numeric gutter, then name, purpose, facts and navigation. */
+function activeChangeCard(props: ChangeCardProps): ReactNode {
+  const { row, t } = props
+  const phase = phaseOf(row)
+  const complete = isComplete(row)
+  const updated = relativeLabel(row.modified, props.now)
+  const units = reviewUnits(row.review, props.live, t, props.now)
+  // Settled task-review coverage is a count; its missing tasks stay in the tooltip.
+  const tasks = row.review?.tasks
+  const purpose = summaryText(row.why ?? row.summary) === null ? null : (row.why ?? row.summary)
   return (
     // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
     <div
       role="button"
       tabIndex={0}
-      className={`dsh-openspec-card${archived ? ' dsh-openspec-card-archived' : ''}`}
-      onClick={() => props.onOpen(props.row.name)}
+      className="dsh-openspec-change-row"
+      onClick={() => props.onOpen(row.name)}
       onKeyDown={(event) => {
         // A nested button handles its own Enter/Space; only the row itself opens.
         if (event.target !== event.currentTarget) return
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
-        props.onOpen(props.row.name)
+        props.onOpen(row.name)
       }}
     >
-      <span className="dsh-openspec-card-head">
-        {archived ? <primitives.IconCheckCircleOutlineRegular size={14} /> : null}
-        <span className="dsh-openspec-card-title">{props.row.name}</span>
-        {updated === null ? null : (
-          <span className="dsh-openspec-card-count">{`${props.t('change.updated')} ${updated}`}</span>
-        )}
-      </span>
-      {summaryText(props.row.why ?? props.row.summary) === null ? null : (
-        <primitives.Tooltip label={props.row.why ?? props.row.summary ?? ''} portal>
-          <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp">
-            {props.row.why ?? props.row.summary}
-          </span>
-        </primitives.Tooltip>
-      )}
-      {props.row.totalTasks > 0 ? (
-        <span className="dsh-openspec-card-progress">
-          {ProgressBar({
-            done: props.row.completedTasks,
-            total: props.row.totalTasks,
-            t: props.t,
-          })}
-          {reviewTasks === undefined || reviewTasks === null || reviewTasks.checked === 0
-            ? null
-            : ProgressBar({
-                done: reviewTasks.passed,
-                total: reviewTasks.checked,
-                t: props.t,
-                label: `${String(reviewTasks.passed)}/${String(reviewTasks.checked)} ${props.t('change.tasks')} ${props.t('review.reviewed')}`,
-                ...(reviewTasks.missing.length === 0
-                  ? {}
-                  : {
-                      tooltip: `${props.t('review.missingTooltip')}: ${reviewTasks.missing.join(', ')}`,
-                    }),
-              })}
-        </span>
-      ) : (
-        <span className="dsh-openspec-meta">{props.t('change.tasksNotWritten')}</span>
-      )}
-      {CardLabels({ phase, units: review, t: props.t })}
-      <span className="dsh-openspec-meta">
-        <span className="dsh-openspec-tags">
-          {presenceFacts(
-            props.row.presence,
-            props.t,
-            { requirements: props.row.requirementCount ?? 0 },
-            props.onOpenArtifact,
+      <span className="dsh-openspec-change-gutter">
+        <span
+          className={`dsh-openspec-change-count${row.totalTasks > 0 ? '' : ' dsh-openspec-change-count-none'}`}
+        >
+          {row.totalTasks > 0 ? (
+            <>
+              {String(row.completedTasks)}
+              <span className="dsh-openspec-change-count-total">{`/${String(row.totalTasks)}`}</span>
+            </>
+          ) : (
+            '—'
           )}
         </span>
-        {props.row.commit === undefined || props.row.commit === null ? null : (
-          <span className="dsh-openspec-card-tail">
-            {CommitFactView({ commit: props.row.commit })}
+        <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
+      </span>
+      <span className="dsh-openspec-change-body">
+        <span className="dsh-openspec-card-head">
+          <span className="dsh-openspec-card-title">{row.name}</span>
+          {updated === null ? null : (
+            <span className="dsh-openspec-card-count">{`${t('change.updated')} ${updated}`}</span>
+          )}
+        </span>
+        {purpose === null ? null : (
+          <span
+            className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-two"
+            title={purpose}
+          >
+            {purpose}
           </span>
         )}
-      </span>
-      {archived ? null : props.onArchive !== undefined ? (
-        <span className="dsh-openspec-card-actions">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={props.archiving === true}
-            onClick={(event) => {
-              event.stopPropagation()
-              props.onArchive?.()
-            }}
-          >
-            {props.archiving === true ? props.t('change.archiving') : props.t('change.archive')}
-          </Button>
-          {props.archiveReason === undefined ? null : (
-            <span className="dsh-openspec-action-refusal" role="alert">
-              {`${props.t('change.archiveRefused')}: ${props.archiveReason}`}
+        <span className="dsh-openspec-change-facts">
+          <span className="dsh-openspec-change-phase">
+            <StateDot state={phaseDot(phase)} size={6} />
+            {t(`phase.${phase}`)}
+          </span>
+          {row.totalTasks > 0 ? null : <span>{t('change.tasksNotWritten')}</span>}
+          {units.map((unit, index) => (
+            <span
+              className={`dsh-openspec-change-verdict dsh-openspec-change-verdict-${unit.tone}`}
+              key={`${unit.label}-${String(index)}`}
+            >
+              {unit.spinning === true ? Spinner() : null}
+              {unit.tooltip === undefined ? (
+                unit.label
+              ) : (
+                <primitives.Tooltip label={unit.tooltip} portal>
+                  <span>{unit.label}</span>
+                </primitives.Tooltip>
+              )}
             </span>
+          ))}
+          {tasks === undefined || tasks === null || tasks.checked === 0 ? null : (
+            <span
+              className="dsh-openspec-change-coverage"
+              title={
+                tasks.missing.length === 0
+                  ? undefined
+                  : `${t('review.missingTooltip')}: ${tasks.missing.join(', ')}`
+              }
+            >{`${t('review.coverage')} ${String(tasks.passed)}/${String(tasks.checked)}`}</span>
           )}
         </span>
-      ) : props.onApply !== undefined ? (
-        <span className="dsh-openspec-card-actions">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={(event) => {
-              event.stopPropagation()
-              props.onApply?.()
-            }}
-          >
-            {props.t('change.apply')}
-          </Button>
+        <span className="dsh-openspec-change-nav">
+          {changeNav({ row, t, onOpenArtifact: props.onOpenArtifact })}
+          <span className="dsh-openspec-change-actions">
+            <button
+              type="button"
+              className="dsh-openspec-change-action"
+              disabled={complete || props.onApply === undefined}
+              {...(complete ? { title: t('change.applyComplete') } : {})}
+              onClick={(event) => {
+                event.stopPropagation()
+                props.onApply?.()
+              }}
+            >
+              {t('change.apply')}
+            </button>
+            <button
+              type="button"
+              className="dsh-openspec-change-action"
+              disabled={!complete || props.archiving === true}
+              {...(complete ? {} : { title: t('change.archiveIncomplete') })}
+              onClick={(event) => {
+                event.stopPropagation()
+                props.onArchive?.()
+              }}
+            >
+              {props.archiving === true ? t('change.archiving') : t('change.archive')}
+            </button>
+          </span>
         </span>
-      ) : null}
+        {props.archiveReason === undefined ? null : (
+          <span className="dsh-openspec-action-refusal" role="alert">
+            {`${t('change.archiveRefused')}: ${props.archiveReason}`}
+          </span>
+        )}
+      </span>
     </div>
   )
 }
 
-/** The card's status labels: the phase and the review units in one row under the bars. */
-function CardLabels(props: {
-  readonly phase: Phase
-  readonly units: readonly ReviewUnit[]
-  readonly t: Translate
-}): ReactNode {
+/** An archived change: archive facts and last commit, with no action. */
+function archivedChangeCard(props: ChangeCardProps): ReactNode {
+  const { row, t } = props
+  const updated = relativeLabel(row.modified, props.now)
+  const purpose = row.why ?? row.summary
   return (
-    <span className="dsh-openspec-card-labels">
-      <Tag tone={phaseTone(props.phase)}>{props.t(`phase.${props.phase}`)}</Tag>
-      {props.units.map((unit, index) => (
-        <span className="dsh-openspec-review-unit" key={`${unit.label}-${String(index)}`}>
-          {unit.spinning === true ? Spinner() : null}
-          {unit.tooltip === undefined ? (
-            <Tag tone={unit.tone}>{unit.label}</Tag>
-          ) : (
-            <primitives.Tooltip label={unit.tooltip} portal>
-              <Tag tone={unit.tone}>{unit.label}</Tag>
-            </primitives.Tooltip>
+    // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
+    <div
+      role="button"
+      tabIndex={0}
+      className="dsh-openspec-card dsh-openspec-card-archived"
+      onClick={() => props.onOpen(row.name)}
+      onKeyDown={(event) => {
+        // A nested button handles its own Enter/Space; only the row itself opens.
+        if (event.target !== event.currentTarget) return
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        props.onOpen(row.name)
+      }}
+    >
+      <span className="dsh-openspec-card-head">
+        <primitives.IconCheckCircleOutlineRegular size={14} />
+        <span className="dsh-openspec-card-title">{row.name}</span>
+        {updated === null ? null : (
+          <span className="dsh-openspec-card-count">{`${t('change.updated')} ${updated}`}</span>
+        )}
+      </span>
+      {summaryText(purpose) === null ? null : (
+        <primitives.Tooltip label={purpose ?? ''} portal>
+          <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp">{purpose}</span>
+        </primitives.Tooltip>
+      )}
+      {row.totalTasks > 0 ? (
+        <span className="dsh-openspec-card-progress">
+          {ProgressBar({ done: row.completedTasks, total: row.totalTasks, t })}
+        </span>
+      ) : (
+        <span className="dsh-openspec-meta">{t('change.tasksNotWritten')}</span>
+      )}
+      <span className="dsh-openspec-card-labels">
+        <Tag tone={phaseTone('archived')}>{t('phase.archived')}</Tag>
+      </span>
+      <span className="dsh-openspec-meta">
+        <span className="dsh-openspec-tags">
+          {presenceFacts(
+            row.presence,
+            t,
+            { requirements: row.requirementCount ?? 0 },
+            props.onOpenArtifact,
           )}
         </span>
-      ))}
-    </span>
+        {row.commit === undefined || row.commit === null ? null : (
+          <span className="dsh-openspec-card-tail">{CommitFactView({ commit: row.commit })}</span>
+        )}
+      </span>
+    </div>
   )
+}
+
+/** The active row's artifact navigation: one ghost text button per written artifact. */
+function changeNav(props: {
+  readonly row: ChangeRow
+  readonly t: Translate
+  onOpenArtifact?(kind: ArtifactKind): void
+}): ReactNode[] {
+  const presence = props.row.presence
+  const facts: { readonly kind: ArtifactKind; readonly label: string; readonly title?: string }[] =
+    []
+  if (presence.proposal) facts.push({ kind: 'proposal', label: props.t('presence.proposal') })
+  if (presence.design) facts.push({ kind: 'design', label: props.t('presence.design') })
+  if (presence.specs > 0) {
+    const requirements = props.row.requirementCount ?? 0
+    const specs = presence.specs === 1 ? props.t('presence.spec') : props.t('presence.specs')
+    facts.push({
+      kind: 'specs',
+      label: requirements > 0 ? `${specs} ${String(requirements)}` : specs,
+      ...(requirements > 0
+        ? { title: `${String(requirements)} ${props.t('capability.requirements')}` }
+        : {}),
+    })
+  }
+  if (presence.tasks) facts.push({ kind: 'tasks', label: props.t('presence.tasks') })
+  return facts.map((fact) => (
+    <button
+      type="button"
+      className="dsh-openspec-change-nav-item"
+      key={fact.kind}
+      disabled={props.onOpenArtifact === undefined}
+      {...(fact.title === undefined ? {} : { title: fact.title })}
+      onClick={(event) => {
+        event.stopPropagation()
+        props.onOpenArtifact?.(fact.kind)
+      }}
+    >
+      {fact.label}
+    </button>
+  ))
 }
 
 /** One capability row: date, name, purpose, and acceptance/commit facts. */
@@ -2760,6 +2855,9 @@ export const PANEL_CSS = `
 .dsh-openspec-purpose-one {
   -webkit-line-clamp: 1;
 }
+.dsh-openspec-purpose-two {
+  -webkit-line-clamp: 2;
+}
 .dsh-openspec-producer {
   max-width: 100%;
   min-width: 0;
@@ -2789,12 +2887,6 @@ export const PANEL_CSS = `
   min-width: 0;
   font: var(--dsw-font-xxs-12);
   color: var(--dsw-alias-label-tertiary);
-}
-.dsh-openspec-review-unit {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
 }
 .dsh-openspec-artifact-link {
   display: inline-flex;
@@ -2854,12 +2946,135 @@ export const PANEL_CSS = `
   gap: 8px;
   min-width: 0;
 }
-.dsh-openspec-card-actions {
+.dsh-openspec-change-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.dsh-openspec-change-row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+/* The numeric margin: one count per row, aligned down the whole list. */
+.dsh-openspec-change-gutter {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 10px;
+}
+.dsh-openspec-change-count {
+  font: var(--dsw-font-s-strong-14);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+}
+.dsh-openspec-change-count-total,
+.dsh-openspec-change-count-none {
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dsh-openspec-change-gutter-label {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+}
+.dsh-openspec-change-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-left: 1px solid var(--dsw-alias-border-l1);
+}
+.dsh-openspec-change-facts {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 2px 10px;
   min-width: 0;
+  font: var(--dsw-font-xxs-12);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dsh-openspec-change-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+/* A live review names the unit it is reviewing; that text wraps instead of clipping. */
+.dsh-openspec-change-verdict {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dsh-openspec-change-verdict-success {
+  color: var(--dsw-alias-state-success-secondary);
+}
+.dsh-openspec-change-verdict-warning {
+  color: var(--dsw-alias-state-warn-secondary);
+}
+.dsh-openspec-change-verdict-danger {
+  color: var(--dsw-alias-state-error-primary);
+}
+.dsh-openspec-change-verdict-info {
+  color: var(--dsw-alias-state-business-primary);
+}
+/* Artifact entries and actions are one navigation row: text buttons, hover fill. */
+.dsh-openspec-change-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+}
+.dsh-openspec-change-nav-item,
+.dsh-openspec-change-action {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: none;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dsh-openspec-change-nav-item:hover,
+.dsh-openspec-change-action:not(:disabled):hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-openspec-change-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  min-width: 0;
+}
+.dsh-openspec-change-action {
+  font: var(--dsw-font-xxs-strong-12);
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-openspec-change-action:disabled {
+  color: var(--dsw-alias-label-caption);
+  cursor: not-allowed;
+}
+.dsh-openspec-change-body .dsh-openspec-action-refusal {
+  flex: none;
 }
 .dsh-openspec-action-refusal {
   flex: 1 1 160px;
@@ -3119,6 +3334,7 @@ export const PANEL_CSS = `
 }
 @media (prefers-reduced-motion: reduce) {
   .dsh-openspec-card,
+  .dsh-openspec-change-row,
   .dsh-openspec-action-card,
   .dsh-openspec-history-row {
     transition: none;
