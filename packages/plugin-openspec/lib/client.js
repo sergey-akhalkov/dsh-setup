@@ -206,12 +206,6 @@ window.__ModuleLoader__.load({
       if (phase === "archived") return "quiet";
       return "info";
     }
-    function phaseDot(phase) {
-      if (phase === "planning") return "warning";
-      if (phase === "complete") return "done";
-      if (phase === "archived") return "idle";
-      return "ongoing";
-    }
     function relativeLabel(modified, now = /* @__PURE__ */ new Date()) {
       if (modified === null || modified === void 0) return null;
       const at = new Date(modified).getTime();
@@ -927,6 +921,7 @@ window.__ModuleLoader__.load({
       "phase.complete": "complete",
       "phase.archived": "archived",
       "change.apply": "Apply change",
+      "change.applyShort": "Apply",
       "change.archive": "Archive",
       "change.archiving": "Archiving\u2026",
       "change.archiveRefused": "Archive refused",
@@ -1861,7 +1856,7 @@ window.__ModuleLoader__.load({
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-body", children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: row.name }),
-                  updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${t("change.updated")} ${updated}` })
+                  updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: updated })
                 ] }),
                 purpose === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                   "span",
@@ -1873,7 +1868,7 @@ window.__ModuleLoader__.load({
                 ),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-facts", children: [
                   /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-phase", children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.StateDot, { state: phaseDot(phase), size: 6 }),
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-dot", "data-phase": phase, "aria-hidden": "true" }),
                     t(`phase.${phase}`)
                   ] }),
                   row.totalTasks > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("change.tasksNotWritten") }),
@@ -1883,7 +1878,7 @@ window.__ModuleLoader__.load({
                       className: `dsh-openspec-change-verdict dsh-openspec-change-verdict-${unit.tone}`,
                       children: [
                         unit.spinning === true ? Spinner() : null,
-                        unit.tooltip === void 0 ? unit.label : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: unit.tooltip, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: unit.label }) })
+                        unit.tooltip === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: `${unit.label} - ${unit.tooltip}`, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) })
                       ]
                     },
                     `${unit.label}-${String(index)}`
@@ -1911,7 +1906,7 @@ window.__ModuleLoader__.load({
                           event.stopPropagation();
                           props.onApply?.();
                         },
-                        children: t("change.apply")
+                        children: t("change.applyShort")
                       }
                     ),
                     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -1986,7 +1981,7 @@ window.__ModuleLoader__.load({
       if (presence.design) facts.push({ kind: "design", label: props.t("presence.design") });
       if (presence.specs > 0) {
         const requirements = props.row.requirementCount ?? 0;
-        const specs = presence.specs === 1 ? props.t("presence.spec") : props.t("presence.specs");
+        const specs = props.t("presence.specs");
         facts.push({
           kind: "specs",
           label: requirements > 0 ? `${specs} ${String(requirements)}` : specs,
@@ -2607,6 +2602,7 @@ window.__ModuleLoader__.load({
     }
     .dsh-openspec-spinner {
       display: inline-flex;
+      flex: none;
       align-items: center;
       animation: dsh-openspec-spin 900ms linear infinite;
     }
@@ -2826,6 +2822,24 @@ window.__ModuleLoader__.load({
       padding: 8px 12px;
       border-left: 1px solid var(--dsw-alias-border-l1);
     }
+    /* A static dot: the phase is a state, not an activity, so it never animates. */
+    .dsh-openspec-change-dot {
+      flex: none;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--dsw-alias-label-tertiary);
+    }
+    .dsh-openspec-change-dot[data-phase='planning'] {
+      background: var(--dsw-alias-state-warn-primary);
+    }
+    .dsh-openspec-change-dot[data-phase='ready-to-apply'],
+    .dsh-openspec-change-dot[data-phase='applying'] {
+      background: var(--dsw-alias-state-business-primary);
+    }
+    .dsh-openspec-change-dot[data-phase='complete'] {
+      background: var(--dsw-alias-state-success-primary);
+    }
     .dsh-openspec-change-facts {
       display: flex;
       align-items: center;
@@ -2842,14 +2856,19 @@ window.__ModuleLoader__.load({
       gap: 4px;
       white-space: nowrap;
     }
-    /* A live review names the unit it is reviewing; that text wraps instead of clipping. */
+    /* A review unit stays one item: the label truncates, its tooltip carries the full text. */
     .dsh-openspec-change-verdict {
       display: inline-flex;
       align-items: center;
-      flex-wrap: wrap;
       gap: 4px;
       min-width: 0;
-      overflow-wrap: anywhere;
+      max-width: 100%;
+    }
+    .dsh-openspec-change-verdict-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .dsh-openspec-change-verdict-success {
       color: var(--dsw-alias-state-success-secondary);

@@ -675,24 +675,24 @@ without submitting, and three counted segments — `Changes`, `Specs` and `Archi
 carry the totals from the first `/changes` read, so all three are complete before Specs is opened.
 `Changes` lists the workspace's active changes, unfinished first. Each card sets a fixed numeric
 gutter — `4/12` over `tasks`, or a dash before any task is written — beside a body of four rows: the
-change name with when it last moved, the proposal's `## Why` clamped to two lines with the full text
-on its title, one facts row, and one navigation row. The facts row carries the derived status
-(`planning`, `ready to apply`, `applying` or `complete`) as a state dot and short label, the whole-spec
-verdict as a coloured word (`spec PASS` while the record still matches the change artifacts, `spec
-outdated` after a plan edit, `spec findings (N)`, `spec error`, or `spec not reviewed` when this clone
-has no local record), and the settled review coverage as `review 10/16` — the checked tasks with the
-portable task-review `PASS` the archive gate counts, with the missing task numbers in its tooltip —
-which appears once a task is checked. The navigation row holds one text button per artifact the change
-carries (`proposal`, `design`, `specs N`, `tasks`) beside both actions: `Apply change` while the change
-is not complete and `Archive` once every task is done, with the inapplicable one disabled and its
-reason on the control. An active row states no commit fact — the change detail header carries it — and
-draws no progress bar: the gutter count is the progress fact. An archived card keeps its history
+change name with its relative last-modified time, the proposal's `## Why` clamped to two lines with the
+full text on its title, one facts row, and one navigation row. The facts row carries the derived status
+(`planning`, `ready to apply`, `applying` or `complete`) as a static colored dot and short label, the
+whole-spec verdict as a coloured word (`spec PASS` while the record still matches the change artifacts,
+`spec outdated` after a plan edit, `spec findings (N)`, `spec error`, or `spec not reviewed` when this
+clone has no local record), and the settled review coverage as `review 10/16` — the checked tasks with
+the portable task-review `PASS` the archive gate counts, with the missing task numbers in its
+tooltip — which appears once a task is checked. The navigation row holds one text button per artifact
+the change carries (`proposal`, `design`, `specs N`, `tasks`) beside both actions: `Apply` while the
+change is not complete and `Archive` once every task is done, with the inapplicable one disabled and
+its reason on the control. An active row states no commit fact — the change detail header carries it —
+and draws no progress bar: the gutter count is the progress fact. An archived card keeps its history
 layout (when it last changed, task completion, purpose, the artifact kinds and the last commit) and
 offers no action. The line reads the workflows engine's `workflowsReviewStatus` service: a profile
 without the engine, or a failed read, renders the card from the change list alone, and a commit-backed
 audit of the approvals stays with `pnpm reviews:check`. While a review of one of the workspace's
 changes is live, the facts row shows that review's own `reviewing ...` label beside the shipped
-loading spinner. The panel reads the
+loading spinner, truncated to one line with the full label in its tooltip. The panel reads the
 engine's live route every four seconds while `Changes` is visible, stops when that route is absent,
 and performs one debounced change-list re-read when a previously live review settles so the new
 verdict replaces the spinner without a manual refresh. The change list itself is never polled. An empty change list repeats both actions, shows the

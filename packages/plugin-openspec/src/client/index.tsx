@@ -71,7 +71,6 @@ import {
   PROPOSE_DRAFT,
   parseTaskGroups,
   parseTaskLines,
-  phaseDot,
   phaseOf,
   phaseTone,
   type ReadState,
@@ -256,6 +255,7 @@ const EN: Record<string, string> = {
   'phase.complete': 'complete',
   'phase.archived': 'archived',
   'change.apply': 'Apply change',
+  'change.applyShort': 'Apply',
   'change.archive': 'Archive',
   'change.archiving': 'Archiving…',
   'change.archiveRefused': 'Archive refused',
@@ -1686,9 +1686,7 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
       <span className="dsh-openspec-change-body">
         <span className="dsh-openspec-card-head">
           <span className="dsh-openspec-card-title">{row.name}</span>
-          {updated === null ? null : (
-            <span className="dsh-openspec-card-count">{`${t('change.updated')} ${updated}`}</span>
-          )}
+          {updated === null ? null : <span className="dsh-openspec-card-count">{updated}</span>}
         </span>
         {purpose === null ? null : (
           <span
@@ -1700,7 +1698,7 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
         )}
         <span className="dsh-openspec-change-facts">
           <span className="dsh-openspec-change-phase">
-            <StateDot state={phaseDot(phase)} size={6} />
+            <span className="dsh-openspec-change-dot" data-phase={phase} aria-hidden="true" />
             {t(`phase.${phase}`)}
           </span>
           {row.totalTasks > 0 ? null : <span>{t('change.tasksNotWritten')}</span>}
@@ -1711,10 +1709,10 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
             >
               {unit.spinning === true ? Spinner() : null}
               {unit.tooltip === undefined ? (
-                unit.label
+                <span className="dsh-openspec-change-verdict-label">{unit.label}</span>
               ) : (
-                <primitives.Tooltip label={unit.tooltip} portal>
-                  <span>{unit.label}</span>
+                <primitives.Tooltip label={`${unit.label} - ${unit.tooltip}`} portal>
+                  <span className="dsh-openspec-change-verdict-label">{unit.label}</span>
                 </primitives.Tooltip>
               )}
             </span>
@@ -1743,7 +1741,7 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
                 props.onApply?.()
               }}
             >
-              {t('change.apply')}
+              {t('change.applyShort')}
             </button>
             <button
               type="button"
@@ -1841,7 +1839,8 @@ function changeNav(props: {
   if (presence.design) facts.push({ kind: 'design', label: props.t('presence.design') })
   if (presence.specs > 0) {
     const requirements = props.row.requirementCount ?? 0
-    const specs = presence.specs === 1 ? props.t('presence.spec') : props.t('presence.specs')
+    // The word names the artifact; the number is the requirement count, as the design mock reads it.
+    const specs = props.t('presence.specs')
     facts.push({
       kind: 'specs',
       label: requirements > 0 ? `${specs} ${String(requirements)}` : specs,
@@ -2774,6 +2773,7 @@ export const PANEL_CSS = `
 }
 .dsh-openspec-spinner {
   display: inline-flex;
+  flex: none;
   align-items: center;
   animation: dsh-openspec-spin 900ms linear infinite;
 }
@@ -2993,6 +2993,24 @@ export const PANEL_CSS = `
   padding: 8px 12px;
   border-left: 1px solid var(--dsw-alias-border-l1);
 }
+/* A static dot: the phase is a state, not an activity, so it never animates. */
+.dsh-openspec-change-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
+}
+.dsh-openspec-change-dot[data-phase='planning'] {
+  background: var(--dsw-alias-state-warn-primary);
+}
+.dsh-openspec-change-dot[data-phase='ready-to-apply'],
+.dsh-openspec-change-dot[data-phase='applying'] {
+  background: var(--dsw-alias-state-business-primary);
+}
+.dsh-openspec-change-dot[data-phase='complete'] {
+  background: var(--dsw-alias-state-success-primary);
+}
 .dsh-openspec-change-facts {
   display: flex;
   align-items: center;
@@ -3009,14 +3027,19 @@ export const PANEL_CSS = `
   gap: 4px;
   white-space: nowrap;
 }
-/* A live review names the unit it is reviewing; that text wraps instead of clipping. */
+/* A review unit stays one item: the label truncates, its tooltip carries the full text. */
 .dsh-openspec-change-verdict {
   display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
-  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.dsh-openspec-change-verdict-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dsh-openspec-change-verdict-success {
   color: var(--dsw-alias-state-success-secondary);

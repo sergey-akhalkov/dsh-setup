@@ -230,6 +230,7 @@ const COPY: Record<string, string> = {
   'phase.complete': 'complete',
   'phase.archived': 'archived',
   'change.apply': 'Apply change',
+  'change.applyShort': 'Apply',
   'change.archive': 'Archive',
   'change.archiving': 'Archiving…',
   'change.archiveRefused': 'Archive refused',
@@ -1925,7 +1926,12 @@ describe('OpenSpec root view', () => {
     expect(text).toContain('proposal')
     expect(text).toContain('design')
     expect(text).toContain('specs')
-    expect(text).toContain('updated 2h ago')
+    // The head states the relative time alone, as the design mock does.
+    expect(text).toContain('2h ago')
+    expect(text).not.toContain('updated 2h ago')
+    // The card action is the short `Apply`; only the detail header says `Apply change`.
+    expect(text).toContain('Apply')
+    expect(text).not.toContain('Apply change')
     // The active row states no commit fact; the change detail header owns provenance.
     expect(text).not.toContain('7e87448')
     expect(text).not.toContain('2026-10-27')
@@ -1933,7 +1939,8 @@ describe('OpenSpec root view', () => {
     expect(textOf(gutter)).toContain('4/12')
     expect(textOf(gutter)).toContain('tasks')
     const head = nodes(card).find((node) => node.props.className === 'dsh-openspec-card-head')
-    expect(textOf(head)).toContain('updated 2h ago')
+    expect(textOf(head)).toContain('2h ago')
+    expect(textOf(head)).not.toContain('updated')
     expect(textOf(head)).not.toContain('4/12')
     const purpose = nodes(card).find((node) =>
       String(node.props.className ?? '').includes('dsh-openspec-purpose-clamp'),
@@ -1942,7 +1949,12 @@ describe('OpenSpec root view', () => {
     expect(purpose?.props.title).toBe('Add authentication to the product.')
     const facts = nodes(card).find((node) => node.props.className === 'dsh-openspec-change-facts')
     expect(textOf(facts)).toContain('applying')
-    expect(typed(facts, 'StateDot').map((dot) => dot.props.state)).toEqual(['ongoing'])
+    const phaseDot = nodes(facts).find((node) => node.props.className === 'dsh-openspec-change-dot')
+    expect(phaseDot?.props['data-phase']).toBe('applying')
+    expect(phaseDot?.props['aria-hidden']).toBe('true')
+    // The phase is a state, not an activity: the row must not reuse the shell's ongoing
+    // spinner glyph for it.
+    expect(typed(facts, 'StateDot')).toHaveLength(0)
     // The count in the gutter is the progress fact; the row draws no tracking bar.
     expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
   })
@@ -2073,8 +2085,15 @@ describe('OpenSpec root view', () => {
     expect(textOf(planningCard)).toContain('planning')
     expect(textOf(planningCard)).toContain('tasks not written yet')
     expect(textOf(planningCard)).toContain('—')
-    expect(typed(planningCard, 'StateDot').map((dot) => dot.props.state)).toEqual(['warning'])
-    expect(typed(completeCard, 'StateDot').map((dot) => dot.props.state)).toEqual(['done'])
+    const dotOf = (card: Found): unknown =>
+      nodes(card).find((node) => node.props.className === 'dsh-openspec-change-dot')?.props[
+        'data-phase'
+      ]
+    expect(dotOf(planningCard)).toBe('planning')
+    expect(dotOf(completeCard)).toBe('complete')
+    // A static dot, never the shell's spinner: no state-dot glyph inside the card.
+    expect(typed(planningCard, 'StateDot')).toHaveLength(0)
+    expect(typed(completeCard, 'StateDot')).toHaveLength(0)
     expect(typed(tree, 'Tag').find((tag) => tag.props.children === 'planning')).toBeUndefined()
     const archivedTree = RootView(
       rootProps({
@@ -2138,7 +2157,7 @@ describe('OpenSpec root view', () => {
       stopPropagation: () => {},
     })
     expect(onArchiveChange).not.toHaveBeenCalled()
-    expect(rowButton(card, 'Apply change').props.disabled).toBe(false)
+    expect(rowButton(card, 'Apply').props.disabled).toBe(false)
   })
 
   it('disables Apply on a complete change and states that it is complete', () => {
@@ -2152,7 +2171,7 @@ describe('OpenSpec root view', () => {
     )
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
-    const apply = rowButton(card, 'Apply change')
+    const apply = rowButton(card, 'Apply')
     expect(apply.props.disabled).toBe(true)
     expect(apply.props.title).toBe('the change is complete')
     // A disabled action is inert: firing its handler fills no draft.
@@ -3297,7 +3316,7 @@ describe('OpenSpec tab bodies', () => {
     const workingCard = cards.find((card) => textOf(card).includes('add-auth'))
     if (doneCard === undefined || workingCard === undefined) throw new Error('card missing')
     // Both actions render on both cards; only the state-matching one is enabled.
-    expect(rowButton(doneCard, 'Apply change').props.disabled).toBe(true)
+    expect(rowButton(doneCard, 'Apply').props.disabled).toBe(true)
     expect(rowButton(workingCard, 'Archive').props.disabled).toBe(true)
     const stop = vi.fn()
     const archiveButton = rowButton(doneCard, 'Archive')
@@ -3307,7 +3326,7 @@ describe('OpenSpec tab bodies', () => {
     expect(stop).toHaveBeenCalledTimes(1)
     expect(onArchiveChange).toHaveBeenCalledWith('done-change')
     expect(onOpenChange).not.toHaveBeenCalled()
-    const applyButton = rowButton(workingCard, 'Apply change')
+    const applyButton = rowButton(workingCard, 'Apply')
     ;(applyButton.props.onClick as (event: { stopPropagation(): void }) => void)({
       stopPropagation: () => {},
     })
@@ -4991,7 +5010,7 @@ describe('OpenSpec panel visual contract', () => {
       nodes(nav)
         .filter((node) => node.type === 'button')
         .map((node) => textOf(node)),
-    ).toEqual(['proposal', 'design', 'specs 2', 'tasks', 'Apply change', 'Archive'])
+    ).toEqual(['proposal', 'design', 'specs 2', 'tasks', 'Apply', 'Archive'])
     expect(rowButton(card, 'Archive').props.title).toBe(
       'every task must be complete before archiving',
     )
@@ -5025,7 +5044,7 @@ describe('OpenSpec panel visual contract', () => {
     ).toBe(false)
   })
 
-  it('lets a long live-review fact wrap instead of clipping it', () => {
+  it('keeps a long live-review fact on one line with its full text in the tooltip', () => {
     const section =
       '1. Change row markup and styles (owns packages/plugin-openspec/src/client/index.tsx)'
     const live: ReviewLiveEntry[] = [
@@ -5056,11 +5075,24 @@ describe('OpenSpec panel visual contract', () => {
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
     const facts = nodes(card).find((node) => node.props.className === 'dsh-openspec-change-facts')
-    // The reviewed unit's own text rides in the facts row, so it must stay whole and wrap.
-    expect(textOf(facts)).toContain(section)
-    const verdict = /\.dsh-openspec-change-verdict \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
-    expect(verdict).toContain('overflow-wrap: anywhere')
-    expect(verdict).not.toContain('nowrap')
+    if (facts === undefined) throw new Error('facts row missing')
+    const unit = nodes(facts).find((node) =>
+      String(node.props.className ?? '').startsWith('dsh-openspec-change-verdict '),
+    )
+    if (unit === undefined) throw new Error('review unit missing')
+    const label = nodes(unit).find(
+      (node) => node.props.className === 'dsh-openspec-change-verdict-label',
+    )
+    // The reviewed unit's whole label stays in the DOM and on the control; only the
+    // paint is clipped, so the row keeps one line instead of spilling across it.
+    expect(textOf(label)).toContain(section)
+    expect(typed(unit, 'Tooltip')[0]?.props.label).toContain(section)
+    expect(typed(unit, 'IconLoadingOutlineRegular')).toHaveLength(1)
+    const box = /\.dsh-openspec-change-verdict \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
+    expect(box).not.toContain('flex-wrap')
+    const labelCss = /\.dsh-openspec-change-verdict-label \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
+    expect(labelCss).toContain('text-overflow: ellipsis')
+    expect(labelCss).toContain('white-space: nowrap')
     const phase = /\.dsh-openspec-change-phase \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
     expect(phase).toContain('white-space: nowrap')
   })
