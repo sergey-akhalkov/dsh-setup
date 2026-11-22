@@ -4,18 +4,25 @@
 
 The one-command installer SHALL install every bundle declared in `dsh.json` under `installBundles.git`
 from its pnpm spec and SHALL select it in `dsh.profile.bundles` before the setup bundle, so the setup
-defaults retain precedence. Each declaration MUST carry the bundle's package name and a spec whose
-reference is a 40-hex commit; the standalone installer MUST carry the same name/spec pairs, and
-repository validation MUST reject a mismatch between them, an unpinned reference, or a declared name
-that is not the package the spec installs. A failed fetch MUST warn and leave the rest of the
-installation complete, and a rerun MUST retry it. The bundle MUST NOT be vendored into the repository,
-duplicated as a setup row, or published to the setup's market index.
+defaults retain precedence. Each declaration MUST be a git spec whose reference is a 40-hex commit,
+and the standalone installer MUST carry the same specs; repository validation MUST reject a mismatch
+between them and a spec that is not exactly `<source>:<path>#<40-hex commit>`. The selection name MUST
+be the package name the profile recorded for that exact spec, which MAY differ from the repository
+name and MAY be scoped, so a declaration cannot select a package that does not exist. A failed fetch
+MUST warn and leave the rest of the installation complete, and a rerun MUST retry it. The bundle MUST
+NOT be vendored into the repository, duplicated as a setup row, or published to the setup's market
+index.
 
 #### Scenario: Fresh installation
 
 - **WHEN** the installer runs against a profile that does not have the declared bundle
-- **THEN** it installs the package from the pinned spec, selects it ahead of the setup bundle, and the
-  composed profile contains the bundle's rows
+- **THEN** it installs the package from the pinned spec, selects the package name the profile recorded
+  ahead of the setup bundle, and the composed profile contains every row that package's patch declares
+
+#### Scenario: Package name differs from the repository name
+
+- **WHEN** the installed package's name is not the spec's repository name, or is scoped
+- **THEN** the installer selects the recorded package name and the verification passes
 
 #### Scenario: Failed fetch
 
@@ -30,6 +37,6 @@ duplicated as a setup row, or published to the setup's market index.
 
 #### Scenario: Divergent declaration
 
-- **WHEN** `dsh.json` and `install.ps1` disagree about the name or the spec, or the spec's reference is
-  not a commit
-- **THEN** repository validation fails and names the offending bundle
+- **WHEN** `dsh.json` and `install.ps1` disagree about a spec, or a spec is not exactly
+  `<source>:<path>#<40-hex commit>`
+- **THEN** repository validation fails and names the offending spec

@@ -9,12 +9,11 @@ present on every machine the one-command installer prepares, not installed by ha
 
 ## What Changes
 
-- Add a third installer bundle list, `installBundles.git` in `dsh.json`: name/spec pairs for
-  third-party bundles installed from a commit-pinned pnpm spec. It starts with one entry,
-  `huashu-design`.
+- Add a third installer bundle list, `installBundles.git` in `dsh.json`: pnpm specs for third-party
+  bundles installed from a commit-pinned source. It starts with one entry, `huashu-design`.
 - The installer installs each declared git bundle with `dsh plugin add <spec>` before the setup
-  bundle, selects it in `dsh.profile.bundles`, and reports a failed fetch as a warning so the rest of
-  the installation still completes.
+  bundle, selects the package name the profile recorded, and reports a failed fetch as a warning so
+  the rest of the installation still completes.
 - Extend the repository validation, the installer acceptance run, and the dogfood check to expect
   the declared bundle, a commit-pinned spec, and a declared name that matches the package the spec
   installs.

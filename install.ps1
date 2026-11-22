@@ -155,10 +155,11 @@ $ShippedBundles = @(
   '@deepseek-ai/dsh-experimental-session-titles-bundle'
 )
 $RegistryBundles = @()
-# Third-party bundles installed from an explicit pnpm spec, written as
-# '<package name>=<spec>'. The spec pins a commit, so a pin bump reinstalls.
+# Third-party bundles installed from an explicit pnpm spec. The spec pins a
+# commit, so a pin bump reinstalls; the package name comes from the profile
+# after the install, never from the spec.
 $GitBundles = @(
-  'huashu-design=github:alchaincyf/huashu-design#937113133ae446a69ea19d4ceed6cbd2ed3c7735'
+  'github:alchaincyf/huashu-design#937113133ae446a69ea19d4ceed6cbd2ed3c7735'
 )
 # END REPOSITORY METADATA
 
@@ -342,6 +343,17 @@ function Set-ProfileBundles($Manifest, [object[]]$Bundles) {
   if (-not (Test-HasProperty $Manifest.dsh 'profile')) { $Manifest.dsh | Add-Member -MemberType NoteProperty -Name profile -Value ([pscustomobject]@{}) }
   $Manifest.dsh.profile | Add-Member -MemberType NoteProperty -Name bundles -Value @($Bundles) -Force
   return $Manifest
+}
+
+function Get-DependencyNameBySpec($Manifest, [string]$Spec) {
+  # The package name pnpm installed for one spec: the profile dependency whose
+  # recorded value is that spec. The name is not derivable from the spec, because
+  # a repository name and a package name can differ.
+  if (-not (Test-HasProperty $Manifest 'dependencies')) { return $null }
+  foreach ($property in $Manifest.dependencies.PSObject.Properties) {
+    if ([string]$property.Value -eq $Spec) { return $property.Name }
+  }
+  return $null
 }
 
 function Get-HarnessProcesses {
@@ -1935,11 +1947,14 @@ try {
   Write-Host "    profile: $profileDirectory"
   Write-Host "    setup:   $setupSpec"
   $existingBundles = @(Get-ProfileBundles $manifest)
-  $gitBundleNames = @()
-  foreach ($entry in $GitBundles) { $gitBundleNames += ($entry -split '=', 2)[0] }
-  foreach ($name in @($ShippedBundles + $RegistryBundles + $gitBundleNames)) {
+  foreach ($name in @($ShippedBundles + $RegistryBundles)) {
     if ($existingBundles -contains $name) { Write-Host "    keep     $name" }
     else { Write-Host "    enable   $name" }
+  }
+  foreach ($spec in $GitBundles) {
+    $gitName = Get-DependencyNameBySpec $manifest $spec
+    if ($null -ne $gitName -and $existingBundles -contains $gitName) { Write-Host "    keep     $spec" }
+    else { Write-Host "    enable   $spec" }
   }
   if ($NoDesktopShortcut) { Write-Host '    shortcut: skip' }
   else { Write-Host '    shortcut: create DeepSeek Harness (Administrator).lnk on the Desktop' }
@@ -2032,16 +2047,12 @@ try {
     }
   }
 
-  foreach ($entry in $GitBundles) {
-    $name, $spec = $entry -split '=', 2
+  foreach ($spec in $GitBundles) {
     $manifest = Read-JsonFile $profileManifestPath
-    $selected = (@(Get-ProfileBundles $manifest)) -contains $name
-    $installedSpec = $null
-    if ((Test-HasProperty $manifest 'dependencies') -and (Test-HasProperty $manifest.dependencies $name)) {
-      $installedSpec = [string]$manifest.dependencies.$name
-    }
-    if ($selected -and $installedSpec -eq $spec) {
-      Write-Ok "already installed: $name"
+    $bundles = @(Get-ProfileBundles $manifest)
+    $installedName = Get-DependencyNameBySpec $manifest $spec
+    if ($null -ne $installedName -and $bundles -contains $installedName) {
+      Write-Ok "already installed: $installedName"
       continue
     }
     try {
@@ -2049,18 +2060,24 @@ try {
     } catch {
       # A third-party bundle that cannot be fetched must not fail the setup
       # install: the profile is complete without it and a rerun retries it.
-      Write-Warn "optional bundle $name could not be installed: $($_.Exception.Message)"
+      Write-Warn "optional bundle $spec could not be installed: $($_.Exception.Message)"
       continue
     }
-    # The CLI can install the dependency without selecting its bundle, so the
-    # selection is asserted here as well; the setup bundle is moved last later.
+    # The CLI can install the dependency without selecting its bundle, and the
+    # package name is only known from what the profile recorded, so both are
+    # read back here; the setup bundle is moved last later.
     $manifest = Read-JsonFile $profileManifestPath
+    $installedName = Get-DependencyNameBySpec $manifest $spec
+    if ($null -eq $installedName) {
+      Write-Warn "optional bundle $spec was installed but the profile does not record that spec; selection skipped"
+      continue
+    }
     $bundles = @(Get-ProfileBundles $manifest)
-    if ($bundles -notcontains $name) {
-      $manifest = Set-ProfileBundles $manifest (@($bundles) + $name)
+    if ($bundles -notcontains $installedName) {
+      $manifest = Set-ProfileBundles $manifest (@($bundles) + $installedName)
       Save-JsonFile $profileManifestPath $manifest
     }
-    Write-Ok "installed and enabled: $name"
+    Write-Ok "installed and enabled: $installedName"
   }
 
   $manifest = Read-JsonFile $profileManifestPath
@@ -2173,11 +2190,12 @@ try {
     if ($skippedShipped -contains $name) { continue }
     if ($bundles -notcontains $name) { $problems += "bundle $name is not selected" }
   }
-  foreach ($name in $gitBundleNames) {
+  foreach ($spec in $GitBundles) {
     # A third-party bundle that could not be fetched warns and leaves the
     # installation complete; only an installed one must be selected.
-    if (-not ((Test-HasProperty $manifest 'dependencies') -and (Test-HasProperty $manifest.dependencies $name))) { continue }
-    if ($bundles -notcontains $name) { $problems += "bundle $name is not selected" }
+    $installedName = Get-DependencyNameBySpec $manifest $spec
+    if ($null -eq $installedName) { continue }
+    if ($bundles -notcontains $installedName) { $problems += "bundle $installedName is not selected" }
   }
   $installedVersion = Get-InstalledSetupVersion $profileDirectory
   if ($null -eq $installedVersion) {

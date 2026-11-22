@@ -13,7 +13,6 @@ import { validatePackageManifest } from './lib/manifest.ts'
 import { readRepositoryFiles, scanMachinePaths, scanSecrets } from './lib/scan.ts'
 import {
   checkInstructionBudget,
-  type GitBundle,
   type InstructionBudget,
   listPluginPackages,
   type PackageManifest,
@@ -91,7 +90,7 @@ function checkInstaller(problems: string[]): void {
       problems,
       'GitBundles',
       readInstallerArray(text, 'GitBundles'),
-      versions.installBundles.git.map((bundle) => `${bundle.name}=${bundle.spec}`),
+      versions.installBundles.git,
     )
     checkGitBundles(problems, versions.installBundles.git)
   } catch (error) {
@@ -101,21 +100,17 @@ function checkInstaller(problems: string[]): void {
 
 /**
  * A git-sourced bundle installs on every machine the installer runs on, so its
- * spec must name a commit, and the declared name must be the package the spec
- * installs: the installer selects by that name, and a mismatch would leave a
- * dead selection pointing at a package the profile does not have.
+ * spec must name one commit and nothing that can float. The package name is not
+ * checked here: a spec names a repository, and the installed profile is the only
+ * place the package it publishes is known.
  */
-function checkGitBundles(problems: string[], bundles: readonly GitBundle[]): void {
-  for (const bundle of bundles) {
-    const ref = bundle.spec.slice(bundle.spec.lastIndexOf('#') + 1)
-    if (!/^[0-9a-f]{40}$/u.test(ref)) {
-      problems.push(`dsh.json: git bundle ${bundle.name} is not commit-pinned: ${bundle.spec}`)
-    }
-    const path = (bundle.spec.split('#')[0] ?? '').replace(/^[a-z+]+:/iu, '')
-    const leaf = (path.split(/[/\\]/u).pop() ?? '').replace(/\.git$/u, '')
-    if (leaf !== bundle.name) {
+const PINNED_GIT_SPEC = /^[a-z+]+:[^#\s]+#[0-9a-f]{40}$/u
+
+function checkGitBundles(problems: string[], specs: readonly string[]): void {
+  for (const spec of specs) {
+    if (!PINNED_GIT_SPEC.test(spec)) {
       problems.push(
-        `dsh.json: git bundle ${bundle.name} does not match the package ${JSON.stringify(leaf)} in ${bundle.spec}`,
+        `dsh.json: git bundle spec is not a commit-pinned git spec: ${spec} (expected <source>:<path>#<40-hex commit>)`,
       )
     }
   }

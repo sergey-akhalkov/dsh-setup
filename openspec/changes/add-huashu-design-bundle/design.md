@@ -35,13 +35,24 @@ the same mechanism the installer already uses for the setup bundle itself.
 
 `dsh.json` already declares `installBundles.shipped` (enabled by selection) and
 `installBundles.registry` (installed as `name@version`). A third list, `installBundles.git`, holds
-`{ name, spec }` pairs because a git spec does not carry the profile selection name: the spec names a
+pnpm specs, because a git spec does not carry the profile selection name: the spec names a
 repository, the profile selects the package.
 
-The installer copies the pairs into `$GitBundles` as `'<name>=<spec>'`, the same way it copies the
-other two lists, and `validate:repo` compares them. Validation additionally rejects a spec whose
-reference is not a 40-hex commit, and a declared name that does not match the last path segment of
-the spec — that name is what the installer selects, so a mismatch would leave a dead selection.
+The installer copies the specs into `$GitBundles` as a plain string array, the same way it copies the
+other two lists, and `validate:repo` compares them and rejects a spec that is not exactly
+`<source>:<path>#<40-hex commit>` — a floating ref would change what every machine installs.
+
+### The package name comes from the profile, never from the spec
+
+A repository name and a package name may differ, and a scoped package name cannot be read off a spec
+at all. After `dsh plugin add <spec>`, the installer looks up the profile dependency whose recorded
+value is that exact spec and selects that key. A declaration therefore cannot select a package that
+does not exist, and a wrong guess is not possible because nothing is guessed.
+
+The same lookup drives the install skip (`a current pin, already selected, is left alone`), the
+reinstall of a changed pin, and the verification. Acceptance runs and dogfood resolve the expected
+name the same way, and fail when a declared spec is absent from the installed profile instead of
+silently narrowing the expectation.
 
 ### Selection before the setup bundle
 
@@ -57,7 +68,15 @@ itself after a successful add — the same precaution the setup bundle already g
 A failed fetch warns and continues: the profile is complete without the skill, and a rerun retries
 it. Verification demands the selection only for a bundle present in the profile's dependencies, so a
 skipped fetch cannot fail an otherwise good installation, while an installed-but-unselected bundle
-does fail it.
+does fail it. The stub-CLI acceptance step covers these paths directly: a failed fetch, a stale pin
+that is reinstalled, a current pin that is skipped, a dependency-only add that still gets selected,
+and a dropped selection that fails the verification.
+
+### A row-level compose check, not a name match
+
+The acceptance run composes the installed profile and then checks the rows the installed bundle's own
+patch declares: every row id it names must appear in the dump. A bundle header alone proves only that
+the layer was applied, which is exactly the gap a name-substring check leaves.
 
 ### No opt-out switch
 

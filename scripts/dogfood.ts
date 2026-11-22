@@ -28,7 +28,7 @@ import {
   SETUP_BUNDLE,
 } from './lib/dogfood.ts'
 import { parseDefaults } from './lib/generate.ts'
-import { availableBundles, probeNpmBundle } from './lib/install-bundles.ts'
+import { availableBundles, gitBundleSelection, probeNpmBundle } from './lib/install-bundles.ts'
 import {
   type PackageManifest,
   readDshVersions,
@@ -358,18 +358,26 @@ function main(): number {
     const installedManifest = readJson<InstalledProfileManifest>(manifestPath)
     const selectedBundles = readBundles(installedManifest)
 
+    const gitSelection = gitBundleSelection(
+      versions.installBundles.git,
+      installedManifest.dependencies,
+    )
     step('the installer enables the documented bundles and keeps the setup bundle last', () => {
       // The installer selects only the shipped bundles this DSH version
-      // provides, every declared registry bundle, and the pinned git bundles.
+      // provides, every declared registry bundle, and the pinned git bundles,
+      // whose package name is the one the profile recorded.
       const expected = [
         ...availableBundles(
           [...versions.installBundles.shipped, ...versions.installBundles.registry],
           versions.runtime,
           probeNpmBundle,
         ),
-        ...versions.installBundles.git.map((bundle) => bundle.name),
+        ...gitSelection.names,
       ]
       const problems = checkBundleSelection(ownerBundles, selectedBundles, expected)
+      for (const spec of gitSelection.missing) {
+        problems.push(`git bundle "${spec}" was not installed from its pin`)
+      }
       if (installedManifest.dependencies?.[SETUP_BUNDLE] === undefined) {
         problems.push(`${SETUP_BUNDLE} is missing from the profile dependencies`)
       }

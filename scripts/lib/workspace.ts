@@ -81,22 +81,14 @@ export interface WorkspacePackage {
   manifest: PackageManifest
 }
 
-/** One third-party bundle installed from an explicit, commit-pinned pnpm spec. */
-export interface GitBundle {
-  /** Package name the spec installs, and the name selected in the profile bundles. */
-  name: string
-  /** pnpm spec; the reference is a commit so every machine installs the same tree. */
-  spec: string
-}
-
 /** Bundles the one-command installer enables besides the setup bundle itself. */
 export interface InstallBundles {
   /** Shipped optional bundles: enabled by adding their names to the profile selection. */
   shipped: string[]
   /** Bundles published to the registry: installed as a dependency, then selected. */
   registry: string[]
-  /** Third-party bundles installed from a pinned git spec, then selected. */
-  git: GitBundle[]
+  /** Third-party bundles installed from a commit-pinned git spec, then selected. */
+  git: string[]
 }
 
 export interface DshVersions {

@@ -189,9 +189,12 @@ design skill for prototypes, slides, infographics, App Store images, and motion.
 it costs no prompt text per request: the catalog lists it, and its body loads only when invoked.
 
 The bundle is not part of `@dsh-setup/setup`; it is a separate profile dependency that the installer
-adds with `dsh plugin add` and selects before the setup bundle, so the setup stays last. The spec
-pins a commit, so every machine installs the same tree. [`dsh.json`](../dsh.json)
-(`installBundles.git`) is the source; the standalone installer carries the same pair, and
+adds with `dsh plugin add` and selects before the setup bundle, so the setup stays last. Keeping it
+separate keeps its 47 MB asset tree out of this repository and out of every setup install, and leaves
+the upstream package to own its skill provider and its own dependencies. The spec pins a commit, so
+every machine installs the same tree; the profile records the package name, so a repository name that
+differs from it (or a scoped package) still selects correctly. [`dsh.json`](../dsh.json)
+(`installBundles.git`) is the source; the standalone installer carries the same spec, and
 `validate:repo` fails when they disagree or when the spec is not commit-pinned.
 
 A failed fetch (offline, GitHub unavailable) warns and the installation continues without the

@@ -43,3 +43,34 @@ export function availableBundles(
 ): string[] {
   return packages.filter((name) => probe(`${name}@${version}`) === 'available')
 }
+
+/**
+ * The package name a profile recorded for one exact pnpm spec. A git spec names
+ * a repository, not a package — the repository and package names may differ, and
+ * a scoped package cannot be read off the spec at all — so the installed
+ * dependency is the only authority, exactly as the installer treats it.
+ */
+export function dependencyNameBySpec(
+  dependencies: Readonly<Record<string, string>> | undefined,
+  spec: string,
+): string | undefined {
+  for (const [name, recorded] of Object.entries(dependencies ?? {})) {
+    if (recorded === spec) return name
+  }
+  return undefined
+}
+
+/** Resolve each declared git spec to its recorded package name, and report the rest. */
+export function gitBundleSelection(
+  specs: readonly string[],
+  dependencies: Readonly<Record<string, string>> | undefined,
+): { names: string[]; missing: string[] } {
+  const names: string[] = []
+  const missing: string[] = []
+  for (const spec of specs) {
+    const name = dependencyNameBySpec(dependencies, spec)
+    if (name === undefined) missing.push(spec)
+    else names.push(name)
+  }
+  return { names, missing }
+}

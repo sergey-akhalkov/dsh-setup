@@ -13,11 +13,6 @@
       "@deepseek-ai/dsh-experimental-session-titles-bundle"
     ],
     "registry": [],
-    "git": [
-      {
-        "name": "huashu-design",
-        "spec": "github:alchaincyf/huashu-design#937113133ae446a69ea19d4ceed6cbd2ed3c7735"
-      }
-    ]
+    "git": ["github:alchaincyf/huashu-design#937113133ae446a69ea19d4ceed6cbd2ed3c7735"]
   }
 }

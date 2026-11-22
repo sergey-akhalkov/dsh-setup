@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import { availableBundles, probeNpmBundle } from './lib/install-bundles.ts'
+import { availableBundles, gitBundleSelection, probeNpmBundle } from './lib/install-bundles.ts'
 import { readDshVersions, readJson, rootDir, setupDir } from './lib/workspace.ts'
 
 /**
@@ -109,9 +109,13 @@ function serveIndex(home: string, document: unknown): { url: string; stop: () =>
 }
 
 /**
- * A stand-in plugin manager for the version comparison: it answers the version
- * query and the dump, and on install records a chosen installed version without
- * selecting the setup bundle, reproducing the Desktop CLI's dependency-only add.
+ * A stand-in plugin manager for the version comparison and the pinned git
+ * bundle's failure paths: it answers the version query and the dump, and on
+ * install records a chosen installed version. `STUB_GIT_MODE` selects what an
+ * add of `STUB_GIT_SPEC` does — `fail` the fetch, record the dependency under
+ * `STUB_GIT_PACKAGE` without selecting the bundle (`dependency`), or record it
+ * and drop the whole selection (`drop`), which is how a recompose can lose a
+ * selection the installer itself appended.
  */
 function writeStubCli(home: string): string {
   const stub = join(home, 'stub-dsh.ps1')
@@ -129,8 +133,20 @@ function writeStubCli(home: string): string {
       'if ($arguments -contains "plugin") {',
       '  $profileDir = Join-Path (Join-Path $env:DSH_HOME "profiles") $profile',
       '  $manifestPath = Join-Path $profileDir "package.json"',
+      '  $addIndex = [Array]::IndexOf($arguments, "add")',
+      '  $spec = if ($addIndex -ge 0 -and $addIndex + 1 -lt $arguments.Count) { [string]$arguments[$addIndex + 1] } else { "" }',
+      '  if ($env:STUB_GIT_SPEC -and $spec -eq $env:STUB_GIT_SPEC) {',
+      '    if ($env:STUB_GIT_MODE -eq "fail") { [Console]::Error.WriteLine("stub: the pinned spec cannot be fetched"); exit 1 }',
+      '    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json',
+      '    if (-not $manifest.PSObject.Properties["dependencies"]) { $manifest | Add-Member -NotePropertyName dependencies -NotePropertyValue ([pscustomobject]@{}) }',
+      '    $manifest.dependencies | Add-Member -NotePropertyName $env:STUB_GIT_PACKAGE -NotePropertyValue $spec -Force',
+      '    if ($env:STUB_GIT_MODE -eq "drop") { $manifest.dsh.profile.bundles = @() }',
+      '    $manifest | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $manifestPath',
+      '    exit 0',
+      '  }',
       '  $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json',
       '  $manifest.dependencies | Add-Member -NotePropertyName "@dsh-setup/setup" -NotePropertyValue "stub" -Force',
+      '  if ($env:STUB_GIT_MODE -eq "drop") { $manifest.dsh.profile.bundles = @() }',
       '  $manifest | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $manifestPath',
       '  $packageDir = Join-Path (Join-Path $profileDir "node_modules") "@dsh-setup/setup"',
       '  New-Item -ItemType Directory -Force -Path $packageDir | Out-Null',
@@ -163,8 +179,8 @@ function main(): number {
       `validate-installer: DSH ${dshVersion} ships ${String(shippedBundles.length)} of ${String(versions.installBundles.shipped.length)} selected bundle(s)`,
     )
   }
-  // Git-sourced bundles keep their declared name: the installer selects that name.
-  const gitBundles = versions.installBundles.git.map((bundle) => bundle.name)
+  // Git-sourced bundles are resolved from the installed manifest, because the
+  // installer takes the package name the profile recorded: see the install step.
   const tmpRoot = join(rootDir, '.tmp')
   mkdirSync(tmpRoot, { recursive: true })
   const home = mkdtempSync(join(tmpRoot, 'installer-home-'))
@@ -576,6 +592,131 @@ function main(): number {
       }
     })
 
+    // The pinned git bundle's paths — a failed fetch, a stale pin, and a dropped
+    // selection — are only reachable with a plugin manager that answers the
+    // install, so they run against the stub CLI. The stub records the package
+    // under a scoped name that neither the repository name nor the spec carries,
+    // so a run passes only when the installer takes the name from the profile.
+    step(
+      'the pinned git bundle survives a failed fetch, replaces a stale pin, and rejects a dropped selection',
+      () => {
+        const spec = versions.installBundles.git[0]
+        if (spec === undefined) {
+          console.log('       no git bundle is declared; skipped')
+          return
+        }
+        const recordedPackage = '@probe/scoped-design-package'
+        const staleSpec = spec.replace(/#[0-9a-f]{40}$/u, `#${'1'.repeat(40)}`)
+        if (staleSpec === spec) throw new Error(`cannot build a stale pin from ${spec}`)
+        const runGitCase = (
+          mode: 'fail' | 'dependency' | 'drop',
+          seed?: (manifest: ProfileManifest) => void,
+        ) => {
+          const caseHome = mkdtempSync(join(tmpRoot, 'installer-git-'))
+          const caseProfile = join(caseHome, 'profiles', 'ci')
+          cpSync(join(home, 'profiles', 'ci'), caseProfile, { recursive: true })
+          const caseManifest: ProfileManifest = {
+            dependencies: {},
+            dsh: { profile: { bundles: [] } },
+          }
+          seed?.(caseManifest)
+          writeFileSync(
+            join(caseProfile, 'package.json'),
+            JSON.stringify({ name: 'dsh-profile-ci', ...caseManifest }),
+          )
+          const result = shell(
+            pwsh,
+            [
+              '-NoProfile',
+              '-File',
+              join(rootDir, 'install.ps1'),
+              '-Profile',
+              'ci',
+              '-DshHome',
+              caseHome,
+              '-DshCli',
+              writeStubCli(caseHome),
+              '-SetupSpec',
+              setupSpec,
+              '-NoStopApp',
+              '-NoRestart',
+              '-NoDesktopShortcut',
+              '-NoHindsight',
+            ],
+            {
+              ...env,
+              DSH_HOME: caseHome,
+              STUB_DSH_VERSION: dshVersion,
+              STUB_INSTALLED_VERSION: '0.0.0-stub',
+              STUB_GIT_MODE: mode,
+              STUB_GIT_SPEC: spec,
+              STUB_GIT_PACKAGE: recordedPackage,
+            },
+            240_000,
+          )
+          const manifest = readJson<ProfileManifest>(join(caseProfile, 'package.json'))
+          const bundles = manifest.dsh?.profile?.bundles ?? []
+          cleanup(caseHome)
+          return { result, output: `${result.stdout}\n${result.stderr}`, manifest, bundles }
+        }
+
+        const failed = runGitCase('fail')
+        if (failed.result.status !== 0) throw fail(failed.result)
+        if (!failed.output.includes('could not be installed')) {
+          throw new Error(`the failed fetch is not reported\n${failed.output.trim()}`)
+        }
+        if (failed.manifest.dependencies?.[recordedPackage] !== undefined) {
+          throw new Error('the failed fetch still recorded a dependency')
+        }
+        if (!failed.output.includes('setup version')) {
+          throw new Error('the failed fetch did not leave the setup bundle installed')
+        }
+
+        const installed = runGitCase('dependency')
+        if (installed.result.status !== 0) throw fail(installed.result)
+        if (installed.manifest.dependencies?.[recordedPackage] !== spec) {
+          throw new Error(
+            `the installed dependency is ${String(installed.manifest.dependencies?.[recordedPackage])}, not the declared spec`,
+          )
+        }
+        if (!installed.bundles.includes(recordedPackage)) {
+          throw new Error('the dependency was installed without selecting its bundle')
+        }
+        if (installed.bundles[installed.bundles.length - 1] !== '@dsh-setup/setup') {
+          throw new Error('the setup bundle is not last after a git bundle was selected')
+        }
+
+        const stale = runGitCase('dependency', (manifest) => {
+          manifest.dependencies = { [recordedPackage]: staleSpec }
+          manifest.dsh = { profile: { bundles: [recordedPackage] } }
+        })
+        if (stale.result.status !== 0) throw fail(stale.result)
+        if (stale.manifest.dependencies?.[recordedPackage] !== spec) {
+          throw new Error('a stale pin was not reinstalled at the declared spec')
+        }
+
+        const current = runGitCase('fail', (manifest) => {
+          manifest.dependencies = { [recordedPackage]: spec }
+          manifest.dsh = { profile: { bundles: [recordedPackage] } }
+        })
+        if (current.result.status !== 0) throw fail(current.result)
+        if (!current.output.includes(`already installed: ${recordedPackage}`)) {
+          throw new Error(`a current pin was not skipped\n${current.output.trim()}`)
+        }
+        if (current.output.includes('could not be installed')) {
+          throw new Error('a current pin was fetched again instead of being skipped')
+        }
+
+        const dropped = runGitCase('drop')
+        if (dropped.result.status === 0) {
+          throw new Error('an installed but unselected bundle passed the verification')
+        }
+        if (!dropped.output.includes(`bundle ${recordedPackage} is not selected`)) {
+          throw new Error(`the dropped selection is not named\n${dropped.output.trim()}`)
+        }
+      },
+    )
+
     // The installer's allowlist is the enginesDsh range itself: a prerelease
     // newer than any version list is admitted, and versions outside the range
     // are refused before the profile is read. The stub CLI supplies the
@@ -793,6 +934,18 @@ function main(): number {
       }
     }
 
+    // The installer selects the package name the profile recorded, so the
+    // expectation is read from the installed manifest; a declared spec that is
+    // absent is a real failure, not a silently narrowed check.
+    const installedDependencies = readJson<ProfileManifest>(manifestPath).dependencies
+    const gitSelection = gitBundleSelection(versions.installBundles.git, installedDependencies)
+    step('the installer installed every declared git bundle from its pin', () => {
+      if (gitSelection.missing.length > 0) {
+        throw new Error(`not installed from the pinned spec: ${gitSelection.missing.join(', ')}`)
+      }
+    })
+    const gitBundles = gitSelection.names
+
     stageManifestChecks(manifestPath, versions, shippedBundles, gitBundles, failures)
     step('the installer leaves the profile patch untouched', () => {
       if (hashFile(patchPath) !== patchBefore) throw new Error('cordis.patch.yml changed')
@@ -814,6 +967,22 @@ function main(): number {
       ]
       for (const marker of markers) {
         if (!composed.stdout.includes(marker)) throw new Error(`composed dump lacks "${marker}"`)
+      }
+      // A bundle's header only proves its layer was applied; every row its own
+      // patch declares must be mounted too, or the skill never reaches a session.
+      const rowLines = new Set(composed.stdout.split('\n').map((line) => line.trim()))
+      for (const name of gitBundles) {
+        const bundlePatch = join(profileDir, 'node_modules', name, 'cordis.patch.yml')
+        if (!existsSync(bundlePatch)) throw new Error(`${name} ships no bundle patch to check`)
+        const rowIds = [
+          ...readFileSync(bundlePatch, 'utf8').matchAll(/^\s*-\s+id:\s*([A-Za-z0-9@/._-]+)\s*$/gmu),
+        ].map((match) => match[1] ?? '')
+        if (rowIds.length === 0) throw new Error(`${name}'s patch names no row`)
+        for (const id of rowIds) {
+          if (!rowLines.has(`- id: ${id}`)) {
+            throw new Error(`composed dump lacks the row "${id}" from ${name}`)
+          }
+        }
       }
     })
 
