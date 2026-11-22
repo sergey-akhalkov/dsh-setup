@@ -1078,3 +1078,26 @@ Tail verification (tasks 6.1, 6.3, 6.4):
 ## add-exploratory-testing (2026-11-18)
 
 **Opt-in exploratory testing and spec-less workflow gates.** The archived change added the `exploratory-testing` capability and the `@dsh-setup/plugin-exploratory-testing` bundle: one on-demand skill (state scan, focus register, two user gates, A/B cycle changes, regression/spec proof, knowledge capture) with copy-ready templates, no always-on prompt, tool, dashboard, or custom schema. It also made spec-less changes first-class: the contributed `change-intake` spec step accepts a delta spec or `skip_specs: true`, adoption and user-click archive recheck that eligibility, the effective marker is bound into the change-artifact digest, the whole-spec review scope includes `findings/**/*.md`, and the live-worktree fallback tracks `.openspec.yaml` so a marker change or edit-read-restore discards the verdict (`reviewed-inputs-changed`). The marker reader uses the `yaml` parser (hoisted and vendored by the setup) so duplicate, escaped, quoted, and alias spellings match OpenSpec. Acceptance is committed: the fixture-based intake/adoption/archive test, the behavioral decision-gate run, the cycle-A lifecycle run, and the executed final digest comparison in [exploratory-testing-acceptance](exploratory-testing-acceptance.md). Deltas are synced into `openspec/specs/exploratory-testing/spec.md`, `openspec/specs/openspec-workflows/spec.md`, and `openspec/specs/workflows/spec.md`; the entry lives at `openspec/changes/archive/2026-11-18-add-exploratory-testing/`. Release and the first real exploratory cycle are the owner's next decisions.
+
+## add-huashu-design-bundle (2026-11-22)
+
+**A pinned third-party skill bundle becomes a default.** The one-command installer now installs
+`huashu-design` (MIT, `github:alchaincyf/huashu-design#9371131…`, 3.5.0) from a commit-pinned git spec
+and selects it ahead of the setup bundle, so the skill is cataloged in every session without a
+per-request prompt cost. `dsh.json` gains `installBundles.git`; `install.ps1` mirrors it in
+`$GitBundles`, warns instead of failing when the fetch fails, and takes the selection name from the
+profile dependency that records the exact spec — a git spec names a repository, not a package, and a
+scoped package name cannot be read off it at all. `validate:repo` rejects any spec that is not exactly
+`<source>:<path>#<40-hex commit>`; `validate:installer` gained a stub-CLI step for the failed fetch,
+the stale pin, the current pin, a dependency-only add, and a dropped selection, resolves the expected
+name from the installed profile, and checks every row the installed bundle's own patch declares;
+`dogfood` resolves the same way and reports an unresolved spec.
+
+**Review rounds.** The first lane rounds returned five findings — the docs omitted why the bundle is a
+separate dependency, the failure/stale-pin/verification paths had no covering check, validation derived
+package identity from the repository basename, an unpinned spec was accepted, and the compose check
+accepted a bundle header without its row. All are fixed in `7ff3395`..`8b7ba38`; the re-run gives 11/11
+task approvals plus whole-spec and integration `PASS`, and `pnpm validate:installer` and `pnpm dogfood`
+are green on DSH 0.2.2-rc.2 and the installed CLI. The change is archived as
+`2026-11-22-add-huashu-design-bundle` with the `portable-setup` delta synced (`Pinned third-party
+bundle installation`); the owner release follows.
