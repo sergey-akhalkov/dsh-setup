@@ -521,26 +521,33 @@ interface SimpleWord {
   readonly end: number
 }
 
-/** A shell quote the scanner does not model: PowerShell also accepts these. */
-const SMART_QUOTE = /[\u2018\u2019\u201c\u201d]/u
+/** A character that makes the command more than one simple command, outside quotes. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: a control byte, `;`, or `#` is structure
+const BARE_STRUCTURE = /[\u0000-\u001f`;&|><#$()\\]/u
+
+/** A smart quote PowerShell treats as a regular quote. */
+const SMART_QUOTE = /[\u2018-\u201d]/u
 
 /** Whether one word is the bare token `text`, with no quoted fragment. */
 function isBareWord(word: SimpleWord | undefined, text: string): boolean {
   return word !== undefined && word.quoted.length === 0 && word.bare.toLowerCase() === text
 }
 
+/** One word's text with its quote characters removed. */
+function wordText(word: SimpleWord): string {
+  return word.bare + word.quoted.map((part) => part.body).join('')
+}
+
 /**
  * Split one simple command into words, or return undefined when the text
  * carries shell structure outside quotes. A bare control character, escape,
- * substitution, comment, or parenthesized subexpression is structure, as is a
- * backtick, a smart quote, or a doubled or escaped quote anywhere, because each
- * one moves a quote boundary in one supported shell. The caller then keeps the
- * fail-closed scan; a quoted body is skipped as one region.
+ * substitution, comment, smart quote, or parenthesized subexpression is
+ * structure, as is a doubled quote or, inside double quotes, a backslash or
+ * backtick, because each one moves a quote boundary in one supported shell. The
+ * caller then keeps the fail-closed scan; a quoted body is skipped as one
+ * region.
  */
 function simpleWords(command: string): SimpleWord[] | undefined {
-  // A backtick escapes in PowerShell and a smart quote delimits a string there,
-  // so either one makes every region uncertain; nothing is masked.
-  if (command.includes('`') || SMART_QUOTE.test(command)) return undefined
   const words: SimpleWord[] = []
   let bare = ''
   let quoted: QuotedValue[] = []
@@ -558,11 +565,13 @@ function simpleWords(command: string): SimpleWord[] | undefined {
       const close = command.indexOf(char, index + 1)
       if (close < 0) return undefined
       const body = command.slice(index + 1, close)
-      // A doubled quote is the other shell's escape, so the boundary is uncertain,
-      // and a backslash escapes inside double quotes in Bash. A single-quoted body
-      // is literal in both shells, so its backslashes are data.
+      // A doubled quote escapes in the other shell. Inside double quotes a
+      // backslash escapes in Bash and a backtick escapes or a smart double quote
+      // terminates in PowerShell; a single-quoted body is literal in both
+      // shells except for its own smart quote.
       if (body.includes(char + char)) return undefined
-      if (char === '"' && body.includes(String.fromCharCode(92))) return undefined
+      if (char === '"' && /[\\`\u201c\u201d]/u.test(body)) return undefined
+      if (char === "'" && /[\u2018\u2019]/u.test(body)) return undefined
       start ??= index
       quoted.push({ quote: char, start: index, end: close + 1, body })
       index = close
@@ -572,8 +581,7 @@ function simpleWords(command: string): SimpleWord[] | undefined {
       flush(index)
       continue
     }
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: a control byte, `;`, or `#` is structure
-    if (/[\u0000-\u001f`;&|><#$()]/u.test(char)) return undefined
+    if (BARE_STRUCTURE.test(char) || SMART_QUOTE.test(char)) return undefined
     start ??= index
     bare += char
   }
@@ -624,8 +632,9 @@ function maskMessageArguments(command: string): string {
     const word = words[index]
     if (word === undefined) break
     // `--` ends the options: the values found so far are data, and everything
-    // after it stays visible to the scan as positional arguments.
-    if (isBareWord(word, '--')) break
+    // after it stays visible to the scan as positional arguments. Quotes cannot
+    // make the marker a different argument, so its stripped text decides.
+    if (wordText(word) === '--') break
     const name = word.bare.toLowerCase()
     const equal = name.indexOf('=')
     const base = equal < 0 ? name : name.slice(0, equal)

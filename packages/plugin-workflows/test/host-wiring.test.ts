@@ -9950,6 +9950,9 @@ describe('archive gate message data', () => {
       // A prefix token is verified whole, not by its bare fragment.
       'rtk"evil" git commit -m "openspec archive auth"',
       'pnpm ex"evil"ec git commit -m "openspec archive auth"',
+      // A bare backslash escapes outside quotes, and a quoted `--` is still the marker.
+      "git commit --author a\\'x' -m '$(openspec archive auth)' 'z\\'",
+      'git commit --"" -m "openspec archive auth"',
     ]) {
       const result = await gate(host, command)
       expect(result.kind, command).toBe('deny')
@@ -9962,6 +9965,8 @@ describe('archive gate message data', () => {
     const host = await gateHost()
     for (const command of [
       "git commit -m 'openspec archive notes\\temp'",
+      "git commit -m 'openspec archive uses `code`'",
+      'git commit -m "openspec archive doesn\u2019t run"',
       'git commit -m "openspec archive fix" -- README.md',
     ]) {
       const result = await gate(host, command)
