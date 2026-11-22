@@ -63,24 +63,33 @@ values as message text.
 
 The mask is one pass. Outside quoted regions it recognizes `-m`, `--message`, or `--body`
 (case-insensitive) followed by an optional `=` for the long forms and a quoted value, and replaces
-the value's characters with spaces. A single-quoted value is masked: it is literal in both shells.
-A double-quoted value is masked only when it contains no backslash, no `$(`, and no backtick and
-its closing quote is the first following quote. An unquoted, unterminated, here-string, escaped, or
-otherwise uncertain value masks nothing in the whole command: the function returns the original
-unmasked command instead of resuming from a guessed quote boundary. An exception never escapes; an
-unreadable input keeps today's result.
+the value's characters with spaces. A single-quoted value is masked: it is literal in both shells,
+so a backslash, a backtick, a dollar sign, or a smart apostrophe inside it is data. A double-quoted
+value is masked only when it contains no backslash, no backtick, no smart double quote (U+201C,
+U+201D), none of Bash's `$(`, `${`, or `$[` expansion forms, and its closing quote is the first
+following quote; a plain variable reference and a literal dollar sign stay data. A bare backslash,
+backtick, smart quote, or doubled quote anywhere in the command is structure, as is a here-string, an
+unquoted or unterminated value, and any other uncertain value or boundary: none of them masks
+anything, and the function returns the original unmasked command instead of resuming from a guessed
+quote boundary. An exception never escapes; an unreadable input keeps today's result.
 
 Safety argument:
 
 - Masking is scoped to `git commit`/`-m`/`--message` and `gh pr create`/`--body`. A wrapper, an
-  unknown program, another subcommand, or a git alias prefix is never masked, so
+  unknown program, another subcommand, a git alias prefix, or a quoted fragment in the executable,
+  prefix, or subcommand position is never masked, so
   `bash -c 'eval "$1"' --message "openspec archive auth"` and
   `git -c alias.review='!bash -c' review -m 'openspec archive auth'` keep their original text and
   are refused.
-- A double-quoted value with a backslash, `$(`, or a backtick is not masked, and an uncertain quote
-  boundary abandons the mask for the whole command, so an escaped quote can no longer be mistaken
-  for the value end and the following substitution stays visible to the scan.
-- A single-quoted value is literal in both shells, so masking it cannot hide executed text.
+- A double-quoted value with a backslash, a backtick, a smart double quote, or a `$(`, `${`, or `$[`
+  expansion is not masked, and an uncertain quote boundary abandons the mask for the whole command,
+  so an escaped quote, a PowerShell backtick escape, a smart-quote delimiter, or a Bash brace
+  substitution can no longer be mistaken for the value end and stays visible to the scan.
+- A single-quoted value is literal in both shells, so masking it cannot hide executed text, and its
+  backslashes, backticks, and smart apostrophes stay data.
+- The option is recognized only outside quotes and only before a `--` marker, so neither a `-m`
+  inside prose nor a positional argument after the marker can start a mask that crosses into real
+  code (for example `echo "a -m " ; openspec archive auth`).
 - The option is recognized only outside quotes, so a `-m` inside prose cannot start a mask that
   crosses into real code (for example `echo "a -m " ; openspec archive auth`).
 
@@ -183,7 +192,14 @@ Alternatives rejected:
   - allow `openspec validate narrow-archive-scan-to-invocations --strict`,
     `openspec status --change <name>`, and `openspec instructions archive --change <name>`;
   - refuse `git commit -m "..." ; openspec archive auth` and a message followed by a real move;
-  - refuse `git commit -m "$(openspec archive auth)"` and a bash double-quoted backtick body;
+  - refuse `git commit -m "$(openspec archive auth)"`, a bash double-quoted backtick body, a Bash
+    brace substitution (`${ openspec archive auth; }` and `${| openspec archive auth; }`), a
+    PowerShell backtick escape in another argument, and a smart-quote delimiter;
+  - refuse a quoted fragment in the prefix, executable, or subcommand position
+    (`rtk"evil" git commit -m ...`, `git"evil" commit -m ...`), an unquoted or displaced
+    `--message=value`, a `-m` after a comment or a `--` marker, and a bare backslash;
+  - allow a literal backslash, backtick, or smart apostrophe inside the quoted value that carries
+    it, a plain variable reference and a literal dollar sign, and a message followed by `--`;
   - refuse `git commit -m "a \" -m '$(openspec archive auth)' \" b"`: the escaped quote
     abandons the mask and the substitution is still scanned;
   - refuse a message option on a non-allowlisted program, for example
