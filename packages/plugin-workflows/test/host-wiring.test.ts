@@ -9925,6 +9925,41 @@ describe('archive gate message data', () => {
       expect(result.nextCalled, command).toBe(false)
     }
   })
+
+  it('refuses an escape, a quoted fragment, and an option boundary', async () => {
+    const host = await gateHost()
+    for (const command of [
+      // An escaped quote outside the value moves the value's real boundary.
+      'git commit --author "a\\" -m "openspec archive auth" x"',
+      'git commit -m "notes\\temp openspec archive notes"',
+      // The executable and subcommand are the verified pair, not their fragments.
+      'git"evil" commit -m "openspec archive auth"',
+      'git com"evil"mit -m "openspec archive auth"',
+      // An unquoted or displaced attached value leaves the command unmasked.
+      'git commit --message=plain -m "openspec archive auth"',
+      'git commit --message"openspec archive auth"=',
+      // A comment or `--` makes the following `-m` text, not an option.
+      'git commit # -m "openspec archive auth"',
+      'git commit -- -m "openspec archive auth"',
+    ]) {
+      const result = await gate(host, command)
+      expect(result.kind, command).toBe('deny')
+      expect(result.reason, command).toMatch(/could not be parsed safely/u)
+      expect(result.nextCalled, command).toBe(false)
+    }
+  })
+
+  it('allows a variable reference or a literal dollar sign in a message value', async () => {
+    const host = await gateHost()
+    for (const command of [
+      'git commit -m "openspec archive costs 5$"',
+      'git commit -m "openspec changes: the archive gate reads $cost"',
+    ]) {
+      const result = await gate(host, command)
+      expect(result.kind, command).toBe('continue')
+      expect(result.nextCalled, command).toBe(true)
+    }
+  })
 })
 
 it.skipIf(process.platform !== 'win32')(

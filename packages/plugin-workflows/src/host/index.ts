@@ -517,65 +517,75 @@ interface QuotedValue {
 interface SimpleWord {
   readonly bare: string
   readonly quoted: readonly QuotedValue[]
+  readonly start: number
+  readonly end: number
 }
 
 /**
  * Split one simple command into words, or return undefined when the text
  * carries shell structure outside quotes. A bare control character, escape,
- * substitution, or parenthesized subexpression is structure, so the caller
- * keeps the fail-closed scan; a quoted body is skipped as one region.
+ * substitution, comment, end-of-options marker, or parenthesized subexpression
+ * is structure, as is a backslash or a doubled quote anywhere, because either
+ * one moves a quote boundary in one shell. The caller then keeps the
+ * fail-closed scan; a quoted body is skipped as one region.
  */
 function simpleWords(command: string): SimpleWord[] | undefined {
+  // A backslash escapes in Bash and moves a boundary in either shell, so it
+  // makes every later region uncertain; the whole command stays unmasked.
+  if (command.includes(String.fromCharCode(92))) return undefined
   const words: SimpleWord[] = []
   let bare = ''
   let quoted: QuotedValue[] = []
-  const flush = (): void => {
-    if (bare === '' && quoted.length === 0) return
-    words.push({ bare, quoted })
+  let start: number | undefined
+  const flush = (end: number): void => {
+    if (start === undefined) return
+    words.push({ bare, quoted, start, end })
     bare = ''
     quoted = []
+    start = undefined
   }
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] ?? ''
     if (char === '"' || char === "'") {
       const close = command.indexOf(char, index + 1)
       if (close < 0) return undefined
-      quoted.push({
-        quote: char,
-        start: index,
-        end: close + 1,
-        body: command.slice(index + 1, close),
-      })
+      const body = command.slice(index + 1, close)
+      // A doubled quote is the other shell's escape, so the boundary is uncertain.
+      if (body.includes(char + char)) return undefined
+      start ??= index
+      quoted.push({ quote: char, start: index, end: close + 1, body })
       index = close
       continue
     }
     if (char === ' ' || char === '\t') {
-      flush()
+      flush(index)
       continue
     }
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: a control byte is shell structure
-    if (/[\u0000-\u001f`;&|><\\($)]/u.test(char)) return undefined
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: a control byte, `;`, or `#` is structure
+    if (/[\u0000-\u001f`;&|><#$()]/u.test(char)) return undefined
+    start ??= index
     bare += char
   }
-  flush()
+  flush(command.length)
   return words
 }
 
 /** Whether a quoted value is literal text in both shells. */
 function proseValue(value: QuotedValue): boolean {
-  // A double-quoted body is evaluated: an escape moves its boundary, and a `$`
-  // or a backtick substitutes. A single-quoted body is literal.
-  return value.quote === "'" || !/[\\$`]/u.test(value.body)
+  // A double-quoted body is evaluated: an escape moves its boundary, and a
+  // backtick or a `$(` substitutes. A variable reference yields data, not code.
+  return value.quote === "'" || !/[\\`]|\$\(/u.test(value.body)
 }
 
 /**
  * Mask the value of a verified `git commit -m`/`--message` or `gh pr create
  * --body` option, so the fall-back scan reads a commit message as prose instead
  * of shell structure. Among the verified pair's options, only a quoted value of
- * the option outside a quoted region is masked. Another program, subcommand, or
- * option, an unquoted, unterminated, attached, or evaluated value, and any
- * other shell structure leave the whole command unmasked: the fail-closed scan
- * stays as today.
+ * the option outside a quoted region is masked: the word after the option, or
+ * one directly after its `=`. Another program, subcommand, or option, a quoted
+ * fragment in the executable position, an unquoted, unterminated, concatenated,
+ * or evaluated value, a `--` marker, and any other shell structure leave the
+ * whole command unmasked: the fail-closed scan stays as today.
  */
 function maskMessageArguments(command: string): string {
   const words = simpleWords(command)
@@ -584,7 +594,11 @@ function maskMessageArguments(command: string): string {
   if (words[0]?.bare.toLowerCase() === 'rtk') at = 1
   else if (words[0]?.bare.toLowerCase() === 'pnpm' && words[1]?.bare.toLowerCase() === 'exec')
     at = 2
-  const head = [at, at + 1, at + 2].map((index) => (words[index]?.bare ?? '').toLowerCase())
+  const head = [at, at + 1, at + 2].map((index) => {
+    const word = words[index]
+    // A quoted fragment in the executable position is not the verified pair.
+    return word !== undefined && word.quoted.length === 0 ? word.bare.toLowerCase() : ''
+  })
   const options =
     head[0] === 'git' && head[1] === 'commit'
       ? new Set(['-m', '--message'])
@@ -592,25 +606,36 @@ function maskMessageArguments(command: string): string {
         ? new Set(['--body'])
         : undefined
   if (options === undefined) return command
+  // `--` ends the options, so a `-m` after it is a positional argument.
+  if (words.some((word) => word.bare === '--')) return command
   const start = head[0] === 'gh' ? 3 : 2
   const values: QuotedValue[] = []
   for (let index = at + start; index < words.length; index += 1) {
     const word = words[index]
     if (word === undefined) break
     const name = word.bare.toLowerCase()
-    const attached = name.endsWith('=') && options.has(name.slice(0, -1))
-    if (!attached && !options.has(name)) continue
-    // The attached form is `--message=value` in one word; the separate form is
-    // the option word and exactly one quoted word after it.
-    if (word.quoted.length > (attached ? 1 : 0)) return command
-    const next = words[index + 1]
-    if (!attached && (next === undefined || next.bare !== '' || next.quoted.length !== 1)) {
-      return command
+    const equal = name.indexOf('=')
+    const base = equal < 0 ? name : name.slice(0, equal)
+    if (!options.has(base)) continue
+    const value = word.quoted[0]
+    if (equal >= 0) {
+      // `--message=value`: one quoted value directly after the `=`, and nothing
+      // else in the word. An unquoted or displaced value is uncertain.
+      if (word.quoted.length !== 1 || value === undefined) return command
+      if (word.start + base.length + 1 !== value.start || value.end !== word.end) return command
+      if (!proseValue(value)) return command
+      values.push(value)
+      continue
     }
-    const value = attached ? word.quoted[0] : next?.quoted[0]
-    if (value === undefined || !proseValue(value)) return command
-    values.push(value)
-    if (!attached) index += 1
+    // `-m value`: the option word itself carries no quote, and the next word is
+    // exactly one quoted value.
+    if (word.quoted.length !== 0) return command
+    const next = words[index + 1]
+    if (next === undefined || next.bare !== '' || next.quoted.length !== 1) return command
+    const part = next.quoted[0]
+    if (part === undefined || !proseValue(part)) return command
+    values.push(part)
+    index += 1
   }
   if (values.length === 0) return command
   return values
