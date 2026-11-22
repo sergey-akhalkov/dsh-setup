@@ -155,6 +155,11 @@ $ShippedBundles = @(
   '@deepseek-ai/dsh-experimental-session-titles-bundle'
 )
 $RegistryBundles = @()
+# Third-party bundles installed from an explicit pnpm spec, written as
+# '<package name>=<spec>'. The spec pins a commit, so a pin bump reinstalls.
+$GitBundles = @(
+  'huashu-design=github:alchaincyf/huashu-design#937113133ae446a69ea19d4ceed6cbd2ed3c7735'
+)
 # END REPOSITORY METADATA
 
 # The documented pipeline form also runs on Windows PowerShell 5.1, which has no
@@ -1930,7 +1935,9 @@ try {
   Write-Host "    profile: $profileDirectory"
   Write-Host "    setup:   $setupSpec"
   $existingBundles = @(Get-ProfileBundles $manifest)
-  foreach ($name in @($ShippedBundles + $RegistryBundles)) {
+  $gitBundleNames = @()
+  foreach ($entry in $GitBundles) { $gitBundleNames += ($entry -split '=', 2)[0] }
+  foreach ($name in @($ShippedBundles + $RegistryBundles + $gitBundleNames)) {
     if ($existingBundles -contains $name) { Write-Host "    keep     $name" }
     else { Write-Host "    enable   $name" }
   }
@@ -2023,6 +2030,37 @@ try {
     } catch {
       Write-Warn "optional bundle $name could not be installed: $($_.Exception.Message)"
     }
+  }
+
+  foreach ($entry in $GitBundles) {
+    $name, $spec = $entry -split '=', 2
+    $manifest = Read-JsonFile $profileManifestPath
+    $selected = (@(Get-ProfileBundles $manifest)) -contains $name
+    $installedSpec = $null
+    if ((Test-HasProperty $manifest 'dependencies') -and (Test-HasProperty $manifest.dependencies $name)) {
+      $installedSpec = [string]$manifest.dependencies.$name
+    }
+    if ($selected -and $installedSpec -eq $spec) {
+      Write-Ok "already installed: $name"
+      continue
+    }
+    try {
+      Invoke-DshPlugin @('add', $spec)
+    } catch {
+      # A third-party bundle that cannot be fetched must not fail the setup
+      # install: the profile is complete without it and a rerun retries it.
+      Write-Warn "optional bundle $name could not be installed: $($_.Exception.Message)"
+      continue
+    }
+    # The CLI can install the dependency without selecting its bundle, so the
+    # selection is asserted here as well; the setup bundle is moved last later.
+    $manifest = Read-JsonFile $profileManifestPath
+    $bundles = @(Get-ProfileBundles $manifest)
+    if ($bundles -notcontains $name) {
+      $manifest = Set-ProfileBundles $manifest (@($bundles) + $name)
+      Save-JsonFile $profileManifestPath $manifest
+    }
+    Write-Ok "installed and enabled: $name"
   }
 
   $manifest = Read-JsonFile $profileManifestPath
@@ -2133,6 +2171,12 @@ try {
     # A bundle this DSH version does not provide was skipped above; it must not
     # be reported as missing from the selection.
     if ($skippedShipped -contains $name) { continue }
+    if ($bundles -notcontains $name) { $problems += "bundle $name is not selected" }
+  }
+  foreach ($name in $gitBundleNames) {
+    # A third-party bundle that could not be fetched warns and leaves the
+    # installation complete; only an installed one must be selected.
+    if (-not ((Test-HasProperty $manifest 'dependencies') -and (Test-HasProperty $manifest.dependencies $name))) { continue }
     if ($bundles -notcontains $name) { $problems += "bundle $name is not selected" }
   }
   $installedVersion = Get-InstalledSetupVersion $profileDirectory

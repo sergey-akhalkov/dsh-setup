@@ -25,6 +25,7 @@ const VERSIONS: DshVersions = {
   installBundles: {
     shipped: ['@deepseek-ai/dsh-experimental-agent-team-profile'],
     registry: ['@deepseek-ai/dsh-subagent-codex'],
+    git: [],
   },
 }
 

@@ -141,6 +141,16 @@ duplicate their rows:
 - **Terminal** (`@deepseek-ai/dsh-experimental-terminal-bundle`) — persistent terminal sessions for
   REPL and interactive work.
 
+### Pinned third-party bundle
+
+The installer also installs one third-party bundle from a commit-pinned git spec:
+[**huashu-design**](https://github.com/alchaincyf/huashu-design) (MIT) — an HTML-native design skill
+for prototypes, slides, infographics, App Store images, and motion, loaded on demand so it costs no
+prompt text per request. The pin lives in [`dsh.json`](dsh.json) (`installBundles.git`), the
+standalone installer carries the same spec, and a failed fetch warns instead of failing the
+installation. Prerequisites, update, and removal:
+[install](docs/install.md#pinned-third-party-bundle).
+
 ## Development
 
 Requires Node.js `>=24.18.0 <25` and the pinned pnpm `11.28.5` ([install

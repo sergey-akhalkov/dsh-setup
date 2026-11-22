@@ -163,6 +163,8 @@ function main(): number {
       `validate-installer: DSH ${dshVersion} ships ${String(shippedBundles.length)} of ${String(versions.installBundles.shipped.length)} selected bundle(s)`,
     )
   }
+  // Git-sourced bundles keep their declared name: the installer selects that name.
+  const gitBundles = versions.installBundles.git.map((bundle) => bundle.name)
   const tmpRoot = join(rootDir, '.tmp')
   mkdirSync(tmpRoot, { recursive: true })
   const home = mkdtempSync(join(tmpRoot, 'installer-home-'))
@@ -791,7 +793,7 @@ function main(): number {
       }
     }
 
-    stageManifestChecks(manifestPath, versions, shippedBundles, failures)
+    stageManifestChecks(manifestPath, versions, shippedBundles, gitBundles, failures)
     step('the installer leaves the profile patch untouched', () => {
       if (hashFile(patchPath) !== patchBefore) throw new Error('cordis.patch.yml changed')
     })
@@ -804,6 +806,7 @@ function main(): number {
       const markers = [
         ...shippedBundles,
         ...versions.installBundles.registry,
+        ...gitBundles,
         'dsh-setup-ponytail',
         'reasoningEffort: xhigh',
         'preference: dark',
@@ -1118,6 +1121,7 @@ function stageManifestChecks(
   manifestPath: string,
   versions: ReturnType<typeof readDshVersions>,
   shippedBundles: readonly string[],
+  gitBundles: readonly string[],
   problems: string[],
 ): void {
   const check = (name: string, body: () => void): void => {
@@ -1132,7 +1136,12 @@ function stageManifestChecks(
   check('the profile selects every documented bundle and the setup bundle last', () => {
     const manifest = readJson<ProfileManifest>(manifestPath)
     const bundles = manifest.dsh?.profile?.bundles ?? []
-    const expected = [...shippedBundles, ...versions.installBundles.registry, '@dsh-setup/setup']
+    const expected = [
+      ...shippedBundles,
+      ...versions.installBundles.registry,
+      ...gitBundles,
+      '@dsh-setup/setup',
+    ]
     for (const name of expected) {
       if (!bundles.includes(name)) throw new Error(`"${name}" is not selected`)
     }

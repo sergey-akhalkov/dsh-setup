@@ -13,6 +13,7 @@ import { validatePackageManifest } from './lib/manifest.ts'
 import { readRepositoryFiles, scanMachinePaths, scanSecrets } from './lib/scan.ts'
 import {
   checkInstructionBudget,
+  type GitBundle,
   type InstructionBudget,
   listPluginPackages,
   type PackageManifest,
@@ -86,8 +87,37 @@ function checkInstaller(problems: string[]): void {
       readInstallerArray(text, 'RegistryBundles'),
       versions.installBundles.registry,
     )
+    compareInstallerList(
+      problems,
+      'GitBundles',
+      readInstallerArray(text, 'GitBundles'),
+      versions.installBundles.git.map((bundle) => `${bundle.name}=${bundle.spec}`),
+    )
+    checkGitBundles(problems, versions.installBundles.git)
   } catch (error) {
     problems.push(error instanceof Error ? error.message : String(error))
+  }
+}
+
+/**
+ * A git-sourced bundle installs on every machine the installer runs on, so its
+ * spec must name a commit, and the declared name must be the package the spec
+ * installs: the installer selects by that name, and a mismatch would leave a
+ * dead selection pointing at a package the profile does not have.
+ */
+function checkGitBundles(problems: string[], bundles: readonly GitBundle[]): void {
+  for (const bundle of bundles) {
+    const ref = bundle.spec.slice(bundle.spec.lastIndexOf('#') + 1)
+    if (!/^[0-9a-f]{40}$/u.test(ref)) {
+      problems.push(`dsh.json: git bundle ${bundle.name} is not commit-pinned: ${bundle.spec}`)
+    }
+    const path = (bundle.spec.split('#')[0] ?? '').replace(/^[a-z+]+:/iu, '')
+    const leaf = (path.split(/[/\\]/u).pop() ?? '').replace(/\.git$/u, '')
+    if (leaf !== bundle.name) {
+      problems.push(
+        `dsh.json: git bundle ${bundle.name} does not match the package ${JSON.stringify(leaf)} in ${bundle.spec}`,
+      )
+    }
   }
 }
 

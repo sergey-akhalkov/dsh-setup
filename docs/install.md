@@ -67,7 +67,7 @@ The script:
 3. Enables the shipped bundles the setup expects by appending their names to `dsh.profile.bundles` —
    exactly the operation behind the **Plugins** toggles. A shipped bundle the installed DSH version no
    longer provides is dropped by the CLI's compose step; the installer warns and continues without it.
-   The profile patch is not touched.
+   The profile patch is not touched. It also installs the pinned third-party bundle described below.
 4. Installs the setup bundle from the pinned release commit.
 5. Creates the administrator desktop shortcut unless `-NoDesktopShortcut` is set; a missing Desktop
    app is a warning rather than a failed install.
@@ -181,6 +181,33 @@ configures it:
 
   `maxBlocks` defaults to 8. See [verification-gate.md](verification-gate.md).
 
+### Pinned third-party bundle
+
+The installer also installs one third-party bundle from a commit-pinned git spec:
+[**huashu-design**](https://github.com/alchaincyf/huashu-design) (MIT, by 花叔) — an HTML-native
+design skill for prototypes, slides, infographics, App Store images, and motion. It is a skill, so
+it costs no prompt text per request: the catalog lists it, and its body loads only when invoked.
+
+The bundle is not part of `@dsh-setup/setup`; it is a separate profile dependency that the installer
+adds with `dsh plugin add` and selects before the setup bundle, so the setup stays last. The spec
+pins a commit, so every machine installs the same tree. [`dsh.json`](../dsh.json)
+(`installBundles.git`) is the source; the standalone installer carries the same pair, and
+`validate:repo` fails when they disagree or when the spec is not commit-pinned.
+
+A failed fetch (offline, GitHub unavailable) warns and the installation continues without the
+bundle; rerunning the installer retries it. To remove it, close DeepSeek Harness and run
+`dsh plugin --profile desktop remove huashu-design`, which drops both the dependency and the
+selection.
+
+The skill detects its own environment and names the missing capability instead of failing silently.
+Screenshots, PPTX export, and MP4 rendering need a Chromium that Playwright can launch — after
+`pip install playwright`, `python -m playwright install chromium`; for the bundled Node scripts,
+`npx playwright install chromium` — plus `ffmpeg` for video audio. The bundle's Node dependencies
+(`playwright`, `pptxgenjs`, `pdf-lib`) arrive with the install.
+
+To move the pin, change the commit in `dsh.json` and in `install.ps1`'s `$GitBundles`, then run
+`pnpm validate:repo`.
+
 ## Manual install
 
 Use this path when you cannot run the installer, for example on a CLI-only machine.
@@ -206,6 +233,13 @@ Individual plugins are listed as their own entries. Installing one mounts only t
 the full setup or individual plugins for a given plugin, not both. The Ponytail entry behaves the same
 way whether it arrives with the setup or on its own.
 
+The market path does not add the pinned third-party bundle: install it with the same command the
+installer runs (with DeepSeek Harness closed):
+
+```sh
+dsh plugin --profile desktop add "github:alchaincyf/huashu-design#937113133ae446a69ea19d4ceed6cbd2ed3c7735"
+```
+
 ## Install without the market
 
 The setup is an ordinary git-hosted bundle. Install a specific release commit directly (for example
@@ -230,10 +264,10 @@ changing it**:
    is never a dogfood target, so the installer cannot take its stop/restart path);
 3. runs `install.ps1 -Profile owner-copy -NoStopApp -NoRestart -NoHindsight` against this checkout's
    setup bundle, so dogfood never touches the live Hindsight runtime;
-4. composes the copy with the installed CLI and checks that the installer appended only the setup
-   bundle and kept it last, the profile patch copy is byte-identical, the installed setup version
-   matches the checkout, the setup rows and defaults compose, and every row the owner patched keeps
-   its effective config;
+4. composes the copy with the installed CLI and checks that the installer enabled only the documented
+   bundles and kept the setup bundle last, the profile patch copy is byte-identical, the installed
+   setup version matches the checkout, the setup rows and defaults compose, and every row the owner
+   patched keeps its effective config;
 5. proves the live profile files are byte-identical afterwards.
 
 The running app is never stopped or restarted and the live profile is never written, so the command is
@@ -470,12 +504,13 @@ be combined with this row.
 
 - Credentials and provider keys: authenticate in the app; nothing secret is in the repository.
 - Runtime prerequisites such as `uv` for the Serena lazy server and the local Hindsight runtime,
-  `@nuphus/nuphus-mcp` for the Nuphus lazy server, or `@fission-ai/openspec` for the OpenSpec
-  skills: install them yourself; the setup does not run system installers. The installer's Hindsight
-  phase starts the local daemon when `uv` and a key are available; a missing prerequisite warns and
-  skips that phase.
+  `@nuphus/nuphus-mcp` for the Nuphus lazy server, `@fission-ai/openspec` for the OpenSpec skills, or
+  Python/Playwright/`ffmpeg` for the huashu-design export scripts: install them yourself; the setup
+  does not run system installers. The installer's Hindsight phase starts the local daemon when `uv`
+  and a key are available; a missing prerequisite warns and skips that phase.
 - Your profile's local overrides: these stay in the profile's own patch file.
 - Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
   The setup does ship packaged third-party content: the Ponytail prompt, whose vendored bytes and
   upstream pin are documented in [ponytail.md](ponytail.md), and the OpenSpec core skills, documented
-  in [openspec.md](openspec.md).
+  in [openspec.md](openspec.md); the installer additionally installs the pinned third-party
+  `huashu-design` bundle described above. Removal steps for every opt-out are in those sections.

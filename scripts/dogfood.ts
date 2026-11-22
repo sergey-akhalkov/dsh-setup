@@ -358,13 +358,17 @@ function main(): number {
     const installedManifest = readJson<InstalledProfileManifest>(manifestPath)
     const selectedBundles = readBundles(installedManifest)
 
-    step('the installer appends only the setup bundle and keeps it last', () => {
-      // The installer selects only the shipped bundles this DSH version provides.
-      const expected = availableBundles(
-        [...versions.installBundles.shipped, ...versions.installBundles.registry],
-        versions.runtime,
-        probeNpmBundle,
-      )
+    step('the installer enables the documented bundles and keeps the setup bundle last', () => {
+      // The installer selects only the shipped bundles this DSH version
+      // provides, every declared registry bundle, and the pinned git bundles.
+      const expected = [
+        ...availableBundles(
+          [...versions.installBundles.shipped, ...versions.installBundles.registry],
+          versions.runtime,
+          probeNpmBundle,
+        ),
+        ...versions.installBundles.git.map((bundle) => bundle.name),
+      ]
       const problems = checkBundleSelection(ownerBundles, selectedBundles, expected)
       if (installedManifest.dependencies?.[SETUP_BUNDLE] === undefined) {
         problems.push(`${SETUP_BUNDLE} is missing from the profile dependencies`)
