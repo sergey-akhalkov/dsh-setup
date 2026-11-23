@@ -5114,6 +5114,46 @@ describe('OpenSpec panel visual contract', () => {
     expect(phase).toContain('white-space: nowrap')
   })
 
+  it('renders a waiting review as the neutral dot and keeps the spinner off', () => {
+    const live: ReviewLiveEntry[] = [
+      {
+        session: 's1',
+        runId: 'run-wait',
+        change: 'add-auth',
+        definition: 'task-review',
+        unit: 'tasks',
+        label: '2. Lane A',
+        state: 'waiting',
+        attempt: 1,
+        since: '2026-11-05T16:00:00Z',
+      },
+    ]
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, { phase: 'applying' }),
+          ]),
+        },
+        live: { 'add-auth': live },
+        now: NOW,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const facts = nodes(card).find((node) => node.props.className === 'dsh-openspec-change-facts')
+    if (facts === undefined) throw new Error('facts row missing')
+    const unit = nodes(facts).find(
+      (node) => String(node.props.className ?? '') === 'dsh-openspec-change-verdict',
+    )
+    if (unit === undefined) throw new Error('review unit missing')
+    expect(textOf(unit)).toContain('Waiting for the AI reviewer')
+    const dot = nodes(unit).find((node) => node.props.className === 'dsh-openspec-change-state')
+    expect(dot?.props['data-state']).toBe('ongoing')
+    expect(typed(unit, 'IconLoadingOutlineRegular')).toHaveLength(0)
+  })
+
   it('maps each phase to one semantic tag tone', () => {
     expect(phaseTone('planning')).toBe('warning')
     expect(phaseTone('ready-to-apply')).toBe('info')
@@ -5288,7 +5328,7 @@ describe('OpenSpec review state', () => {
     const running = reviewUnits(summary(), [tasks], t, NOW)
     expect(running[1]).toMatchObject({ label: 'AI task review · 2. Lane A', spinning: true })
     const waiting = reviewUnits(summary(), [{ ...tasks, state: 'waiting' }], t, NOW)
-    expect(waiting[1]).toMatchObject({ label: 'Waiting for the AI reviewer' })
+    expect(waiting[1]).toMatchObject({ label: 'Waiting for the AI reviewer', dot: 'ongoing' })
     expect(waiting[1]).not.toHaveProperty('spinning')
   })
 
@@ -5312,6 +5352,7 @@ describe('OpenSpec review state', () => {
     const waiting = reviewUnits(summary(), [{ ...integration, state: 'waiting' }], t, NOW)
     expect(waiting[1]).toMatchObject({
       label: 'Waiting for the AI reviewer',
+      dot: 'ongoing',
     })
     expect(waiting[1]).not.toHaveProperty('spinning')
     // A settled integration verdict adds no new settled unit: the card keeps
