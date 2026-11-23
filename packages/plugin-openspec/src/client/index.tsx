@@ -1850,7 +1850,12 @@ function changeNav(props: {
         : {}),
     })
   }
-  if (presence.tasks) facts.push({ kind: 'tasks', label: props.t('presence.tasks') })
+  if (presence.tasks) {
+    const tasks = props.t('presence.tasks')
+    const total = props.row.totalTasks
+    // The word names the artifact; the number is the task total, as the specs entry reads its count.
+    facts.push({ kind: 'tasks', label: total > 0 ? `${tasks} ${String(total)}` : tasks })
+  }
   return facts.map((fact) => (
     <button
       type="button"

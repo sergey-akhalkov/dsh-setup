@@ -1996,7 +1996,11 @@ window.__ModuleLoader__.load({
           ...requirements > 0 ? { title: `${String(requirements)} ${props.t("capability.requirements")}` } : {}
         });
       }
-      if (presence.tasks) facts.push({ kind: "tasks", label: props.t("presence.tasks") });
+      if (presence.tasks) {
+        const tasks = props.t("presence.tasks");
+        const total = props.row.totalTasks;
+        facts.push({ kind: "tasks", label: total > 0 ? `${tasks} ${String(total)}` : tasks });
+      }
       return facts.map((fact) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
         "button",
         {

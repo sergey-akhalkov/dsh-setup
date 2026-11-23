@@ -688,7 +688,7 @@ reads `tasks reviewed 10/16` with a dot of its own — green when every checked 
 portable task-review `PASS` the archive gate counts, amber while any is missing, with the missing
 task numbers in its tooltip — and appears once a task is checked. The row keeps one uniform gap
 between facts. The navigation row holds one text button per artifact
-the change carries (`proposal`, `design`, `specs N`, `tasks`) beside both actions: `Apply` while the
+the change carries (`proposal`, `design`, `specs N`, `tasks N`) beside both actions: `Apply` while the
 change is not complete and `Archive` once every task is done, with the inapplicable one disabled and
 its reason on the control. An active row states no commit fact — the change detail header carries it —
 and draws no progress bar: the gutter count is the progress fact. An archived card keeps its history

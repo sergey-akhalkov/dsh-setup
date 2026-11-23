@@ -7,6 +7,7 @@
 - [x] 1.3 Derive `tasks reviewed N/M` as a status unit with its own dot and the missing-task tooltip
 - [x] 1.4 Render every review status as a dot plus a neutral label and drop the coloured-text CSS
 - [x] 1.5 Use one 12px gap in the facts row and remove the fixed phase column
+- [x] 1.6 State the task total beside the `tasks` entry in the navigation row, as `specs N` already reads its count
 
 ## 2. Verification (owns packages/plugin-openspec/test, packages/plugin-openspec/lib, packages/setup/node_modules/@dsh-setup/plugin-openspec)
 

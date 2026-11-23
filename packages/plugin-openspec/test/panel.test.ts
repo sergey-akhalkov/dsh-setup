@@ -2059,8 +2059,13 @@ describe('OpenSpec root view', () => {
     )
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
-    for (const kind of ['proposal', 'design', 'specs', 'tasks'] as const) {
-      const link = rowButton(card, kind)
+    for (const [label, kind] of [
+      ['proposal', 'proposal'],
+      ['design', 'design'],
+      ['specs', 'specs'],
+      ['tasks 12', 'tasks'],
+    ] as const) {
+      const link = rowButton(card, label)
       const stop = vi.fn()
       ;(link.props.onClick as (event: { stopPropagation(): void }) => void)({
         stopPropagation: stop,
@@ -5023,7 +5028,7 @@ describe('OpenSpec panel visual contract', () => {
       nodes(nav)
         .filter((node) => node.type === 'button')
         .map((node) => textOf(node)),
-    ).toEqual(['proposal', 'design', 'specs 2', 'tasks', 'Apply', 'Archive'])
+    ).toEqual(['proposal', 'design', 'specs 2', 'tasks 12', 'Apply', 'Archive'])
     expect(rowButton(card, 'Archive').props.title).toBe(
       'every task must be complete before archiving',
     )
