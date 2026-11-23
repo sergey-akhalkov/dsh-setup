@@ -91,7 +91,7 @@ are written. The gutter MUST NOT draw a tracking bar.
 #### Scenario: Missing task approvals
 
 - **WHEN** a change has 16 tasks, every one checked, and 14 carry a portable task-review PASS
-- **THEN** the reviewed line reads `14/16 reviewed` with a warning dot and its tooltip names the two missing task numbers
+- **THEN** the reviewed line reads `14/16 reviewed` with the informational dot and its tooltip names the two missing task numbers
 
 #### Scenario: Rounding never reports completion
 
