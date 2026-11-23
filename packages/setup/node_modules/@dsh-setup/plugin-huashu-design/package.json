@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-huashu-design",
-  "version": "0.54.2",
+  "version": "0.54.3",
   "description": "English catalog entry for the pinned third-party huashu-design 3.5.0 skill (MIT, by 花叔, github.com/alchaincyf/huashu-design): an English description and trigger words, and an English working-language directive over the installed upstream body",
   "license": "MIT",
   "icon": "./icon.svg",
