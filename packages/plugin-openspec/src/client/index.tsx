@@ -1702,7 +1702,7 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
             <span className="dsh-openspec-change-gutter-line">
               <span
                 className="dsh-openspec-change-state"
-                data-state={progress.implemented === progress.total ? 'done' : 'warning'}
+                data-state={progress.implemented === progress.total ? 'done' : 'active'}
               />
               <b>{`${String(progress.implemented)}/${String(progress.total)}`}</b>{' '}
               {t('change.implemented')}
@@ -1717,7 +1717,7 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
             >
               <span
                 className="dsh-openspec-change-state"
-                data-state={progress.reviewed === progress.total ? 'done' : 'warning'}
+                data-state={progress.reviewed === progress.total ? 'done' : 'active'}
               />
               <b>{`${String(progress.reviewed)}/${String(progress.total)}`}</b>{' '}
               {t('change.reviewed')}
@@ -3122,6 +3122,10 @@ export const PANEL_CSS = `
 }
 .dsh-openspec-change-state[data-state='done'] {
   background: var(--dsw-alias-state-success-primary);
+}
+/* In progress, not a problem: the informational token the phase dot already uses. */
+.dsh-openspec-change-state[data-state='active'] {
+  background: var(--dsw-alias-state-business-primary);
 }
 .dsh-openspec-change-state[data-state='warning'] {
   background: var(--dsw-alias-state-warn-primary);

@@ -66,7 +66,10 @@ widens one gap relative to another.
 A change card for an active change in the `Changes` list SHALL render a fixed-width readiness
 gutter, separated from the card body by a hairline. With task-review state available the gutter
 SHALL state a readiness percent over the two counts that produce it: `N/T implemented` and
-`N/T reviewed`, each with its own status dot and label. Every task MUST count twice in that percent,
+`N/T reviewed`, each with its own status dot and label. A line whose count equals the total SHALL
+carry the success dot; a line that is still behind SHALL carry the informational dot the phase
+already uses, never a warning one, because unfinished work is not a problem to fix. Every task MUST
+count twice in that percent,
 once for being checked in `tasks.md` and once for carrying a task-review `PASS`, so only a change
 that is fully implemented and fully reviewed reads `100%`. While either count is below the total the
 percent MUST read at most `99`, so rounding can never report completion. The percent states task
@@ -78,7 +81,7 @@ are written. The gutter MUST NOT draw a tracking bar.
 #### Scenario: Readiness from two counts
 
 - **WHEN** an active change has 9 tasks, 6 of them checked, and 4 of the checked tasks carry a task-review PASS
-- **THEN** the gutter reads `56%` over `6/9 implemented` and `4/9 reviewed`, each with a warning dot
+- **THEN** the gutter reads `56%` over `6/9 implemented` and `4/9 reviewed`, each with the informational dot
 
 #### Scenario: Fully implemented and reviewed
 

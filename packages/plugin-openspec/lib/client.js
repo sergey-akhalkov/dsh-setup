@@ -1897,7 +1897,7 @@ window.__ModuleLoader__.load({
                     "span",
                     {
                       className: "dsh-openspec-change-state",
-                      "data-state": progress.implemented === progress.total ? "done" : "warning"
+                      "data-state": progress.implemented === progress.total ? "done" : "active"
                     }
                   ),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: `${String(progress.implemented)}/${String(progress.total)}` }),
@@ -1914,7 +1914,7 @@ window.__ModuleLoader__.load({
                         "span",
                         {
                           className: "dsh-openspec-change-state",
-                          "data-state": progress.reviewed === progress.total ? "done" : "warning"
+                          "data-state": progress.reviewed === progress.total ? "done" : "active"
                         }
                       ),
                       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: `${String(progress.reviewed)}/${String(progress.total)}` }),
@@ -2973,6 +2973,10 @@ window.__ModuleLoader__.load({
     }
     .dsh-openspec-change-state[data-state='done'] {
       background: var(--dsw-alias-state-success-primary);
+    }
+    /* In progress, not a problem: the informational token the phase dot already uses. */
+    .dsh-openspec-change-state[data-state='active'] {
+      background: var(--dsw-alias-state-business-primary);
     }
     .dsh-openspec-change-state[data-state='warning'] {
       background: var(--dsw-alias-state-warn-primary);

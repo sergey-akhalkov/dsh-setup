@@ -5021,7 +5021,7 @@ describe('OpenSpec panel visual contract', () => {
       (node) => node.props.title === 'No AI review yet for tasks 2.3, 4.1',
     )
     if (reviewed === undefined) throw new Error('reviewed line missing')
-    expect(nodes(reviewed).map((node) => node.props['data-state'])).toContain('warning')
+    expect(nodes(reviewed).map((node) => node.props['data-state'])).toContain('active')
     // The gutter count and the coverage word are counts, not tracking bars.
     expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
     // One navigation row carries the artifact entries beside both actions.
