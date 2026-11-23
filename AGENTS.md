@@ -85,10 +85,9 @@ requirement updates its delta spec and design rationale in the same change.
 
 When task review is owned, the unit is the lane: a `tasks.md` level-2 section with any checked task
 lacking a current `PASS` is one run over every checked task; a task outside a section is per-task.
-Every due lane starts in one pass, in parallel. One thread owns a unit: the prompt's `- Review key:`
-and stable snapshot path resume the thread every round. No round cap: `FINDINGS`/`ERROR` leave the unit
-due, a live review makes the close a waiting close with no `VIOLATION`, and only a current `PASS`
-ends it. A spec review binds the plan artifacts, not the worktree, so parallel work cannot stale it;
+Every due lane starts in one pass, in parallel. One thread owns a unit; the prompt's `- Review key:`
+and a stable snapshot path resume it. Only a current `PASS` ends a unit (no round cap). A spec review
+binds the plan artifacts, not the worktree, so parallel work cannot stale it;
 `integration-review` is required for the agent archive. On a live-worktree run, restore snapshots or
 defer writes; no blocking sleep. A user stop wins over every gate: a stopped turn starts no review
 and revokes its gate messages. Stop mid-task with a `workflows` `note`, not a tick. The gate refuses
@@ -205,9 +204,10 @@ drift, typecheck, lint, tests, and the three validators. Any failing step blocks
 - **`market/` is generated and gitignored**; never commit it; the artifact is exactly `index.json` +
   `icons/` with `.svg` files only.
 - **Desktop profile is Electron-owned**: the CLI cannot boot or dump it. **Never install into or
-  restart/reload it from an agent session** — a page reload kills the Host, and a hosted-shell
-  install would kill the session. Use `pnpm dogfood`; the owner installs from an external PowerShell
-  with the app closed.
+  restart/reload it from an agent session** — a reload or a hosted-shell install kills the session.
+  Use `pnpm dogfood`; the owner installs from an external PowerShell with the app closed.
+- **Develop in the Web dev host** (`pnpm dev`): plugin edits apply live and the dev profile mirrors the
+  Desktop one, so verify there; never restart or reload that host from a session.
 - **Do not combine** the setup bundle with an individual plugin bundle for the same plugin.
 - On Windows the DSH CLI is usually a `.cmd` shim; `DSH_CLI` is a command line, and child stdin is not
   interactive.
