@@ -2866,8 +2866,8 @@ window.__ModuleLoader__.load({
     }
     .dsh-openspec-change-percent {
       align-self: center;
-      font-size: 22px;
-      line-height: 24px;
+      font-size: 26px;
+      line-height: 28px;
       font-weight: 600;
       color: var(--dsw-alias-label-primary);
       font-variant-numeric: tabular-nums;
