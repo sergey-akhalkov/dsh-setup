@@ -581,7 +581,10 @@ definitions run on the `review` executor, and the OpenSpec plugin contributes `c
 The review executor resolves a reviewer from the workflows row's `reviewers` map, starts the provider
 with the configured model and effort, accepts one fenced JSON verdict that echoes the prepared digest,
 and writes the local record and the portable task approval under `.dsh/workflows/records/` and
-`openspec/changes/<change>/reviews/` (see [workflows](workflows.md#review-executor)). The engine also
+`openspec/changes/<change>/reviews/` (see [workflows](workflows.md#review-executor)). No refusal
+budget ever releases a close for a due review: it delivers at most `maxBlocks` review refusals per
+turn, then lets the turn end with the run and completion still open and the archive still blocked,
+while an unrelated obligation still applies its own rule. The engine also
 owns the work-progress, lane-assignment, goal-complete, and archive gates, each rendered as a
 read-only contract card in the Workflows overview rather than a definition; `workflows` is the only
 review and gate owner, and the archive gate keeps its intake, open-step, and whole-spec checks. The

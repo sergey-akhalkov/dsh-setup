@@ -20,11 +20,24 @@ import { taskLanes } from './tasks.js'
  * `blockTurnClose` step that this engine owns; a deferred step never steers.
  * The refusal is bounded by `maxBlocks`; after the cap the close is allowed
  * exactly once and recorded as a visible VIOLATION, not a pass. A run that
- * reached its owned review step has no refusal budget: while a due review unit
- * has no live review the close is refused, and while every due unit has a live
- * review the close is the waiting close (no VIOLATION). An internal error fails
- * open so a plugin fault can never trap a turn.
+ * reached its owned review step has no refusal budget that releases the close:
+ * while a due review unit has no live review the close is refused, and while
+ * every due unit has a live review the close is the waiting close (no
+ * VIOLATION). Its refusals are delivered under the caller's per-turn budget:
+ * after that bound the refusal no longer holds the turn, and the run stays
+ * open. An internal error fails open so a plugin fault can never trap a turn.
  */
+
+/**
+ * The per-turn delivery budget for review refusals, owned by the turn-close
+ * listener. A review site submits a message only while `remaining()` is
+ * positive and calls `spend()` for each one; without a delivery object (direct
+ * gate calls and tests) the delivery is unbounded.
+ */
+export interface ReviewDelivery {
+  remaining(): number
+  spend(): void
+}
 
 export type TurnCloseOutcome =
   | { readonly kind: 'allow'; readonly run: WorkflowRun; readonly reason: string }
@@ -33,6 +46,8 @@ export type TurnCloseOutcome =
       readonly run: WorkflowRun
       readonly stepId: string
       readonly text: string
+      /** Whether the refusal holds this turn open; false after the delivery bound. */
+      readonly hold: boolean
     }
   | { readonly kind: 'violation'; readonly run: WorkflowRun; readonly detail: string }
 
@@ -103,6 +118,8 @@ export interface TurnCloseInput {
   readonly provisionalReviews?: ReadonlySet<string>
   /** The owned review obligation of a review run, resolved by the host. */
   readonly review?: ReviewCloseInput
+  /** The caller's per-turn review-refusal delivery budget. */
+  readonly delivery?: ReviewDelivery
   readonly now?: number
   readonly onError?: (error: unknown) => void
 }
@@ -173,10 +190,26 @@ function reviewObligationReached(run: WorkflowRun, definition: Definition): bool
 }
 
 /**
- * The review run's turn-close decision: no refusal budget exists, so the close
- * is refused while any due unit has no live review and allowed as the waiting
- * close while every due unit has one. Only a current PASS ends the obligation;
- * a failed dispatch, a FINDINGS, and an ERROR all leave the unit due.
+ * Refuse a review obligation, or let the refusal stop holding the turn once the
+ * per-turn delivery budget is spent. Neither way settles anything: no pass, no
+ * VIOLATION, and the run is returned unchanged so a silent attempt writes
+ * nothing.
+ */
+function reviewRefusal(input: TurnCloseInput, stepId: string, text: string): TurnCloseOutcome {
+  const delivery = input.delivery
+  if (delivery !== undefined && delivery.remaining() <= 0) {
+    return { kind: 'refuse', hold: false, run: input.run, stepId, text }
+  }
+  delivery?.spend()
+  input.agent.steer(text)
+  return { kind: 'refuse', hold: true, run: input.run, stepId, text }
+}
+
+/**
+ * The review run's turn-close decision: no refusal budget releases the close, so
+ * the close is refused while any due unit has no live review and allowed as the
+ * waiting close while every due unit has one. Only a current PASS ends the
+ * obligation; a failed dispatch, a FINDINGS, and an ERROR all leave the unit due.
  */
 function evaluateReviewClose(
   input: TurnCloseInput,
@@ -192,20 +225,13 @@ function evaluateReviewClose(
         ? `; and ${String(review.uncovered.length - 3)} more due unit(s)`
         : ''
     const text = `the close is refused: ${String(review.uncovered.length)} due review unit(s) have no live review and the review gate has no refusal budget; only a current PASS ends the review.${failure}${owned} ${shown}${more}`
-    input.agent.steer(text)
-    return { kind: 'refuse', run: input.run, stepId: 'review', text }
+    return reviewRefusal(input, 'review', text)
   }
   if (review.live.length === 0) {
     if (ownedText !== undefined) {
       // A host-owned completion gap with no due unit to point at is still
       // refused, never released by a budget.
-      input.agent.steer(ownedText)
-      return {
-        kind: 'refuse',
-        run: input.run,
-        stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
-        text: ownedText,
-      }
+      return reviewRefusal(input, input.definition.steps.at(-1)?.id ?? 'owned-rule', ownedText)
     }
     return { kind: 'allow', run: input.run, reason: 'no due review unit is outstanding' }
   }
@@ -275,6 +301,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         input.agent.steer(text)
         return {
           kind: 'refuse',
+          hold: true,
           run: markTurn(incrementTurnBlocks(input.run, at)),
           stepId: failed.id,
           text,
@@ -308,6 +335,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       input.agent.steer(text)
       return {
         kind: 'refuse',
+        hold: true,
         run: markTurn(incrementTurnBlocks(budgetRun(input.run), at)),
         stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
         text,
@@ -347,13 +375,14 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       if (failed?.state === 'failed' && failed.evidence === undefined) {
         // A failed dispatch (no verdict record) stays the documented resume
         // attempt; the next close also retries it.
-        const text = `step "${step.id}" has a failed dispatch${cause}; retry it with workflows resume before the close`
-        input.agent.steer(text)
-        return { kind: 'refuse', run: input.run, stepId: step.id, text }
+        return reviewRefusal(
+          input,
+          step.id,
+          `step "${step.id}" has a failed dispatch${cause}; retry it with workflows resume before the close`,
+        )
       }
       const text = `the review step "${step.id}" is ${failed?.state ?? 'open'}${failed?.state === 'failed' ? cause : ''}; the review gate has no refusal budget, so fix the findings if any and retry`
-      input.agent.steer(text)
-      return { kind: 'refuse', run: input.run, stepId: step.id, text }
+      return reviewRefusal(input, step.id, text)
     }
     const blocks = blocksForTurn(input.run)
     if (!releaseBlocked && blocks >= input.maxBlocks) {
@@ -374,6 +403,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       input.agent.steer(text)
       return {
         kind: 'refuse',
+        hold: true,
         run: markTurn(incrementTurnBlocks(budgetRun(input.run), at)),
         stepId: step.id,
         text,
@@ -407,6 +437,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
           input.agent.steer(text)
           return {
             kind: 'refuse',
+            hold: true,
             run: markTurn(incrementTurnBlocks(steered.run, at)),
             stepId: step.id,
             text,
@@ -432,6 +463,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         }
         return {
           kind: 'refuse',
+          hold: true,
           run,
           stepId: step.id,
           text: `step "${step.id}" has a failed dispatch; retry it with workflows resume before the close`,
@@ -444,7 +476,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         reason: message,
       }
     }
-    return { kind: 'refuse', run, stepId: step.id, text: steered.text }
+    return { kind: 'refuse', hold: true, run, stepId: step.id, text: steered.text }
   } catch (error) {
     input.onError?.(error)
     const message = `the turn-close gate failed internally and the close is allowed: ${

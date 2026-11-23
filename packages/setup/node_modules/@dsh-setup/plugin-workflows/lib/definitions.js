@@ -296,7 +296,7 @@ function settings(raw, definition) {
     const gateOwnership = raw.gateOwnership === undefined
         ? 'own'
         : isOneOf(raw.gateOwnership, GATE_OWNERSHIP, definition, 'settings.gateOwnership');
-    // Omitted defaults to 3; a review run ignores its declared value entirely.
+    // Omitted defaults to 3; a review run's refusal delivery is bounded by it.
     const maxBlocks = raw.maxBlocks === undefined
         ? 3
         : positiveInteger(raw.maxBlocks, definition, 'settings.maxBlocks');

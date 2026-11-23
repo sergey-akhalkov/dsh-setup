@@ -3636,8 +3636,20 @@ describe('turn-close lane dispatch', () => {
     )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(steered(host)).toContain('settled on FINDINGS')
+    // The settled-verdict refusal obeys the per-turn review delivery bound: the
+    // remaining attempts of this turn submit nothing, and the next turn delivers
+    // its own bounded refusal.
+    const maximum = definitionsRegistry.installed('spec-review')?.definition.settings.maxBlocks ?? 3
+    const settledSteers = (): number => steered(host).split('settled on FINDINGS').length - 1
+    for (let close = 1; close < maximum; close += 1) {
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    }
+    expect(settledSteers()).toBe(maximum)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(settledSteers()).toBe(maximum)
     // The next close starts no round: the record and the step stay unchanged.
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(settledSteers()).toBe(maximum + 1)
     const unchanged = JSON.parse(await readFile(join(workspace, recordPath), 'utf8')) as {
       verdict: string
     }
@@ -6519,6 +6531,182 @@ describe('owned review at runtime', () => {
     // the bounded violation is the only way past it.
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     expect(host.steers).toHaveLength(2)
+  })
+
+  /** The gate messages this host submitted, one string each. */
+  function gateTexts(host: ReturnType<typeof fakeHost>): string[] {
+    return host.steers.map((message) =>
+      ((message as { content?: Array<{ text?: string }> }).content ?? [])
+        .map((block) => block.text ?? '')
+        .join(''),
+    )
+  }
+
+  /** The review refusals among the gate messages: every one names the close. */
+  function reviewRefusals(texts: readonly string[]): string[] {
+    return texts.filter((text) => text.startsWith('the close is refused:'))
+  }
+
+  /** A running intake whose owned whole-spec review step is due at the close. */
+  async function dueIntakeReview(workspace: string): Promise<void> {
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = definitionsRegistry.installed('change-intake')?.definition
+    if (intake === undefined) throw new Error('the intake definition is missing')
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    for (const file of ['proposal.md', 'design.md', 'tasks.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-review-bound',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    await runs.writeRun(workspace, run, auth)
+  }
+
+  it('still applies the verification obligation after the review refusal bound', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { specReview: false })
+    apply(host.ctx as never, { verify: { commands: ['pnpm check'] } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await dueIntakeReview(workspace)
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    // The first close refuses for the due owned review and takes the ownership,
+    // so the review run is evaluated before the verify run on every later close.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const bound = definitionsRegistry.installed('change-intake')?.definition.settings.maxBlocks ?? 3
+    expect(reviewRefusals(gateTexts(host))).toHaveLength(1)
+    // The code write makes the verify run applicable: it starts on the next close
+    // and still holds the close once the review delivery bound is spent.
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    for (let close = 0; close < bound; close += 1) {
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    }
+    const texts = gateTexts(host)
+    // The turn submits exactly the bound's review messages, and the verification
+    // obligation still applies its own rule after that bound.
+    expect(reviewRefusals(texts)).toHaveLength(bound)
+    expect(texts.at(-1)).toContain('Run the configured verification command')
+  })
+
+  it('still applies the checkpoint obligation after the review refusal bound', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { specReview: false })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await dueIntakeReview(workspace)
+    const emitStep = async (step: number): Promise<void> => {
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn: 1,
+          step,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    }
+    await emitStep(1)
+    // Close 1 refuses for the due owned review and takes the ownership.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const bound = definitionsRegistry.installed('change-intake')?.definition.settings.maxBlocks ?? 3
+    expect(reviewRefusals(gateTexts(host))).toHaveLength(1)
+    // The turn now satisfies the retro applicability; the next close starts the
+    // checkpoint run behind the review refusal.
+    for (const [index, name] of ['read', 'read', 'read', 'read', 'write'].entries()) {
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: `call-${String(index)}`,
+          name,
+          arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    await host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'checkpoint-call', name: 'work_checkpoint', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: 'checkpoint recorded' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    let retroRun: { id: string; context: Record<string, unknown> } | undefined
+    await waitFor(async () => {
+      retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition.id === 'retro',
+      ) as typeof retroRun
+      return retroRun !== undefined
+    })
+    await mkdir(dirname(join(workspace, String(retroRun?.context.checkpoint))), { recursive: true })
+    await writeFile(
+      join(workspace, String(retroRun?.context.checkpoint)),
+      JSON.stringify({
+        checkpoint: 'checkpoint-1-aaaaaaaa',
+        outcome: 'done',
+        turn: 1,
+        lanes: [],
+        next: 'continue',
+      }),
+      'utf8',
+    )
+    // The third close spends the last delivered review refusal and completes the
+    // checkpoint run; the completed checkpoint then ages past the step interval.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(async () => {
+      const stored = await runs.readAuthenticatedRun(workspace, retroRun?.id ?? '', auth)
+      return stored?.status === 'completed'
+    })
+    for (let step = 2; step <= 42; step += 1) await emitStep(step)
+    const before = host.steers.length
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    // The review run stops holding the turn after the bound and the stale
+    // checkpoint still refuses it under its own rule.
+    expect(host.steers.length).toBe(before + 1)
+    expect(gateTexts(host).at(-1)).toContain(
+      'the checkpoint is older than the configured step interval',
+    )
+    expect(reviewRefusals(gateTexts(host))).toHaveLength(bound)
   })
 })
 

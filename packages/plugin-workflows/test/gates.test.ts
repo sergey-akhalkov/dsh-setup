@@ -9,6 +9,7 @@ import {
   evaluateArchiveGate,
   evaluateIntakeGate,
   evaluateTurnClose,
+  type ReviewDelivery,
   selectBlockingStep,
 } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
@@ -362,17 +363,32 @@ describe('uncapped review turn close', () => {
     agent: FakeAgent,
     turn: number,
     review: { uncovered: readonly string[]; live: readonly string[]; failure?: string },
+    delivery?: ReviewDelivery,
   ): ReturnType<typeof evaluateTurnClose> {
+    const definition = reviewDefinition()
     return evaluateTurnClose({
       run,
-      definition: reviewDefinition(),
+      definition,
       agent,
       evidenceContext,
       turn,
-      maxBlocks: 3,
+      maxBlocks: definition.settings.maxBlocks,
       installedLegacy: new Set(),
       review,
+      ...(delivery === undefined ? {} : { delivery }),
     })
+  }
+
+  /** A per-turn delivery budget the way the listener owns one. */
+  function reviewBudget(cap: number): ReviewDelivery & { used(): number } {
+    let used = 0
+    return {
+      remaining: () => Math.max(0, cap - used),
+      spend: () => {
+        used += 1
+      },
+      used: () => used,
+    }
   }
 
   it('allows the waiting close silently and records the reason', () => {
@@ -408,6 +424,81 @@ describe('uncapped review turn close', () => {
     expect(agent.messages[0]).toContain('no live review')
     expect(agent.messages[0]).toContain('no refusal budget')
     expect(current.steps[0]?.state).toBe('open')
+  })
+
+  it('bounds the review refusal delivery per turn and leaves the run open', () => {
+    const definition = reviewDefinition()
+    const agent = new FakeAgent()
+    const run = reviewRun()
+    const delivery = reviewBudget(definition.settings.maxBlocks)
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      const outcome = gate(
+        run,
+        agent,
+        1,
+        { uncovered: ['section "1" (Plan) is due; start it with workflows(...)'], live: [] },
+        delivery,
+      )
+      expect(outcome.kind, `attempt ${attempt}`).toBe('refuse')
+      if (outcome.kind !== 'refuse') continue
+      // The first `maxBlocks` attempts hold the turn; the rest submit nothing.
+      expect(outcome.hold, `attempt ${attempt}`).toBe(attempt <= definition.settings.maxBlocks)
+      // No attempt rewrites the run or settles anything: no VIOLATION, no budget.
+      expect(outcome.run).toBe(run)
+      expect(outcome.run.violations).toHaveLength(0)
+      expect(outcome.run.turnBlocks).toBeUndefined()
+    }
+    expect(agent.messages).toHaveLength(definition.settings.maxBlocks)
+    expect(delivery.used()).toBe(definition.settings.maxBlocks)
+    expect(run.steps[0]?.state).toBe('open')
+  })
+
+  it('steers the review refusal again on the next turn', () => {
+    const agent = new FakeAgent()
+    const run = reviewRun()
+    const first = reviewBudget(reviewDefinition().settings.maxBlocks)
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      gate(run, agent, 1, { uncovered: ['the unit has no current PASS'], live: [] }, first)
+    }
+    expect(first.remaining()).toBe(0)
+    const nextTurn = reviewBudget(reviewDefinition().settings.maxBlocks)
+    const outcome = gate(
+      run,
+      agent,
+      2,
+      { uncovered: ['the unit has no current PASS'], live: [] },
+      nextTurn,
+    )
+    expect(outcome.kind).toBe('refuse')
+    if (outcome.kind !== 'refuse') return
+    expect(outcome.hold).toBe(true)
+    expect(agent.messages).toHaveLength(reviewDefinition().settings.maxBlocks + 1)
+  })
+
+  it('does not budget an unrelated obligation after the review bound', () => {
+    const agent = new FakeAgent()
+    const definition = blockingDefinition()
+    const run = setRunStatus(runFor(definition), 'completed', 2_000)
+    const exhausted = reviewBudget(1)
+    exhausted.spend()
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent,
+      evidenceContext,
+      turn: 1,
+      maxBlocks: 2,
+      installedLegacy: installed,
+      checkpointIssue: { text: 'the work checkpoint is stale for this turn' },
+      delivery: exhausted,
+    })
+    // The review delivery bound gates review refusals only: the checkpoint
+    // obligation still holds the turn under its own rules.
+    expect(outcome.kind).toBe('refuse')
+    if (outcome.kind !== 'refuse') return
+    expect(outcome.hold).toBe(true)
+    expect(agent.messages).toHaveLength(1)
+    expect(agent.messages[0]).toContain('checkpoint is stale')
   })
 
   it('names a failed start in the refusal', () => {
@@ -468,6 +559,35 @@ describe('uncapped review turn close', () => {
     expect(outcome.run.violations).toHaveLength(0)
     expect(agent.messages).toHaveLength(1)
     expect(agent.messages[0]).toContain('retry it with workflows resume')
+  })
+
+  it('bounds the owned-review fallback when the review status is unavailable', () => {
+    const definition = reviewDefinition(false)
+    const agent = new FakeAgent()
+    const run = settleStep(reviewRunFor(definition), 'review', 'failed', {
+      at: 2_000,
+      reason: 'the review returned FINDINGS',
+    })
+    const delivery = reviewBudget(definition.settings.maxBlocks)
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const outcome = evaluateTurnClose({
+        run,
+        definition,
+        agent,
+        evidenceContext,
+        turn: 1,
+        maxBlocks: definition.settings.maxBlocks,
+        installedLegacy: new Set(),
+        provisionalReviews: new Set(['review']),
+        delivery,
+      })
+      // No budget release: the fallback stays a refusal and never a VIOLATION.
+      expect(outcome.kind, `attempt ${attempt}`).toBe('refuse')
+      expect(outcome.run.violations).toHaveLength(0)
+      if (outcome.kind !== 'refuse') continue
+      expect(outcome.hold, `attempt ${attempt}`).toBe(attempt <= definition.settings.maxBlocks)
+    }
+    expect(agent.messages).toHaveLength(definition.settings.maxBlocks)
   })
 
   it('allows the final tick as a silent waiting close while its approval review is live', () => {

@@ -8,11 +8,23 @@ import type { SteerTarget } from './steer.js';
  * `blockTurnClose` step that this engine owns; a deferred step never steers.
  * The refusal is bounded by `maxBlocks`; after the cap the close is allowed
  * exactly once and recorded as a visible VIOLATION, not a pass. A run that
- * reached its owned review step has no refusal budget: while a due review unit
- * has no live review the close is refused, and while every due unit has a live
- * review the close is the waiting close (no VIOLATION). An internal error fails
- * open so a plugin fault can never trap a turn.
+ * reached its owned review step has no refusal budget that releases the close:
+ * while a due review unit has no live review the close is refused, and while
+ * every due unit has a live review the close is the waiting close (no
+ * VIOLATION). Its refusals are delivered under the caller's per-turn budget:
+ * after that bound the refusal no longer holds the turn, and the run stays
+ * open. An internal error fails open so a plugin fault can never trap a turn.
  */
+/**
+ * The per-turn delivery budget for review refusals, owned by the turn-close
+ * listener. A review site submits a message only while `remaining()` is
+ * positive and calls `spend()` for each one; without a delivery object (direct
+ * gate calls and tests) the delivery is unbounded.
+ */
+export interface ReviewDelivery {
+    remaining(): number;
+    spend(): void;
+}
 export type TurnCloseOutcome = {
     readonly kind: 'allow';
     readonly run: WorkflowRun;
@@ -22,6 +34,8 @@ export type TurnCloseOutcome = {
     readonly run: WorkflowRun;
     readonly stepId: string;
     readonly text: string;
+    /** Whether the refusal holds this turn open; false after the delivery bound. */
+    readonly hold: boolean;
 } | {
     readonly kind: 'violation';
     readonly run: WorkflowRun;
@@ -80,6 +94,8 @@ export interface TurnCloseInput {
     readonly provisionalReviews?: ReadonlySet<string>;
     /** The owned review obligation of a review run, resolved by the host. */
     readonly review?: ReviewCloseInput;
+    /** The caller's per-turn review-refusal delivery budget. */
+    readonly delivery?: ReviewDelivery;
     readonly now?: number;
     readonly onError?: (error: unknown) => void;
 }

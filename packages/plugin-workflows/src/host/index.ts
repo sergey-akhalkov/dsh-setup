@@ -80,6 +80,7 @@ import {
   evaluateTurnClose,
   isSoftSettled,
   type ReviewCloseInput,
+  type ReviewDelivery,
   runReplaceable,
 } from './gates.js'
 import { defaultGit, implementationFingerprint, worktreeDigest } from './git.js'
@@ -2106,6 +2107,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
   /** The session's current main-step owner; a second run waits for it to settle. */
   const mainStepOwners = new Map<string, string>()
+  /** The session's per-turn review-refusal delivery count; a new turn resets it. */
+  const reviewRefusals = new Map<string, { turn: number; cap: number; used: number }>()
   /** Runs whose session ended; a later stale advance must not revive them. */
   const endedRunIds = new Set<string>()
   /** Sessions whose agent was disposed; fenced synchronously before any store read. */
@@ -5814,6 +5817,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           return Number.isSafeInteger(turn) ? turn : undefined
         }
         let refusedThisClose = false
+        // One per-turn delivery budget across every review-refusal steer site. A
+        // review refusal that reaches the bound stops holding the turn but never
+        // settles the run; the first site of a turn fixes the cap.
+        const reviewDelivery = (maxBlocks: number): ReviewDelivery => {
+          // Lazily, so only a review-refusal site fixes the turn's cap.
+          const budgetOf = (): { turn: number; cap: number; used: number } => {
+            const stored = reviewRefusals.get(sessionId)
+            if (stored !== undefined && stored.turn === payload.turn) return stored
+            const created = { turn: payload.turn, cap: maxBlocks, used: 0 }
+            reviewRefusals.set(sessionId, created)
+            return created
+          }
+          return {
+            remaining: () => Math.max(0, budgetOf().cap - budgetOf().used),
+            spend: () => {
+              budgetOf().used += 1
+            },
+          }
+        }
         // The engine dispatches every due lane unit itself: a code fix leaves
         // tasks.md unchanged, so no fs.change creates a run and a due unit must
         // not wait for a tick. Each start uses the trigger's own start path with
@@ -6207,6 +6229,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             evidenceContext: closeContext,
             turn: payload.turn,
             maxBlocks: definition.settings.maxBlocks,
+            delivery: reviewDelivery(definition.settings.maxBlocks),
             installedLegacy: legacy.installed,
             enabledLegacy: legacy.enabled,
             provisionalReviews: await provisionalReviewSteps(current, definition, closeContext),
@@ -6234,8 +6257,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // Keep the session's main-step owner until its step settles; a
           // second run may take over only after that.
           if (outcome.kind !== 'allow') {
-            refusedThisClose = true
             mainStepOwners.set(sessionId, run.id)
+            // A review refusal past the per-turn delivery bound keeps the run
+            // open without holding the turn: submit nothing and keep evaluating
+            // the remaining runs and the post-loop obligations.
+            if (outcome.kind === 'refuse' && !outcome.hold) continue
+            refusedThisClose = true
             break
           }
           if (owner !== undefined && run.id === owner.id) {
@@ -6255,7 +6282,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           for (const definition of definitions) {
             const settledStep = wholeScopeReviewStepOf(definition)
             if (settledStep === undefined || !ownedReviewStep(definition, settledStep)) continue
+            const delivery = reviewDelivery(definition.settings.maxBlocks)
             for (const name of [...involved].sort()) {
+              // Past the per-turn review delivery bound the verdict still keeps
+              // the unit due and the run open, but no further message is sent.
+              if (delivery.remaining() <= 0) break
               if (!CHANGE_NAME.test(name) || archivedChanges.has(name)) continue
               const liveUnit = reviewScheduler?.liveUnit({
                 workspace,
@@ -6281,6 +6312,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               )
               if (settled === undefined || settled.verdict === 'PASS') continue
               steer(`the close is refused: ${settledWholeScopeText(definition, name, settled)}`)
+              delivery.spend()
               refusedThisClose = true
               break
             }
@@ -6306,6 +6338,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             )
             const rule = reviewerBinding(workspace)?.taskRule
             const currentRuns = runs.map((entry) => advanced.get(entry.id) ?? entry)
+            const delivery = reviewDelivery(taskSettlement.settings.maxBlocks)
             const taskOpenRuns: ReviewUnitRun[] = currentRuns
               .filter(
                 (entry) =>
@@ -6319,6 +6352,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 context: entry.context,
               }))
             for (const name of [...involved].sort()) {
+              if (delivery.remaining() <= 0) break
               if (!CHANGE_NAME.test(name) || archivedChanges.has(name)) continue
               const units = (await reviewUnits(workspace, name, settledUnitOf)) ?? []
               const settledUnit = units.find((entry) => {
@@ -6335,18 +6369,26 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               steer(
                 `the close is refused: rule "${rule ?? 'task-review'}": ${reviewUnitText(name, settledUnit, { ...(rule === undefined ? {} : { rule }) })}`,
               )
+              delivery.spend()
               refusedThisClose = true
               break
             }
           }
         }
         // A due unit whose start failed is refused, never released: the next
-        // close retries it and the failure names the cause.
+        // close retries it and the failure names the cause. It shares the
+        // per-turn review delivery bound and holds the close only when steered.
         if (!refusedThisClose && !stopped() && dispatchFailure !== undefined) {
-          steer(
-            `the close is refused: the review run for a due unit could not start: ${dispatchFailure.slice(0, 200)}; the next close retries it`,
+          const delivery = reviewDelivery(
+            definitions.find((entry) => entry.id === 'task-review')?.settings.maxBlocks ?? 3,
           )
-          refusedThisClose = true
+          if (delivery.remaining() > 0) {
+            steer(
+              `the close is refused: the review run for a due unit could not start: ${dispatchFailure.slice(0, 200)}; the next close retries it`,
+            )
+            delivery.spend()
+            refusedThisClose = true
+          }
         }
         // A completed retro run must not hide a checkpoint that went stale
         // later in the same turn: re-check the current-turn record on every
