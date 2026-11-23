@@ -45,9 +45,7 @@ pnpm dogfood      # Windows: verify install.ps1 against a copy of the live deskt
 ```
 
 Full local gate, the command reference, environment variables, and the CI sequence:
-[docs/contributing.md](docs/contributing.md#commands-reference). Scripts under `scripts/` are
-TypeScript executed directly by Node 24: relative imports must carry the `.ts` extension
-(`from './lib/workspace.ts'`).
+[docs/contributing.md](docs/contributing.md#commands-reference).
 
 ## 3. Repository map: handwritten vs generated
 
@@ -192,6 +190,8 @@ drift, typecheck, lint, tests, and the three validators. Any failing step blocks
 - **Never put absolute machine paths, credentials, sessions, or private keys in tracked files**
   (including docs); `validate:repo` rejects them. It skips `openspec/`, `market/`, `node_modules`,
   `.tmp`, `.dsh`, `coverage/`, but scans the vendored `packages/setup/node_modules`.
+- **A file the owner must open never goes in `.tmp/`**: scripts use it as scratch. Write it to
+  `.dsh/design/` and name the full path in the reply.
 - **LF everywhere.** `.gitattributes` forces `eol=lf` because `gen:check` compares bytes.
 - **Markdown is Biome-checked and formatted**; run `pnpm lint:fix` after editing docs (tables get
   padded).
