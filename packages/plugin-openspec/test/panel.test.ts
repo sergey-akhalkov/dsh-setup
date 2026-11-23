@@ -133,6 +133,7 @@ import {
   capabilityAddress,
   changeAddress,
   changeListWatchAddresses,
+  changeProgress,
   type Delta,
   decodeLiveReviewEntries,
   decodeReview,
@@ -164,7 +165,6 @@ import {
   requestCapability,
   requestChange,
   requestChangeList,
-  reviewCoverageUnit,
   reviewUnits,
   type SegmentStorage,
   SPECS_ADDRESS,
@@ -238,6 +238,8 @@ const COPY: Record<string, string> = {
   'change.applyComplete': 'the change is complete',
   'change.archiveIncomplete': 'every task must be complete before archiving',
   'change.tasks': 'tasks',
+  'change.implemented': 'implemented',
+  'change.reviewed': 'reviewed',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
   'change.updated': 'updated',
@@ -276,7 +278,6 @@ const COPY: Record<string, string> = {
   'review.findings': 'findings',
   'review.specError': 'AI spec review failed',
   'review.specMissing': 'AI spec review not run',
-  'review.coverage': 'tasks reviewed',
   'review.running': 'AI spec review running ·',
   'review.tasksUnit': 'AI task review',
   'review.integrationUnit': 'AI code review ·',
@@ -1684,7 +1685,8 @@ describe('OpenSpec panel registration', () => {
     // The review copy ships in this dictionary, so the fixture translation cannot mask a revert.
     expect(fake.locales[0]?.dictionary['review.specPass']).toBe('AI spec review passed')
     expect(fake.locales[0]?.dictionary['review.specMissing']).toBe('AI spec review not run')
-    expect(fake.locales[0]?.dictionary['review.coverage']).toBe('tasks reviewed')
+    expect(fake.locales[0]?.dictionary['change.implemented']).toBe('implemented')
+    expect(fake.locales[0]?.dictionary['change.reviewed']).toBe('reviewed')
     expect(fake.locales[0]?.dictionary['review.missingSpecTooltip']).toContain('Archive needs it')
     expect(fake.locales[0]?.dictionary['capability.historyEmpty']).toBe(
       'No archived change produced this capability.',
@@ -5010,17 +5012,16 @@ describe('OpenSpec panel visual contract', () => {
     }
     expect(order.indexOf(gutter)).toBeLessThan(order.indexOf(facts))
     expect(order.indexOf(facts)).toBeLessThan(order.indexOf(nav))
-    expect(textOf(gutter)).toContain('4/12')
-    expect(textOf(gutter)).toContain('tasks')
+    expect(textOf(gutter)).toContain('58%')
+    expect(textOf(gutter)).toContain('4/12 implemented')
+    expect(textOf(gutter)).toContain('10/12 reviewed')
     expect(textOf(facts)).toContain('applying')
     expect(textOf(facts)).toContain('AI spec review passed')
-    expect(textOf(facts)).toContain('tasks reviewed 10/16')
-    const coverage = order.find(
+    const reviewed = order.find(
       (node) => node.props.title === 'No AI review yet for tasks 2.3, 4.1',
     )
-    if (coverage === undefined) throw new Error('coverage fact missing')
-    expect(textOf(coverage)).toContain('tasks reviewed 10/16')
-    expect(nodes(coverage).map((node) => node.props['data-state'])).toContain('warning')
+    if (reviewed === undefined) throw new Error('reviewed line missing')
+    expect(nodes(reviewed).map((node) => node.props['data-state'])).toContain('warning')
     // The gutter count and the coverage word are counts, not tracking bars.
     expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
     // One navigation row carries the artifact entries beside both actions.
@@ -5044,8 +5045,8 @@ describe('OpenSpec panel visual contract', () => {
     expect(phaseCss).not.toContain('min-width')
   })
 
-  it('states the review coverage only once a task is checked', () => {
-    const tree = RootView(
+  it('states readiness from task-review state and keeps the plain count without it', () => {
+    const withReview = RootView(
       rootProps({
         changes: {
           phase: 'ready',
@@ -5059,11 +5060,28 @@ describe('OpenSpec panel visual contract', () => {
         now: NOW,
       }),
     )
-    const card = cardButtons(tree)[0]
-    if (card === undefined) throw new Error('card missing')
-    expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
-    expect(textOf(card)).toContain('ready to apply')
-    expect(textOf(card)).not.toContain('tasks reviewed')
+    const reviewedCard = cardButtons(withReview)[0]
+    if (reviewedCard === undefined) throw new Error('card missing')
+    expect(nodes(reviewedCard).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
+    expect(textOf(reviewedCard)).toContain('ready to apply')
+    expect(textOf(reviewedCard)).toContain('0%')
+    expect(textOf(reviewedCard)).toContain('0/12 implemented')
+    expect(textOf(reviewedCard)).toContain('0/12 reviewed')
+    const plain = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 0, 12, EMPTY_PRESENCE, { phase: 'ready-to-apply' }),
+          ]),
+        },
+        now: NOW,
+      }),
+    )
+    const plainCard = cardButtons(plain)[0]
+    if (plainCard === undefined) throw new Error('card missing')
+    expect(textOf(plainCard)).not.toContain('%')
+    expect(textOf(plainCard)).toContain('0/12')
   })
 
   it('keeps a long live-review fact on one line with its full text in the tooltip', () => {
@@ -5282,18 +5300,33 @@ describe('OpenSpec review state', () => {
     ])
   })
 
-  it('gives the reviewed-task count a state dot', () => {
-    expect(reviewCoverageUnit(undefined, t)).toBeNull()
-    expect(reviewCoverageUnit({ checked: 0, passed: 0, missing: [] }, t)).toBeNull()
-    expect(reviewCoverageUnit({ checked: 16, passed: 16, missing: [] }, t)).toEqual({
-      label: 'tasks reviewed 16/16',
-      dot: 'done',
+  it('counts each task twice in the readiness percent', () => {
+    const row = (completed: number, total: number, passed: number, missing: string[] = []) => ({
+      completedTasks: completed,
+      totalTasks: total,
+      review: { spec: null, tasks: { checked: completed, passed, missing } },
     })
-    expect(reviewCoverageUnit({ checked: 16, passed: 14, missing: ['2.3', '4.1'] }, t)).toEqual({
-      label: 'tasks reviewed 14/16',
-      dot: 'warning',
-      tooltip: 'No AI review yet for tasks 2.3, 4.1',
+    expect(changeProgress(row(6, 9, 4, ['2.1']))).toEqual({
+      percent: 56,
+      implemented: 6,
+      reviewed: 4,
+      total: 9,
+      missing: ['2.1'],
     })
+    expect(changeProgress(row(0, 9, 0))?.percent).toBe(0)
+    expect(changeProgress(row(9, 9, 9))?.percent).toBe(100)
+    expect(changeProgress(row(9, 9, 0))?.percent).toBe(50)
+    // A lowered numerator can never pass a fully reviewed change.
+    expect(changeProgress(row(9, 9, 12))?.reviewed).toBe(9)
+    expect(changeProgress({ completedTasks: 0, totalTasks: 0 })).toBeNull()
+    expect(changeProgress({ completedTasks: 0, totalTasks: 9 })).toBeNull()
+    expect(
+      changeProgress({
+        completedTasks: 0,
+        totalTasks: 9,
+        review: { spec: null, tasks: null },
+      }),
+    ).toBeNull()
   })
 
   it('replaces the settled spec unit with its live review', () => {

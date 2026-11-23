@@ -18,11 +18,6 @@ SHALL read as `AI spec review running · N`, `AI task review · <unit>`, or `AI 
 the waiting form SHALL read `Waiting for the AI reviewer`. A live unit MUST replace only its own
 unit and MUST NOT be rendered as settled.
 
-The count of checked tasks with a valid portable task-review PASS SHALL render as
-`tasks reviewed N/M` with its own dot: the success token when every checked task carries a PASS, the
-warning token while any is missing, and no item at all when no task is checked. Its tooltip SHALL
-name the missing tasks.
-
 The facts row SHALL keep one uniform gap between items. It MUST NOT reserve a fixed column that
 widens one gap relative to another.
 
@@ -46,21 +41,6 @@ widens one gap relative to another.
 - **WHEN** the last whole-spec record is findings or an engine error at the current digest
 - **THEN** the row shows `AI spec review: N findings` or `AI spec review failed` with an error dot while the label itself stays neutral
 
-#### Scenario: Missing task approvals
-
-- **WHEN** a change has 16 checked tasks and 14 carry a portable task-review PASS
-- **THEN** the row shows `tasks reviewed 14/16` with a warning dot and names the two missing task numbers in its tooltip
-
-#### Scenario: Every checked task reviewed
-
-- **WHEN** every checked task carries a valid portable PASS
-- **THEN** the reviewed-task count renders with a success dot
-
-#### Scenario: No task checked
-
-- **WHEN** no task is checked
-- **THEN** the row renders no reviewed-task count
-
 #### Scenario: Uncommitted approval
 
 - **WHEN** a checked task carries a valid portable PASS that is present in the working tree but not committed
@@ -80,3 +60,39 @@ widens one gap relative to another.
 
 - **WHEN** two cards render phases of different label length
 - **THEN** the gap between any two facts is the same, because no item reserves a fixed column
+
+### Requirement: Change card gutter
+
+A change card for an active change in the `Changes` list SHALL render a fixed-width readiness
+gutter, separated from the card body by a hairline. With task-review state available the gutter
+SHALL state a readiness percent over the two counts that produce it: `N/T implemented` and
+`N/T reviewed`, each with its own status dot and label. Every task MUST count twice in that percent,
+once for being checked in `tasks.md` and once for carrying a task-review `PASS`, so only a change
+that is fully implemented and fully reviewed reads `100%`. Without task-review state the gutter
+SHALL keep stating the completed and total task counts over a `tasks` label, or a dash when no tasks
+are written. The gutter MUST NOT draw a tracking bar.
+
+#### Scenario: Readiness from two counts
+
+- **WHEN** an active change has 9 tasks, 6 of them checked, and 4 of the checked tasks carry a task-review PASS
+- **THEN** the gutter reads `56%` over `6/9 implemented` and `4/9 reviewed`, each with a warning dot
+
+#### Scenario: Fully implemented and reviewed
+
+- **WHEN** every task is checked and every checked task carries a PASS
+- **THEN** the gutter reads `100%` over `9/9 implemented` and `9/9 reviewed` with success dots
+
+#### Scenario: Missing task approvals
+
+- **WHEN** a change has 16 tasks, every one checked, and 14 carry a portable task-review PASS
+- **THEN** the reviewed line reads `14/16 reviewed` with a warning dot and its tooltip names the two missing task numbers
+
+#### Scenario: No task-review state
+
+- **WHEN** the workflows engine reports no task-review state for the change
+- **THEN** the gutter states the plain completed and total counts over `tasks` and renders no percent
+
+#### Scenario: No tasks written
+
+- **WHEN** an active change has a proposal but no tasks file
+- **THEN** the gutter states a dash instead of a fraction and the facts row states that no tasks are written yet

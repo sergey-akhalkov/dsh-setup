@@ -48,6 +48,7 @@ import {
   capabilitySpecPath,
   changeAddress,
   changeListWatchAddresses,
+  changeProgress,
   changeWatchPaths,
   type Delta,
   type DeltaSpec,
@@ -87,7 +88,6 @@ import {
   requestChange,
   requestChangeList,
   requestLiveReviews,
-  reviewCoverageUnit,
   reviewUnits,
   type SegmentStorage,
   settledReviews,
@@ -263,6 +263,8 @@ const EN: Record<string, string> = {
   'change.applyComplete': 'the change is complete',
   'change.archiveIncomplete': 'every task must be complete before archiving',
   'change.tasks': 'tasks',
+  'change.implemented': 'implemented',
+  'change.reviewed': 'reviewed',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
   'change.updated': 'updated',
@@ -301,7 +303,6 @@ const EN: Record<string, string> = {
   'review.findings': 'findings',
   'review.specError': 'AI spec review failed',
   'review.specMissing': 'AI spec review not run',
-  'review.coverage': 'tasks reviewed',
   'review.running': 'AI spec review running ·',
   'review.tasksUnit': 'AI task review',
   'review.integrationUnit': 'AI code review ·',
@@ -1654,15 +1655,15 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
   const complete = isComplete(row)
   const updated = relativeLabel(row.modified, props.now)
   const units = reviewUnits(row.review, props.live, t, props.now)
-  // Settled task-review coverage is a count with a state; its missing tasks stay in the tooltip.
-  const coverage = reviewCoverageUnit(row.review?.tasks, t)
+  // Readiness counts each task twice: once checked in tasks.md, once reviewed by AI.
+  const progress = changeProgress(row)
   const purpose = summaryText(row.why ?? row.summary) === null ? null : (row.why ?? row.summary)
   return (
     // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
     <div
       role="button"
       tabIndex={0}
-      className="dsh-openspec-change-row"
+      className={`dsh-openspec-change-row${progress === null ? '' : ' dsh-openspec-change-row-progress'}`}
       onClick={() => props.onOpen(row.name)}
       onKeyDown={(event) => {
         // A nested button handles its own Enter/Space; only the row itself opens.
@@ -1673,19 +1674,56 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
       }}
     >
       <span className="dsh-openspec-change-gutter">
-        <span
-          className={`dsh-openspec-change-count${row.totalTasks > 0 ? '' : ' dsh-openspec-change-count-none'}`}
-        >
-          {row.totalTasks > 0 ? (
-            <>
-              {String(row.completedTasks)}
-              <span className="dsh-openspec-change-count-total">{`/${String(row.totalTasks)}`}</span>
-            </>
-          ) : (
-            '—'
-          )}
-        </span>
-        <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
+        {progress === null ? (
+          <>
+            <span
+              className={`dsh-openspec-change-count${row.totalTasks > 0 ? '' : ' dsh-openspec-change-count-none'}`}
+            >
+              {row.totalTasks > 0 ? (
+                <>
+                  {String(row.completedTasks)}
+                  <span className="dsh-openspec-change-count-total">{`/${String(row.totalTasks)}`}</span>
+                </>
+              ) : (
+                '—'
+              )}
+            </span>
+            <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
+          </>
+        ) : (
+          <>
+            <span
+              className="dsh-openspec-change-percent"
+              title={`${String(progress.implemented)}/${String(progress.total)} ${t('change.implemented')} · ${String(progress.reviewed)}/${String(progress.total)} ${t('change.reviewed')}`}
+            >
+              {String(progress.percent)}
+              <span className="dsh-openspec-change-percent-unit">%</span>
+            </span>
+            <span className="dsh-openspec-change-gutter-line">
+              <span
+                className="dsh-openspec-change-state"
+                data-state={progress.implemented === progress.total ? 'done' : 'warning'}
+              />
+              <b>{`${String(progress.implemented)}/${String(progress.total)}`}</b>{' '}
+              {t('change.implemented')}
+            </span>
+            <span
+              className="dsh-openspec-change-gutter-line"
+              title={
+                progress.missing.length === 0
+                  ? undefined
+                  : `${t('review.missingTooltip')} ${progress.missing.join(', ')}`
+              }
+            >
+              <span
+                className="dsh-openspec-change-state"
+                data-state={progress.reviewed === progress.total ? 'done' : 'warning'}
+              />
+              <b>{`${String(progress.reviewed)}/${String(progress.total)}`}</b>{' '}
+              {t('change.reviewed')}
+            </span>
+          </>
+        )}
       </span>
       <span className="dsh-openspec-change-body">
         <span className="dsh-openspec-card-head">
@@ -1722,12 +1760,6 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
               )}
             </span>
           ))}
-          {coverage === null ? null : (
-            <span className="dsh-openspec-change-verdict" title={coverage.tooltip}>
-              <span className="dsh-openspec-change-state" data-state={coverage.dot} />
-              <span className="dsh-openspec-change-verdict-label">{coverage.label}</span>
-            </span>
-          )}
         </span>
         <span className="dsh-openspec-change-nav">
           {changeNav({ row, t, onOpenArtifact: props.onOpenArtifact })}
@@ -2973,8 +3005,40 @@ export const PANEL_CSS = `
 .dsh-openspec-change-gutter {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   min-width: 0;
   padding: 10px;
+}
+/* A reviewed row states readiness: one percent over the two counts it is made of. */
+.dsh-openspec-change-row-progress {
+  grid-template-columns: 132px minmax(0, 1fr);
+}
+.dsh-openspec-change-percent {
+  align-self: center;
+  font-size: 22px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dsh-openspec-change-percent-unit {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  margin-left: 1px;
+}
+.dsh-openspec-change-gutter-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+.dsh-openspec-change-gutter-line b {
+  font: var(--dsw-font-xxs-strong-12);
+  color: var(--dsw-alias-label-secondary);
 }
 .dsh-openspec-change-count {
   font: var(--dsw-font-s-strong-14);

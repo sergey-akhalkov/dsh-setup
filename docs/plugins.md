@@ -673,8 +673,13 @@ right sidebar. A Start-page card, the sidebar's panel list, and client navigatio
 archived`), `Explore` and `Propose` actions that fill `/openspec-explore ` and `/openspec-propose `
 without submitting, and three counted segments — `Changes`, `Specs` and `Archive`. The segment labels
 carry the totals from the first `/changes` read, so all three are complete before Specs is opened.
-`Changes` lists the workspace's active changes, unfinished first. Each card sets a fixed numeric
-gutter — `4/12` over `tasks`, or a dash before any task is written — beside a body of four rows: the
+`Changes` lists the workspace's active changes, unfinished first. Each card sets a fixed readiness
+gutter beside a body of four rows: the percentile over the two counts it is made of — `58%` over
+`4/12 implemented` and `10/12 reviewed`, each with a status dot — or the plain `4/12` over `tasks`
+when this clone has no task-review state, or a dash before any task is written. Every task counts
+twice in that percent: once for being checked in `tasks.md` and once for carrying a task-review
+`PASS`, so only a fully implemented and fully reviewed change reads 100%; the reviewed line names
+its missing task numbers in a tooltip. The body holds the
 change name with its relative last-modified time, the proposal's `## Why` clamped to two lines with the
 full text on its title, one facts row, and one navigation row. Every fact in that row is a static
 status dot plus a neutral label: the colour lives in the dot alone, and it names one disposition —
@@ -683,15 +688,12 @@ running or waiting one. The derived status (`planning`, `ready to apply`, `apply
 keeps its own dot and label. The whole-spec record reads `AI spec review passed` while the record
 still matches the change artifacts, `AI spec review outdated` after a plan edit, `AI spec review: N
 findings`, `AI spec review failed`, or `AI spec review not run` when this clone has no local record,
-whose tooltip names how the review starts and that archive needs it. The settled review coverage
-reads `tasks reviewed 10/16` with a dot of its own — green when every checked task carries the
-portable task-review `PASS` the archive gate counts, amber while any is missing, with the missing
-task numbers in its tooltip — and appears once a task is checked. The row keeps one uniform gap
+whose tooltip names how the review starts and that archive needs it. The row keeps one uniform gap
 between facts. The navigation row holds one text button per artifact
 the change carries (`proposal`, `design`, `specs N`, `tasks N`) beside both actions: `Apply` while the
 change is not complete and `Archive` once every task is done, with the inapplicable one disabled and
 its reason on the control. An active row states no commit fact — the change detail header carries it —
-and draws no progress bar: the gutter count is the progress fact. An archived card keeps its history
+and draws no progress bar: the readiness percent is the progress fact. An archived card keeps its history
 layout (when it last changed, task completion, purpose, the artifact kinds and the last commit) and
 offers no action. The line reads the workflows engine's `workflowsReviewStatus` service: a profile
 without the engine, or a failed read, renders the card from the change list alone, and a commit-backed

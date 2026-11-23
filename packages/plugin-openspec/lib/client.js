@@ -320,12 +320,18 @@ window.__ModuleLoader__.load({
         spinning: true
       };
     }
-    function reviewCoverageUnit(tasks, t) {
-      if (tasks === null || tasks === void 0 || tasks.checked === 0) return null;
+    function changeProgress(row) {
+      const total = row.totalTasks;
+      const tasks = row.review?.tasks;
+      if (total <= 0 || tasks === null || tasks === void 0) return null;
+      const implemented = Math.min(Math.max(row.completedTasks, 0), total);
+      const reviewed = Math.min(Math.max(tasks.passed, 0), total);
       return {
-        label: `${t("review.coverage")} ${String(tasks.passed)}/${String(tasks.checked)}`,
-        dot: tasks.passed === tasks.checked ? "done" : "warning",
-        ...tasks.missing.length === 0 ? {} : { tooltip: `${t("review.missingTooltip")} ${tasks.missing.join(", ")}` }
+        percent: Math.round((implemented + reviewed) / (total * 2) * 100),
+        implemented,
+        reviewed,
+        total,
+        missing: tasks.missing
       };
     }
     function reviewUnits(review, live, t, now = /* @__PURE__ */ new Date()) {
@@ -945,6 +951,8 @@ window.__ModuleLoader__.load({
       "change.applyComplete": "the change is complete",
       "change.archiveIncomplete": "every task must be complete before archiving",
       "change.tasks": "tasks",
+      "change.implemented": "implemented",
+      "change.reviewed": "reviewed",
       "change.artifactLabel": "Change artifacts",
       "change.deltas": "delta specs",
       "change.updated": "updated",
@@ -983,7 +991,6 @@ window.__ModuleLoader__.load({
       "review.findings": "findings",
       "review.specError": "AI spec review failed",
       "review.specMissing": "AI spec review not run",
-      "review.coverage": "tasks reviewed",
       "review.running": "AI spec review running \xB7",
       "review.tasksUnit": "AI task review",
       "review.integrationUnit": "AI code review \xB7",
@@ -1841,7 +1848,7 @@ window.__ModuleLoader__.load({
       const complete = isComplete(row);
       const updated = relativeLabel(row.modified, props.now);
       const units = reviewUnits(row.review, props.live, t, props.now);
-      const coverage = reviewCoverageUnit(row.review?.tasks, t);
+      const progress = changeProgress(row);
       const purpose = summaryText(row.why ?? row.summary) === null ? null : row.why ?? row.summary;
       return (
         // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
@@ -1850,7 +1857,7 @@ window.__ModuleLoader__.load({
           {
             role: "button",
             tabIndex: 0,
-            className: "dsh-openspec-change-row",
+            className: `dsh-openspec-change-row${progress === null ? "" : " dsh-openspec-change-row-progress"}`,
             onClick: () => props.onOpen(row.name),
             onKeyDown: (event) => {
               if (event.target !== event.currentTarget) return;
@@ -1859,7 +1866,7 @@ window.__ModuleLoader__.load({
               props.onOpen(row.name);
             },
             children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-gutter", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter", children: progress === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                   "span",
                   {
@@ -1871,7 +1878,50 @@ window.__ModuleLoader__.load({
                   }
                 ),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
-              ] }),
+              ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+                  "span",
+                  {
+                    className: "dsh-openspec-change-percent",
+                    title: `${String(progress.implemented)}/${String(progress.total)} ${t("change.implemented")} \xB7 ${String(progress.reviewed)}/${String(progress.total)} ${t("change.reviewed")}`,
+                    children: [
+                      String(progress.percent),
+                      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent-unit", children: "%" })
+                    ]
+                  }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-gutter-line", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                    "span",
+                    {
+                      className: "dsh-openspec-change-state",
+                      "data-state": progress.implemented === progress.total ? "done" : "warning"
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: `${String(progress.implemented)}/${String(progress.total)}` }),
+                  " ",
+                  t("change.implemented")
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+                  "span",
+                  {
+                    className: "dsh-openspec-change-gutter-line",
+                    title: progress.missing.length === 0 ? void 0 : `${t("review.missingTooltip")} ${progress.missing.join(", ")}`,
+                    children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                        "span",
+                        {
+                          className: "dsh-openspec-change-state",
+                          "data-state": progress.reviewed === progress.total ? "done" : "warning"
+                        }
+                      ),
+                      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: `${String(progress.reviewed)}/${String(progress.total)}` }),
+                      " ",
+                      t("change.reviewed")
+                    ]
+                  }
+                )
+              ] }) }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-body", children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: row.name }),
@@ -1894,11 +1944,7 @@ window.__ModuleLoader__.load({
                   units.map((unit, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-verdict", children: [
                     unit.spinning === true ? Spinner() : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-state", "data-state": unit.dot }),
                     unit.tooltip === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: `${unit.label} - ${unit.tooltip}`, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) })
-                  ] }, `${unit.label}-${String(index)}`)),
-                  coverage === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-verdict", title: coverage.tooltip, children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-state", "data-state": coverage.dot }),
-                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: coverage.label })
-                  ] })
+                  ] }, `${unit.label}-${String(index)}`))
                 ] }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-nav", children: [
                   changeNav({ row, t, onOpenArtifact: props.onOpenArtifact }),
@@ -2808,8 +2854,40 @@ window.__ModuleLoader__.load({
     .dsh-openspec-change-gutter {
       display: flex;
       flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
       min-width: 0;
       padding: 10px;
+    }
+    /* A reviewed row states readiness: one percent over the two counts it is made of. */
+    .dsh-openspec-change-row-progress {
+      grid-template-columns: 132px minmax(0, 1fr);
+    }
+    .dsh-openspec-change-percent {
+      align-self: center;
+      font-size: 22px;
+      line-height: 24px;
+      font-weight: 600;
+      color: var(--dsw-alias-label-primary);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .dsh-openspec-change-percent-unit {
+      font: var(--dsw-font-xxs-12);
+      color: var(--dsw-alias-label-tertiary);
+      margin-left: 1px;
+    }
+    .dsh-openspec-change-gutter-line {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font: var(--dsw-font-xxs-12);
+      color: var(--dsw-alias-label-tertiary);
+      white-space: nowrap;
+    }
+    .dsh-openspec-change-gutter-line b {
+      font: var(--dsw-font-xxs-strong-12);
+      color: var(--dsw-alias-label-secondary);
     }
     .dsh-openspec-change-count {
       font: var(--dsw-font-s-strong-14);

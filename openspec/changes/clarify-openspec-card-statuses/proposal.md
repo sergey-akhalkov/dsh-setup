@@ -20,9 +20,9 @@ such as `complete` leaves 40px of empty slot before the next item while a long l
 - The whole-spec unit reads `AI spec review passed | not run | outdated | failed | N findings`, the
   task unit `AI task review · <unit>`, the integration unit `AI code review · N`, and the waiting
   form `Waiting for the AI reviewer`.
-- The reviewed-task count becomes a status-bearing item: `tasks reviewed N/M` with a success dot
-  when every checked task carries a PASS, a warning dot while any is missing, and no item at all at
-  zero checked tasks.
+- The gutter becomes the change's readiness indicator: a percent over `N/T implemented` and
+  `N/T reviewed`, counting every task twice so only a fully implemented and fully reviewed change
+  reads 100%. The reviewed count leaves the facts row and the navigation row states the task total.
 - `AI spec review not run` carries its remedy in the tooltip: the review starts on turn close or on
   request, and archive needs it.
 - One uniform 12px gap between facts; the fixed phase column is removed.

@@ -622,30 +622,38 @@ function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now:
   }
 }
 
+/** A change's readiness: one percent, and the two counts it is made from. */
+export interface ChangeProgress {
+  readonly percent: number
+  readonly implemented: number
+  readonly reviewed: number
+  readonly total: number
+  readonly missing: readonly string[]
+}
+
 /**
- * The settled task-review coverage count: green when every checked task carries
- * a PASS, warning while any is missing, absent when no task is checked. A count
- * with a state, so it renders beside the other status dots instead of as plain
- * text.
+ * Overall progress of a change. Every task counts twice: once for being checked
+ * in `tasks.md` and once for carrying a task-review PASS, so only a change that
+ * is fully implemented and fully reviewed reaches 100%. Absent when no task is
+ * written, or when the engine reports no task-review state, because a missing
+ * review record must never read as zero reviews.
  */
-export function reviewCoverageUnit(
-  tasks:
-    | {
-        readonly checked: number
-        readonly passed: number
-        readonly missing: readonly string[]
-      }
-    | null
-    | undefined,
-  t: (key: string) => string,
-): ReviewUnit | null {
-  if (tasks === null || tasks === undefined || tasks.checked === 0) return null
+export function changeProgress(row: {
+  readonly completedTasks: number
+  readonly totalTasks: number
+  readonly review?: ChangeReviewSummary
+}): ChangeProgress | null {
+  const total = row.totalTasks
+  const tasks = row.review?.tasks
+  if (total <= 0 || tasks === null || tasks === undefined) return null
+  const implemented = Math.min(Math.max(row.completedTasks, 0), total)
+  const reviewed = Math.min(Math.max(tasks.passed, 0), total)
   return {
-    label: `${t('review.coverage')} ${String(tasks.passed)}/${String(tasks.checked)}`,
-    dot: tasks.passed === tasks.checked ? 'done' : 'warning',
-    ...(tasks.missing.length === 0
-      ? {}
-      : { tooltip: `${t('review.missingTooltip')} ${tasks.missing.join(', ')}` }),
+    percent: Math.round(((implemented + reviewed) / (total * 2)) * 100),
+    implemented,
+    reviewed,
+    total,
+    missing: tasks.missing,
   }
 }
 

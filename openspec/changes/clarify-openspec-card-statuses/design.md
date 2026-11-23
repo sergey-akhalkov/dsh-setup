@@ -26,10 +26,11 @@ the row's height.
 `AI task review` and `AI code review` so one noun names one unit. `PASS` disappears from the card
 labels and stays only in tooltips where the record itself is discussed.
 
-**D4 — The reviewed-task count becomes a state.** `tasks reviewed N/M` with a dot answers "are the
-tasks reviewed?" at a glance; previously it was plain text that looked like the gutter's task count.
-Green when every checked task carries a portable PASS, amber while any is missing, absent at zero
-checked tasks — the same guard the card already used.
+**D4 — The gutter carries readiness.** One percent over the two counts that produce it —
+`N/T implemented` and `N/T reviewed` — answers "how far is this change?" without a second bar. Every
+task counts twice, once for its checkbox and once for its review `PASS`, so 100% means "can be
+archived", not "code written". The reviewed line keeps the missing task numbers in its tooltip, and
+the facts row loses the reviewed count entirely.
 
 **D5 — One 12px gap, no fixed column.** The fixed `min-width` on the phase slot bought vertical
 alignment of the review dots but produced a different gap after every short phase label. The gap is
