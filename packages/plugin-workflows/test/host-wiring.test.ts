@@ -6713,7 +6713,7 @@ describe('owned review at runtime', () => {
     expect(reviewRefusals(gateTexts(host))).toHaveLength(bound)
   })
 
-  it('bounds a persistently failing review start per turn and retries on the next turn', async () => {
+  it('bounds a persistently failing review start per turn and keeps the checkpoint obligation', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await gitGateWorkspace(`# Tasks
 
@@ -6724,6 +6724,81 @@ describe('owned review at runtime', () => {
     const host = await engineGateHost(workspace)
     // Attribute the change to this session so its due lane unit is dispatched.
     await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const emitStep = async (step: number): Promise<void> => {
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn: 1,
+          step,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    }
+    // A completed checkpoint that ages past the step interval: the post-loop
+    // freshness obligation is due behind the failing review start.
+    await emitStep(1)
+    for (const [index, name] of ['read', 'read', 'read', 'read', 'write'].entries()) {
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: `call-${String(index)}`,
+          name,
+          arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    await host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'checkpoint-call', name: 'work_checkpoint', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: 'checkpoint recorded' }] },
+    )
+    const checkpointPath = '.dsh/work-checkpoints/12020af3351652c1/1.json'
+    await mkdir(dirname(join(workspace, checkpointPath)), { recursive: true })
+    await writeFile(
+      join(workspace, checkpointPath),
+      JSON.stringify({
+        checkpoint: 'checkpoint-1-aaaaaaaa',
+        outcome: 'done',
+        turn: 1,
+        lanes: [],
+        next: 'continue',
+      }),
+      'utf8',
+    )
+    for (let step = 2; step <= 42; step += 1) await emitStep(step)
+    const stale = runs.createRun({
+      definition: 'retro',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { checkpoint: checkpointPath },
+      steps: ['checkpoint', 'verify'],
+      id: 'run-stale-checkpoint',
+      now: 1_500,
+    })
+    await runs.writeRun(
+      workspace,
+      runs.setRunStatus(
+        runs.settleStep(
+          runs.settleStep(stale, 'checkpoint', 'done', { at: 1_600 }),
+          'verify',
+          'done',
+          { at: 1_650 },
+        ),
+        'completed',
+        1_700,
+      ),
+      auth,
+    )
     const bound = definitionsRegistry.installed('task-review')?.definition.settings.maxBlocks ?? 3
     const startFailures = (): number => steered(host).split('could not start').length - 1
     runStoreFaults.syncWriteFile = 'simulated run-store write failure'
@@ -6733,6 +6808,9 @@ describe('owned review at runtime', () => {
       }
       // The failed start keeps the unit due and steers at most the per-turn bound.
       expect(startFailures()).toBe(bound)
+      // The exhausted start-failure refusal must not swallow the post-loop
+      // checkpoint-freshness obligation.
+      expect(steered(host)).toContain('the checkpoint is older than the configured step interval')
       // A new turn delivers its own bounded refusal and retries the start.
       await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
       expect(startFailures()).toBe(bound + 1)
@@ -6741,12 +6819,12 @@ describe('owned review at runtime', () => {
     }
   })
 
-  it('bounds the unavailable review-status fallback per turn and retries on the next turn', async () => {
+  it('bounds the unavailable review-status fallback per turn and keeps the verification obligation', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     // The spec-review signal is off, so its definition owns the review step.
     const host = fakeHost(workspace, { specReview: false })
-    apply(host.ctx as never)
+    apply(host.ctx as never, { verify: { commands: ['pnpm check'] } })
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
@@ -6780,12 +6858,44 @@ describe('owned review at runtime', () => {
           text.includes('retry it with workflows resume') ||
           text.includes('the review gate has no refusal budget'),
       ).length
-    for (let close = 0; close < bound + 1; close += 1) {
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    // The fallback refusal takes the ownership first, so the verification run is
+    // evaluated only after the review delivery bound is spent.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(fallbackSteers()).toBe(1)
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    for (let close = 1; close < bound; close += 1) {
       await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     }
-    // The fallback stays a refusal: the unit keeps its unresolved step and no
-    // VIOLATION is recorded.
+    // The bound holds the turn until it is spent: the verification obligation is
+    // not delivered early.
     expect(fallbackSteers()).toBe(bound)
+    expect(steered(host)).not.toContain('Run the configured verification command')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    // The fallback stays a refusal and the verification obligation still applies
+    // its own rule after the bound.
+    expect(fallbackSteers()).toBe(bound)
+    expect(steered(host)).toContain('Run the configured verification command')
     const stored = await runs.readAuthenticatedRun(workspace, 'run-no-review-status', auth)
     expect(stored?.violations ?? []).toHaveLength(0)
     expect(stored?.steps[0]?.state).not.toBe('done')
