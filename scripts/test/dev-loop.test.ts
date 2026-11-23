@@ -25,6 +25,7 @@ import {
   installArgs,
   linkSpec,
   managedNames,
+  mirrorPlan,
   parseDevArgs,
   patchText,
   recompositionTrigger,
@@ -103,6 +104,54 @@ describe('managedNames', () => {
 describe('linkSpec', () => {
   it('links a checkout with forward slashes', () => {
     expect(linkSpec('/repo\\packages\\plugin-alpha')).toBe('link:/repo/packages/plugin-alpha')
+  })
+})
+
+describe('mirrorPlan', () => {
+  const DESKTOP = {
+    dependencies: {
+      '@dsh-setup/setup': 'github:example/setup#abc&path:/packages/setup',
+      'huashu-design': 'github:alchaincyf/huashu-design#937',
+      '@dsh-setup/plugin-alpha': 'link:/repo/packages/plugin-alpha',
+    },
+    dsh: {
+      profile: {
+        bundles: [
+          '@deepseek-ai/dsh-base',
+          '@deepseek-ai/dsh-web-app',
+          '@deepseek-ai/dsh-experimental-session-search',
+          'huashu-design',
+          '@dsh-setup/plugin-alpha',
+          '@dsh-setup/setup',
+        ],
+      },
+    },
+  }
+
+  it('mirrors the desktop selection for setup mode', () => {
+    const plan = mirrorPlan(DESKTOP, SETUP_PACKAGE_NAME, managedNames(PLUGINS))
+    expect(plan?.bundles).toEqual([
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+      '@deepseek-ai/dsh-experimental-session-search',
+      'huashu-design',
+      SETUP_PACKAGE_NAME,
+    ])
+    expect(plan?.installs).toEqual([
+      { name: 'huashu-design', spec: 'github:alchaincyf/huashu-design#937' },
+    ])
+  })
+
+  it('mirrors the desktop selection for plugin mode without the setup', () => {
+    const plan = mirrorPlan(DESKTOP, '@dsh-setup/plugin-beta', managedNames(PLUGINS))
+    expect(plan?.bundles).not.toContain(SETUP_PACKAGE_NAME)
+    expect(plan?.bundles).not.toContain('@dsh-setup/plugin-alpha')
+    expect(plan?.bundles.at(-1)).toBe('@dsh-setup/plugin-beta')
+    expect(plan?.installs.map((entry) => entry.name)).toEqual(['huashu-design'])
+  })
+
+  it('returns undefined without a desktop profile', () => {
+    expect(mirrorPlan(undefined, SETUP_PACKAGE_NAME, managedNames(PLUGINS))).toBeUndefined()
   })
 })
 
@@ -565,6 +614,12 @@ const FAKE_CLI = [
   '  m.dsh.profile = m.dsh.profile || {}',
   '  m.dsh.profile.bundles = m.dsh.profile.bundles || []',
   "  if (action === 'add') {",
+  "    if (!spec.startsWith('link:')) {",
+  "      const log = join(process.env.FAKE_STATE_DIR, 'installs.txt')",
+  "      const existing = existsSync(log) ? readFileSync(log, 'utf8') : ''",
+  "      writeFileSync(log, existing + spec + '\\n')",
+  '      process.exit(0)',
+  '    }',
   '    const dir = spec.slice(5)',
   "    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))",
   '    m.dependencies[pkg.name] = spec',
@@ -628,6 +683,40 @@ function createHarness(): Harness {
   writeFileSync(
     join(setupPackageDir, 'package.json'),
     JSON.stringify({ name: '@dsh-setup/setup', version: '0.54.0' }),
+    'utf8',
+  )
+  const desktopDir = join(home, 'profiles', 'desktop')
+  mkdirSync(desktopDir, { recursive: true })
+  writeFileSync(
+    join(desktopDir, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: 'dsh-profile-desktop',
+        private: true,
+        dependencies: {
+          '@dsh-setup/setup': 'github:example/setup#abc&path:/packages/setup',
+          'huashu-design': 'github:example/huashu#937',
+        },
+        dsh: {
+          profile: {
+            bundles: [
+              '@deepseek-ai/dsh-base',
+              '@deepseek-ai/dsh-web-app',
+              '@deepseek-ai/dsh-experimental-session-search',
+              'huashu-design',
+              '@dsh-setup/setup',
+            ],
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  )
+  writeFileSync(
+    join(desktopDir, 'cordis.patch.yml'),
+    '- id: ui-chat\n  name: "@deepseek-ai/dsh-client-ui-chat"\n  config:\n    transcriptView: standard\n',
     'utf8',
   )
   const fakeCli = join(root, 'fake-cli.mjs')
@@ -781,10 +870,20 @@ describe('runDev (fake CLI, no Harness installation)', () => {
       expect(manifest.dependencies['@dsh-setup/plugin-alpha']).toBe(
         `link:${harness.pluginDir.replaceAll('\\', '/')}`,
       )
-      expect(manifest.dsh.profile.bundles).toContain('@dsh-setup/plugin-alpha')
+      expect(manifest.dsh.profile.bundles).toEqual([
+        '@deepseek-ai/dsh-base',
+        '@deepseek-ai/dsh-web-app',
+        '@deepseek-ai/dsh-experimental-session-search',
+        'huashu-design',
+        '@dsh-setup/plugin-alpha',
+      ])
       const patch = readFileSync(join(harness.home, 'profiles', 'dev', 'cordis.patch.yml'), 'utf8')
+      expect(patch).toContain('- id: ui-chat')
       expect(patch).toContain('- id: hmr')
       expect(patch).toContain('lib')
+      expect(readFileSync(join(harness.stateDir, 'installs.txt'), 'utf8')).toContain(
+        'github:example/huashu#937',
+      )
       expect(harness.logs).toContain(
         `Harness CLI (override): ${harness.cliLine} (version 0.0.0-test)`,
       )
@@ -827,9 +926,10 @@ describe('runDev (fake CLI, no Harness installation)', () => {
       expect(await first.run).toBe(130)
 
       const patchPath = join(harness.home, 'profiles', 'dev', 'cordis.patch.yml')
+      const desktopPatchPath = join(harness.home, 'profiles', 'desktop', 'cordis.patch.yml')
       writeFileSync(
-        patchPath,
-        `${readFileSync(patchPath, 'utf8')}- id: keep\n  name: "@deepseek-ai/dsh-keep"\n`,
+        desktopPatchPath,
+        `${readFileSync(desktopPatchPath, 'utf8')}- id: keep\n  name: "@deepseek-ai/dsh-keep"\n`,
         'utf8',
       )
 
@@ -867,7 +967,11 @@ describe('runDev (fake CLI, no Harness installation)', () => {
       await waitFor(() => harness.logs.some((line) => line.includes('host rebuild detected')))
       const triggered = readFileSync(patchPath, 'utf8')
       expect(triggered).toContain('- id: keep\n  name: "@deepseek-ai/dsh-keep"\n# dev rebuild')
-      expect(parse(triggered)).toEqual([{ id: 'keep', name: '@deepseek-ai/dsh-keep' }])
+      const parsed = parse(triggered) as Array<Record<string, unknown>>
+      expect(parsed.find((entry) => entry.id === 'keep')).toEqual({
+        id: 'keep',
+        name: '@deepseek-ai/dsh-keep',
+      })
 
       second.controller?.abort()
       expect(await second.run).toBe(130)

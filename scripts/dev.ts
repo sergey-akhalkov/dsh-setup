@@ -23,6 +23,7 @@ import {
   installArgs,
   linkSpec,
   managedNames,
+  mirrorPlan,
   parseDevArgs,
   patchText,
   recompositionTrigger,
@@ -235,13 +236,49 @@ export async function runDev(options: DevRunOptions): Promise<number> {
     return 1
   }
 
+  // Mirror the desktop profile's selection so the web host mounts the same
+  // bundles. The desktop profile is read only; it is never written here.
+  const desktopDir = join(home, 'profiles', 'desktop')
+  const desktopManifestPath = join(desktopDir, 'package.json')
+  const desktopPatchPath = join(desktopDir, 'cordis.patch.yml')
+  const desktop = existsSync(desktopManifestPath)
+    ? readJson<{
+        dependencies?: Record<string, string>
+        dsh?: { profile?: { bundles?: string[] } }
+      }>(desktopManifestPath)
+    : undefined
+  const mirror = mirrorPlan(desktop, target.name, managedNames(plugins))
+  if (mirror !== undefined) {
+    log(`mirroring the desktop profile selection (${String(mirror.bundles.length)} bundles)`)
+    const current = readJson<{
+      dependencies?: Record<string, string>
+      dsh?: { profile?: { bundles?: string[] } }
+    }>(paths.manifestPath)
+    current.dsh = current.dsh ?? {}
+    current.dsh.profile = current.dsh.profile ?? {}
+    current.dsh.profile.bundles = mirror.bundles
+    writeFileSync(paths.manifestPath, `${JSON.stringify(current, null, 2)}\n`, 'utf8')
+    for (const entry of mirror.installs) {
+      if (current.dependencies?.[entry.name] === entry.spec) continue
+      const added = runCommand(cliSpawnLine(cli, installArgs(DEV_PROFILE, entry.spec)), cwd, env)
+      if (added.status !== 0) {
+        log(`cannot install ${entry.name}: ${detail(added)}`)
+        return 1
+      }
+    }
+  }
+
   const existingPatch = existsSync(paths.patchPath)
     ? readFileSync(paths.patchPath, 'utf8')
     : undefined
+  const desktopPatch = existsSync(desktopPatchPath)
+    ? readFileSync(desktopPatchPath, 'utf8')
+    : undefined
+  const patchBase = desktopPatch ?? existingPatch
   const patch =
     parsed.mode === 'plugin'
-      ? patchText(existingPatch, 'plugin', { libDir: target.libDir ?? join(home, 'lib') })
-      : patchText(existingPatch, 'setup')
+      ? patchText(patchBase, 'plugin', { libDir: target.libDir ?? join(home, 'lib') })
+      : patchText(patchBase, 'setup')
   if (patch !== existingPatch) writeFileSync(paths.patchPath, patch, 'utf8')
 
   if (parsed.mode === 'setup') {

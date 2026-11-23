@@ -143,6 +143,44 @@ export interface ReconcilePlan {
   addition: string
 }
 
+/** A profile manifest as the mirror reads it. */
+export interface MirrorManifest {
+  dependencies?: Record<string, string>
+  dsh?: { profile?: { bundles?: string[] } }
+}
+
+/** The selection and dependencies copied from the desktop profile. */
+export interface MirrorPlan {
+  /** Bundle names to record in the development profile, the requested one last. */
+  bundles: string[]
+  /** Desktop dependencies the development profile must install too. */
+  installs: Array<{ name: string; spec: string }>
+}
+
+/**
+ * Mirror the desktop profile's selection so the web host mounts the same
+ * bundles: keep every desktop bundle except the setup and the plugin names the
+ * command manages itself, record the requested package last, and carry the
+ * desktop's external dependencies over. Reading is read-only; the desktop
+ * profile is never written. `undefined` means the machine has no desktop
+ * profile to mirror.
+ */
+export function mirrorPlan(
+  desktop: MirrorManifest | undefined,
+  requested: string,
+  managed: readonly string[],
+): MirrorPlan | undefined {
+  if (desktop === undefined) return undefined
+  const bundles = (desktop.dsh?.profile?.bundles ?? []).filter(
+    (name) => name !== SETUP_PACKAGE_NAME && name !== requested && !managed.includes(name),
+  )
+  bundles.push(requested)
+  const installs = Object.entries(desktop.dependencies ?? {})
+    .filter(([name]) => name !== SETUP_PACKAGE_NAME && !managed.includes(name))
+    .map(([name, spec]) => ({ name, spec }))
+  return { bundles, installs }
+}
+
 /** Remove every managed selection the requested mode does not want. */
 export function reconcilePlan(
   dependencies: Readonly<Record<string, string>> | undefined,

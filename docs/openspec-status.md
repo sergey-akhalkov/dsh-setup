@@ -1142,3 +1142,11 @@ which the spec records as Host-owned. The full gate ran on a clean tree: 3242/32
 `2026-11-23-add-plugin-dev-loop` with the new `dev-loop` capability synced (five requirements).
 Local working copies that still hold the ignored `.agents/worktrees` or `.huashu-design` directories
 fail the scans (issues #15 and #17).
+
+**Follow-up (2026-11-23): the development profile mirrors the Desktop profile.** `pnpm dev` now reads
+the `desktop` profile's manifest and patch (read-only) and records the same bundle selection, the same
+non-managed dependencies (`huashu-design`), and the same owner patch in the `dev` profile, then adds the
+development entry it owns. Verified live: the `dev` profile's bundle list matches the Desktop one
+byte-for-byte, `huashu-design` was installed, and the host booted with the Desktop settings. Rows the
+Harness guards with `profileContext.name === 'desktop'` or the primary runtime (native pickers, the
+browser tab, the primary-runtime Python, desktop telemetry) stay desktop-only by design.

@@ -57,13 +57,21 @@ interrupted or the host exits.
 ### Requirement: Development profile isolation
 
 The command SHALL write only the development profile under the Harness home selected by the environment,
-and MUST NOT read or write the `desktop` profile, whose lifecycle belongs to the Desktop application. The
-Harness home MUST be `$DSH_HOME` when set and the user's default Harness home otherwise.
+and MUST NOT write the `desktop` profile, whose lifecycle belongs to the Desktop application. It MAY read
+that profile's manifest and patch to mirror its selection, which is read-only. The Harness home MUST be
+`$DSH_HOME` when set and the user's default Harness home otherwise.
 
 #### Scenario: Desktop profile untouched
 
 - **WHEN** the command runs while a Desktop application profile exists
 - **THEN** that profile's manifest, patch, and installed dependencies are unchanged
+
+#### Scenario: Selection mirrors the desktop profile
+
+- **WHEN** the machine has a desktop profile
+- **THEN** the development profile records that profile's bundle selection without the setup bundle, the
+  same non-managed dependencies, and its patch followed by the development entry the command owns, so the
+  Web host mounts the same bundles
 
 #### Scenario: Module-watch override location
 
