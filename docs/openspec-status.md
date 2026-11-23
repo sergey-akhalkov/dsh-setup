@@ -1157,3 +1157,13 @@ UI language fell back to the browser's (Russian on a Russian machine) and the "P
 returned on every `pnpm dev`. The Desktop patch now seeds a development patch that holds no entries of
 its own, and a populated one is kept; the `dev-loop` spec scopes the mirror to a first start. Released
 in 0.54.6.
+
+**Follow-up (2026-11-23): the change card speaks in status dots and readiness.** The facts row mixed two
+grammars — a dotted phase beside coloured text — and the `not reviewed` state had no dot and no CSS class
+at all, so it read as furniture. The whole-spec unit now reads `AI spec review passed | not run |
+outdated | failed | N findings`, the task and integration units read `AI task review - <unit>` and
+`AI code review - N`, and every label stays neutral with the colour in a 6px dot. The gutter states
+readiness as a percent over `N/T implemented` and `N/T reviewed`, counting each task twice so 100%
+means implemented and reviewed; the value is reserved for a finished change and never rounded up to it.
+Archived rows wear the same skeleton, and their artifact entries now open from the Archive segment as
+well as from the empty-state recents. Released in 0.55.0.
