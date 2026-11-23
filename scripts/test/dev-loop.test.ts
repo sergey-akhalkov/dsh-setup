@@ -286,6 +286,13 @@ describe('patchText', () => {
     expect(patchText(withEntry, 'setup')).not.toContain('id: hmr')
   })
 
+  it('keeps an empty patch a valid YAML array for setup mode', () => {
+    const onlyEntry = patchText('[]', 'plugin', { libDir: LIB })
+    expect(patchText(onlyEntry, 'setup')).toBe('[]\n')
+    expect(patchText('', 'setup')).toBe('[]\n')
+    expect(entries(patchText('', 'setup'))).toEqual([])
+  })
+
   it('requires the build directory in plugin mode', () => {
     expect(() => patchText('[]', 'plugin')).toThrow(/needs the linked package build directory/)
   })

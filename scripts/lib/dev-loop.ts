@@ -270,9 +270,10 @@ export function patchText(
   )
 
   if (mode === 'setup') {
-    if (owned === undefined || !isMap(owned)) return text
+    if (owned === undefined || !isMap(owned)) return text.trim() === '' ? '[]\n' : text
     const result = flow ? flowRemoval(text, owned) : removeBlock(text, owned)
-    return result.trim() === '' ? '' : withFinalNewline(result)
+    // An empty file is not a patch list: the boot rejects a null document.
+    return result.trim() === '' ? '[]\n' : withFinalNewline(result)
   }
 
   const libDir = plugin?.libDir
