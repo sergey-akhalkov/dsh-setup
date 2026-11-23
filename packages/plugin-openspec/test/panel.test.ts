@@ -2120,13 +2120,16 @@ describe('OpenSpec root view', () => {
         },
       }),
     )
-    const archivedTag = typed(archivedTree, 'Tag').find((tag) => tag.props.children === 'archived')
-    expect(archivedTag?.props.tone).toBe('quiet')
     const archivedCard = cardButtons(archivedTree)[0]
-    const archivedHeadTags = typed(archivedCard, 'Tag').map((tag) => tag.props.children)
-    expect(archivedHeadTags).toContain('archived')
-    expect(archivedHeadTags).not.toContain('2026-10-27')
-    expect(cardButtons(archivedTree)[0]?.props.className).toContain('dsh-openspec-card-archived')
+    if (archivedCard === undefined) throw new Error('archived card missing')
+    // The archived row wears the same dot grammar as every other row.
+    const archivedDot = nodes(archivedCard).find(
+      (node) => node.props.className === 'dsh-openspec-change-dot',
+    )
+    expect(archivedDot?.props['data-phase']).toBe('archived')
+    expect(textOf(archivedCard)).toContain('archived')
+    expect(typed(archivedCard, 'Tag')).toHaveLength(0)
+    expect(archivedCard.props.className).toContain('dsh-openspec-card-archived')
   })
 
   it('keeps the archived row history layout and offers no action', () => {
@@ -2142,16 +2145,17 @@ describe('OpenSpec root view', () => {
     expect(String(card.props.className)).toContain('dsh-openspec-card-archived')
     const text = textOf(card)
     expect(text).toContain('updated 9d ago')
-    expect(text).toContain('5/5 tasks')
+    expect(text).toContain('5/5')
+    expect(text).toContain('tasks')
     expect(text).toContain('Add the admin indicator to the app.')
     expect(text).toContain('7e87448')
-    // The archived branch keeps its history facts and renders no control at all.
-    expect(nodes(card).filter((node) => node.type === 'button')).toHaveLength(0)
-    expect(text).not.toContain('Apply change')
+    // One skeleton with the active row: a gutter and a facts row, but no action at all.
+    expect(text).not.toContain('Apply')
     expect(text).not.toContain('Archive')
     expect(nodes(card).some((node) => node.props.className === 'dsh-openspec-change-gutter')).toBe(
-      false,
+      true,
     )
+    expect(nodes(card).filter((node) => node.type === 'button')).toHaveLength(0)
   })
 
   it('disables Archive on an incomplete change and names its gate', () => {

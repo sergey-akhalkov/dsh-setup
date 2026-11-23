@@ -61,6 +61,30 @@ widens one gap relative to another.
 - **WHEN** two cards render phases of different label length
 - **THEN** the gap between any two facts is the same, because no item reserves a fixed column
 
+### Requirement: Change card body
+
+The body of an active change card SHALL state, in order, the change name with its last-modified time,
+the proposal's purpose clamped to two lines, one facts row, and one navigation row carrying the
+artifact entries beside the card's actions. An archived change card SHALL keep the same skeleton: the
+fixed gutter, the change name with its last-modified time, the two-line purpose, one facts row
+stating the neutral `archived` dot and label, and one navigation row carrying the artifact entries
+and the last commit. An archived card MUST offer no action and MUST NOT show review state.
+
+#### Scenario: Purpose stays short
+
+- **WHEN** a proposal's Why runs longer than two lines of the body at the current width
+- **THEN** the purpose shows two lines with a trailing ellipsis and the full text on demand
+
+#### Scenario: Navigation row
+
+- **WHEN** an active change carries a proposal, a design, delta spec requirements and tasks
+- **THEN** one navigation row lists those artifacts beside the card's actions, and choosing an entry opens that artifact
+
+#### Scenario: Archived row matches the active skeleton
+
+- **WHEN** a card renders an archived change in the `Archive` segment or in the empty-state recents
+- **THEN** it uses the same gutter, facts and navigation rows, states the neutral `archived` dot and label instead of a tag, shows the last commit, and offers no action and no review state
+
 ### Requirement: Change card gutter
 
 A change card for an active change in the `Changes` list SHALL render a fixed-width readiness

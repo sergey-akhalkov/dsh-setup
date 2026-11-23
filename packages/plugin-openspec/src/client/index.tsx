@@ -1800,7 +1800,7 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
   )
 }
 
-/** An archived change: archive facts and last commit, with no action. */
+/** An archived change: the active card's skeleton, with no actions and no review state. */
 function archivedChangeCard(props: ChangeCardProps): ReactNode {
   const { row, t } = props
   const updated = relativeLabel(row.modified, props.now)
@@ -1810,7 +1810,7 @@ function archivedChangeCard(props: ChangeCardProps): ReactNode {
     <div
       role="button"
       tabIndex={0}
-      className="dsh-openspec-card dsh-openspec-card-archived"
+      className="dsh-openspec-change-row dsh-openspec-card-archived"
       onClick={() => props.onOpen(row.name)}
       onKeyDown={(event) => {
         // A nested button handles its own Enter/Space; only the row itself opens.
@@ -1820,40 +1820,48 @@ function archivedChangeCard(props: ChangeCardProps): ReactNode {
         props.onOpen(row.name)
       }}
     >
-      <span className="dsh-openspec-card-head">
-        <primitives.IconCheckCircleOutlineRegular size={14} />
-        <span className="dsh-openspec-card-title">{row.name}</span>
-        {updated === null ? null : (
-          <span className="dsh-openspec-card-count">{`${t('change.updated')} ${updated}`}</span>
-        )}
-      </span>
-      {summaryText(purpose) === null ? null : (
-        <primitives.Tooltip label={purpose ?? ''} portal>
-          <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp">{purpose}</span>
-        </primitives.Tooltip>
-      )}
-      {row.totalTasks > 0 ? (
-        <span className="dsh-openspec-card-progress">
-          {ProgressBar({ done: row.completedTasks, total: row.totalTasks, t })}
-        </span>
-      ) : (
-        <span className="dsh-openspec-meta">{t('change.tasksNotWritten')}</span>
-      )}
-      <span className="dsh-openspec-card-labels">
-        <Tag tone={phaseTone('archived')}>{t('phase.archived')}</Tag>
-      </span>
-      <span className="dsh-openspec-meta">
-        <span className="dsh-openspec-tags">
-          {presenceFacts(
-            row.presence,
-            t,
-            { requirements: row.requirementCount ?? 0 },
-            props.onOpenArtifact,
+      <span className="dsh-openspec-change-gutter">
+        <span
+          className={`dsh-openspec-change-count${row.totalTasks > 0 ? '' : ' dsh-openspec-change-count-none'}`}
+        >
+          {row.totalTasks > 0 ? (
+            <>
+              {String(row.completedTasks)}
+              <span className="dsh-openspec-change-count-total">{`/${String(row.totalTasks)}`}</span>
+            </>
+          ) : (
+            '—'
           )}
         </span>
-        {row.commit === undefined || row.commit === null ? null : (
-          <span className="dsh-openspec-card-tail">{CommitFactView({ commit: row.commit })}</span>
+        <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
+      </span>
+      <span className="dsh-openspec-change-body">
+        <span className="dsh-openspec-card-head">
+          <span className="dsh-openspec-card-title">{row.name}</span>
+          {updated === null ? null : (
+            <span className="dsh-openspec-card-count">{`${t('change.updated')} ${updated}`}</span>
+          )}
+        </span>
+        {summaryText(purpose) === null ? null : (
+          <span
+            className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-two"
+            title={purpose ?? undefined}
+          >
+            {purpose}
+          </span>
         )}
+        <span className="dsh-openspec-change-facts">
+          <span className="dsh-openspec-change-phase">
+            <span className="dsh-openspec-change-dot" data-phase="archived" aria-hidden="true" />
+            {t('phase.archived')}
+          </span>
+        </span>
+        <span className="dsh-openspec-change-nav">
+          {changeNav({ row, t, onOpenArtifact: props.onOpenArtifact })}
+          {row.commit === undefined || row.commit === null ? null : (
+            <span className="dsh-openspec-card-tail">{CommitFactView({ commit: row.commit })}</span>
+          )}
+        </span>
       </span>
     </div>
   )

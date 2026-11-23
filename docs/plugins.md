@@ -693,9 +693,10 @@ between facts. The navigation row holds one text button per artifact
 the change carries (`proposal`, `design`, `specs N`, `tasks N`) beside both actions: `Apply` while the
 change is not complete and `Archive` once every task is done, with the inapplicable one disabled and
 its reason on the control. An active row states no commit fact — the change detail header carries it —
-and draws no progress bar: the readiness percent is the progress fact. An archived card keeps its history
-layout (when it last changed, task completion, purpose, the artifact kinds and the last commit) and
-offers no action. The line reads the workflows engine's `workflowsReviewStatus` service: a profile
+and draws no progress bar: the readiness percent is the progress fact. An archived card wears the same
+skeleton — the gutter, the two-line purpose, the neutral `archived` dot and label, and the artifact
+entries as text buttons — with its last commit where the actions sit, and shows no review state. The
+line reads the workflows engine's `workflowsReviewStatus` service: a profile
 without the engine, or a failed read, renders the card from the change list alone, and a commit-backed
 audit of the approvals stays with `pnpm reviews:check`. While a review of one of the workspace's
 changes is live, the facts row replaces that unit with its own label beside the shipped loading

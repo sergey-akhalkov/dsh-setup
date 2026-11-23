@@ -1999,7 +1999,7 @@ window.__ModuleLoader__.load({
           {
             role: "button",
             tabIndex: 0,
-            className: "dsh-openspec-card dsh-openspec-card-archived",
+            className: "dsh-openspec-change-row dsh-openspec-card-archived",
             onClick: () => props.onOpen(row.name),
             onKeyDown: (event) => {
               if (event.target !== event.currentTarget) return;
@@ -2008,22 +2008,40 @@ window.__ModuleLoader__.load({
               props.onOpen(row.name);
             },
             children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }),
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: row.name }),
-                updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${t("change.updated")} ${updated}` })
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-gutter", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  "span",
+                  {
+                    className: `dsh-openspec-change-count${row.totalTasks > 0 ? "" : " dsh-openspec-change-count-none"}`,
+                    children: row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                      String(row.completedTasks),
+                      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-count-total", children: `/${String(row.totalTasks)}` })
+                    ] }) : "\u2014"
+                  }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
               ] }),
-              summaryText(purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: purpose ?? "", portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: purpose }) }),
-              row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-progress", children: ProgressBar({ done: row.completedTasks, total: row.totalTasks, t }) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: t("change.tasksNotWritten") }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-labels", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone("archived"), children: t("phase.archived") }) }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(
-                  row.presence,
-                  t,
-                  { requirements: row.requirementCount ?? 0 },
-                  props.onOpenArtifact
-                ) }),
-                row.commit === void 0 || row.commit === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-tail", children: CommitFactView({ commit: row.commit }) })
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-body", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: row.name }),
+                  updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${t("change.updated")} ${updated}` })
+                ] }),
+                summaryText(purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  "span",
+                  {
+                    className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-two",
+                    title: purpose ?? void 0,
+                    children: purpose
+                  }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-facts", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-phase", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-dot", "data-phase": "archived", "aria-hidden": "true" }),
+                  t("phase.archived")
+                ] }) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-nav", children: [
+                  changeNav({ row, t, onOpenArtifact: props.onOpenArtifact }),
+                  row.commit === void 0 || row.commit === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-tail", children: CommitFactView({ commit: row.commit }) })
+                ] })
               ] })
             ]
           }
@@ -2126,50 +2144,6 @@ window.__ModuleLoader__.load({
         ] }),
         props.commit.at === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.commit.at.slice(0, 10) })
       ] });
-    }
-    function presenceFacts(presence, t, counts, onOpen) {
-      if (presence === void 0) return [];
-      const facts = [];
-      if (presence.proposal) facts.push({ kind: "proposal", label: t("presence.proposal") });
-      if (presence.design) facts.push({ kind: "design", label: t("presence.design") });
-      if (presence.specs > 0) {
-        facts.push({
-          kind: "specs",
-          label: presence.specs === 1 ? t("presence.spec") : t("presence.specs"),
-          ...counts.requirements > 0 ? { suffix: `${String(counts.requirements)} ${t("specs.req")}` } : {}
-        });
-      }
-      if (presence.tasks) facts.push({ kind: "tasks", label: t("presence.tasks") });
-      return facts.map((fact) => {
-        const tag = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", className: "dsh-openspec-artifact-tag", children: [
-          fact.label,
-          fact.suffix === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-artifact-count", children: fact.suffix })
-        ] });
-        if (onOpen === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: tag }, fact.kind);
-        return (
-          // biome-ignore lint/a11y/useSemanticElements: an artifact tag is a card-internal link; the row stays the primary activation.
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-            "span",
-            {
-              role: "button",
-              tabIndex: 0,
-              className: "dsh-openspec-artifact-link",
-              onClick: (event) => {
-                event.stopPropagation();
-                onOpen(fact.kind);
-              },
-              onKeyDown: (event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                event.stopPropagation();
-                onOpen(fact.kind);
-              },
-              children: tag
-            },
-            fact.kind
-          )
-        );
-      });
     }
     function ChangeView(props) {
       const { change, artifact, delta, t, labels } = props;

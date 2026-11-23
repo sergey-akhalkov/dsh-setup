@@ -9,6 +9,7 @@
 - [x] 1.5 Use one 12px gap in the facts row and remove the fixed phase column
 - [x] 1.6 State the task total beside the `tasks` entry in the navigation row, as `specs N` already reads its count
 - [x] 1.7 Make the gutter the change's readiness: a percent over `N/T implemented` and `N/T reviewed`, each with a dot, and drop the reviewed count from the facts row
+- [x] 1.8 Give the archived row the same skeleton: the gutter, the neutral `archived` dot and label, and text artifact entries instead of tags and a progress bar
 
 ## 2. Verification (owns packages/plugin-openspec/test, packages/plugin-openspec/lib, packages/setup/node_modules/@dsh-setup/plugin-openspec)
 
