@@ -16,7 +16,7 @@ import { evaluateEvent } from './evaluate.js';
 import { commandMatches, currentSpecDigest, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
 import { startFsChangeWatcher } from './fs-change.js';
-import { authorizationWriteDecision, evaluateIntakeGate, evaluateTurnClose, isSoftSettled, runReplaceable, } from './gates.js';
+import { authorizationWriteDecision, evaluateIntakeGate, evaluateTurnClose, isSoftSettled, reviewDeliveryFor, runReplaceable, } from './gates.js';
 import { defaultGit, implementationFingerprint, worktreeDigest } from './git.js';
 import { WorkflowHealth } from './health.js';
 import { HostAuth } from './host-auth.js';
@@ -4896,24 +4896,8 @@ export function apply(ctx, config = {}) {
             let refusedThisClose = false;
             // One per-turn delivery budget across every review-refusal steer site. A
             // review refusal that reaches the bound stops holding the turn but never
-            // settles the run; the first site of a turn fixes the cap.
-            const reviewDelivery = (maxBlocks) => {
-                // Lazily, so only a review-refusal site fixes the turn's cap.
-                const budgetOf = () => {
-                    const stored = reviewRefusals.get(sessionId);
-                    if (stored !== undefined && stored.turn === payload.turn)
-                        return stored;
-                    const created = { turn: payload.turn, cap: maxBlocks, used: 0 };
-                    reviewRefusals.set(sessionId, created);
-                    return created;
-                };
-                return {
-                    remaining: () => Math.max(0, budgetOf().cap - budgetOf().used),
-                    spend: () => {
-                        budgetOf().used += 1;
-                    },
-                };
-            };
+            // settles the run; the first site that actually submits fixes the cap.
+            const reviewDelivery = (maxBlocks) => reviewDeliveryFor(reviewRefusals, sessionId, payload.turn, maxBlocks);
             // The engine dispatches every due lane unit itself: a code fix leaves
             // tasks.md unchanged, so no fs.change creates a run and a due unit must
             // not wait for a tick. Each start uses the trigger's own start path with

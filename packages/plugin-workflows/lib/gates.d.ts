@@ -25,6 +25,20 @@ export interface ReviewDelivery {
     remaining(): number;
     spend(): void;
 }
+/** One session's per-turn review-refusal delivery count, held by the listener. */
+export interface ReviewDeliveryState {
+    readonly turn: number;
+    readonly cap: number;
+    used: number;
+}
+/**
+ * One site's view of the session's per-turn review-refusal budget. The cap
+ * belongs to the first site that actually submits a refusal: reading
+ * `remaining()` fixes nothing, so an unrelated definition that refuses nothing
+ * can never raise the bound of the definition that does. A new turn starts a
+ * fresh budget.
+ */
+export declare function reviewDeliveryFor(states: Map<string, ReviewDeliveryState>, session: string, turn: number, maxBlocks: number): ReviewDelivery;
 export type TurnCloseOutcome = {
     readonly kind: 'allow';
     readonly run: WorkflowRun;

@@ -10,6 +10,8 @@ import {
   evaluateIntakeGate,
   evaluateTurnClose,
   type ReviewDelivery,
+  type ReviewDeliveryState,
+  reviewDeliveryFor,
   selectBlockingStep,
 } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
@@ -499,6 +501,52 @@ describe('uncapped review turn close', () => {
     expect(outcome.hold).toBe(true)
     expect(agent.messages).toHaveLength(1)
     expect(agent.messages[0]).toContain('checkpoint is stale')
+  })
+
+  it('fixes the turn cap on the first submitted review refusal, not on a read', () => {
+    const states = new Map<string, ReviewDeliveryState>()
+    // A definition that refuses nothing only reads the budget: the configured
+    // cap of the definition that does refuse must survive that read.
+    const unrelated = reviewDeliveryFor(states, 'session-1', 1, 3)
+    expect(unrelated.remaining()).toBe(3)
+    expect(states.size).toBe(0)
+    const configured = reviewDeliveryFor(states, 'session-1', 1, 1)
+    configured.spend()
+    expect(configured.remaining()).toBe(0)
+    expect(unrelated.remaining()).toBe(0)
+    // A new turn starts a fresh budget.
+    expect(reviewDeliveryFor(states, 'session-1', 2, 1).remaining()).toBe(1)
+  })
+
+  it('bounds an unresolved completion refusal on a terminal review run', () => {
+    const definition = reviewDefinition()
+    const agent = new FakeAgent()
+    const run = setRunStatus(reviewRunFor(definition), 'failed', 2_000)
+    const delivery = reviewBudget(definition.settings.maxBlocks)
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const outcome = evaluateTurnClose({
+        run,
+        definition,
+        agent,
+        evidenceContext,
+        turn: 1,
+        maxBlocks: definition.settings.maxBlocks,
+        installedLegacy: new Set(),
+        completion: {
+          ok: false,
+          text: 'the completion coverage is incomplete: task 1.1 has no portable PASS',
+        },
+        delivery,
+      })
+      // With no resolved review status the completion refusal is still a review
+      // refusal: bounded, never a VIOLATION, and it leaves the run unchanged.
+      expect(outcome.kind, `attempt ${attempt}`).toBe('refuse')
+      if (outcome.kind !== 'refuse') continue
+      expect(outcome.hold, `attempt ${attempt}`).toBe(attempt <= definition.settings.maxBlocks)
+      expect(outcome.run).toBe(run)
+      expect(outcome.run.violations).toHaveLength(0)
+    }
+    expect(agent.messages).toHaveLength(definition.settings.maxBlocks)
   })
 
   it('names a failed start in the refusal', () => {

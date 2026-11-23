@@ -14,7 +14,7 @@
 
 ## 3. Verification (owns packages/plugin-workflows/lib)
 
-- [ ] 3.1 Run `pnpm build`, `pnpm check` and `pnpm gen:check`; verify the committed build output matches the sources and no generated file drifted.
+- [x] 3.1 Run `pnpm build`, `pnpm check` and `pnpm gen:check`; verify the committed build output matches the sources and no generated file drifted.
 - [x] 3.2 Re-read the gate tests and confirm the asserted message count equals `settings.maxBlocks` from the definition fixture, not a literal that could drift from the shipped definition; verify by pointing the assertion at the fixture value.
 
 ## Workflow follow-up

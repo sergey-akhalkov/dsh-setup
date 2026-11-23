@@ -39,6 +39,46 @@ export interface ReviewDelivery {
   spend(): void
 }
 
+/** One session's per-turn review-refusal delivery count, held by the listener. */
+export interface ReviewDeliveryState {
+  readonly turn: number
+  readonly cap: number
+  used: number
+}
+
+/**
+ * One site's view of the session's per-turn review-refusal budget. The cap
+ * belongs to the first site that actually submits a refusal: reading
+ * `remaining()` fixes nothing, so an unrelated definition that refuses nothing
+ * can never raise the bound of the definition that does. A new turn starts a
+ * fresh budget.
+ */
+export function reviewDeliveryFor(
+  states: Map<string, ReviewDeliveryState>,
+  session: string,
+  turn: number,
+  maxBlocks: number,
+): ReviewDelivery {
+  const stored = (): ReviewDeliveryState | undefined => {
+    const state = states.get(session)
+    return state !== undefined && state.turn === turn ? state : undefined
+  }
+  return {
+    remaining: () => {
+      const state = stored()
+      return state === undefined ? maxBlocks : Math.max(0, state.cap - state.used)
+    },
+    spend: () => {
+      const state = stored()
+      if (state === undefined) {
+        states.set(session, { turn, cap: maxBlocks, used: 1 })
+        return
+      }
+      state.used += 1
+    },
+  }
+}
+
 export type TurnCloseOutcome =
   | { readonly kind: 'allow'; readonly run: WorkflowRun; readonly reason: string }
   | {
@@ -341,6 +381,15 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         text,
       }
     }
+    const reviewStepId = input.definition.steps.find((entry) => entry.executor === 'review')?.id
+    // A completion or checkpoint refusal on a run whose review obligation is
+    // still unresolved is a review refusal: it obeys the per-turn delivery bound
+    // and never rewrites the run or records a VIOLATION, so an unavailable
+    // review status can never become an unbounded hold or a release.
+    const ownedRuleRefusal = (text: string): TurnCloseOutcome =>
+      releaseBlocked && reviewStepId !== undefined
+        ? reviewRefusal(input, reviewStepId, text)
+        : ownedRefusal(text)
     // A terminal run is never revived by a later steer, and a run whose
     // session ended (interrupted) is not steered; the owned completion or
     // checkpoint decision still refuses a terminal run.
@@ -350,7 +399,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       input.run.status === 'cancelled' ||
       input.run.status === 'interrupted'
     ) {
-      if (ownedText !== undefined) return ownedRefusal(ownedText)
+      if (ownedText !== undefined) return ownedRuleRefusal(ownedText)
       return {
         kind: 'allow',
         run: input.run,
@@ -358,7 +407,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       }
     }
     if (ownedText !== undefined && step === undefined) {
-      return ownedRefusal(ownedText)
+      return ownedRuleRefusal(ownedText)
     }
     if (step === undefined) {
       return {

@@ -3580,7 +3580,7 @@ describe('turn-close lane dispatch', () => {
 
 - [ ] 1.1 Later engine task
 `)
-    const host = await engineGateHost(workspace)
+    const host = await engineGateHost(workspace, {}, { verify: { commands: ['pnpm check'] } })
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const { currentSpecDigest, reviewDigest } = await import('../src/host/evidence.ts')
@@ -3636,17 +3636,21 @@ describe('turn-close lane dispatch', () => {
     )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(steered(host)).toContain('settled on FINDINGS')
-    // The settled-verdict refusal obeys the per-turn review delivery bound: the
-    // remaining attempts of this turn submit nothing, and the next turn delivers
-    // its own bounded refusal.
     const maximum = definitionsRegistry.installed('spec-review')?.definition.settings.maxBlocks ?? 3
     const settledSteers = (): number => steered(host).split('settled on FINDINGS').length - 1
+    // A code write makes the verification obligation due; the settled review
+    // keeps the ownership, so verification is evaluated only after the bound.
+    await gateWrite(host, 'src/app.ts')
     for (let close = 1; close < maximum; close += 1) {
       await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     }
     expect(settledSteers()).toBe(maximum)
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    // The settled-verdict refusal obeys the per-turn review delivery bound: the
+    // remaining attempts submit nothing for the verdict, while the verification
+    // obligation still applies its own rule after the bound.
     expect(settledSteers()).toBe(maximum)
+    expect(steered(host)).toContain('Run the configured verification command')
     // The next close starts no round: the record and the step stay unchanged.
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     expect(settledSteers()).toBe(maximum + 1)
@@ -6707,6 +6711,87 @@ describe('owned review at runtime', () => {
       'the checkpoint is older than the configured step interval',
     )
     expect(reviewRefusals(gateTexts(host))).toHaveLength(bound)
+  })
+
+  it('bounds a persistently failing review start per turn and retries on the next turn', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await gitGateWorkspace(`# Tasks
+
+## 1. Engine (lane 1, owns \`src/**\`)
+
+- [x] 1.1 Engine task
+`)
+    const host = await engineGateHost(workspace)
+    // Attribute the change to this session so its due lane unit is dispatched.
+    await gateWrite(host, 'openspec/changes/auth/proposal.md')
+    const bound = definitionsRegistry.installed('task-review')?.definition.settings.maxBlocks ?? 3
+    const startFailures = (): number => steered(host).split('could not start').length - 1
+    runStoreFaults.syncWriteFile = 'simulated run-store write failure'
+    try {
+      for (let close = 0; close < bound + 1; close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      }
+      // The failed start keeps the unit due and steers at most the per-turn bound.
+      expect(startFailures()).toBe(bound)
+      // A new turn delivers its own bounded refusal and retries the start.
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      expect(startFailures()).toBe(bound + 1)
+    } finally {
+      runStoreFaults.syncWriteFile = undefined
+    }
+  })
+
+  it('bounds the unavailable review-status fallback per turn and retries on the next turn', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    // The spec-review signal is off, so its definition owns the review step.
+    const host = fakeHost(workspace, { specReview: false })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = definitionsRegistry.installed('spec-review')?.definition
+    if (definition === undefined) throw new Error('the spec-review definition is missing')
+    // No change name: the host cannot resolve the due-unit status, so the close
+    // takes the owned-review fallback with no resolved review status.
+    const attempted = runs.createRun({
+      definition: 'spec-review',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: {},
+      steps: ['review'],
+      id: 'run-no-review-status',
+      now: 1_000,
+    })
+    await runs.writeRun(
+      workspace,
+      runs.settleStep(attempted, 'review', 'failed', {
+        at: 1_100,
+        reason: 'the review status is unavailable',
+      }),
+      auth,
+    )
+    const bound = definition.settings.maxBlocks
+    const fallbackSteers = (): number =>
+      gateTexts(host).filter(
+        (text) =>
+          text.includes('retry it with workflows resume') ||
+          text.includes('the review gate has no refusal budget'),
+      ).length
+    for (let close = 0; close < bound + 1; close += 1) {
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    }
+    // The fallback stays a refusal: the unit keeps its unresolved step and no
+    // VIOLATION is recorded.
+    expect(fallbackSteers()).toBe(bound)
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-no-review-status', auth)
+    expect(stored?.violations ?? []).toHaveLength(0)
+    expect(stored?.steps[0]?.state).not.toBe('done')
+    // A new turn delivers its own bounded fallback refusal.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(fallbackSteers()).toBe(bound + 1)
   })
 })
 
