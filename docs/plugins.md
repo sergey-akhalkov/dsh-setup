@@ -828,10 +828,12 @@ reports (which can differ from the `dsh.json` runtime the download fallback woul
 `profiles/dev` from the shipped `web` template when it is absent (or on `--refresh`), reconciles the
 managed selection it installed earlier, links the requested package, and prints the page URL. On a
 machine with a Desktop profile it also mirrors that profile's bundle selection, its non-managed
-dependencies, and its owner patch (read-only), so the Web host mounts the same plugins and uses the same
-settings; without a Desktop profile it keeps the shipped `web` template. It writes only the development
-profile: the `hmr` patch entry and the recomposition trigger it owns. The `desktop` profile is never
-written.
+dependencies, and — while the development patch has no entries of its own — its owner patch (read-only),
+so the first start mounts the same plugins and uses the same settings; afterwards the development patch
+is kept, so settings the running page writes there (the chosen UI language, an acknowledged notice)
+survive every start. Without a Desktop profile it keeps the shipped `web` template. It writes only the
+development profile: the `hmr` patch entry and the recomposition trigger it owns. The `desktop` profile
+is never written.
 
 Observed behavior on DSH 0.2.2-rc.5 (installed Desktop CLI, throwaway `DSH_HOME`, live verification
 2026-11-23):

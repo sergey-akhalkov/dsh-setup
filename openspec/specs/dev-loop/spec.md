@@ -68,10 +68,18 @@ that profile's manifest and patch to mirror its selection, which is read-only. T
 
 #### Scenario: Selection mirrors the desktop profile
 
-- **WHEN** the machine has a desktop profile
+- **WHEN** the machine has a desktop profile and the development profile's patch holds no entries of its
+  own
 - **THEN** the development profile records that profile's bundle selection without the setup bundle, the
   same non-managed dependencies, and its patch followed by the development entry the command owns, so the
-  Web host mounts the same bundles
+  Web host mounts the same bundles on first use
+
+#### Scenario: Page-written settings survive a restart
+
+- **WHEN** the development profile's patch already holds entries of its own, including the settings the
+  running page writes there (the chosen locale, an acknowledged notice version)
+- **THEN** the command rewrites only the entry it owns and keeps every existing entry, so those settings
+  survive the next start
 
 #### Scenario: Module-watch override location
 

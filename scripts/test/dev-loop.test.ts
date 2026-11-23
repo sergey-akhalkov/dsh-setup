@@ -27,6 +27,7 @@ import {
   managedNames,
   mirrorPlan,
   parseDevArgs,
+  patchBaseText,
   patchText,
   recompositionTrigger,
   reconcilePlan,
@@ -481,6 +482,33 @@ describe('patchText', () => {
   })
 })
 
+describe('patchBaseText', () => {
+  const DESKTOP = '- id: ui-chat\n  name: "@deepseek-ai/dsh-client-ui-chat"\n'
+  const OWN =
+    '- id: locale\n  name: "@deepseek-ai/dsh-client-locale"\n  config:\n    preference: en\n'
+
+  it('seeds a development patch with no entries of its own from the desktop patch', () => {
+    expect(patchBaseText('# template\n[]\n', DESKTOP)).toBe(DESKTOP)
+    expect(patchBaseText('', DESKTOP)).toBe(DESKTOP)
+    expect(patchBaseText(undefined, DESKTOP)).toBe(DESKTOP)
+    expect(patchBaseText('[] # local overrides\n', DESKTOP)).toBe(DESKTOP)
+  })
+
+  it('keeps a development patch that holds entries, so page-written settings survive', () => {
+    const existing = `${DESKTOP}${OWN}`
+    expect(patchBaseText(existing, `${DESKTOP}- id: later\n  name: y\n`)).toBe(existing)
+  })
+
+  it('falls back to the existing text without a desktop profile', () => {
+    expect(patchBaseText('# template\n[]\n', undefined)).toBe('# template\n[]\n')
+    expect(patchBaseText(undefined, undefined)).toBeUndefined()
+  })
+
+  it('rejects a development patch that is not a YAML array', () => {
+    expect(() => patchBaseText('id: x\n', DESKTOP)).toThrow(/not a YAML array/)
+  })
+})
+
 describe('command arguments', () => {
   it('boots the host without opening a browser', () => {
     expect(hostArgs()).toEqual(['--profile', 'dev', '--no-open'])
@@ -926,10 +954,11 @@ describe('runDev (fake CLI, no Harness installation)', () => {
       expect(await first.run).toBe(130)
 
       const patchPath = join(harness.home, 'profiles', 'dev', 'cordis.patch.yml')
-      const desktopPatchPath = join(harness.home, 'profiles', 'desktop', 'cordis.patch.yml')
+      // Settings the running page writes into this patch (the chosen locale, an
+      // acknowledged notice version) must survive the next start.
       writeFileSync(
-        desktopPatchPath,
-        `${readFileSync(desktopPatchPath, 'utf8')}- id: keep\n  name: "@deepseek-ai/dsh-keep"\n`,
+        patchPath,
+        `${readFileSync(patchPath, 'utf8')}- id: keep\n  name: "@deepseek-ai/dsh-keep"\n`,
         'utf8',
       )
 

@@ -385,6 +385,22 @@ export function patchText(
   return `${text}${separator}${entryText(libDir)}\n`
 }
 
+/**
+ * The patch the development profile is rewritten from: a profile with no
+ * entries of its own is seeded once from the Desktop patch, and one that holds
+ * any keeps them. The running page writes its own settings — the chosen locale,
+ * an acknowledged notice version — into this file, so reseeding on every start
+ * would erase them.
+ */
+export function patchBaseText(
+  existing: string | undefined,
+  desktop: string | undefined,
+): string | undefined {
+  const contents = parsePatch((existing ?? '').replaceAll('\r\n', '\n')).contents
+  const entries = isSeq(contents) ? contents.items.length : 0
+  return entries === 0 ? (desktop ?? existing) : existing
+}
+
 /** Launcher arguments that boot the development host without opening a browser. */
 export function hostArgs(profile: string = DEV_PROFILE): string[] {
   return ['--profile', profile, '--no-open']

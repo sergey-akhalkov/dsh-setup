@@ -1150,3 +1150,10 @@ development entry it owns. Verified live: the `dev` profile's bundle list matche
 byte-for-byte, `huashu-design` was installed, and the host booted with the Desktop settings. Rows the
 Harness guards with `profileContext.name === 'desktop'` or the primary runtime (native pickers, the
 browser tab, the primary-runtime Python, desktop telemetry) stay desktop-only by design.
+
+**Follow-up (2026-11-23): page-written dev settings survive a restart.** Mirroring the Desktop patch on
+every start erased the settings the running page writes into `profiles/dev/cordis.patch.yml`: the chosen
+UI language fell back to the browser's (Russian on a Russian machine) and the "Preview Notice" modal
+returned on every `pnpm dev`. The Desktop patch now seeds a development patch that holds no entries of
+its own, and a populated one is kept; the `dev-loop` spec scopes the mirror to a first start. Released
+in 0.54.6.

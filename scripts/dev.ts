@@ -25,6 +25,7 @@ import {
   managedNames,
   mirrorPlan,
   parseDevArgs,
+  patchBaseText,
   patchText,
   recompositionTrigger,
   reconcilePlan,
@@ -274,7 +275,9 @@ export async function runDev(options: DevRunOptions): Promise<number> {
   const desktopPatch = existsSync(desktopPatchPath)
     ? readFileSync(desktopPatchPath, 'utf8')
     : undefined
-  const patchBase = desktopPatch ?? existingPatch
+  // Only a development profile with no entries of its own is seeded from the
+  // Desktop patch; a later start keeps the entries the running page wrote here.
+  const patchBase = patchBaseText(existingPatch, desktopPatch)
   const patch =
     parsed.mode === 'plugin'
       ? patchText(patchBase, 'plugin', { libDir: target.libDir ?? join(home, 'lib') })
