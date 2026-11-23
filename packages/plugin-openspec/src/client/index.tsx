@@ -1692,7 +1692,16 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
           </>
         ) : progress === null ? (
           <>
-            <span className="dsh-openspec-change-percent">—</span>
+            <span className="dsh-openspec-change-percent">
+              {row.totalTasks > 0 ? (
+                <>
+                  {String(row.completedTasks)}
+                  <span className="dsh-openspec-change-percent-unit">{`/${String(row.totalTasks)}`}</span>
+                </>
+              ) : (
+                '—'
+              )}
+            </span>
             <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
           </>
         ) : (

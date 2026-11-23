@@ -1882,7 +1882,10 @@ window.__ModuleLoader__.load({
                 ),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
               ] }) : progress === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent", children: "\u2014" }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent", children: row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                  String(row.completedTasks),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent-unit", children: `/${String(row.totalTasks)}` })
+                ] }) : "\u2014" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
               ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(

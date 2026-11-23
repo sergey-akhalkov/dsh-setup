@@ -5127,6 +5127,25 @@ describe('OpenSpec panel visual contract', () => {
     if (plainCard === undefined) throw new Error('card missing')
     expect(textOf(plainCard)).not.toContain('%')
     expect(textOf(plainCard)).toContain('0/12')
+    // Known task counts stay visible when the engine reports no task-review state.
+    const unreported = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+              phase: 'applying',
+              review: { spec: null, tasks: null },
+            }),
+          ]),
+        },
+        now: NOW,
+      }),
+    )
+    const unreportedCard = cardButtons(unreported)[0]
+    if (unreportedCard === undefined) throw new Error('card missing')
+    expect(textOf(unreportedCard)).toContain('4/12')
+    expect(textOf(unreportedCard)).not.toContain('%')
     // A reviewed change with no tasks keeps the wide readiness block and states a dash.
     const empty = RootView(
       rootProps({
