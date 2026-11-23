@@ -2198,10 +2198,11 @@ describe('OpenSpec root view', () => {
       'proposal',
     )
     // The empty-state recents strip on the Changes segment wires the same navigation.
+    const recentsSpy = vi.fn()
     const recents = RootView(
       rootProps({
         changes: { phase: 'ready', value: listOf([], [archivedRow], { archived: 1 }) },
-        onOpenArtifact,
+        onOpenArtifact: recentsSpy,
       }),
     )
     const recentCard = cardButtons(recents)[0]
@@ -2214,11 +2215,8 @@ describe('OpenSpec root view', () => {
       stopPropagation: recentStop,
     })
     expect(recentStop).toHaveBeenCalledTimes(1)
-    expect(onOpenArtifact).toHaveBeenLastCalledWith(
-      '2026-10-27-add-admin-indicator',
-      true,
-      'proposal',
-    )
+    expect(recentsSpy).toHaveBeenCalledTimes(1)
+    expect(recentsSpy).toHaveBeenLastCalledWith('2026-10-27-add-admin-indicator', true, 'proposal')
   })
 
   it('disables Archive on an incomplete change and names its gate', () => {
