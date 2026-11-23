@@ -2197,6 +2197,28 @@ describe('OpenSpec root view', () => {
       true,
       'proposal',
     )
+    // The empty-state recents strip on the Changes segment wires the same navigation.
+    const recents = RootView(
+      rootProps({
+        changes: { phase: 'ready', value: listOf([], [archivedRow], { archived: 1 }) },
+        onOpenArtifact,
+      }),
+    )
+    const recentCard = cardButtons(recents)[0]
+    if (recentCard === undefined) throw new Error('recent card missing')
+    const recentButtons = nodes(recentCard).filter((node) => node.type === 'button')
+    const recentFirst = recentButtons[0]
+    if (recentFirst === undefined) throw new Error('recent artifact button missing')
+    const recentStop = vi.fn()
+    ;(recentFirst.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: recentStop,
+    })
+    expect(recentStop).toHaveBeenCalledTimes(1)
+    expect(onOpenArtifact).toHaveBeenLastCalledWith(
+      '2026-10-27-add-admin-indicator',
+      true,
+      'proposal',
+    )
   })
 
   it('disables Archive on an incomplete change and names its gate', () => {
