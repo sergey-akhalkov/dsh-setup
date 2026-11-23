@@ -2,7 +2,7 @@ import type { Definition, Step } from './definitions.js';
 import type { EvidenceCheck, EvidenceContext } from './evidence.js';
 import type { WorkflowReceipt } from './receipts.js';
 import { type WorkflowRun } from './runs.js';
-import type { SteerTarget } from './steer.js';
+import { type SteerTarget } from './steer.js';
 /**
  * The turn-close gate. It refuses a root turn close while the run has an open
  * `blockTurnClose` step that this engine owns; a deferred step never steers.

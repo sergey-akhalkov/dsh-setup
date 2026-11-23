@@ -12,7 +12,7 @@ import {
   settleStep,
   type WorkflowRun,
 } from './runs.js'
-import type { SteerTarget } from './steer.js'
+import { renderMainSteer, type SteerTarget } from './steer.js'
 import { taskLanes } from './tasks.js'
 
 /**
@@ -363,6 +363,26 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       input.enabledLegacy,
       provisionalReviews,
     )
+    // Missing owned completion coverage is a review obligation even when this
+    // unit's review step is done and no review status resolved: it obeys the
+    // per-turn delivery bound and never the ordinary budget-and-VIOLATION path.
+    if (ownedReview && input.review === undefined && input.completion?.ok === false) {
+      const note = input.completion.text ?? 'the completion coverage is incomplete'
+      let text = note
+      if (step !== undefined && step.executor !== 'review') {
+        try {
+          text = `${note.slice(0, 600)}\n\n${renderMainSteer({
+            run: input.run,
+            definition: input.definition,
+            step,
+            evidenceContext: input.evidenceContext,
+          })}`
+        } catch {
+          // The completion text alone is still a bounded, actionable refusal.
+        }
+      }
+      return reviewRefusal(input, step?.id ?? 'owned-rule', text)
+    }
     const ownedRefusal = (text: string): TurnCloseOutcome => {
       const blocks = blocksForTurn(input.run)
       if (!releaseBlocked && blocks >= input.maxBlocks) {
@@ -381,17 +401,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         text,
       }
     }
-    const reviewStepId = input.definition.steps.find((entry) => entry.executor === 'review')?.id
-    // A completion or checkpoint refusal on a run whose review obligation is
-    // still unresolved is a review refusal: it obeys the per-turn delivery bound
-    // and never rewrites the run or records a VIOLATION, so an unavailable
-    // review status can never become an unbounded hold or a release.
-    const ownedRuleRefusal = (text: string): TurnCloseOutcome =>
-      releaseBlocked && reviewStepId !== undefined
-        ? reviewRefusal(input, reviewStepId, text)
-        : ownedRefusal(text)
-    // A terminal run is never revived by a later steer, and a run whose
-    // session ended (interrupted) is not steered; the owned completion or
+    // A terminal run is never revived by a later steer, and a run whose    // session ended (interrupted) is not steered; the owned completion or
     // checkpoint decision still refuses a terminal run.
     if (
       input.run.status === 'completed' ||
@@ -399,7 +409,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       input.run.status === 'cancelled' ||
       input.run.status === 'interrupted'
     ) {
-      if (ownedText !== undefined) return ownedRuleRefusal(ownedText)
+      if (ownedText !== undefined) return ownedRefusal(ownedText)
       return {
         kind: 'allow',
         run: input.run,
@@ -407,7 +417,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       }
     }
     if (ownedText !== undefined && step === undefined) {
-      return ownedRuleRefusal(ownedText)
+      return ownedRefusal(ownedText)
     }
     if (step === undefined) {
       return {

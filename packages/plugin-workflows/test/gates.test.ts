@@ -343,6 +343,58 @@ function reviewDefinition(withGateMetadata = true): Definition {
   })
 }
 
+/** The shipped task-review shape: a unit review plus its completion-coverage step. */
+function reviewCompletionDefinition(): Definition {
+  return validateDefinition({
+    v: 1,
+    id: 'task-review',
+    name: 'Task review',
+    version: 1,
+    trigger: {
+      kind: 'fs.change',
+      match: { path: 'openspec/changes/{name}/tasks.md' },
+      mode: 'active',
+      dedupe: 'path+content-hash',
+    },
+    settings: {
+      allowModelStart: true,
+      risk: 'low',
+      gateOwnership: 'own',
+      allowIntent: false,
+      gate: 'review',
+      gateIdentity: 'task-review',
+    },
+    steps: [
+      {
+        id: 'review',
+        title: 'Review the checked task',
+        executor: 'review',
+        review: { target: 'codex', instruction: 'review-task', scope: 'task' },
+        evidence: {
+          kind: 'record',
+          rule: 'task-review',
+          change: '{name}',
+          scope: 'task',
+          task: '{taskId}',
+          verdicts: ['PASS', 'ERROR'],
+          path: '.dsh/workflows/records/task-review/{name}/tasks/{taskId}.json',
+        },
+        next: 'complete-review',
+        blockTurnClose: true,
+      },
+      {
+        id: 'complete-review',
+        title: 'Confirm the completion coverage',
+        executor: 'main',
+        prompt: 'Confirm the portable task-review PASS coverage for every checked task.',
+        evidence: { kind: 'check', source: 'task-review-coverage' },
+        next: 'end',
+        blockTurnClose: true,
+      },
+    ],
+  })
+}
+
 function reviewRunFor(definition = reviewDefinition()): WorkflowRun {
   return createRun({
     definition: definition.id,
@@ -543,6 +595,42 @@ describe('uncapped review turn close', () => {
       expect(outcome.kind, `attempt ${attempt}`).toBe('refuse')
       if (outcome.kind !== 'refuse') continue
       expect(outcome.hold, `attempt ${attempt}`).toBe(attempt <= definition.settings.maxBlocks)
+      expect(outcome.run).toBe(run)
+      expect(outcome.run.violations).toHaveLength(0)
+    }
+    expect(agent.messages).toHaveLength(definition.settings.maxBlocks)
+  })
+
+  it('bounds a completion gap after the unit review settles', () => {
+    const definition = reviewCompletionDefinition()
+    const agent = new FakeAgent()
+    // The unit's own review passed; only the completion coverage is missing, and
+    // the review status is unavailable, so the generic step walk would steer and
+    // then record a VIOLATION for a review obligation.
+    const run = settleStep(reviewRunFor(definition), 'review', 'done', {
+      at: 1_100,
+      evidence: { kind: 'record', path: 'review-record.json', digest: 'a'.repeat(64) },
+    })
+    const delivery = reviewBudget(definition.settings.maxBlocks)
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const outcome = evaluateTurnClose({
+        run,
+        definition,
+        agent,
+        evidenceContext,
+        turn: 1,
+        maxBlocks: definition.settings.maxBlocks,
+        installedLegacy: new Set(),
+        completion: {
+          ok: false,
+          text: 'checked task "1.1 Foreign" has no portable PASS',
+        },
+        delivery,
+      })
+      expect(outcome.kind, `attempt ${attempt}`).toBe('refuse')
+      if (outcome.kind !== 'refuse') continue
+      expect(outcome.hold, `attempt ${attempt}`).toBe(attempt <= definition.settings.maxBlocks)
+      // No attempt rewrites the run or records a VIOLATION.
       expect(outcome.run).toBe(run)
       expect(outcome.run.violations).toHaveLength(0)
     }
