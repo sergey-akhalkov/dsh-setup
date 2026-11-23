@@ -676,13 +676,18 @@ carry the totals from the first `/changes` read, so all three are complete befor
 `Changes` lists the workspace's active changes, unfinished first. Each card sets a fixed numeric
 gutter — `4/12` over `tasks`, or a dash before any task is written — beside a body of four rows: the
 change name with its relative last-modified time, the proposal's `## Why` clamped to two lines with the
-full text on its title, one facts row, and one navigation row. The facts row carries the derived status
-(`planning`, `ready to apply`, `applying` or `complete`) as a static colored dot and short label, the
-whole-spec verdict as a coloured word (`spec PASS` while the record still matches the change artifacts,
-`spec outdated` after a plan edit, `spec findings (N)`, `spec error`, or `spec not reviewed` when this
-clone has no local record), and the settled review coverage as `review 10/16` — the checked tasks with
-the portable task-review `PASS` the archive gate counts, with the missing task numbers in its
-tooltip — which appears once a task is checked. The navigation row holds one text button per artifact
+full text on its title, one facts row, and one navigation row. Every fact in that row is a static
+status dot plus a neutral label: the colour lives in the dot alone, and it names one disposition —
+green for a done state, amber for one that waits on the reader, red for a failed one, neutral for a
+running or waiting one. The derived status (`planning`, `ready to apply`, `applying` or `complete`)
+keeps its own dot and label. The whole-spec record reads `AI spec review passed` while the record
+still matches the change artifacts, `AI spec review outdated` after a plan edit, `AI spec review: N
+findings`, `AI spec review failed`, or `AI spec review not run` when this clone has no local record,
+whose tooltip names how the review starts and that archive needs it. The settled review coverage
+reads `tasks reviewed 10/16` with a dot of its own — green when every checked task carries the
+portable task-review `PASS` the archive gate counts, amber while any is missing, with the missing
+task numbers in its tooltip — and appears once a task is checked. The row keeps one uniform gap
+between facts. The navigation row holds one text button per artifact
 the change carries (`proposal`, `design`, `specs N`, `tasks`) beside both actions: `Apply` while the
 change is not complete and `Archive` once every task is done, with the inapplicable one disabled and
 its reason on the control. An active row states no commit fact — the change detail header carries it —
@@ -691,8 +696,9 @@ layout (when it last changed, task completion, purpose, the artifact kinds and t
 offers no action. The line reads the workflows engine's `workflowsReviewStatus` service: a profile
 without the engine, or a failed read, renders the card from the change list alone, and a commit-backed
 audit of the approvals stays with `pnpm reviews:check`. While a review of one of the workspace's
-changes is live, the facts row shows that review's own `reviewing ...` label beside the shipped
-loading spinner, truncated to one line with the full label in its tooltip. The panel reads the
+changes is live, the facts row replaces that unit with its own label beside the shipped loading
+spinner (`AI spec review running · N`, `AI task review · <unit>`, `AI code review · N`, or `Waiting
+for the AI reviewer`), truncated to one line with the full label in its tooltip. The panel reads the
 engine's live route every four seconds while `Changes` is visible, stops when that route is absent,
 and performs one debounced change-list re-read when a previously live review settles so the new
 verdict replaces the spinner without a manual refresh. The change list itself is never polled. An empty change list repeats both actions, shows the

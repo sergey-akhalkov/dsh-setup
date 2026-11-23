@@ -540,10 +540,13 @@ export function decodeLiveReviewEntries(body: unknown): ReviewLiveEntry[] | unde
   return entries
 }
 
+/** The colour a status dot carries: what the reader has to do about the state. */
+export type ReviewDot = 'done' | 'warning' | 'error' | 'ongoing'
+
 /** One rendered status label on a card: a phase or a review unit. */
 export interface ReviewUnit {
   readonly label: string
-  readonly tone: TagTone
+  readonly dot: ReviewDot
   /** Bounded tooltip text; absent renders the unit plainly. */
   readonly tooltip?: string
   /** A live review spins; a waiting review stays still. */
@@ -556,23 +559,32 @@ function reviewSpecUnit(
   t: (key: string) => string,
   now: Date,
 ): ReviewUnit {
-  if (spec === null) return { label: t('review.specMissing'), tone: 'quiet' }
+  if (spec === null) {
+    return {
+      label: t('review.specMissing'),
+      dot: 'warning',
+      tooltip: t('review.missingSpecTooltip'),
+    }
+  }
   if (spec.verdict === 'PASS' && spec.current) {
     const relative = relativeLabel(spec.at, now)
     const reviewer = spec.model === undefined ? spec.reviewer : `${spec.reviewer} (${spec.model})`
     return {
       label: t('review.specPass'),
-      tone: 'success',
-      tooltip: `${t('review.passTooltip')} ${reviewer}${relative === null ? '' : ` - ${relative}`}`,
+      dot: 'done',
+      tooltip: `${t('review.passTooltip')} ${reviewer}${relative === null ? '' : ` · ${relative}`}`,
     }
   }
   if (!spec.current) {
-    return { label: t('review.specOutdated'), tone: 'warning', tooltip: t('review.staleTooltip') }
+    return { label: t('review.specOutdated'), dot: 'warning', tooltip: t('review.staleTooltip') }
   }
   if (spec.verdict === 'FINDINGS') {
-    return { label: `${t('review.specFindings')} (${String(spec.findings)})`, tone: 'warning' }
+    return {
+      label: `${t('review.specFindings')}: ${String(spec.findings)} ${t('review.findings')}`,
+      dot: 'error',
+    }
   }
-  return { label: t('review.specError'), tone: 'warning' }
+  return { label: t('review.specError'), dot: 'error' }
 }
 
 /** One live review: a running unit spins, a waiting unit stays still. */
@@ -580,7 +592,7 @@ function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now:
   if (entry.state === 'waiting') {
     return {
       label: t('review.waiting'),
-      tone: 'info',
+      dot: 'ongoing',
       tooltip: t('review.waitTooltip'),
     }
   }
@@ -588,8 +600,8 @@ function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now:
   const tooltip = `${entry.definition} - ${t('review.liveTooltip')}${relative === null ? '' : ` ${relative}`}`
   if (entry.unit === 'tasks') {
     return {
-      label: `${t('review.tasksUnit')}${entry.label === undefined ? '' : ` - ${entry.label}`}`,
-      tone: 'info',
+      label: `${t('review.tasksUnit')}${entry.label === undefined ? '' : ` · ${entry.label}`}`,
+      dot: 'ongoing',
       tooltip,
       spinning: true,
     }
@@ -597,16 +609,43 @@ function reviewLiveUnit(entry: ReviewLiveEntry, t: (key: string) => string, now:
   if (entry.unit === 'integration') {
     return {
       label: `${t('review.integrationUnit')} ${String(entry.attempt)}`,
-      tone: 'info',
+      dot: 'ongoing',
       tooltip,
       spinning: true,
     }
   }
   return {
     label: `${t('review.running')} ${String(entry.attempt)}`,
-    tone: 'info',
+    dot: 'ongoing',
     tooltip,
     spinning: true,
+  }
+}
+
+/**
+ * The settled task-review coverage count: green when every checked task carries
+ * a PASS, warning while any is missing, absent when no task is checked. A count
+ * with a state, so it renders beside the other status dots instead of as plain
+ * text.
+ */
+export function reviewCoverageUnit(
+  tasks:
+    | {
+        readonly checked: number
+        readonly passed: number
+        readonly missing: readonly string[]
+      }
+    | null
+    | undefined,
+  t: (key: string) => string,
+): ReviewUnit | null {
+  if (tasks === null || tasks === undefined || tasks.checked === 0) return null
+  return {
+    label: `${t('review.coverage')} ${String(tasks.passed)}/${String(tasks.checked)}`,
+    dot: tasks.passed === tasks.checked ? 'done' : 'warning',
+    ...(tasks.missing.length === 0
+      ? {}
+      : { tooltip: `${t('review.missingTooltip')} ${tasks.missing.join(', ')}` }),
   }
 }
 

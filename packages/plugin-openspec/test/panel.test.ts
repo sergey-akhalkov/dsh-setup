@@ -164,6 +164,7 @@ import {
   requestCapability,
   requestChange,
   requestChangeList,
+  reviewCoverageUnit,
   reviewUnits,
   type SegmentStorage,
   SPECS_ADDRESS,
@@ -269,21 +270,24 @@ const COPY: Record<string, string> = {
   'markdown.copy': 'Copy',
   'markdown.copied': 'Copied',
   'markdown.footnotes': 'Footnotes',
-  'review.specPass': 'spec PASS',
-  'review.specOutdated': 'spec outdated',
-  'review.specFindings': 'spec findings',
-  'review.specError': 'spec error',
-  'review.specMissing': 'spec not reviewed',
-  'review.coverage': 'review',
-  'review.running': 'spec review running - attempt',
-  'review.tasksUnit': 'reviewing tasks',
-  'review.integrationUnit': 'integration review running - attempt',
-  'review.waiting': 'waiting for the live review run',
-  'review.passTooltip': 'Whole-spec review PASS by',
+  'review.specPass': 'AI spec review passed',
+  'review.specOutdated': 'AI spec review outdated',
+  'review.specFindings': 'AI spec review',
+  'review.findings': 'findings',
+  'review.specError': 'AI spec review failed',
+  'review.specMissing': 'AI spec review not run',
+  'review.coverage': 'tasks reviewed',
+  'review.running': 'AI spec review running ·',
+  'review.tasksUnit': 'AI task review',
+  'review.integrationUnit': 'AI code review ·',
+  'review.waiting': 'Waiting for the AI reviewer',
+  'review.passTooltip': 'AI spec review of the plan ·',
   'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
-  'review.missingTooltip': 'No portable task-review PASS for',
+  'review.missingTooltip': 'No AI review yet for tasks',
+  'review.missingSpecTooltip':
+    'Starts when the turn ends, or ask the agent to start it. Archive needs it',
   'review.liveTooltip': 'Started',
-  'review.waitTooltip': 'Waiting for the live review run',
+  'review.waitTooltip': 'Waiting for the AI reviewer to start',
 }
 
 const t = (key: string): string => COPY[key] ?? key
@@ -4165,7 +4169,7 @@ describe('OpenSpec live observation', () => {
       await settle()
       body.render()
       expect(listCalls()).toBe(2)
-      expect(textOf(RootView(rootViewOf(body).props as never))).toContain('spec PASS')
+      expect(textOf(RootView(rootViewOf(body).props as never))).toContain('AI spec review passed')
       // Later polls see no further disappearance and re-read nothing.
       vi.advanceTimersByTime(4000)
       await settle()
@@ -4999,10 +5003,14 @@ describe('OpenSpec panel visual contract', () => {
     expect(textOf(gutter)).toContain('4/12')
     expect(textOf(gutter)).toContain('tasks')
     expect(textOf(facts)).toContain('applying')
-    expect(textOf(facts)).toContain('spec PASS')
-    expect(textOf(facts)).toContain('review 10/16')
-    const coverage = order.find((node) => node.props.className === 'dsh-openspec-change-coverage')
-    expect(coverage?.props.title).toBe('No portable task-review PASS for: 2.3, 4.1')
+    expect(textOf(facts)).toContain('AI spec review passed')
+    expect(textOf(facts)).toContain('tasks reviewed 10/16')
+    const coverage = order.find(
+      (node) => node.props.title === 'No AI review yet for tasks 2.3, 4.1',
+    )
+    if (coverage === undefined) throw new Error('coverage fact missing')
+    expect(textOf(coverage)).toContain('tasks reviewed 10/16')
+    expect(nodes(coverage).map((node) => node.props['data-state'])).toContain('warning')
     // The gutter count and the coverage word are counts, not tracking bars.
     expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
     // One navigation row carries the artifact entries beside both actions.
@@ -5014,9 +5022,10 @@ describe('OpenSpec panel visual contract', () => {
     expect(rowButton(card, 'Archive').props.title).toBe(
       'every task must be complete before archiving',
     )
-    // The verdict word takes its colour from the semantic state tokens.
-    expect(PANEL_CSS).toContain('.dsh-openspec-change-verdict-success')
-    expect(PANEL_CSS).toContain('var(--dsw-alias-state-success-secondary)')
+    // The status dot takes its colour from the semantic state tokens; the label stays neutral.
+    expect(PANEL_CSS).toContain(".dsh-openspec-change-state[data-state='done']")
+    expect(PANEL_CSS).toContain('var(--dsw-alias-state-success-primary)')
+    expect(PANEL_CSS).not.toContain('.dsh-openspec-change-verdict-success')
     expect(PANEL_CSS).not.toContain('dsh-openspec-review-ring')
   })
 
@@ -5039,9 +5048,7 @@ describe('OpenSpec panel visual contract', () => {
     if (card === undefined) throw new Error('card missing')
     expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
     expect(textOf(card)).toContain('ready to apply')
-    expect(
-      nodes(card).some((node) => node.props.className === 'dsh-openspec-change-coverage'),
-    ).toBe(false)
+    expect(textOf(card)).not.toContain('tasks reviewed')
   })
 
   it('keeps a long live-review fact on one line with its full text in the tooltip', () => {
@@ -5076,8 +5083,8 @@ describe('OpenSpec panel visual contract', () => {
     if (card === undefined) throw new Error('card missing')
     const facts = nodes(card).find((node) => node.props.className === 'dsh-openspec-change-facts')
     if (facts === undefined) throw new Error('facts row missing')
-    const unit = nodes(facts).find((node) =>
-      String(node.props.className ?? '').startsWith('dsh-openspec-change-verdict '),
+    const unit = nodes(facts).find(
+      (node) => String(node.props.className ?? '') === 'dsh-openspec-change-verdict',
     )
     if (unit === undefined) throw new Error('review unit missing')
     const label = nodes(unit).find(
@@ -5153,8 +5160,8 @@ describe('OpenSpec review state', () => {
 
   it('renders the settled spec verdict as the card label', () => {
     const units = reviewUnits(summary(), undefined, t, NOW)
-    expect(units.map((unit) => [unit.label, unit.tone])).toEqual([['spec PASS', 'success']])
-    expect(units[0]?.tooltip).toBe('Whole-spec review PASS by codex (gpt-5.1-codex) - 2h ago')
+    expect(units.map((unit) => [unit.label, unit.dot])).toEqual([['AI spec review passed', 'done']])
+    expect(units[0]?.tooltip).toBe('AI spec review of the plan · codex (gpt-5.1-codex) · 2h ago')
   })
 
   it('renders a stale PASS as outdated without claiming the change is reviewed', () => {
@@ -5172,7 +5179,7 @@ describe('OpenSpec review state', () => {
       t,
       NOW,
     )
-    expect(units[0]).toMatchObject({ label: 'spec outdated', tone: 'warning' })
+    expect(units[0]).toMatchObject({ label: 'AI spec review outdated', dot: 'warning' })
     expect(units[0]?.tooltip).toBe('The PASS is stale: the change artifacts changed after it')
   })
 
@@ -5191,7 +5198,7 @@ describe('OpenSpec review state', () => {
       t,
       NOW,
     )
-    expect(findings[0]).toMatchObject({ label: 'spec findings (2)', tone: 'warning' })
+    expect(findings[0]).toMatchObject({ label: 'AI spec review: 2 findings', dot: 'error' })
     const error = reviewUnits(
       summary({
         spec: {
@@ -5206,12 +5213,32 @@ describe('OpenSpec review state', () => {
       t,
       NOW,
     )
-    expect(error[0]).toMatchObject({ label: 'spec error', tone: 'warning' })
+    expect(error[0]).toMatchObject({ label: 'AI spec review failed', dot: 'error' })
   })
 
-  it('reads a missing local record as not reviewed and drops an unreadable task unit', () => {
+  it('reads a missing local record as not run and drops an unreadable task unit', () => {
     const units = reviewUnits({ spec: null, tasks: null }, undefined, t, NOW)
-    expect(units).toEqual([{ label: 'spec not reviewed', tone: 'quiet' }])
+    expect(units).toEqual([
+      {
+        label: 'AI spec review not run',
+        dot: 'warning',
+        tooltip: 'Starts when the turn ends, or ask the agent to start it. Archive needs it',
+      },
+    ])
+  })
+
+  it('gives the reviewed-task count a state dot', () => {
+    expect(reviewCoverageUnit(undefined, t)).toBeNull()
+    expect(reviewCoverageUnit({ checked: 0, passed: 0, missing: [] }, t)).toBeNull()
+    expect(reviewCoverageUnit({ checked: 16, passed: 16, missing: [] }, t)).toEqual({
+      label: 'tasks reviewed 16/16',
+      dot: 'done',
+    })
+    expect(reviewCoverageUnit({ checked: 16, passed: 14, missing: ['2.3', '4.1'] }, t)).toEqual({
+      label: 'tasks reviewed 14/16',
+      dot: 'warning',
+      tooltip: 'No AI review yet for tasks 2.3, 4.1',
+    })
   })
 
   it('replaces the settled spec unit with its live review', () => {
@@ -5232,8 +5259,8 @@ describe('OpenSpec review state', () => {
       t,
       NOW,
     )
-    expect(units.map((unit) => unit.label)).toEqual(['spec review running - attempt 2'])
-    expect(units[0]).toMatchObject({ tone: 'info', spinning: true })
+    expect(units.map((unit) => unit.label)).toEqual(['AI spec review running · 2'])
+    expect(units[0]).toMatchObject({ dot: 'ongoing', spinning: true })
   })
 
   it('names the reviewed task unit and keeps the spinner off while waiting', () => {
@@ -5249,9 +5276,9 @@ describe('OpenSpec review state', () => {
       since: '2026-11-05T16:00:00',
     }
     const running = reviewUnits(summary(), [tasks], t, NOW)
-    expect(running[1]).toMatchObject({ label: 'reviewing tasks - 2. Lane A', spinning: true })
+    expect(running[1]).toMatchObject({ label: 'AI task review · 2. Lane A', spinning: true })
     const waiting = reviewUnits(summary(), [{ ...tasks, state: 'waiting' }], t, NOW)
-    expect(waiting[1]).toMatchObject({ label: 'waiting for the live review run' })
+    expect(waiting[1]).toMatchObject({ label: 'Waiting for the AI reviewer' })
     expect(waiting[1]).not.toHaveProperty('spinning')
   })
 
@@ -5268,19 +5295,21 @@ describe('OpenSpec review state', () => {
     }
     const running = reviewUnits(summary(), [integration], t, NOW)
     expect(running.map((unit) => unit.label)).toEqual([
-      'spec PASS',
-      'integration review running - attempt 1',
+      'AI spec review passed',
+      'AI code review · 1',
     ])
-    expect(running[1]).toMatchObject({ tone: 'info', spinning: true })
+    expect(running[1]).toMatchObject({ dot: 'ongoing', spinning: true })
     const waiting = reviewUnits(summary(), [{ ...integration, state: 'waiting' }], t, NOW)
     expect(waiting[1]).toMatchObject({
-      label: 'waiting for the live review run',
+      label: 'Waiting for the AI reviewer',
     })
     expect(waiting[1]).not.toHaveProperty('spinning')
     // A settled integration verdict adds no new settled unit: the card keeps
     // exactly its spec label once the live entry is gone.
     expect(reviewUnits(summary(), [], t, NOW)).toEqual(reviewUnits(summary(), undefined, t, NOW))
-    expect(reviewUnits(summary(), [], t, NOW).map((unit) => unit.label)).toEqual(['spec PASS'])
+    expect(reviewUnits(summary(), [], t, NOW).map((unit) => unit.label)).toEqual([
+      'AI spec review passed',
+    ])
     // A live unit still renders without any static review field.
     const liveOnly = reviewUnits(
       undefined,
@@ -5300,7 +5329,7 @@ describe('OpenSpec review state', () => {
       NOW,
     )
     expect(liveOnly).toHaveLength(1)
-    expect(liveOnly[0]).toMatchObject({ tone: 'info', spinning: true })
+    expect(liveOnly[0]).toMatchObject({ dot: 'ongoing', spinning: true })
   })
 
   it('decodes a valid review field, drops a malformed one, and ignores an absent one', () => {

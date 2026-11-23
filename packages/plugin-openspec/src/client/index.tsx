@@ -87,6 +87,7 @@ import {
   requestChange,
   requestChangeList,
   requestLiveReviews,
+  reviewCoverageUnit,
   reviewUnits,
   type SegmentStorage,
   settledReviews,
@@ -294,21 +295,24 @@ const EN: Record<string, string> = {
   'markdown.copy': 'Copy',
   'markdown.copied': 'Copied',
   'markdown.footnotes': 'Footnotes',
-  'review.specPass': 'spec PASS',
-  'review.specOutdated': 'spec outdated',
-  'review.specFindings': 'spec findings',
-  'review.specError': 'spec error',
-  'review.specMissing': 'spec not reviewed',
-  'review.coverage': 'review',
-  'review.running': 'spec review running - attempt',
-  'review.tasksUnit': 'reviewing tasks',
-  'review.integrationUnit': 'integration review running - attempt',
-  'review.waiting': 'waiting for the live review run',
-  'review.passTooltip': 'Whole-spec review PASS by',
+  'review.specPass': 'AI spec review passed',
+  'review.specOutdated': 'AI spec review outdated',
+  'review.specFindings': 'AI spec review',
+  'review.findings': 'findings',
+  'review.specError': 'AI spec review failed',
+  'review.specMissing': 'AI spec review not run',
+  'review.coverage': 'tasks reviewed',
+  'review.running': 'AI spec review running ·',
+  'review.tasksUnit': 'AI task review',
+  'review.integrationUnit': 'AI code review ·',
+  'review.waiting': 'Waiting for the AI reviewer',
+  'review.passTooltip': 'AI spec review of the plan ·',
   'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
-  'review.missingTooltip': 'No portable task-review PASS for',
+  'review.missingTooltip': 'No AI review yet for tasks',
+  'review.missingSpecTooltip':
+    'Starts when the turn ends, or ask the agent to start it. Archive needs it',
   'review.liveTooltip': 'Started',
-  'review.waitTooltip': 'Waiting for the live review run',
+  'review.waitTooltip': 'Waiting for the AI reviewer to start',
 }
 
 type Translate = (key: string) => string
@@ -1650,8 +1654,8 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
   const complete = isComplete(row)
   const updated = relativeLabel(row.modified, props.now)
   const units = reviewUnits(row.review, props.live, t, props.now)
-  // Settled task-review coverage is a count; its missing tasks stay in the tooltip.
-  const tasks = row.review?.tasks
+  // Settled task-review coverage is a count with a state; its missing tasks stay in the tooltip.
+  const coverage = reviewCoverageUnit(row.review?.tasks, t)
   const purpose = summaryText(row.why ?? row.summary) === null ? null : (row.why ?? row.summary)
   return (
     // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
@@ -1703,11 +1707,12 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
           </span>
           {row.totalTasks > 0 ? null : <span>{t('change.tasksNotWritten')}</span>}
           {units.map((unit, index) => (
-            <span
-              className={`dsh-openspec-change-verdict dsh-openspec-change-verdict-${unit.tone}`}
-              key={`${unit.label}-${String(index)}`}
-            >
-              {unit.spinning === true ? Spinner() : null}
+            <span className="dsh-openspec-change-verdict" key={`${unit.label}-${String(index)}`}>
+              {unit.spinning === true ? (
+                Spinner()
+              ) : (
+                <span className="dsh-openspec-change-state" data-state={unit.dot} />
+              )}
               {unit.tooltip === undefined ? (
                 <span className="dsh-openspec-change-verdict-label">{unit.label}</span>
               ) : (
@@ -1717,15 +1722,11 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
               )}
             </span>
           ))}
-          {tasks === undefined || tasks === null || tasks.checked === 0 ? null : (
-            <span
-              className="dsh-openspec-change-coverage"
-              title={
-                tasks.missing.length === 0
-                  ? undefined
-                  : `${t('review.missingTooltip')}: ${tasks.missing.join(', ')}`
-              }
-            >{`${t('review.coverage')} ${String(tasks.passed)}/${String(tasks.checked)}`}</span>
+          {coverage === null ? null : (
+            <span className="dsh-openspec-change-verdict" title={coverage.tooltip}>
+              <span className="dsh-openspec-change-state" data-state={coverage.dot} />
+              <span className="dsh-openspec-change-verdict-label">{coverage.label}</span>
+            </span>
           )}
         </span>
         <span className="dsh-openspec-change-nav">
@@ -3015,7 +3016,7 @@ export const PANEL_CSS = `
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 2px 10px;
+  gap: 2px 12px;
   min-width: 0;
   font: var(--dsw-font-xxs-12);
   font-variant-numeric: tabular-nums;
@@ -3041,17 +3042,22 @@ export const PANEL_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dsh-openspec-change-verdict-success {
-  color: var(--dsw-alias-state-success-secondary);
+/* A status dot: one shape and one colour vocabulary for the phase and every review state. */
+.dsh-openspec-change-state {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
 }
-.dsh-openspec-change-verdict-warning {
-  color: var(--dsw-alias-state-warn-secondary);
+.dsh-openspec-change-state[data-state='done'] {
+  background: var(--dsw-alias-state-success-primary);
 }
-.dsh-openspec-change-verdict-danger {
-  color: var(--dsw-alias-state-error-primary);
+.dsh-openspec-change-state[data-state='warning'] {
+  background: var(--dsw-alias-state-warn-primary);
 }
-.dsh-openspec-change-verdict-info {
-  color: var(--dsw-alias-state-business-primary);
+.dsh-openspec-change-state[data-state='error'] {
+  background: var(--dsw-alias-state-error-primary);
 }
 /* Artifact entries and actions are one navigation row: text buttons, hover fill. */
 .dsh-openspec-change-nav {

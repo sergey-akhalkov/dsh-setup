@@ -260,29 +260,38 @@ window.__ModuleLoader__.load({
       return entries;
     }
     function reviewSpecUnit(spec, t, now) {
-      if (spec === null) return { label: t("review.specMissing"), tone: "quiet" };
+      if (spec === null) {
+        return {
+          label: t("review.specMissing"),
+          dot: "warning",
+          tooltip: t("review.missingSpecTooltip")
+        };
+      }
       if (spec.verdict === "PASS" && spec.current) {
         const relative = relativeLabel(spec.at, now);
         const reviewer = spec.model === void 0 ? spec.reviewer : `${spec.reviewer} (${spec.model})`;
         return {
           label: t("review.specPass"),
-          tone: "success",
-          tooltip: `${t("review.passTooltip")} ${reviewer}${relative === null ? "" : ` - ${relative}`}`
+          dot: "done",
+          tooltip: `${t("review.passTooltip")} ${reviewer}${relative === null ? "" : ` \xB7 ${relative}`}`
         };
       }
       if (!spec.current) {
-        return { label: t("review.specOutdated"), tone: "warning", tooltip: t("review.staleTooltip") };
+        return { label: t("review.specOutdated"), dot: "warning", tooltip: t("review.staleTooltip") };
       }
       if (spec.verdict === "FINDINGS") {
-        return { label: `${t("review.specFindings")} (${String(spec.findings)})`, tone: "warning" };
+        return {
+          label: `${t("review.specFindings")}: ${String(spec.findings)} ${t("review.findings")}`,
+          dot: "error"
+        };
       }
-      return { label: t("review.specError"), tone: "warning" };
+      return { label: t("review.specError"), dot: "error" };
     }
     function reviewLiveUnit(entry, t, now) {
       if (entry.state === "waiting") {
         return {
           label: t("review.waiting"),
-          tone: "info",
+          dot: "ongoing",
           tooltip: t("review.waitTooltip")
         };
       }
@@ -290,8 +299,8 @@ window.__ModuleLoader__.load({
       const tooltip = `${entry.definition} - ${t("review.liveTooltip")}${relative === null ? "" : ` ${relative}`}`;
       if (entry.unit === "tasks") {
         return {
-          label: `${t("review.tasksUnit")}${entry.label === void 0 ? "" : ` - ${entry.label}`}`,
-          tone: "info",
+          label: `${t("review.tasksUnit")}${entry.label === void 0 ? "" : ` \xB7 ${entry.label}`}`,
+          dot: "ongoing",
           tooltip,
           spinning: true
         };
@@ -299,16 +308,24 @@ window.__ModuleLoader__.load({
       if (entry.unit === "integration") {
         return {
           label: `${t("review.integrationUnit")} ${String(entry.attempt)}`,
-          tone: "info",
+          dot: "ongoing",
           tooltip,
           spinning: true
         };
       }
       return {
         label: `${t("review.running")} ${String(entry.attempt)}`,
-        tone: "info",
+        dot: "ongoing",
         tooltip,
         spinning: true
+      };
+    }
+    function reviewCoverageUnit(tasks, t) {
+      if (tasks === null || tasks === void 0 || tasks.checked === 0) return null;
+      return {
+        label: `${t("review.coverage")} ${String(tasks.passed)}/${String(tasks.checked)}`,
+        dot: tasks.passed === tasks.checked ? "done" : "warning",
+        ...tasks.missing.length === 0 ? {} : { tooltip: `${t("review.missingTooltip")} ${tasks.missing.join(", ")}` }
       };
     }
     function reviewUnits(review, live, t, now = /* @__PURE__ */ new Date()) {
@@ -960,21 +977,23 @@ window.__ModuleLoader__.load({
       "markdown.copy": "Copy",
       "markdown.copied": "Copied",
       "markdown.footnotes": "Footnotes",
-      "review.specPass": "spec PASS",
-      "review.specOutdated": "spec outdated",
-      "review.specFindings": "spec findings",
-      "review.specError": "spec error",
-      "review.specMissing": "spec not reviewed",
-      "review.coverage": "review",
-      "review.running": "spec review running - attempt",
-      "review.tasksUnit": "reviewing tasks",
-      "review.integrationUnit": "integration review running - attempt",
-      "review.waiting": "waiting for the live review run",
-      "review.passTooltip": "Whole-spec review PASS by",
+      "review.specPass": "AI spec review passed",
+      "review.specOutdated": "AI spec review outdated",
+      "review.specFindings": "AI spec review",
+      "review.findings": "findings",
+      "review.specError": "AI spec review failed",
+      "review.specMissing": "AI spec review not run",
+      "review.coverage": "tasks reviewed",
+      "review.running": "AI spec review running \xB7",
+      "review.tasksUnit": "AI task review",
+      "review.integrationUnit": "AI code review \xB7",
+      "review.waiting": "Waiting for the AI reviewer",
+      "review.passTooltip": "AI spec review of the plan \xB7",
       "review.staleTooltip": "The PASS is stale: the change artifacts changed after it",
-      "review.missingTooltip": "No portable task-review PASS for",
+      "review.missingTooltip": "No AI review yet for tasks",
+      "review.missingSpecTooltip": "Starts when the turn ends, or ask the agent to start it. Archive needs it",
       "review.liveTooltip": "Started",
-      "review.waitTooltip": "Waiting for the live review run"
+      "review.waitTooltip": "Waiting for the AI reviewer to start"
     };
     var fallbackTranslate = (key) => EN[key] ?? key;
     var alwaysOpenSession = (select) => select({ openState: "open" });
@@ -1822,7 +1841,7 @@ window.__ModuleLoader__.load({
       const complete = isComplete(row);
       const updated = relativeLabel(row.modified, props.now);
       const units = reviewUnits(row.review, props.live, t, props.now);
-      const tasks = row.review?.tasks;
+      const coverage = reviewCoverageUnit(row.review?.tasks, t);
       const purpose = summaryText(row.why ?? row.summary) === null ? null : row.why ?? row.summary;
       return (
         // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
@@ -1872,25 +1891,14 @@ window.__ModuleLoader__.load({
                     t(`phase.${phase}`)
                   ] }),
                   row.totalTasks > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("change.tasksNotWritten") }),
-                  units.map((unit, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-                    "span",
-                    {
-                      className: `dsh-openspec-change-verdict dsh-openspec-change-verdict-${unit.tone}`,
-                      children: [
-                        unit.spinning === true ? Spinner() : null,
-                        unit.tooltip === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: `${unit.label} - ${unit.tooltip}`, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) })
-                      ]
-                    },
-                    `${unit.label}-${String(index)}`
-                  )),
-                  tasks === void 0 || tasks === null || tasks.checked === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                    "span",
-                    {
-                      className: "dsh-openspec-change-coverage",
-                      title: tasks.missing.length === 0 ? void 0 : `${t("review.missingTooltip")}: ${tasks.missing.join(", ")}`,
-                      children: `${t("review.coverage")} ${String(tasks.passed)}/${String(tasks.checked)}`
-                    }
-                  )
+                  units.map((unit, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-verdict", children: [
+                    unit.spinning === true ? Spinner() : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-state", "data-state": unit.dot }),
+                    unit.tooltip === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: `${unit.label} - ${unit.tooltip}`, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) })
+                  ] }, `${unit.label}-${String(index)}`)),
+                  coverage === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-verdict", title: coverage.tooltip, children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-state", "data-state": coverage.dot }),
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: coverage.label })
+                  ] })
                 ] }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-nav", children: [
                   changeNav({ row, t, onOpenArtifact: props.onOpenArtifact }),
@@ -2844,7 +2852,7 @@ window.__ModuleLoader__.load({
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 2px 10px;
+      gap: 2px 12px;
       min-width: 0;
       font: var(--dsw-font-xxs-12);
       font-variant-numeric: tabular-nums;
@@ -2870,17 +2878,22 @@ window.__ModuleLoader__.load({
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .dsh-openspec-change-verdict-success {
-      color: var(--dsw-alias-state-success-secondary);
+    /* A status dot: one shape and one colour vocabulary for the phase and every review state. */
+    .dsh-openspec-change-state {
+      flex: none;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--dsw-alias-label-tertiary);
     }
-    .dsh-openspec-change-verdict-warning {
-      color: var(--dsw-alias-state-warn-secondary);
+    .dsh-openspec-change-state[data-state='done'] {
+      background: var(--dsw-alias-state-success-primary);
     }
-    .dsh-openspec-change-verdict-danger {
-      color: var(--dsw-alias-state-error-primary);
+    .dsh-openspec-change-state[data-state='warning'] {
+      background: var(--dsw-alias-state-warn-primary);
     }
-    .dsh-openspec-change-verdict-info {
-      color: var(--dsw-alias-state-business-primary);
+    .dsh-openspec-change-state[data-state='error'] {
+      background: var(--dsw-alias-state-error-primary);
     }
     /* Artifact entries and actions are one navigation row: text buttons, hover fill. */
     .dsh-openspec-change-nav {
