@@ -28,9 +28,11 @@ labels and stays only in tooltips where the record itself is discussed.
 
 **D4 — The gutter carries readiness.** One percent over the two counts that produce it —
 `N/T implemented` and `N/T reviewed` — answers "how far is this change?" without a second bar. Every
-task counts twice, once for its checkbox and once for its review `PASS`, so 100% means "can be
-archived", not "code written". The reviewed line keeps the missing task numbers in its tooltip, and
-the facts row loses the reviewed count entirely.
+task counts twice, once for its checkbox and once for its review `PASS`, so 100% means "every task
+is checked and reviewed", not "code written" and not "ready to archive": archive stays a separate
+gate that still needs a current whole-spec PASS. Rounding never reports completion either: while
+either count is below the total the percent stays at most 99. The reviewed line keeps the missing
+task numbers in its tooltip, and the facts row loses the reviewed count entirely.
 
 **D5 — One 12px gap, no fixed column.** The fixed `min-width` on the phase slot bought vertical
 alignment of the review dots but produced a different gap after every short phase label. The gap is

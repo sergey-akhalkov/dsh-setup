@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "clarify-openspec-card-statuses",
+  "scope": "task",
+  "taskId": "e4ade36f4d5ce41b",
+  "digest": "af231cd3476bbd5101a31fdcd82282811814e280cf839c606e4aa7386ae29509",
+  "worktreeDigest": "cd311e92280b21b275252e7c82d3b842f2d9536d42e6b9453a1d46567ca6217f",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-23T19:06:26.547Z"
+}

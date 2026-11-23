@@ -68,7 +68,10 @@ gutter, separated from the card body by a hairline. With task-review state avail
 SHALL state a readiness percent over the two counts that produce it: `N/T implemented` and
 `N/T reviewed`, each with its own status dot and label. Every task MUST count twice in that percent,
 once for being checked in `tasks.md` and once for carrying a task-review `PASS`, so only a change
-that is fully implemented and fully reviewed reads `100%`. Without task-review state the gutter
+that is fully implemented and fully reviewed reads `100%`. While either count is below the total the
+percent MUST read at most `99`, so rounding can never report completion. The percent states task
+completion, not archive eligibility: a `100%` change whose whole-spec `PASS` is missing or stale
+still cannot be archived. Without task-review state the gutter
 SHALL keep stating the completed and total task counts over a `tasks` label, or a dash when no tasks
 are written. The gutter MUST NOT draw a tracking bar.
 
@@ -86,6 +89,16 @@ are written. The gutter MUST NOT draw a tracking bar.
 
 - **WHEN** a change has 16 tasks, every one checked, and 14 carry a portable task-review PASS
 - **THEN** the reviewed line reads `14/16 reviewed` with a warning dot and its tooltip names the two missing task numbers
+
+#### Scenario: Rounding never reports completion
+
+- **WHEN** a change has 100 tasks, every one checked, and 99 carrying a portable PASS
+- **THEN** the gutter reads `99%`, never `100%`
+
+#### Scenario: Readiness is not archive eligibility
+
+- **WHEN** every task is checked and every checked task carries a PASS but the whole-spec PASS is missing or stale
+- **THEN** the gutter reads `100%` and an archive attempt is still refused for the missing whole-spec record
 
 #### Scenario: No task-review state
 
