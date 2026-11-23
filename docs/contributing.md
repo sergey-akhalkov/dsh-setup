@@ -46,6 +46,7 @@ rebuild (`git diff --exit-code` after `pnpm build`, plus `pnpm gen:check`).
 | `pnpm openspec:update --version X.Y.Z`        | Regenerates the vendored OpenSpec core skills and lock from a pinned upstream release                                                 | updating the vendored skills                                                    |
 | `pnpm build`                                  | `tsc -b` Host output + esbuild Client bundles                                                                                         | any `src/**` change                                                             |
 | `pnpm build:watch`                            | Rebuild Host (tsc watch) and Client bundles on change                                                                                 | plugin development loop                                                         |
+| `pnpm dev`                                    | Run the development host: a `dev` profile plus the build watcher and the Web host it owns (`--plugin <name>` links one package)       | plugin development loop                                                         |
 | `pnpm typecheck`                              | `tsc -p tsconfig.check.json` (packages src+test, scripts, DOM/react libs)                                                             | any TS change                                                                   |
 | `pnpm lint` / `pnpm lint:fix` / `pnpm format` | Biome check / autofix / format                                                                                                        | before commit                                                                   |
 | `pnpm test`                                   | Vitest (all `packages/*/test/**` and `scripts/test/**`)                                                                               | any change                                                                      |
@@ -176,16 +177,17 @@ root `README.md` plugin row reflects the plugin's current name, role, and behavi
 ## Plugin development loop (link a workspace package)
 
 ```sh
-dsh --profile dev --from-default-profile web
-dsh plugin --profile dev add link:<absolute path to packages/plugin-<name>>
-pnpm build:watch
+pnpm dev                            # the whole setup, linked from packages/setup
+pnpm dev --plugin plugin-openspec   # one workspace plugin, linked from its package
 ```
 
-Observed behavior on DSH 0.2.1-rc.3 (documented in [plugins.md](plugins.md)): editing
-`src/client/index.tsx` rewrites `lib/client.js` and the Web transport's `rebuilt` frame hot-swaps the
-Client half without a page reload; Host edits (`src/host/index.ts`) apply only on profile
-recomposition (profile patch change) or a Harness restart; the Desktop app picks up rebuilt Client
-bundles only after reopening/restarting. Do not assume both halves hot-reload.
+The command owns the `dev` profile, the build watcher, and the Web host; it prints the resolved Harness
+CLI line and the page URL, reconciles a reused profile, and writes only its own `hmr` entry and
+recomposition trigger. Observed on DSH 0.2.2-rc.5 (live verification, documented in
+[plugins.md](plugins.md)): a Client edit swaps the page through `/plugins/events` without a reload (0.23 s
+plugin mode, 2.31 s setup mode), and a Host edit applies in place through a profile recomposition
+(3.67 s, 5.90 s in setup mode) with the session alive. The restart path is only the fallback when the
+trigger cannot be written.
 
 **Applying a change to the live profile.** Check the profile's `dependencies."@dsh-setup/setup"` in
 the Harness home (`profiles/<name>/package.json`). A `link:` spec means the app reads this checkout:

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -13,6 +13,7 @@ import {
   SETUP_PATCH_FILE,
   validateDefaultsTargets,
   validateSetupManifest,
+  writeGenerated,
 } from '../lib/generate.ts'
 import { HINDSIGHT_PACKAGE } from '../lib/hindsight.ts'
 import { validatePackageManifest } from '../lib/manifest.ts'
@@ -418,6 +419,26 @@ describe('generated-file drift', () => {
       expect(report.missing).toEqual([join(dir, 'missing.txt')])
       expect(report.changed).toEqual([changed])
       expect(report.unexpected).toEqual([unexpected])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('writeGenerated', () => {
+  it('leaves a byte-identical file untouched so its timestamp survives', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-generate-'))
+    try {
+      const vendorRoot = join(dir, 'vendor')
+      mkdirSync(vendorRoot, { recursive: true })
+      const file = join(vendorRoot, 'bundle.js')
+      writeGenerated(new Map([[file, Buffer.from('same')]]), vendorRoot)
+      const older = new Date(Date.now() - 60_000)
+      utimesSync(file, older, older)
+      writeGenerated(new Map([[file, Buffer.from('same')]]), vendorRoot)
+      expect(Math.abs(statSync(file).mtimeMs - older.getTime())).toBeLessThan(5)
+      writeGenerated(new Map([[file, Buffer.from('changed')]]), vendorRoot)
+      expect(statSync(file).mtimeMs).toBeGreaterThan(older.getTime())
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

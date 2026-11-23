@@ -815,30 +815,39 @@ and the plugin never writes `.dsh/workflows/`.
 
 ## Development loop
 
-Install the workspace package into a dedicated profile as a link, so the Harness loads the
-checked-out files instead of a copy:
+One command owns a dedicated `dev` profile, the build watcher, and the Web host it starts:
 
 ```sh
-dsh --profile dev --from-default-profile web
-dsh plugin --profile dev add link:<absolute path to packages/plugin-<name>>
-pnpm build --watch
+pnpm dev                            # the whole setup, linked from packages/setup
+pnpm dev --plugin plugin-openspec   # one workspace plugin, linked from its package
 ```
 
-Observed behavior on DSH 0.2.1-rc.3 (Web boot of a throwaway `dev`
-profile with the plugin installed as a `link:`):
+The command resolves the Harness CLI in one order (`DSH_CLI`, then an installed Harness command line,
+then `pnpm dlx @deepseek-ai/dsh@<runtime>`), prints that line together with the version the command
+reports (which can differ from the `dsh.json` runtime the download fallback would install), creates
+`profiles/dev` from the shipped `web` template when it is absent (or on `--refresh`), reconciles the
+managed selection it installed earlier, links the requested package, and prints the page URL. It writes only the development profile:
+the `hmr` patch entry and the recomposition trigger it owns. The `desktop` profile is never read or
+written.
 
-- **The Client half reloads without a page reload or Host restart.** Editing
-  `src/client/index.tsx` makes `pnpm build --watch` rewrite `lib/client.js`; the client-HMR transport
-  then reports the new bundle revision on `/plugins/events` (a `rebuilt` frame naming the package and
-  its new revision). An open Web page swaps the rebuilt bundle and remounts the plugin with fresh
-  state; the page is not reloaded.
-- **The Host half applies on the next profile recomposition, not when its file is written.** Editing
-  `src/host/index.ts` makes the TypeScript watch rewrite `lib/index.js`, but the running Host keeps
-  the loaded module. Changing the profile's `cordis.patch.yml` recomposes the profile, replaces the
-  linked package's module, and runs `apply` again; restarting the Harness also applies the new code.
-- **The Desktop app uses neither of these paths for the Client half.** The `rebuilt` frame is
-  delivered over the Web transport; a Desktop window picks up rebuilt Client bundles only after it is
-  reopened or the app is restarted.
+Observed behavior on DSH 0.2.2-rc.5 (installed Desktop CLI, throwaway `DSH_HOME`, live verification
+2026-11-23):
 
-So the Client half is the half with true hot replacement; treat Host changes as requiring a profile
-recomposition (or a restart) rather than assuming both halves reload.
+| change                               | reaches the running host                                                         | session  |
+| ------------------------------------ | -------------------------------------------------------------------------------- | -------- |
+| Client source (`src/client/**`)      | page swaps through `/plugins/events` (0.23 s plugin mode, 2.31 s setup mode)     | survives |
+| Host source (`src/host/**`)          | profile recomposition replaces the linked module in place (3.67 s, 5.90 s setup) | survives |
+| new plugin, bundle selection, config | rerun the command, or `--refresh` to recreate the profile                        | restarts |
+
+Setup mode runs `pnpm gen` before the host boots and after each plugin rebuild, because the linked setup
+loads the vendored copies under `packages/setup/node_modules`; the recomposition replaces those vendored
+modules too, so a Host edit still applies in place instead of restarting the host.
+
+The `hmr` module-watch root configured in the profile was not delivered by the installed Desktop CLI, so
+the command writes a profile-patch trigger after every Host rebuild; treat that write as the apply point.
+The restart path is the fallback when the trigger cannot be written.
+
+A failed Host replacement stays inactive until the next successful rebuild; the host keeps running and
+does not print the failure itself, so watch the page, fix the error, and let the next rebuild recover it.
+A Client swap drops the plugin's React state. Interrupting the command stops its host and watcher trees;
+remove the profile with `Remove-Item ~/.dsh/profiles/dev` (or wherever `DSH_HOME` pointed).

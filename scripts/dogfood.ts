@@ -13,6 +13,7 @@ import {
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { parse } from 'yaml'
+import { resolveDshCli } from './lib/cli.ts'
 import {
   checkBundleSelection,
   checkOwnerRowsPreserved,
@@ -133,36 +134,6 @@ function hashFile(path: string): string | undefined {
     : undefined
 }
 
-function resolveDshCli(home: string, runtimeVersion: string): string {
-  const override = process.env.DSH_CLI?.trim()
-  if (override !== undefined && override !== '') {
-    if (existsSync(override)) return override
-    return wrapCli(home, override)
-  }
-  const localAppData = process.env.LOCALAPPDATA
-  if (localAppData !== undefined && localAppData !== '') {
-    const installed = join(
-      localAppData,
-      'Programs',
-      'DeepSeek Harness',
-      'resources',
-      'runtime',
-      'cli',
-      'bin',
-      'dsh.cmd',
-    )
-    if (existsSync(installed)) return installed
-  }
-  return wrapCli(home, `pnpm dlx @deepseek-ai/dsh@${runtimeVersion}`)
-}
-
-/** The installer accepts one executable path; wrap a command line with arguments in a .cmd. */
-function wrapCli(home: string, commandLine: string): string {
-  const wrapper = join(home, 'dsh-cli.cmd')
-  writeFileSync(wrapper, `@echo off\r\n${commandLine} %*\r\n`, 'utf8')
-  return wrapper
-}
-
 function isInside(parent: string, candidate: string): boolean {
   const path = relative(resolve(parent), resolve(candidate))
   if (path === '') return true
@@ -278,7 +249,7 @@ function main(): number {
   // bin directory; project operations must not inherit that arrangement.
   delete env.PNPM_HOME
 
-  const cli = resolveDshCli(home, versions.runtime)
+  const cli = resolveDshCli(versions.runtime, { home }).executable
   const dump = (): string => {
     const result = shellCommand(
       `${quote(cli)} ${['--profile', DOGFOOD_PROFILE, '--dump-config'].map(quote).join(' ')}`,

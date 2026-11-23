@@ -454,13 +454,29 @@ export function diffGenerated(expected: GeneratedFiles, scanRoots: string[]): Dr
   return report
 }
 
-/** Write every generated file, then remove vendored files the generation no longer lists. */
-export function writeGenerated(expected: GeneratedFiles): number {
+/**
+ * Write every generated file, then remove vendored files the generation no
+ * longer lists. `vendorRoot` is injectable so a test can never prune the real
+ * setup tree.
+ */
+export function writeGenerated(
+  expected: GeneratedFiles,
+  vendorRoot: string = SETUP_VENDOR_DIR,
+): number {
   for (const [path, content] of expected) {
+    let unchanged = false
+    try {
+      unchanged = readFileSync(path).equals(content)
+    } catch {
+      // A missing file is written below.
+    }
+    // Byte-identical output keeps its timestamp, so a Client bundle nothing
+    // rebuilt does not get a new revision in the watcher's view.
+    if (unchanged) continue
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, content)
   }
-  for (const file of walkFiles(SETUP_VENDOR_DIR)) {
+  for (const file of walkFiles(vendorRoot)) {
     if (!expected.has(file)) rmSync(file)
   }
   return expected.size

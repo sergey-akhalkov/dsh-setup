@@ -1124,3 +1124,21 @@ gate result with its numbers. `7ff3395`..`4f6559e` carry the work; the re-run gi
 plus whole-spec and integration `PASS`. The change is archived as
 `2026-11-22-add-english-huashu-design-catalog` with the `packaged-skills` delta synced (`English
 catalog adapter for a Chinese-only third-party skill`); the owner release follows.
+
+## add-plugin-dev-loop (2026-11-23)
+
+**A one-command development loop for plugins.** `pnpm dev` prepares a `dev` profile (links
+`packages/setup`; `--plugin <name>` links one workspace package), starts the build watcher and the Web
+host it owns, prints the resolved Harness CLI line with the version it reports, and prints the page URL.
+It reconciles a reused profile — removing the managed selection the requested mode does not want and
+rewriting only the `hmr` patch entry it owns — and it never reads or writes the `desktop` profile. After
+every Host rebuild it writes a standalone profile-patch trigger, so the change applies in place; the
+restart path exists only for a failed trigger write. Live verification on DSH 0.2.2-rc.5 with the
+installed Desktop CLI: the client `rebuilt` frame arrived after 0.23 s (plugin mode) and 2.31 s (setup
+mode); the Host applied in place after 3.67 s and 5.90 s with one boot banner; recovery after a broken
+build took 3.84 s; a failed replacement stays inactive and the Host prints no diagnostic of its own,
+which the spec records as Host-owned. The full gate ran on a clean tree: 3242/3242 tests,
+`validate:repo` scanned 1392 files and `gen:check` matched 686 generated files. The change is filed as
+`2026-11-23-add-plugin-dev-loop` with the new `dev-loop` capability synced (five requirements).
+Local working copies that still hold the ignored `.agents/worktrees` or `.huashu-design` directories
+fail the scans (issues #15 and #17).
