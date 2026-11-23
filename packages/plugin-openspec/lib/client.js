@@ -1803,7 +1803,8 @@ window.__ModuleLoader__.load({
             t: props.t,
             now: props.now,
             archived: true,
-            onOpen: (name) => props.onOpenChange(name, true)
+            onOpen: (name) => props.onOpenChange(name, true),
+            onOpenArtifact: (kind) => props.onOpenArtifact(row.name, true, kind)
           })
         ) })
       ] });
@@ -1859,7 +1860,7 @@ window.__ModuleLoader__.load({
           {
             role: "button",
             tabIndex: 0,
-            className: `dsh-openspec-change-row${progress === null ? "" : " dsh-openspec-change-row-progress"}`,
+            className: `dsh-openspec-change-row${row.review === void 0 ? "" : " dsh-openspec-change-row-progress"}`,
             onClick: () => props.onOpen(row.name),
             onKeyDown: (event) => {
               if (event.target !== event.currentTarget) return;
@@ -1868,7 +1869,7 @@ window.__ModuleLoader__.load({
               props.onOpen(row.name);
             },
             children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter", children: progress === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter", children: row.review === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                   "span",
                   {
@@ -1879,6 +1880,9 @@ window.__ModuleLoader__.load({
                     ] }) : "\u2014"
                   }
                 ),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
+              ] }) : progress === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent", children: "\u2014" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
               ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
@@ -1999,7 +2003,7 @@ window.__ModuleLoader__.load({
           {
             role: "button",
             tabIndex: 0,
-            className: "dsh-openspec-change-row dsh-openspec-card-archived",
+            className: "dsh-openspec-change-row dsh-openspec-change-row-progress dsh-openspec-card-archived",
             onClick: () => props.onOpen(row.name),
             onKeyDown: (event) => {
               if (event.target !== event.currentTarget) return;
@@ -2009,16 +2013,10 @@ window.__ModuleLoader__.load({
             },
             children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-gutter", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                  "span",
-                  {
-                    className: `dsh-openspec-change-count${row.totalTasks > 0 ? "" : " dsh-openspec-change-count-none"}`,
-                    children: row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-                      String(row.completedTasks),
-                      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-count-total", children: `/${String(row.totalTasks)}` })
-                    ] }) : "\u2014"
-                  }
-                ),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent", children: row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                  String(row.completedTasks),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent-unit", children: `/${String(row.totalTasks)}` })
+                ] }) : "\u2014" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-body", children: [

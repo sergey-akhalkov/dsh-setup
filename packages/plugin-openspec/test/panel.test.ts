@@ -2158,6 +2158,47 @@ describe('OpenSpec root view', () => {
     expect(nodes(card).filter((node) => node.type === 'button')).toHaveLength(0)
   })
 
+  it('opens an archived artifact from the Archive segment', () => {
+    const onOpenArtifact = vi.fn()
+    const archivedRow = row(
+      '2026-10-27-add-admin-indicator',
+      'complete',
+      5,
+      5,
+      { proposal: true, design: true, tasks: true, specs: 1 },
+      {
+        archived: true,
+        archivedAt: '2026-10-27',
+        summary: 'Add the admin indicator to the app.',
+        commit: COMMIT,
+        phase: 'archived',
+      },
+    )
+    const tree = RootView(
+      rootProps({
+        segment: 'archive',
+        changes: { phase: 'ready', value: listOf([], [archivedRow], { archived: 1 }) },
+        onOpenArtifact,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const buttons = nodes(card).filter((node) => node.type === 'button')
+    expect(buttons.map((node) => textOf(node))).toEqual(['proposal', 'design', 'specs', 'tasks 5'])
+    const stop = vi.fn()
+    const first = buttons[0]
+    if (first === undefined) throw new Error('artifact button missing')
+    ;(first.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: stop,
+    })
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(onOpenArtifact).toHaveBeenLastCalledWith(
+      '2026-10-27-add-admin-indicator',
+      true,
+      'proposal',
+    )
+  })
+
   it('disables Archive on an incomplete change and names its gate', () => {
     const onArchiveChange = vi.fn()
     const working = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, { phase: 'applying' })
@@ -5086,6 +5127,26 @@ describe('OpenSpec panel visual contract', () => {
     if (plainCard === undefined) throw new Error('card missing')
     expect(textOf(plainCard)).not.toContain('%')
     expect(textOf(plainCard)).toContain('0/12')
+    // A reviewed change with no tasks keeps the wide readiness block and states a dash.
+    const empty = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'no-tasks', 0, 0, EMPTY_PRESENCE, {
+              phase: 'planning',
+              review: { spec: null, tasks: { checked: 0, passed: 0, missing: [] } },
+            }),
+          ]),
+        },
+        now: NOW,
+      }),
+    )
+    const emptyCard = cardButtons(empty)[0]
+    if (emptyCard === undefined) throw new Error('card missing')
+    expect(String(emptyCard.props.className)).toContain('dsh-openspec-change-row-progress')
+    expect(textOf(emptyCard)).toContain('—')
+    expect(textOf(emptyCard)).not.toContain('implemented')
   })
 
   it('keeps a long live-review fact on one line with its full text in the tooltip', () => {

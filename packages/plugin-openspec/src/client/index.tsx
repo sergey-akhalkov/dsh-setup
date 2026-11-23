@@ -41,7 +41,6 @@ import {
   type CapabilitySummary,
   type ChangeDetail,
   type ChangeListResponse,
-  type ChangePresence,
   type ChangeRow,
   canOpenOpenSpec,
   capabilityAddress,
@@ -1569,6 +1568,7 @@ function archiveBody(rows: readonly ChangeRow[], props: RootViewProps): ReactNod
               now: props.now,
               archived: true,
               onOpen: (name) => props.onOpenChange(name, true),
+              onOpenArtifact: (kind) => props.onOpenArtifact(row.name, true, kind),
             }),
           )}
         </div>
@@ -1663,7 +1663,7 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
     <div
       role="button"
       tabIndex={0}
-      className={`dsh-openspec-change-row${progress === null ? '' : ' dsh-openspec-change-row-progress'}`}
+      className={`dsh-openspec-change-row${row.review === undefined ? '' : ' dsh-openspec-change-row-progress'}`}
       onClick={() => props.onOpen(row.name)}
       onKeyDown={(event) => {
         // A nested button handles its own Enter/Space; only the row itself opens.
@@ -1674,7 +1674,7 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
       }}
     >
       <span className="dsh-openspec-change-gutter">
-        {progress === null ? (
+        {row.review === undefined ? (
           <>
             <span
               className={`dsh-openspec-change-count${row.totalTasks > 0 ? '' : ' dsh-openspec-change-count-none'}`}
@@ -1688,6 +1688,11 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
                 '—'
               )}
             </span>
+            <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
+          </>
+        ) : progress === null ? (
+          <>
+            <span className="dsh-openspec-change-percent">—</span>
             <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
           </>
         ) : (
@@ -1810,7 +1815,7 @@ function archivedChangeCard(props: ChangeCardProps): ReactNode {
     <div
       role="button"
       tabIndex={0}
-      className="dsh-openspec-change-row dsh-openspec-card-archived"
+      className="dsh-openspec-change-row dsh-openspec-change-row-progress dsh-openspec-card-archived"
       onClick={() => props.onOpen(row.name)}
       onKeyDown={(event) => {
         // A nested button handles its own Enter/Space; only the row itself opens.
@@ -1821,13 +1826,11 @@ function archivedChangeCard(props: ChangeCardProps): ReactNode {
       }}
     >
       <span className="dsh-openspec-change-gutter">
-        <span
-          className={`dsh-openspec-change-count${row.totalTasks > 0 ? '' : ' dsh-openspec-change-count-none'}`}
-        >
+        <span className="dsh-openspec-change-percent">
           {row.totalTasks > 0 ? (
             <>
               {String(row.completedTasks)}
-              <span className="dsh-openspec-change-count-total">{`/${String(row.totalTasks)}`}</span>
+              <span className="dsh-openspec-change-percent-unit">{`/${String(row.totalTasks)}`}</span>
             </>
           ) : (
             '—'
@@ -2028,62 +2031,6 @@ function CommitFactView(props: {
       )}
     </span>
   )
-}
-
-/** Quiet artifact facts for a change card: kinds, delta, and requirement count. */
-function presenceFacts(
-  presence: ChangePresence | undefined,
-  t: Translate,
-  counts: { readonly requirements: number },
-  onOpen?: (kind: ArtifactKind) => void,
-): ReactNode[] {
-  if (presence === undefined) return []
-  const facts: { readonly kind: ArtifactKind; readonly label: string; readonly suffix?: string }[] =
-    []
-  if (presence.proposal) facts.push({ kind: 'proposal', label: t('presence.proposal') })
-  if (presence.design) facts.push({ kind: 'design', label: t('presence.design') })
-  if (presence.specs > 0) {
-    facts.push({
-      kind: 'specs',
-      label: presence.specs === 1 ? t('presence.spec') : t('presence.specs'),
-      ...(counts.requirements > 0
-        ? { suffix: `${String(counts.requirements)} ${t('specs.req')}` }
-        : {}),
-    })
-  }
-  if (presence.tasks) facts.push({ kind: 'tasks', label: t('presence.tasks') })
-  return facts.map((fact) => {
-    const tag = (
-      <Tag tone="quiet" className="dsh-openspec-artifact-tag">
-        {fact.label}
-        {fact.suffix === undefined ? null : (
-          <span className="dsh-openspec-artifact-count">{fact.suffix}</span>
-        )}
-      </Tag>
-    )
-    if (onOpen === undefined) return <span key={fact.kind}>{tag}</span>
-    return (
-      // biome-ignore lint/a11y/useSemanticElements: an artifact tag is a card-internal link; the row stays the primary activation.
-      <span
-        key={fact.kind}
-        role="button"
-        tabIndex={0}
-        className="dsh-openspec-artifact-link"
-        onClick={(event) => {
-          event.stopPropagation()
-          onOpen(fact.kind)
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return
-          event.preventDefault()
-          event.stopPropagation()
-          onOpen(fact.kind)
-        }}
-      >
-        {tag}
-      </span>
-    )
-  })
 }
 
 export interface ChangeViewProps {
