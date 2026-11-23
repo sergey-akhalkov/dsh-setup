@@ -2855,6 +2855,7 @@ window.__ModuleLoader__.load({
       display: flex;
       flex-direction: column;
       align-items: flex-start;
+      justify-content: center;
       gap: 4px;
       min-width: 0;
       padding: 10px;
