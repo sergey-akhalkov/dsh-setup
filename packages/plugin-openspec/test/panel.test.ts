@@ -5316,6 +5316,8 @@ describe('OpenSpec review state', () => {
     expect(changeProgress(row(0, 9, 0))?.percent).toBe(0)
     expect(changeProgress(row(9, 9, 9))?.percent).toBe(100)
     expect(changeProgress(row(9, 9, 0))?.percent).toBe(50)
+    // Rounding must never show 100 while one review is still missing.
+    expect(changeProgress(row(100, 100, 99))?.percent).toBe(99)
     // A lowered numerator can never pass a fully reviewed change.
     expect(changeProgress(row(9, 9, 12))?.reviewed).toBe(9)
     expect(changeProgress({ completedTasks: 0, totalTasks: 0 })).toBeNull()

@@ -648,8 +648,11 @@ export function changeProgress(row: {
   if (total <= 0 || tasks === null || tasks === undefined) return null
   const implemented = Math.min(Math.max(row.completedTasks, 0), total)
   const reviewed = Math.min(Math.max(tasks.passed, 0), total)
+  const complete = implemented === total && reviewed === total
+  // 100 is reserved for a finished change: rounding must not hide one missing review.
+  const partial = Math.min(99, Math.round(((implemented + reviewed) / (total * 2)) * 100))
   return {
-    percent: Math.round(((implemented + reviewed) / (total * 2)) * 100),
+    percent: complete ? 100 : partial,
     implemented,
     reviewed,
     total,

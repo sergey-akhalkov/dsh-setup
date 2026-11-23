@@ -326,8 +326,10 @@ window.__ModuleLoader__.load({
       if (total <= 0 || tasks === null || tasks === void 0) return null;
       const implemented = Math.min(Math.max(row.completedTasks, 0), total);
       const reviewed = Math.min(Math.max(tasks.passed, 0), total);
+      const complete = implemented === total && reviewed === total;
+      const partial = Math.min(99, Math.round((implemented + reviewed) / (total * 2) * 100));
       return {
-        percent: Math.round((implemented + reviewed) / (total * 2) * 100),
+        percent: complete ? 100 : partial,
         implemented,
         reviewed,
         total,
