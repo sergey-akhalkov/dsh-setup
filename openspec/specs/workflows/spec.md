@@ -339,7 +339,7 @@ A `human` step SHALL ask the user through the user-questions service with a boun
 
 ### Requirement: Turn-close gate
 
-When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the close SHALL be refused, and while every due unit has a live review it SHALL be allowed as a waiting close with no `VIOLATION` and no message. A review run whose recorded change has been archived MUST NOT hold the close: its failed or blocked review is not a due unit. An unresolved run MUST be settled cancelled once instead of being advanced into a review, so it releases its slot without recording a failed attempt; a terminal run MUST stay unchanged. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
+When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the engine SHALL record no pass and no `VIOLATION` and MUST keep the run open. Every review refusal shall be steered under one per-turn delivery bound of `maxBlocks`: while the bound is not reached the engine SHALL submit the refusal and hold the turn open; once it is reached the engine SHALL submit no further review refusal in that turn, MUST NOT hold the turn for the review obligation, and MUST continue evaluating every unrelated obligation (verification, checkpoint, completion, settled verdicts) under its own rules. Ending the turn after the bound MUST NOT release, settle, cancel, or close the review run; the next turn SHALL evaluate it again and submit its own bounded refusal. While every due unit has a live review the close SHALL be allowed as a waiting close with no `VIOLATION` and no message. A review run whose recorded change has been archived MUST NOT hold the close: its failed or blocked review is not a due unit. An unresolved run MUST be settled cancelled once instead of being advanced into a review, so it releases its slot without recording a failed attempt; a terminal run MUST stay unchanged. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
 
 A user stop SHALL win over the gate: when the turn's abort signal is set, the gate MUST NOT start a
 review, persist an outcome, or submit a message, and a message it already submitted SHALL be removed
@@ -358,7 +358,37 @@ from the agent inbox when that signal aborts, so no queued gate message resumes 
 #### Scenario: Review close has no cap
 
 - **WHEN** a due review unit has no live review at the turn stop
-- **THEN** the close is refused regardless of prior refusals, no `VIOLATION` is recorded for the review, and a round starts only for a unit whose current digest and coverage are not already settled
+- **THEN** the close is never recorded as a pass or a `VIOLATION` regardless of prior refusals, the run stays open, and a round starts only for a unit whose current digest and coverage are not already settled
+
+#### Scenario: Review refusals are bounded per turn
+
+- **WHEN** the model attempts the close more than `maxBlocks` times in one turn while a due review unit has no live review, a review start keeps failing, a settled verdict stays due, or the review status is unavailable and the owned-review fallback refuses
+- **THEN** every attempt leaves the run open, exactly `maxBlocks` review-refusal messages are submitted for that turn across every review-refusal steer site, no later attempt submits a review-refusal message, no `VIOLATION` is recorded for a review obligation, and the turn may end after the bound
+
+#### Scenario: A failed review start stays retryable
+
+- **WHEN** the review refusal bound is reached while the latest review start has failed
+- **THEN** the next turn retries the start under a fresh bound, and the failed start still keeps the unit due and the run open
+
+#### Scenario: An unavailable review status is never released
+
+- **WHEN** the owned-review fallback refuses because the review status is unavailable and the bound is reached
+- **THEN** the unit stays due, no `VIOLATION` is recorded, the turn may end, and the next turn refuses again under its own bound
+
+#### Scenario: An unrelated obligation still holds the turn
+
+- **WHEN** the review refusal bound is reached while a verification, checkpoint, or completion obligation is also open
+- **THEN** the review submits no message but that other obligation is still evaluated and applies its own reference and hold rules
+
+#### Scenario: An ended turn does not release the run
+
+- **WHEN** a turn ends after the review refusal bound with the run still open
+- **THEN** the run is unchanged, it is not settled, cancelled, or closed, and the next turn evaluates it again
+
+#### Scenario: A new turn restores the review refusal delivery
+
+- **WHEN** a later turn attempts its first close while a due review unit still has no live review
+- **THEN** the refusal text is submitted once again and the close is refused
 
 #### Scenario: An archived change's run does not hold the close
 
@@ -1568,17 +1598,17 @@ checked task. The workflow SHALL start every due unit of a change in one pass, i
 
 ### Requirement: Owned completion coverage
 
-When the session's tick completes the change's task list, the owned task-review gate SHALL require a portable PASS for every checked task in the change, including tasks this session did not attribute. A missing or `ERROR` record MUST refuse the turn close, except that when every checked task still missing a portable `PASS` has a live review, the close SHALL be allowed as the silent waiting close with no steer and no `VIOLATION`, while completion and the archive remain blocked. Only an intermediate turn that does not complete the list MAY close on `ERROR`.
+When the session's tick completes the change's task list, the owned task-review gate SHALL require a portable PASS for every checked task in the change, including tasks this session did not attribute. A missing or `ERROR` record MUST keep completion and the archive blocked and the close unapproved, except that when every checked task still missing a portable `PASS` has a live review, the close SHALL be allowed as the silent waiting close with no steer and no `VIOLATION`, while completion and the archive remain blocked. Its refusal delivery SHALL obey the per-turn review delivery bound, after which the turn MAY end with completion still blocked. Only an intermediate turn that does not complete the list MAY close on `ERROR`.
 
 #### Scenario: Final tick with an unapproved foreign task is refused
 
 - **WHEN** the session's tick completes the task list, an earlier checked task from another session has no portable `PASS`, and that task's review is not live
-- **THEN** the turn close is refused and the steer names that task and its review call
+- **THEN** the close stays unapproved and the steer names that task and its review call
 
 #### Scenario: Final tick with an ERROR foreign task is refused
 
 - **WHEN** the session's tick completes the task list and an earlier checked foreign task has only an `ERROR` record with no live review
-- **THEN** the turn close is refused because `ERROR` is not a portable `PASS`
+- **THEN** the close stays unapproved because `ERROR` is not a portable `PASS`
 
 #### Scenario: Final tick waits on a live review
 
@@ -3256,14 +3286,7 @@ limit SHALL defer an attempt as a transient failure, not as an engine queue.
 
 ### Requirement: Waiting close for a live review
 
-While every due review unit has a live review run, the turn close SHALL be allowed as a waiting
-close and MUST NOT submit any steering, follow-up, or injected message to the agent: the turn ends so
-the asynchronous verdict can start the next one. The close MUST record no `VIOLATION`. Only a current
-`PASS` SHALL end a unit's obligation; `FINDINGS`, `ERROR`, and a failed start leave it due. A due unit
-whose current digest and covered task set carry a settled `FINDINGS` or terminal `ERROR` SHALL keep
-the close refused and name the verdict and the explicit fresh-round action. A run that only has a
-pending review step with no executor MUST NOT make the waiting close. The close MUST NOT be released
-by a refusal budget while a unit is due and no review is live.
+While every due review unit has a live review run, the turn close SHALL be allowed as a waiting close and MUST NOT submit any steering, follow-up, or injected message to the agent: the turn ends so the asynchronous verdict can start the next one. The close MUST record no `VIOLATION`. Only a current `PASS` SHALL end a unit's obligation; `FINDINGS`, `ERROR`, and a failed start leave it due. A due unit whose current digest and covered task set carry a settled `FINDINGS` or terminal `ERROR` SHALL keep the close unapproved and name the verdict and the explicit fresh-round action; its refusal is steered under the per-turn review delivery bound, and after that bound the turn MAY end while the unit stays due. A run that only has a pending review step with no executor MUST NOT make the waiting close. The close MUST NOT be approved by a refusal budget while a unit is due and no review is live.
 
 #### Scenario: Waiting close is allowed
 
@@ -3283,12 +3306,12 @@ by a refusal budget while a unit is due and no review is live.
 #### Scenario: FINDINGS starts the next round
 
 - **WHEN** a review settles `FINDINGS` at the unit's current digest
-- **THEN** the unit stays due, the close is refused naming the findings and the explicit start action, and the next round for the unit starts when the reviewed digest or its coverage moves, or when a fresh round is explicitly requested; no reviewer starts for the unchanged digest
+- **THEN** the unit stays due, the close stays unapproved and the refusal names the findings and the explicit start action, and the next round for the unit starts when the reviewed digest or its coverage moves, or when a fresh round is explicitly requested; no reviewer starts for the unchanged digest
 
 #### Scenario: ERROR is not a pass
 
 - **WHEN** a review settles `ERROR` at the unit's current digest
-- **THEN** the unit stays due and unapproved, the close is refused, and no round restarts until the reviewed digest changes or a fresh round is explicitly started
+- **THEN** the unit stays due and unapproved, the close stays unapproved, and no round restarts until the reviewed digest changes or a fresh round is explicitly started
 
 ### Requirement: Whole-scope review snapshot
 
@@ -3587,19 +3610,20 @@ by a host restart, cancelled, or a failed start — MUST NOT count as a settled 
 ### Requirement: Settled verdict surfacing
 
 A `FINDINGS` or terminal `ERROR` settled at the unit's current digest SHALL keep the unit due and the
-turn close refused. The refusal MUST name the verdict, the reviewed digest, the record, and the
-explicit fresh-round action, and the close MUST NOT start a reviewer for it. A run that only has a
-pending review step with no executor MUST NOT make the waiting close.
+close unapproved. The refusal MUST name the verdict, the reviewed digest, the record, and the
+explicit fresh-round action, and the close MUST NOT start a reviewer for it. Its delivery SHALL obey
+the per-turn review delivery bound: after the bound the turn MAY end while the unit stays due. A run
+that only has a pending review step with no executor MUST NOT make the waiting close.
 
 #### Scenario: FINDINGS surfaces with the next action
 
 - **WHEN** the close evaluates a unit settled on `FINDINGS` at its current digest
-- **THEN** the close is refused, the text names the verdict, digest, and record, and it offers fixing the findings or starting a fresh round explicitly
+- **THEN** the close stays unapproved, the text names the verdict, digest, and record, and it offers fixing the findings or starting a fresh round explicitly
 
 #### Scenario: ERROR surfaces with its failure class
 
 - **WHEN** the close evaluates a unit settled on a terminal `ERROR` at its current digest
-- **THEN** the close is refused and the text names the failure class and the explicit fresh-round action
+- **THEN** the close stays unapproved and the text names the failure class and the explicit fresh-round action
 
 #### Scenario: A blocked run is not live coverage
 
@@ -3609,9 +3633,9 @@ pending review step with no executor MUST NOT make the waiting close.
 #### Scenario: A foreign verdict refuses the close without a local run
 
 - **WHEN** another session published the settled non-`PASS` verdict and this session's close owns no review run for the unit
-- **THEN** the close is still refused with the verdict, digest, record, and explicit action, and no reviewer starts
+- **THEN** the close stays unapproved with the verdict, digest, record, and explicit action, and no reviewer starts
 
 #### Scenario: A settled verdict starts no reviewer
 
-- **WHEN** the close refused a unit settled at its current digest
+- **WHEN** the close evaluated a unit settled at its current digest
 - **THEN** no reviewer child starts for that unit until the digest or coverage changes or a fresh round is explicitly requested
