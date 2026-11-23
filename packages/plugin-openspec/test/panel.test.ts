@@ -1681,6 +1681,11 @@ describe('OpenSpec panel registration', () => {
     expect(fake.locales[0]?.dictionary['guide.title']).toBe('OpenSpec')
     expect(fake.locales[0]?.dictionary['segment.archive']).toBe('Archive')
     expect(fake.locales[0]?.dictionary['phase.ready-to-apply']).toBe('ready to apply')
+    // The review copy ships in this dictionary, so the fixture translation cannot mask a revert.
+    expect(fake.locales[0]?.dictionary['review.specPass']).toBe('AI spec review passed')
+    expect(fake.locales[0]?.dictionary['review.specMissing']).toBe('AI spec review not run')
+    expect(fake.locales[0]?.dictionary['review.coverage']).toBe('tasks reviewed')
+    expect(fake.locales[0]?.dictionary['review.missingSpecTooltip']).toContain('Archive needs it')
     expect(fake.locales[0]?.dictionary['capability.historyEmpty']).toBe(
       'No archived change produced this capability.',
     )
@@ -5027,6 +5032,11 @@ describe('OpenSpec panel visual contract', () => {
     expect(PANEL_CSS).toContain('var(--dsw-alias-state-success-primary)')
     expect(PANEL_CSS).not.toContain('.dsh-openspec-change-verdict-success')
     expect(PANEL_CSS).not.toContain('dsh-openspec-review-ring')
+    // One gap for every fact: a fixed phase column would widen the gap after a short label.
+    const factsCss = /\.dsh-openspec-change-facts \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
+    expect(factsCss).toContain('gap: 2px 12px')
+    const phaseCss = /\.dsh-openspec-change-phase \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
+    expect(phaseCss).not.toContain('min-width')
   })
 
   it('states the review coverage only once a task is checked', () => {
