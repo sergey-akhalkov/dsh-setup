@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-exploratory-testing",
-  "version": "0.54.1",
+  "version": "0.54.2",
   "description": "Opt-in exploratory testing: state-driven focus selection, a read-only cycle change, and an outcome change for classified findings, regression tests, spec corrections, and knowledge capture",
   "license": "MIT",
   "icon": "./icon.svg",
