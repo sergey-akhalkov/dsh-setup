@@ -339,7 +339,7 @@ A `human` step SHALL ask the user through the user-questions service with a boun
 
 ### Requirement: Turn-close gate
 
-When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the engine SHALL record no pass and no `VIOLATION` and MUST keep the run open. Every review refusal shall be steered under one per-turn delivery bound of `maxBlocks`: while the bound is not reached the engine SHALL submit the refusal and hold the turn open; once it is reached the engine SHALL submit no further review refusal in that turn, MUST NOT hold the turn for the review obligation, and MUST continue evaluating every unrelated obligation (verification, checkpoint, completion, settled verdicts) under its own rules. Ending the turn after the bound MUST NOT release, settle, cancel, or close the review run; the next turn SHALL evaluate it again and submit its own bounded refusal. While every due unit has a live review the close SHALL be allowed as a waiting close with no `VIOLATION` and no message. A review run whose recorded change has been archived MUST NOT hold the close: its failed or blocked review is not a due unit. An unresolved run MUST be settled cancelled once instead of being advanced into a review, so it releases its slot without recording a failed attempt; a terminal run MUST stay unchanged. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
+When a root turn stops and an active run has an open `blockTurnClose` step that is owned and not deferred, the engine SHALL steer and refuse the close up to `maxBlocks`. After the cap it SHALL allow the close once and record a visible `VIOLATION` that is not a pass. A run that has reached its owned `review` step MUST NOT be released by that budget: while a due review unit has no live review the engine SHALL record no pass and no `VIOLATION` and MUST keep the run open. Every close refusal that has no terminal outcome of its own SHALL be steered under one per-turn delivery bound of `maxBlocks` — a review refusal, a settled verdict, a failed dispatch, the parity-report refusal, and an engine-owned progress or lane refusal: while the bound is not reached the engine SHALL submit the refusal and hold the turn open; once it is reached the engine SHALL submit no further such refusal in that turn, MUST NOT hold the turn for the refusing obligation, and MUST continue evaluating every unrelated obligation (verification, checkpoint, completion, settled verdicts) under its own rules. The checkpoint and run-step obligations keep their own per-turn budget and their own visible `VIOLATION` close, so every close obligation is bounded and no state is held forever. Ending the turn after the bound MUST NOT release, settle, cancel, or close the review run; the next turn SHALL evaluate it again and submit its own bounded refusal. While every due unit has a live review the close SHALL be allowed as a waiting close with no `VIOLATION` and no message. A review run whose recorded change has been archived MUST NOT hold the close: its failed or blocked review is not a due unit. An unresolved run MUST be settled cancelled once instead of being advanced into a review, so it releases its slot without recording a failed attempt; a terminal run MUST stay unchanged. It MUST fail open on an internal error and MUST NOT evaluate a subagent turn.
 
 A user stop SHALL win over the gate: when the turn's abort signal is set, the gate MUST NOT start a
 review, persist an outcome, or submit a message, and a message it already submitted SHALL be removed
@@ -434,6 +434,31 @@ from the agent inbox when that signal aborts, so no queued gate message resumes 
 
 - **WHEN** a subagent turn stops
 - **THEN** the gate does not evaluate it
+
+#### Scenario: An owned refusal is bounded per turn
+
+- **WHEN** an engine-owned progress or lane gate refuses the close more than `maxBlocks` times in one turn while the state stays unchanged
+- **THEN** exactly `maxBlocks` close-refusal messages are submitted for that turn across every shared-budget site, no later attempt submits one, the turn may end, and every obligation stays due
+
+#### Scenario: A new turn starts a fresh budget
+
+- **WHEN** a later turn changes implementation files again with no coverage
+- **THEN** its first close refuses again under a fresh budget and its own bound
+
+#### Scenario: An unchanging turn is not refused by the progress gate
+
+- **WHEN** a later turn changes no implementation file
+- **THEN** the progress gate does not refuse the close, while completion and the archive remain governed by the review obligations
+
+#### Scenario: A checkpoint or run-step obligation keeps its own budget
+
+- **WHEN** the shared delivery bound is reached while a checkpoint or a run-step obligation is open
+- **THEN** that obligation still applies its own per-turn budget and may allow one close recorded as a visible `VIOLATION`
+
+#### Scenario: The bound is shared across refusal sites
+
+- **WHEN** a review refusal has spent the last unit of a turn's refusal budget
+- **THEN** no engine-owned progress or lane refusal is steered in that turn, the turn may end, and nothing is released, settled, approved, or unblocked
 
 ### Requirement: Pre-execute intake gate
 
@@ -2046,7 +2071,7 @@ set and stay portable: no session id, run id, machine path, or error text.
 
 ### Requirement: Owned work-progress gate
 
-The work-progress gate SHALL be owned by the engine: a code-changing turn SHALL be refused unless it has a newly checked and reviewed task or a `note` action whose worktree digest matches the current worktree. A stale note MUST NOT authorize the close and MUST NOT count as a `PASS`. The note SHALL be written by the `note` action to `.dsh/workflows/notes/<change>.json` and SHALL be readable by any session. The `note` action MUST require the change and the task id and MUST record a bounded reason and a timestamp; it SHALL accept only `in-progress` or `blocked` and MUST reject an unknown task. A checked task SHALL be accepted: a fully checked plan whose remaining work is review has no unchecked task to name, and its matching worktree-digest note is the only available progress evidence; a checked task's note never claims a tick and the task still needs its task-review `PASS` to complete.
+The work-progress gate SHALL be owned by the engine: a code-changing turn SHALL be refused unless it has a newly checked and reviewed task or a `note` action whose worktree digest matches the current worktree. A stale note MUST NOT authorize the close and MUST NOT count as a `PASS`. The note SHALL be written by the `note` action to `.dsh/workflows/notes/<change>.json` and SHALL be readable by any session. The `note` action MUST require the change and the task id and MUST record a bounded reason and a timestamp; it SHALL accept only `in-progress` or `blocked` and MUST reject an unknown task. A checked task SHALL be accepted: a fully checked plan whose remaining work is review has no unchecked task to name, and its matching worktree-digest note is the only available progress evidence; a checked task's note never claims a tick and the task still needs its task-review `PASS` to complete. The refusal SHALL offer only a remedy the plan state allows: it MUST NOT ask for a tick when no unchecked task exists, and its `note` remedy SHALL name the checked task by its 16-character id. The refusal SHALL report the observed state: a missing note MUST be reported as a missing note, the worktree digest SHALL be printed only for a note it is compared with, and an unreadable digest SHALL be named as unreadable. The refusal SHALL be steered under the turn-close delivery bound.
 
 #### Scenario: Progress note fields and validation
 
@@ -2074,6 +2099,21 @@ The work-progress gate SHALL be owned by the engine: a code-changing turn SHALL 
 
 - **WHEN** the worktree digest changes after the note
 - **THEN** the gate refuses the close and requires a fresh note or a reviewed tick
+
+#### Scenario: An all-checked plan is steered to a note
+
+- **WHEN** a code-changing turn has no unchecked task and no matching note
+- **THEN** the refusal offers only the `note` remedy, names a checked task by its 16-character id, and does not ask for a tick
+
+#### Scenario: A missing note is reported as missing
+
+- **WHEN** no progress note exists for the change at the close
+- **THEN** the refusal names the missing note and MUST NOT report the worktree digest as unavailable
+
+#### Scenario: An unreadable digest is named
+
+- **WHEN** a note exists and git cannot produce the current worktree digest
+- **THEN** the refusal names the unreadable digest as the cause and offers the retry after the git state is fixed
 
 ### Requirement: Owned lane-assignment gate
 

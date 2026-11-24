@@ -564,21 +564,30 @@ export async function evaluateOwnedProgressGate(input: ProgressGateInput): Promi
     ...(note === undefined ? {} : { note }),
   })
   if (decision.decision === 'allow') return decision
+  // The remedy the plan allows: with every task checked there is no task left to
+  // tick, so the note is the only executable evidence and it names a checked task
+  // by its id.
   const task = tasks.find((entry) => !entry.checked)
-  const noteCall =
+  const checkedTask = tasks.filter((entry) => entry.checked).at(-1)
+  const noteTarget =
+    task === undefined ? (checkedTask?.id ?? '<task text>') : `${task.number} ${task.text}`
+  const noteCall = `workflows { action: "note", change: "${input.change}", task: "${noteTarget}", status: "in-progress", reason: "..." }`
+  // Report the observed state: a missing note is not an unavailable digest, and
+  // the digest is printed only for a note it was compared with.
+  const state =
+    note === undefined
+      ? 'no progress note for this change exists, so there is nothing to compare with the current worktree'
+      : note.currentDigest === undefined
+        ? "the progress note's worktree digest could not be read, so it cannot be compared with the current worktree; retry the close after the git state is readable"
+        : `the current worktree digest is ${note.currentDigest.slice(0, 12)}`
+  const remedy =
     task === undefined
-      ? `workflows { action: "note", change: "${input.change}", task: "<task text>", status: "in-progress", reason: "..." }`
-      : `workflows { action: "note", change: "${input.change}", task: "${task.number} ${task.text}", status: "in-progress", reason: "..." }`
-  const reviewCall =
-    task === undefined
-      ? `workflows status`
-      : `workflows(action: "start", definitionId: "${reviewerBinding(input.workspace)?.taskRule ?? 'task-review'}", change: "${input.change}", task: "${task.id}")`
-  const digest =
-    note?.currentDigest === undefined ? '(unavailable)' : note.currentDigest.slice(0, 12)
+      ? `Record ${noteCall}.`
+      : `Tick the task and run workflows(action: "start", definitionId: "${reviewerBinding(input.workspace)?.taskRule ?? 'task-review'}", change: "${input.change}", task: "${task.id}"), or record ${noteCall}.`
   return {
     decision: 'refuse',
     reason: decision.reason,
-    steer: `rule "task-progress": this turn changed implementation files in change "${input.change}" without a newly checked-and-reviewed task and without a current progress note for worktree digest ${digest}.${stale ?? ''} Tick the task and run ${reviewCall}, or record ${noteCall}. Only a matching record or a note whose worktree digest matches the current worktree satisfies this gate; a text claim does not.`,
+    steer: `rule "task-progress": this turn changed implementation files in change "${input.change}" without a newly checked-and-reviewed task; ${state}.${stale ?? ''} ${remedy} Only a matching record or a note whose worktree digest matches the current worktree satisfies this gate; a text claim does not.`,
   }
 }
 

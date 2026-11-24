@@ -7,13 +7,11 @@ context: |
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always state what is out of scope
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - 'A change that fixes GitHub issues lists each one on its own line as `Fixes #<n>`; an issue the change only informs uses `Refs #<n>`. A `Refs` line never closes an issue.'
+  tasks:
+    - 'A change that fixes an issue runs `pnpm issues:close --change <name>` before archiving and records the plan; the issue closes only from the release closeout.'
 
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.

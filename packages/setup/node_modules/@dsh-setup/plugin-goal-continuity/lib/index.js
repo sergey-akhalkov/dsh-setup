@@ -1909,7 +1909,9 @@ const NO_EFFECT_ROUND_LIMIT = 2;
  * The latest successful `work_checkpoint` plan that may decide a settled turn:
  * recorded after the most recent user signal and in that turn or the one before
  * it. A plan the user's own message or answer predates is answered evidence, not
- * input, so a decision the user already supplied cannot replay as a stop.
+ * input, so a decision the user already supplied cannot replay as a stop. A timed
+ * `pending` ask result is a user signal too: it settles the ask without deciding
+ * it, so it is neither an answer nor permission.
  */
 function latestCheckpointPlan(agent, settledTurn) {
     const events = sessionEvents(agent);
@@ -1943,7 +1945,8 @@ function latestCheckpointPlan(agent, settledTurn) {
         if (event.type !== 'tool/result')
             continue;
         const callId = String(event.data.message.toolCallId);
-        // An answered question is a user signal too; a cancelled or failed one is not.
+        // An answered question is a user signal too, and so is the timed `pending`
+        // result that settles the ask without deciding it; a cancelled or failed one is not.
         if (questions.delete(callId)) {
             if (event.data.message.isError !== true)
                 lastUserSignal = index;

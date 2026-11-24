@@ -18,9 +18,10 @@ const sectionBytes = Buffer.byteLength(`${contract}${alwaysOnFooter()}`, 'utf8')
 const contractBytes = Buffer.byteLength(contract, 'utf8')
 const estimatedTokens = sectionBytes / 4
 
-const BUDGET_TOKENS = 1600
+const BUDGET_TOKENS = 1500
 const MINIMUM_BYTES = 3200
-const MAXIMUM_BYTES = 6200
+// Derived from the same two inputs the token check uses, so the caps cannot drift.
+const MAXIMUM_BYTES = BUDGET_TOKENS * 4 - Buffer.byteLength(alwaysOnFooter(), 'utf8')
 
 describe('always-on contract budget', () => {
   it('stays inside the documented per-step budget', () => {
@@ -58,6 +59,39 @@ describe('always-on contract budget', () => {
     expect(section).toContain('independently reviewed')
     expect(section).toContain('continuation')
     expect(section).toContain('grants.json')
+  })
+
+  it('states the pending-question policy and forbids a continue question', () => {
+    const section = (contract.split('## Recover instead of repeating')[1] ?? '').replace(
+      /\s+/g,
+      ' ',
+    )
+    expect(section).toContain('`pending`')
+    expect(section).toContain('not a pause, a decision, or permission')
+    expect(section).toContain('continue independent work')
+    expect(section).toContain('reversible operational choice')
+    expect(section).toContain('record the assumption in the next checkpoint')
+    expect(section).toContain(
+      'leave scope, product, release, credential, and destructive choices open',
+    )
+    expect(section).toContain('stop and report it')
+    expect(section).toContain('never re-ask')
+    expect(section).toContain('stays answerable')
+    expect(section).toContain('`timeout: -1` only before the call')
+    expect(section).toContain(
+      'only when the decision is irreversible and no independent work can proceed',
+    )
+    expect(section).toContain('Never ask whether to continue')
+  })
+
+  it('states the configuration-over-constants rule', () => {
+    const section = (contract.split('## Recover instead of repeating')[1] ?? '').replace(
+      /\s+/g,
+      ' ',
+    )
+    expect(section).toContain('Give a real operational knob')
+    expect(section).toContain('a documented configured default, not a constant')
+    expect(section).toContain('leave unrelated behavior fixed')
   })
 
   it('states the user-only blocker, means, and scope rules', () => {

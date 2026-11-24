@@ -8,7 +8,7 @@ See [proposal.md](proposal.md) for the motivation. The release path today is
 `packages/setup/package.json`, builds, merges the previously published index, generates the market
 directory, and deploys Pages as its last step. The workflow declares `contents: read` at the top
 level; no job creates a GitHub Release, and `gh release list --repo sergey-akhalkov/dsh-setup` is
-empty while tags exist through `v0.48.1` (the repository version is `0.48.1`). The install path
+empty while tags exist through `v0.57.1` (the repository version is `0.57.1`). The install path
 (enable **Custom plugin markets**, open **Discover**, add the index URL) is described in
 `docs/install.md` and the README with no image; the repository tracks no image files under `docs/`.
 
@@ -64,10 +64,12 @@ version, so a rerun redeploys the same document. The `publish` job already refus
 not equal the setup version, so the release job does not repeat that check.
 
 **D4 — Backfill only the latest existing tag, manually.** The workflow affects future tags; the
-current `v0.48.1` needs a one-time command run by a maintainer with an authenticated `gh`:
-`gh release create v0.48.1 --generate-notes --verify-tag`. No CI step does this, and older tags stay
-unreleased: the issue asks for the latest one, and producing releases for old commits adds history
-nobody needs to review. The command is documented in `docs/releasing.md` and in the change tasks.
+latest tag when the job lands (`v0.57.1` at the time of writing) needs a one-time command run by a
+maintainer with an authenticated `gh`: `gh release create v0.57.1 --generate-notes --verify-tag`. No
+CI step does this, and older tags stay unreleased: the issue asks for the latest one, and producing
+releases for old commits adds history nobody needs to review. The tag number is the only part of this
+plan that ages: the maintainer runs the command for whatever tag is latest when the workflow change is
+merged. The command is documented in `docs/releasing.md` and in the change tasks.
 
 **D5 — The screenshot is `docs/images/discover-market.png`, embedded in both Discover descriptions.**
 It is captured from a throwaway Harness profile (never the live desktop profile) with **Custom plugin
@@ -124,7 +126,7 @@ runtime surface; the Release requirement is release-process behavior.
   job graph (`release.needs: ["publish"]`, `release.permissions.contents: "write"`, workflow-level
   `contents: read`) and that the step runs `gh release create` with `--generate-notes --verify-tag`.
 - `pnpm validate:repo` and `pnpm lint` pass; the Markdown image links resolve to the tracked PNG.
-- `gh release list --repo sergey-akhalkov/dsh-setup` shows `v0.48.1` after the backfill and
-  `gh release view v0.48.1` shows generated notes.
+- `gh release list --repo sergey-akhalkov/dsh-setup` shows `v0.57.1` after the backfill and
+  `gh release view v0.57.1` shows generated notes.
 - The first release after the merge is the end-to-end proof; a deliberately failed gate is not run on
   the real repository, and the fail-safe is asserted structurally from the `needs` chain.

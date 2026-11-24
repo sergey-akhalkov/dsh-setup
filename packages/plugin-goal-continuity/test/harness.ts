@@ -428,7 +428,7 @@ export function toolCall(
   harness: Harness,
   name: string,
   args: Record<string, unknown>,
-  options: { isError?: boolean; turn?: number } = {},
+  options: { isError?: boolean; turn?: number; result?: string } = {},
 ): void {
   const callId = `call-${randomUUID()}`
   const turn = options.turn ?? 1
@@ -449,7 +449,9 @@ export function toolCall(
         role: 'tool',
         source: { kind: 'tool', callId },
         toolCallId: callId,
-        content: [{ type: 'text', text: options.isError === true ? 'failed' : 'ok' }],
+        content: [
+          { type: 'text', text: options.isError === true ? 'failed' : (options.result ?? 'ok') },
+        ],
         isError: options.isError === true,
       },
     },

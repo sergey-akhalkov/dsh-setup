@@ -6,8 +6,9 @@
 
 The repository SHALL carry the `dsh-studio` identity in every current, user-visible namespace: the
 repository and Pages URL, the `@dsh-studio/` package scope with `@dsh-studio/setup`, the
-`dsh-studio-` row prefix, and the `dsh-studio:` prompt-section prefix. The installer defaults SHALL
-name the same repository. A release under this identity MUST be `1.0.0`, tagged `v1.0.0`.
+`dsh-studio-` row id prefix for the rows that currently use `dsh-setup-`, and the `dsh-studio:`
+prompt-section prefix. The installer defaults SHALL name the same
+repository. A release under this identity MUST be `1.0.0`, tagged `v1.0.0`.
 
 #### Scenario: Current packages
 
@@ -17,7 +18,7 @@ name the same repository. A release under this identity MUST be `1.0.0`, tagged 
 #### Scenario: Current rows and sections
 
 - **WHEN** the composition fragments, the generated patches, and the guidance plugins are inspected
-- **THEN** every current row id starts with `dsh-studio-` and the four guidance prompt sections start with `dsh-studio:`
+- **THEN** every current row id that uses the `dsh-setup-` prefix starts with `dsh-studio-`, the approved Harness-owned `preset-goal-reviewer` row keeps its id, and the four guidance prompt sections start with `dsh-studio:`
 
 #### Scenario: Installer defaults
 

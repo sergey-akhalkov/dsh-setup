@@ -233,6 +233,11 @@ The same row makes one bounded, read-only review call and delivers the work-chec
   declares parallel remaining work, requires a tagged worker start or a serial reason. The request is
   non-waking, and the record stays local under `.dsh/work-checkpoints/`.
 
+How long a question may hold the turn is a preset setting, not the review's: the setup's
+`dsh-setup-question-timeout` row derives the timed `ask_user_question` of every preset, its watched
+settings file is the supported knob, and the policy for a pending result is in
+[autonomy.md](autonomy.md).
+
 The row ships enabled with `resumeAfterRestart: false`, `resumeAfterUserStop: never`,
 `maxSessionResumes: 20`, `roundExtension: 1000`, `maxRoundExtensions: 2`, `hardMaxGoalRounds: 5000`,
 `blockReview.enabled: true`, `blockReview.reviewQuestions: true`, and `checkpoint.enabled: true`. The

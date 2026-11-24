@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-question-timeout-autonomy",
+  "scope": "task",
+  "taskId": "cadc0b59f0002629",
+  "digest": "d1fd0b15a4142bc4a57ab122138c2d42d911f78e1a0dc4b67295c1ca7ddc9fca",
+  "worktreeDigest": "d256a5a2e1c979689ae49d91d6ee8a8d307a5c453c890d077d1e732f690cef7b",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-24T15:39:04.178Z"
+}

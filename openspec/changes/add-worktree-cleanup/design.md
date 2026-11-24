@@ -125,8 +125,8 @@ instead of force-deleting content the owner never saw.
 
 1. Land the package, fragment, defaults, docs, generated setup tree, and tests; `pnpm gen` and `pnpm
    build` produce the committed artifacts.
-2. Install the setup; the plugin row mounts with `autoRemove: managed`. The first startup sweep on the
-   current workspace removes the 34 merged and clean lane worktrees and keeps `wt-move-review-1-7h`
-   with the "4 uncommitted files" reason.
+2. Install the setup; the plugin row mounts with `autoRemove: managed`. The first startup sweep
+   reclaims whatever merged and clean lane worktrees the owner's workspace holds at install time; the
+   required acceptance (task 6.2) runs against a seeded temporary repository, not that live inventory.
 3. Rollback: disable or remove the plugin row; it owns no checkout and writes only its reports under
    `.dsh/worktrees`, which remain readable.

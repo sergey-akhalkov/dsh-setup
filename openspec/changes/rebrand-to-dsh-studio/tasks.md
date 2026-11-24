@@ -12,20 +12,20 @@ independent lanes.
 - [ ] 1.3 Update the setup display identity: `packages/setup/locale/en.json` title, `packages/setup/icon.svg` aria-label, and the market-facing description in `packages/setup/package.json`.
 - [ ] 1.4 Rewrite `README.md` (title, badges, intro, market source URL, one-line installer, package names) for the new identity.
 - [ ] 1.5 Update `docs/install.md`, `docs/releasing.md`, and `docs/contributing.md`: URLs, install and manual-install commands, release tag flow, and the migration section from task 5.3.
-- [ ] 1.6 Update the remaining named-repository docs and `AGENTS.md`: `docs/{plugins,setup-composition,delegation-rules,goal-continuity,hindsight,lazy-mcp,loop-guard,serena,ponytail,rtk,principles,verification-gate,answer-pages,rust,openspec,workflows,codex-subagent}.md`; leave `docs/openspec-status.md` historical notes unchanged.
+- [ ] 1.6 Update the remaining named-repository docs and `AGENTS.md`: `docs/{plugins,setup-composition,goal-continuity,hindsight,lazy-mcp,loop-guard,serena,ponytail,rtk,principles,verification-gate,answer-pages,rust,openspec,workflows,codex-subagent}.md`; leave `docs/openspec-status.md` historical notes unchanged.
 - [ ] 1.7 Update the per-package documentation and notice files that name the old scope: `packages/plugin-workflows/README.md` and `packages/plugin-workflows/THIRD_PARTY_NOTICES.md`.
 
 ## 2. Package scope
 
 - [ ] 2.1 Rename every `packages/plugin-*/package.json` name to the `@dsh-studio` scope and set `SETUP_PACKAGE_NAME` in `scripts/lib/workspace.ts`.
 - [ ] 2.2 Rename the runtime name exports and server-derived ids in every plugin source: provider names, HTTP route paths, client slot ids, command definition ids, `SHIPPED_SOURCE`, `OPENSPEC_ID`, and the workflows host-key comment.
-- [ ] 2.3 Rename the first-party adapter and guidance text that names the package scope, including `packages/plugin-openspec/assets/guidance/task-lanes.md`, the delegation rules skill asset, and the skill adapter notes in the plugin sources.
+- [ ] 2.3 Rename the first-party adapter and guidance text that names the package scope, including `packages/plugin-openspec/assets/guidance/task-lanes.md` and the skill adapter notes in the plugin sources.
 - [ ] 2.4 Rename the identifiers inside the forked `packages/plugin-codex-subagent/lib/**`, its `README.md`, and its `NOTICE` through the documented fork patch/rebase procedure in `docs/codex-subagent.md`; do not run `pnpm build` or `pnpm gen` against that tree.
 - [ ] 2.5 Update `scripts/lib/scan.ts`, `scripts/dogfood.ts` installed-package path, and every repository test that asserts package names, provider ids, routes, and command ids (`scripts/test/*`, `packages/plugin-*/test/*`).
 
 ## 3. Row ids and prompt sections
 
-- [ ] 3.1 Rename the row ids in all 18 `packages/plugin-*/cordis.fragment.yml` files to the `dsh-studio-` prefix.
+- [ ] 3.1 Rename the row ids that currently use the `dsh-setup-` prefix in all 18 `packages/plugin-*/cordis.fragment.yml` files to the `dsh-studio-` prefix; keep the approved Harness-owned `preset-goal-reviewer` row id.
 - [ ] 3.2 Rename the row ids and `mounted.section` values in `packages/setup/defaults.yml`.
 - [ ] 3.3 Rename the prompt-section constants in `plugin-ponytail`, `plugin-working-principles`, `plugin-rtk`, and `plugin-serena` to the `dsh-studio:` prefix.
 - [ ] 3.4 Update `scripts/lib/fragments.ts` (`ROW_ID_PATTERN`), the prefix guard in `scripts/lib/generate.ts`, and the current-row ids in `scripts/lib/dogfood.ts`; keep the retired adapter allowance on `dsh-setup-nuphus-mcp` and `dsh-setup-serena`.
@@ -48,11 +48,12 @@ independent lanes.
 - [ ] 6.1 Confirm the rebrand lands after `move-review-runtime-into-workflows`, `focused-rereview-and-section-steer`, and `add-worktree-cleanup` archive; rebase the rebrand's `workflows` delta and every other behavioral overlap on their final text, and reconcile the old-scope literals (`@dsh-setup/plugin-openspec`, the planned worktrees package) before syncing.
 - [ ] 6.2 Sync the delta specs into the main specs and run `openspec validate --strict` on the synced tree.
 - [ ] 6.3 Run `pnpm release:prepare --version 1.0.0`, `pnpm build`, and `pnpm gen`, then commit the version bump with the regenerated files.
-- [ ] 6.4 Run `pnpm validate`, `pnpm gen:check`, `git diff --exit-code`, and the scan gate on the synced tree; confirm every remaining match is on the design D10 keep-list (archived changes, historical notes, review records, retired-row fixtures, the preserved host-key path in source and generated copies, the legacy-detection and migration literals, this change's own artifacts, and third-party vendored packages) and record the result.
-- [ ] 6.5 Write the release note: the breaking rename, the old market URL and one-line command now 404, the legacy-removal and snapshot steps, the stale row-id overrides, and the kept local directory name.
-- [ ] 6.6 (owner) Rename the GitHub repository to `dsh-studio` and verify that Actions, Pages, and the `raw` installer URL answer on the new name.
-- [ ] 6.7 (owner) Tag and push `v1.0.0`; verify the new index URL lists `@dsh-studio/setup` `1.0.0` with a commit pin.
-- [ ] 6.8 (owner) On this machine: snapshot the profile manifest and patch, remove the legacy setup bundle, rerun the documented installer, and re-add the market source; keep the checkout directory name.
+- [ ] 6.4 Make the downloaded-installer step in `scripts/validate-installer.ts` resolve against a local index fixture (`serveIndex`, passed as `-IndexUrl`) instead of the live default URLs, so `pnpm validate` passes before the repository rename; the real new index and repository URLs stay verified by the owner's rename, tag, and install checks.
+- [ ] 6.5 Run `pnpm validate`, `pnpm gen:check`, `git diff --exit-code`, and the scan gate on the synced tree; confirm every remaining match is on the design D10 keep-list (archived changes, historical notes, review records, retired-row fixtures, the preserved host-key path in source and generated copies, the legacy-detection and migration literals, this change's own artifacts, and third-party vendored packages) and record the result.
+- [ ] 6.6 Write the release note: the breaking rename, the old market URL and one-line command now 404, the legacy-removal and snapshot steps, the stale row-id overrides, and the kept local directory name.
+- [ ] 6.7 (owner) Rename the GitHub repository to `dsh-studio` and verify that Actions, Pages, and the `raw` installer URL answer on the new name.
+- [ ] 6.8 (owner) Tag and push `v1.0.0`; verify the new index URL lists `@dsh-studio/setup` `1.0.0` with a commit pin.
+- [ ] 6.9 (owner) On this machine: snapshot the profile manifest and patch, remove the legacy setup bundle, rerun the documented installer, and re-add the market source; keep the checkout directory name.
 
 ## 7. Verification and close-out
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-setup",
-  "version": "0.57.1",
+  "version": "0.58.0",
   "private": true,
   "type": "module",
   "description": "A portable, installable DeepSeek Harness setup: plugin bundles, agent presets, and a static plugin market index",
@@ -32,6 +32,7 @@
     "validate:composition": "node scripts/validate-composition.ts",
     "validate:installer": "node scripts/validate-installer.ts",
     "reviews:check": "node scripts/reviews-check.ts",
+    "issues:close": "node scripts/close-issues.ts",
     "hooks:install": "node scripts/install-hooks.ts",
     "validate": "pnpm check && pnpm gen:check && pnpm validate:repo && pnpm validate:composition && pnpm validate:installer",
     "generate:market": "node scripts/generate-market.ts",

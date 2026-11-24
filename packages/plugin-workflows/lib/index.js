@@ -5392,14 +5392,18 @@ export function apply(ctx, config = {}) {
                     }
                 }
             }
-            // The engine-owned work-progress and lane gates share this listener. A
-            // close a run step already refused is held; the next close evaluates
-            // them once that obligation settles.
+            // The engine-owned work-progress and lane gates share this listener and
+            // the turn-close delivery bound: past it they submit nothing and the
+            // obligation stays due for the next turn, which starts a fresh budget.
             if (!refusedThisClose && !stopped()) {
-                const ownedText = await ownedGateRefusal(workspace, sessionId, payload.turn);
-                if (ownedText !== undefined) {
-                    steer(ownedText);
-                    refusedThisClose = true;
+                const delivery = reviewDelivery(definitions.find((entry) => entry.id === 'task-review')?.settings.maxBlocks ?? 3);
+                if (delivery.remaining() > 0) {
+                    const ownedText = await ownedGateRefusal(workspace, sessionId, payload.turn);
+                    if (ownedText !== undefined) {
+                        steer(ownedText);
+                        delivery.spend();
+                        refusedThisClose = true;
+                    }
                 }
             }
             await refreshPromptRuns(workspace);

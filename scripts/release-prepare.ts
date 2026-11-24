@@ -40,6 +40,18 @@ function main(): number {
   })
 
   console.log(`release-prepare: all packages now at ${version}`)
+  try {
+    const plan = execFileSync(process.execPath, [join(rootDir, 'scripts', 'close-issues.ts')], {
+      cwd: rootDir,
+      encoding: 'utf8',
+    })
+    console.log('release closeout plan (previous tag .. HEAD):')
+    console.log(plan.trimEnd())
+  } catch (error) {
+    console.warn(
+      `release-prepare: the release closeout plan could not be computed (${error instanceof Error ? error.message : String(error)}); run pnpm issues:close`,
+    )
+  }
   console.log('next: pnpm build && pnpm validate, then commit and tag v' + version)
   return 0
 }

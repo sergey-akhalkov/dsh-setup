@@ -40,8 +40,6 @@ guard.
 - `portable-setup`: adds the project identity and row-namespace requirement and the legacy
   installation migration requirement, and renames the lazy MCP row in the defaults requirement.
 - `codex-subagent`: the setup delivery scenario names the renamed row id.
-- `delegation-rules`: the row id and the sibling-bundle scope in the removal and setup-delivery
-  requirements are renamed.
 - `hindsight-memory`: the opt-out and export requirements name the renamed row id.
 - `lazy-mcp`: the shipped lazy MCP requirement names the renamed row id.
 - `observability`: the guidance readiness scenario names the renamed prompt section.

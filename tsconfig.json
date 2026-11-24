@@ -13,6 +13,7 @@
     { "path": "./packages/plugin-observability" },
     { "path": "./packages/plugin-openspec" },
     { "path": "./packages/plugin-ponytail" },
+    { "path": "./packages/plugin-question-timeout" },
     { "path": "./packages/plugin-refactoring" },
     { "path": "./packages/plugin-rtk" },
     { "path": "./packages/plugin-rust" },

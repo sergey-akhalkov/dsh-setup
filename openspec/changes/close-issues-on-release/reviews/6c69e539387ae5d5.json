@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "close-issues-on-release",
+  "scope": "task",
+  "taskId": "6c69e539387ae5d5",
+  "digest": "af1cba1a63ae34ae2c8168b22f8b0135f9d5a36e15684f792287255f0a47b4f6",
+  "worktreeDigest": "ecb2c422a7f827a975ddd8dafb8ecbef7c3e5ebb37dc67a8d1c38b759e07d88a",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-24T18:38:54.460Z"
+}

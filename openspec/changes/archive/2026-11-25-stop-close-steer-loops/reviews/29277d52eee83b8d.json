@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "stop-close-steer-loops",
+  "scope": "task",
+  "taskId": "29277d52eee83b8d",
+  "digest": "7ac2038d1bfde4201ce70d510c049ff203ea1373751d1f03935f98c626352e0d",
+  "worktreeDigest": "505a27fa79fac58d3356c3f99f1681986c09ae00a9af0bf5fdb1ed10466e1e51",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-24T21:40:04.379Z"
+}

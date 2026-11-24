@@ -112,6 +112,11 @@
       name: "@dsh-setup/plugin-openspec"
     - id: dsh-setup-ponytail
       name: "@dsh-setup/plugin-ponytail"
+    - id: dsh-setup-question-timeout
+      name: "@dsh-setup/plugin-question-timeout"
+      config:
+        timed: true
+        timeout: 300
     - id: dsh-setup-refactoring
       name: "@dsh-setup/plugin-refactoring"
     - id: dsh-setup-rtk
@@ -336,6 +341,10 @@
         window: week
         minSamples: 20
         guardrail: failure-rate
+- id: dsh-setup-question-timeout
+  config:
+    timed: true
+    timeout: 300
 - id: dsh-setup-workflows
   config:
     checkpointApplicability:

@@ -186,3 +186,51 @@ jobs:
       - name: Deploy to Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # The GitHub Release names the tag and its generated notes. It is created last, so a
+  # failed gate or deployment publishes no Release; a rerun leaves an existing Release
+  # and its notes untouched.
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub Release for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "the Release for $TAG already exists; leaving it unchanged"
+          else
+            gh release create "$TAG" --generate-notes --verify-tag
+          fi
+
+  # Closes the issues an archived change names with `Fixes #<n>`. It waits for both the
+  # published index and the Release, so a partial release closes nothing; a rerun posts
+  # no second comment.
+  close-issues:
+    needs: [publish, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # The window is previous tag .. tag, so the planner needs the tag history.
+      - name: Check out the tagged commit with its tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Close the issues the release fixes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/close-issues.ts --apply --version "$GITHUB_REF_NAME"

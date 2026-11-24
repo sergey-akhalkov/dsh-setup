@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Question timeout",
+    "description": "Configurable timed ask_user_question: the setup derives the timed row of every preset so a pending result releases the turn, and the wait is edited on a settings page"
+  }
+}

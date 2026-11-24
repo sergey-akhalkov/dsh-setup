@@ -36,4 +36,4 @@
 ## 6. Verification (serial, owns `openspec/changes/add-worktree-cleanup/tasks.md`)
 
 - [ ] 6.1 Run the full gate (`pnpm build`, `git diff --exit-code`, `pnpm gen:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, `pnpm validate:composition`) and record the result.
-- [ ] 6.2 In the installed profile, open the Worktrees tab and verify the first sweep removes the 34 merged and clean lane worktrees, keeps `wt-move-review-1-7h` with the "4 uncommitted files" reason, and shows the sweep in the Report segment; record the report file and the before/after `git worktree list`.
+- [ ] 6.2 In a throwaway `DSH_HOME` and a temporary Git repository seeded with merged-and-clean, dirty, unmerged, locked, and protected worktrees, open the Worktrees tab and verify the first sweep removes only the merged and clean lane worktree, keeps the others with their reason, keeps every branch, and shows the sweep in the Report segment; record the report file and the before/after `git worktree list`.

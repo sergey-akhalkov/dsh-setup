@@ -6,15 +6,20 @@ current procedure.
 
 ## 1. Release workflow `.github/workflows/release.yml`
 
-- [ ] 1.1 Add the `release` job after `publish` with `needs: publish`, `runs-on: ubuntu-latest`, job-level `permissions: { contents: write }`, no checkout, and one step with `GH_TOKEN: ${{ github.token }}`, `GH_REPO: ${{ github.repository }}` and `TAG: ${{ github.ref_name }}`; verify the step declares `GH_REPO` so both `gh release view` and `gh release create` resolve the repository without a checkout, the workflow-level permissions still declare `contents: read`, and no other job gains write.
-- [ ] 1.2 Make the step rerunnable: `gh release view "$TAG"` reports an existing Release and leaves it unchanged, otherwise `gh release create "$TAG" --generate-notes --verify-tag` creates it; verify the workflow YAML parses with the installed `yaml` package and the command contains `--verify-tag`.
+- [x] 1.1 Add the `release` job after `publish` with `needs: publish`, `runs-on: ubuntu-latest`, job-level `permissions: { contents: write }`, no checkout, and one step with `GH_TOKEN: ${{ github.token }}`, `GH_REPO: ${{ github.repository }}` and `TAG: ${{ github.ref_name }}`; verify the step declares `GH_REPO` so both `gh release view` and `gh release create` resolve the repository without a checkout, the workflow-level permissions still declare `contents: read`, and no other job gains write.
+- [x] 1.2 Make the step rerunnable: `gh release view "$TAG"` reports an existing Release and leaves it unchanged, otherwise `gh release create "$TAG" --generate-notes --verify-tag` creates it; verify the workflow YAML parses with the installed `yaml` package and the command contains `--verify-tag`.
 - [ ] 1.3 Update `docs/releasing.md`: the procedure names the Release as the last publication step (after the deployed index), its generated notes, the `contents: write` scope, and the one-time backfill command; verify `pnpm lint`.
 - [ ] 1.4 Verify the job graph structurally from the file (`release` needs `publish`, `publish` needs `validate`) so a failed gate cannot reach the Release step; record the assertion beside the parse check.
 
 ## 2. One-time backfill
 
-- [ ] 2.1 Run `gh release create v0.48.1 --generate-notes --verify-tag` from an authenticated checkout after the workflow change is on `main`; verify `gh release list --repo sergey-akhalkov/dsh-setup` shows one `Latest` entry for `v0.48.1` and `gh release view v0.48.1` shows generated notes.
-- [ ] 2.2 Confirm only the latest tag is backfilled: no older tag gets a Release and no tag or existing Release is edited or moved; verify with `gh release list --repo sergey-akhalkov/dsh-setup`.
+- [ ] 2.1 Run `gh release create v0.57.1 --generate-notes --verify-tag` (the latest tag when the job
+      lands) from an authenticated checkout after the workflow change is on `main`; verify
+      `gh release list --repo sergey-akhalkov/dsh-setup` shows one `Latest` entry for `v0.57.1` and
+      `gh release view v0.57.1` shows generated notes.
+- [ ] 2.2 Confirm only the latest tag is backfilled: no older tag gets a Release and no tag or
+      existing Release is edited or moved; verify with
+      `gh release list --repo sergey-akhalkov/dsh-setup`.
 
 ## 3. Screenshot and docs
 

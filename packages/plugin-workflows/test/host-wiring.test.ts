@@ -6713,6 +6713,278 @@ describe('owned review at runtime', () => {
     expect(reviewRefusals(gateTexts(host))).toHaveLength(bound)
   })
 
+  describe('the shared turn-close refusal budget', () => {
+    const bound = (): number =>
+      definitionsRegistry.installed('task-review')?.definition.settings.maxBlocks ?? 3
+    const texts = (host: ReturnType<typeof fakeHost>): string[] => gateTexts(host)
+    const progressRefusals = (host: ReturnType<typeof fakeHost>): string[] =>
+      texts(host).filter((text) => text.includes('rule "task-progress"'))
+
+    it('bounds the engine-owned refusals per turn and lets the turn end', async () => {
+      const workspace = await gitGateWorkspace()
+      await mkdir(join(workspace, 'src'), { recursive: true })
+      await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+      const host = await engineGateHost(workspace, {
+        taskProgress: true,
+        laneFanout: false,
+        workflowOwned: false,
+      })
+      await gateWrite(host, 'openspec/changes/auth/proposal.md')
+      await gateWrite(host, 'src/app.ts')
+      for (let close = 0; close < bound() + 2; close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      }
+      expect(progressRefusals(host)).toHaveLength(bound())
+      // The close past the bound submitted nothing; the state stays due.
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      expect(progressRefusals(host)).toHaveLength(bound())
+      expect(steered(host)).toContain('changed implementation files in change "auth"')
+    })
+
+    it('bounds the lane-assignment refusal at the same shared bound', async () => {
+      const workspace = await gitGateWorkspace()
+      await mkdir(join(workspace, 'src'), { recursive: true })
+      await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+      const host = await engineGateHost(workspace, {
+        taskProgress: false,
+        laneFanout: false,
+        workflowOwned: false,
+      })
+      await gateWrite(host, 'openspec/changes/auth/proposal.md')
+      await gateWrite(host, 'src/app.ts')
+      for (let close = 0; close < bound() + 2; close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      }
+      const laneRefusals = texts(host).filter((text) =>
+        text.includes('lane assignment is missing in change "auth"'),
+      )
+      expect(laneRefusals).toHaveLength(bound())
+    })
+
+    it('bounds an uncertified parity-report refusal at the same shared bound', async () => {
+      const workspace = await gitGateWorkspace(`# Tasks\n\n- [ ] 1.1 First task\n`)
+      await mkdir(join(workspace, 'src'), { recursive: true })
+      await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+      const real = JSON.parse(
+        readFileSync(
+          fileURLToPath(new URL('../assets/parity/retire-legacy-gates.json', import.meta.url)),
+          'utf8',
+        ),
+      ) as { retained: Record<string, unknown> }
+      parityMock.active = true
+      parityMock.report = {
+        ...real,
+        retained: {
+          ...real.retained,
+          'task-progress': { cases: 4, replayed: 3, status: 'failed' },
+        },
+      }
+      try {
+        const host = await engineGateHost(workspace, {
+          taskProgress: false,
+          laneFanout: true,
+          workflowOwned: false,
+        })
+        await gateWrite(host, 'openspec/changes/auth/proposal.md')
+        await gateWrite(host, 'src/app.ts')
+        for (let close = 0; close < bound() + 2; close += 1) {
+          await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+        }
+        expect(texts(host).filter((text) => text.includes('did not replay'))).toHaveLength(bound())
+      } finally {
+        parityMock.active = false
+        parityMock.report = undefined
+        parityMock.error = undefined
+        parityMock.path = undefined
+      }
+    })
+
+    it('lets a review refusal spend the last unit so no owned refusal steers', async () => {
+      process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+      const workspace = await tempWorkspace()
+      const host = fakeHost(workspace, { specReview: false })
+      apply(host.ctx as never)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      await dueIntakeReview(workspace)
+      await gateWrite(host, 'openspec/changes/auth/proposal.md')
+      await gateWrite(host, 'src/app.ts')
+      const reviewBound =
+        definitionsRegistry.installed('change-intake')?.definition.settings.maxBlocks ?? 3
+      for (let close = 0; close < reviewBound + 1; close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      }
+      expect(reviewRefusals(texts(host))).toHaveLength(reviewBound)
+      // The shared budget is spent: the owned gate behind the review never steers.
+      expect(progressRefusals(host)).toHaveLength(0)
+    })
+
+    it('lets an owned refusal spend the last unit so a later review refusal steers nothing', async () => {
+      const workspace = await gitGateWorkspace()
+      await mkdir(join(workspace, 'src'), { recursive: true })
+      await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+      const host = await engineGateHost(workspace, {
+        specReview: false,
+        taskProgress: true,
+        laneFanout: false,
+        workflowOwned: false,
+      })
+      await gateWrite(host, 'openspec/changes/auth/proposal.md')
+      await gateWrite(host, 'src/app.ts')
+      for (let close = 0; close < bound(); close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      }
+      expect(progressRefusals(host)).toHaveLength(bound())
+      // A due review appears after the budget is spent: it submits nothing.
+      await dueIntakeReview(workspace)
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      expect(reviewRefusals(texts(host))).toHaveLength(0)
+      expect(progressRefusals(host)).toHaveLength(bound())
+    })
+
+    it('keeps the checkpoint budget after the shared bound is spent by an owned refusal', async () => {
+      const workspace = await gitGateWorkspace()
+      await mkdir(join(workspace, 'src'), { recursive: true })
+      await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+      const host = await engineGateHost(workspace)
+      await gateWrite(host, 'openspec/changes/auth/proposal.md')
+      await gateWrite(host, 'src/app.ts')
+      for (let close = 0; close < bound() + 1; close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      }
+      expect(progressRefusals(host)).toHaveLength(bound())
+      const runs = await import('../src/host/runs.ts')
+      const { HostAuth } = await import('../src/host/host-auth.ts')
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      const checkpointPath = '.dsh/work-checkpoints/12020af3351652c1/1.json'
+      await mkdir(dirname(join(workspace, checkpointPath)), { recursive: true })
+      await writeFile(
+        join(workspace, checkpointPath),
+        JSON.stringify({
+          checkpoint: 'checkpoint-1-aaaaaaaa',
+          outcome: 'done',
+          turn: 1,
+          lanes: [],
+          next: 'continue',
+        }),
+        'utf8',
+      )
+      for (let step = 2; step <= 42; step += 1) {
+        await host.emit(
+          'agent/pre-step',
+          {
+            agent: host.agent,
+            turn: 1,
+            step,
+            messages: [],
+            signal: new AbortController().signal,
+            modelSelection: { provider: 'p', model: 'm' },
+          },
+          async () => ({ kind: 'continue' }),
+        )
+      }
+      const stale = runs.createRun({
+        definition: 'retro',
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { checkpoint: checkpointPath },
+        steps: ['checkpoint', 'verify'],
+        id: 'run-stale-after-bound',
+        now: 1_500,
+      })
+      await runs.writeRun(
+        workspace,
+        runs.setRunStatus(
+          runs.settleStep(
+            runs.settleStep(stale, 'checkpoint', 'done', { at: 1_600 }),
+            'verify',
+            'done',
+            { at: 1_650 },
+          ),
+          'completed',
+          1_700,
+        ),
+        auth,
+      )
+      const settled = texts(host).length
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      // The shared bound submits nothing, the checkpoint obligation still steers.
+      expect(texts(host).at(-1)).toContain(
+        'the checkpoint is older than the configured step interval',
+      )
+      expect(texts(host)).toHaveLength(settled + 1)
+      const limit = definitionsRegistry.installed('retro')?.definition.settings.maxBlocks ?? 3
+      for (let close = 0; close < limit + 1; close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      }
+      const checkpointTexts = (): string[] =>
+        texts(host).filter(
+          (text) =>
+            text.includes('the checkpoint is older than the configured step interval') ||
+            text.includes('Work checkpoint UNCHECKED'),
+        )
+      // Own per-turn budget: every refusal steered, then one visible VIOLATION.
+      expect(checkpointTexts()).toHaveLength(limit + 1)
+      const stored = await runs.readAuthenticatedRun(workspace, 'run-stale-after-bound', auth)
+      expect(stored?.turnBlocksTurn).toBe(1)
+      expect(stored?.turnBlocks).toBe(limit + 1)
+      expect(
+        (stored?.violations ?? []).filter(
+          (violation) => violation.reason?.includes('checkpoint freshness refused') === true,
+        ),
+      ).toHaveLength(1)
+      // The close after the VIOLATION is silent: the budget is spent for good.
+      const closed = texts(host).length
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      expect(texts(host)).toHaveLength(closed)
+    })
+
+    it('does not refuse a later turn that changes no implementation file', async () => {
+      const workspace = await gitGateWorkspace()
+      await mkdir(join(workspace, 'src'), { recursive: true })
+      await writeFile(join(workspace, 'src', 'app.ts'), 'export const app = 1\n', 'utf8')
+      const host = await engineGateHost(workspace, {
+        taskProgress: true,
+        laneFanout: false,
+        workflowOwned: false,
+      })
+      await gateWrite(host, 'openspec/changes/auth/proposal.md')
+      await gateWrite(host, 'src/app.ts')
+      // Exhaust turn 1: every unit steers, then the close is silent.
+      for (let close = 0; close < bound(); close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      }
+      expect(progressRefusals(host)).toHaveLength(bound())
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      expect(progressRefusals(host)).toHaveLength(bound())
+      // Turn 2 starts normally with its own implementation baseline.
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn: 2,
+          step: 1,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+      // An unchanged implementation is allowed by the progress gate.
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      expect(progressRefusals(host)).toHaveLength(bound())
+      // A writing turn receives a fresh full budget, then a silent close.
+      await writeFile(join(workspace, 'src', 'other.ts'), 'export const other = 1\n', 'utf8')
+      await gateWrite(host, 'src/other.ts')
+      for (let close = 0; close < bound(); close += 1) {
+        await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      }
+      expect(progressRefusals(host)).toHaveLength(bound() + bound())
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+      expect(progressRefusals(host)).toHaveLength(bound() + bound())
+    })
+  })
+
   it('bounds a persistently failing review start per turn and keeps the checkpoint obligation', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await gitGateWorkspace(`# Tasks

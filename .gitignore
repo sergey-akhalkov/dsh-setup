@@ -26,3 +26,6 @@ market/
 # Editor and OS noise
 .DS_Store
 Thumbs.db
+
+# Workspace-local design-skill scratch
+.huashu-design/

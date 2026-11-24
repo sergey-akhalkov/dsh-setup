@@ -235,6 +235,103 @@ describe('the owned work-progress gate', () => {
     expect(stale.steer).toContain('workflows { action: "note"')
   })
 
+  it('offers only the note remedy, naming a checked task, when every task is checked', async () => {
+    const root = await workspace('# Tasks\n\n- [x] 1.1 First task\n')
+    const decision = await evaluateOwnedProgressGate({
+      workspace: root,
+      change: 'change-a',
+      calls: [],
+      turn: 1,
+      codeChanged: true,
+      runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
+    })
+    expect(decision.decision).toBe('refuse')
+    // There is no task left to tick: the note names a checked task by its id.
+    expect(decision.steer).toContain(taskIdOf('First task'))
+    expect(decision.steer).toContain('workflows { action: "note"')
+    expect(decision.steer).not.toContain('Tick the task')
+    expect(decision.steer).not.toContain('definitionId:')
+  })
+
+  it('keeps the tick plus start remedy while an unchecked task exists', async () => {
+    const root = await workspace()
+    const decision = await evaluateOwnedProgressGate({
+      workspace: root,
+      change: 'change-a',
+      calls: [],
+      turn: 1,
+      codeChanged: true,
+      runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
+    })
+    expect(decision.decision).toBe('refuse')
+    expect(decision.steer).toContain('Tick the task and run workflows(action: "start"')
+    expect(decision.steer).toContain(`task: "${taskIdOf('Engine task')}"`)
+  })
+
+  it('reports a missing note as a missing note, never as an unavailable digest', async () => {
+    const root = await workspace()
+    const decision = await evaluateOwnedProgressGate({
+      workspace: root,
+      change: 'change-a',
+      calls: [],
+      turn: 1,
+      codeChanged: true,
+      runGit: fakeGit(() => IMPLEMENTATION_STATUS, root),
+    })
+    expect(decision.decision).toBe('refuse')
+    expect(decision.steer).toContain('no progress note for this change')
+    expect(decision.steer).not.toContain('(unavailable)')
+    expect(decision.steer).not.toContain('the current worktree digest is')
+    expect(decision.steer).not.toContain('stale')
+  })
+
+  it('names an unreadable digest as the cause when a note exists', async () => {
+    const root = await workspace()
+    const runGit = fakeGit(() => IMPLEMENTATION_STATUS, root)
+    await writeProgressNote(
+      root,
+      { change: 'change-a', task: '1.1 Engine task', status: 'in-progress', reason: 'spanning' },
+      { runGit, now: 1_000 },
+    )
+    const failing: GitRunner = async (args) => {
+      const [command, sub] = args
+      if (command === 'rev-parse' && sub === '--show-toplevel') return Buffer.from(`${root}\n`)
+      if (command === 'rev-parse') return Buffer.from('a'.repeat(40))
+      throw new Error('git failed')
+    }
+    const decision = await evaluateOwnedProgressGate({
+      workspace: root,
+      change: 'change-a',
+      calls: [],
+      turn: 1,
+      codeChanged: true,
+      runGit: failing,
+    })
+    expect(decision.decision).toBe('refuse')
+    expect(decision.steer).toContain('worktree digest could not be read')
+    expect(decision.steer).toContain('retry the close after the git state is readable')
+  })
+
+  it('reads no worktree digest when no note exists', async () => {
+    const root = await workspace()
+    let calls = 0
+    const base = fakeGit(() => IMPLEMENTATION_STATUS, root)
+    const counting: GitRunner = async (...parameters) => {
+      calls += 1
+      return await base(...parameters)
+    }
+    const decision = await evaluateOwnedProgressGate({
+      workspace: root,
+      change: 'change-a',
+      calls: [],
+      turn: 1,
+      codeChanged: true,
+      runGit: counting,
+    })
+    expect(decision.decision).toBe('refuse')
+    expect(calls).toBe(0)
+  })
+
   it('matches the marker-bound taskRule in the record store', async () => {
     const root = await workspace(FIRST_PLAN)
     const taskId = taskIdOf('First task')

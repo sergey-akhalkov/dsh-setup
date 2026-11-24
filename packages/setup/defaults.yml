@@ -226,6 +226,15 @@
         window: week
         minSamples: 20
         guardrail: failure-rate
+# The setup owns the timed ask_user_question row: on activation the bundle derives
+# it from every installed preset through the profile patch, so the wait is
+# configurable here, on the row's settings page, and a preset that already has its
+# own profile override keeps it (local precedence). A profile without the config
+# editor leaves the presets untouched and the bundle logs one warning.
+- id: dsh-setup-question-timeout
+  config:
+    timed: true
+    timeout: 300
 # The workflows engine owns the checkpoint, review, work-progress, lane and
 # verification closes in this release; the verification-gate row stays installed
 # but disabled for one release. The verify definition has no shipped commands,

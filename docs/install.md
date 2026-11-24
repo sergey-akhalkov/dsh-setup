@@ -525,6 +525,9 @@ be combined with this row.
   does not run system installers. The installer's Hindsight phase starts the local daemon when `uv`
   and a key are available; a missing prerequisite warns and skips that phase.
 - Your profile's local overrides: these stay in the profile's own patch file.
+- A shipped preset copy: the setup's `dsh-setup-question-timeout` row derives the timed
+  `ask_user_question` from the installed preset and its watched settings file tunes the wait; see
+  [autonomy.md](autonomy.md).
 - Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
   The setup does ship packaged third-party content: the Ponytail prompt, whose vendored bytes and
   upstream pin are documented in [ponytail.md](ponytail.md), and the OpenSpec core skills, documented

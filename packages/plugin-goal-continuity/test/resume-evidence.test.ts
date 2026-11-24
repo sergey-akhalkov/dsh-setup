@@ -192,6 +192,32 @@ describe('checkpoint-evidenced continuation', () => {
     expect(notices(harness)).not.toContain('pick-a')
   })
 
+  it('treats a pending question as plan freshness, not an answer', async () => {
+    const harness = createHarness()
+    setGoal(harness, { activation: 'disarmed' })
+    turnStart(harness, 1)
+    const goal = harness.goals.goal
+    if (goal === undefined) throw new Error('test goal missing')
+    goalMessage(harness, goal, 1)
+    checkpointCall(harness, continuePlan('user_decision', 'first-night', 'check the log at 07:00'))
+    toolCall(
+      harness,
+      'ask_user_question',
+      { questions: [{ id: 'first-night', question: 'Check the log now?' }] },
+      { result: '{"pending":true,"callId":"call-pending"}' },
+    )
+    turnEnd(harness, COMPLETED, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    // A pending result settles the ask without deciding it, so the plan that
+    // asked cannot replay as a stop.
+    expect(countCalls(harness, 'resume')).toBe(1)
+    expect(notices(harness)).not.toContain('first-night')
+    expect(harness.goals.goal?.phase).toBe('active')
+    expect(harness.goals.goal?.activation).toBe('armed')
+  })
+
   it('treats an unreadable or refused checkpoint as no evidence', async () => {
     const unreadable = createHarness()
     setGoal(unreadable, { activation: 'disarmed' })

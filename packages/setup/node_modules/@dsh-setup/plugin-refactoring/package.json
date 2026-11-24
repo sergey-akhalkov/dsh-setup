@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-refactoring",
-  "version": "0.57.1",
+  "version": "0.58.0",
   "description": "Opt-in refactoring method: a read-only audit ranks refactoring paths by evidence and ROI, the user approves one path, a four-proof test safety net precedes the first production edit, and small green steps leave an enforceable ratchet",
   "license": "MIT",
   "icon": "./icon.svg",

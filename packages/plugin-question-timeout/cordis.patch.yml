@@ -1,0 +1,8 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-question-timeout.
+- insert:
+    - id: dsh-setup-question-timeout
+      name: "@dsh-setup/plugin-question-timeout"
+      config:
+        timed: true
+        timeout: 300

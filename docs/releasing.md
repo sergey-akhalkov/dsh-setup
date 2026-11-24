@@ -45,7 +45,11 @@ per-release edit. Its standalone copy of the engines range and bundle list is ch
    pnpm dogfood
    git diff --exit-code
    pnpm gen:check
+   pnpm issues:close
    ```
+
+   `pnpm issues:close` is the pre-tag dry run of the release closeout: it prints every still-open
+   issue an archived change since the previous tag names with `Fixes #<n>`, and closes nothing.
 
 4. Commit the version bump together with the regenerated `packages/setup` manifest and vendored
    copies.
@@ -60,7 +64,11 @@ per-release edit. Its standalone copy of the engines range and bundle list is ch
    range, including the installer exercise, before the publish job starts. The publish job fetches
    the previously published index, merges the new version into it, generates the market directory,
    and deploys that directory. The deployment step is last: any earlier failure leaves the
-   previously published index untouched.
+   previously published index untouched. The `release` job then creates the GitHub Release for the
+   tag, and only after both jobs succeeded the `close-issues` job closes every issue the release
+   fixed, commenting the tag, the Release URL, and the archived change. A failed publication or a
+   missing Release therefore closes nothing; if the closeout job itself fails, re-run that job — it
+   posts no second comment and never moves the tag.
 7. Verify the published index responds with a direct `200` over HTTPS, lists the setup bundle and
    the plugin bundles, and retains the previous versions:
 
