@@ -319,6 +319,40 @@ Rollback: `<how to revert safely, verified or documented>`
 | `<date>` | `<decision>` | `<why>` |
 ```
 
+## B: tasks.md
+
+```markdown
+# Tasks
+
+## 1. Safety net (owns `test/**`; no production path)
+
+- [ ] 1.1 Record the green baseline: command, commit, environment, duration, and known flakes.
+- [ ] 1.2 Add or confirm the behavior oracles at every public seam this change moves.
+- [ ] 1.3 Record the mutation proof: break the behavior, observe the oracle fail, restore it.
+- [ ] 1.4 Record the performance or data baseline and its budget, or record why it does not apply.
+
+## 2. Gate 2 and the steps (owns `src/**`)
+
+- [ ] 2.1 Record user gate 2 approval in `design.md`; no production edit precedes it.
+- [ ] 2.2 Step 1: `<behavior-preserving transformation>`, then narrow suite, full suite, commit.
+- [ ] 2.3 Step 2: `<the same records>`, or record why the path needs no further step.
+
+## 3. Deduplication and deletion (owns the touched modules)
+
+- [ ] 3.1 Collapse only behavior proven identical and verify every caller.
+- [ ] 3.2 Delete proven-dead code or a proven-dead test only with its unreachability proof.
+
+## 4. Ratchet and verification (owns the project's lint/test/CI configuration)
+
+- [ ] 4.1 Land the ratchet in the project's existing check, with the baseline when violations exist.
+- [ ] 4.2 Run the verification contract: oracles, empty contract diff, budget, full suite, metrics.
+- [ ] 4.3 Record the rollback, the oracle rewrites, and the discovered defects as separate changes.
+
+## 5. Close (planning only)
+
+- [ ] 5.1 Record the close record, update the brief and state snapshot, and write the digest.
+```
+
 ## B: safety-net record
 
 ```markdown

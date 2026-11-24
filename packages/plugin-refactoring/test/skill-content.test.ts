@@ -46,6 +46,14 @@ describe('refactoring skill content', () => {
     expect(prose).toContain('proven-dead code')
   })
 
+  it('requires the highest-ROI path and excludes the previous area without a hard override', () => {
+    expect(prose).toContain('Select the highest-ROI eligible candidate')
+    expect(prose).toContain("exclude the previous cycle's area unless a hard override applies")
+    expect(prose).toContain('rotate the path class and the area')
+    // The spec scenario has no second exception: no anti-repetition bypass for a failed refactor.
+    expect(prose).not.toContain('failed verification')
+  })
+
   it('requires a ratchet and its baseline', () => {
     expect(prose).toContain('At least one automated ratchet guards the target architecture')
     expect(skill).toContain('## Ratchet baseline')
@@ -124,6 +132,7 @@ describe('refactoring templates', () => {
       '## A: brief.md',
       '## B: proposal.md',
       '## B: design.md',
+      '## B: tasks.md',
       '## B: safety-net record',
       '## B: step record',
       '## B: verification and ratchet record',
@@ -145,6 +154,24 @@ describe('refactoring templates', () => {
       'Approval decision',
     ]) {
       expect(templates, field).toContain(field)
+    }
+  })
+
+  it('ships the refactor B task plan with every phase', () => {
+    const start = templates.indexOf('## B: tasks.md')
+    expect(start).toBeGreaterThan(-1)
+    const block = templates.slice(start)
+    for (const phase of [
+      '## 1. Safety net',
+      '## 2. Gate 2 and the steps',
+      '## 3. Deduplication and deletion',
+      '## 4. Ratchet and verification',
+      '## 5. Close',
+    ]) {
+      expect(block, phase).toContain(phase)
+    }
+    for (const rule of ['user gate 2 approval', 'narrow suite, full suite, commit', 'ratchet']) {
+      expect(block, rule).toContain(rule)
     }
   })
 

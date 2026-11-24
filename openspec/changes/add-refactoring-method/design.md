@@ -125,10 +125,10 @@ Hard overrides outrank the score and are exempt from repeat exclusion: an active
 incident, a security or data risk, or a critical contract contradiction. Red CI or no green baseline is
 a blocker, not a path: the first refactor is `stabilize` or a separate fix.
 
-Anti-repetition excludes the previous area unless a hard override applies or the previous refactor
-failed verification. When all candidates repeat, the method rotates the path class and area. WIP limit:
-one active A and one active B. Path classes: `stabilize`, `deduplicate`, `boundary`, `seam`, `simplify`,
-`migrate`; one primary class per change, preparatory steps in the Mikado graph.
+Anti-repetition excludes the previous area unless a hard override applies. When all candidates repeat,
+the method rotates the path class and area. WIP limit: one active A and one active B. Path classes:
+`stabilize`, `deduplicate`, `boundary`, `seam`, `simplify`, `migrate`; one primary class per change,
+preparatory steps in the Mikado graph.
 
 The formula is a ranking aid, not truth. Anchors, evidence, hard overrides, and the user gate keep it
 honest; the register records rejected candidates so the next cycle does not re-litigate them.

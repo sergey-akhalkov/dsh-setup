@@ -113,8 +113,8 @@ fix, never a refactor on a red baseline.
 - Hard overrides outrank the score and are exempt from repeat exclusion: an active P0/P1 defect or
   incident, a security or data risk, or a critical contract contradiction. Select a hard-override
   path before any score-based candidate.
-- Anti-repetition: exclude the previous cycle's area unless a hard override applies or the previous
-  refactor failed verification. When every candidate repeats, rotate the path class and the area.
+- Anti-repetition: exclude the previous cycle's area unless a hard override applies. When every
+  candidate repeats, rotate the path class and the area.
 - WIP limit: one active audit A and one active, unclassified refactor B. Start no new audit while
   either is active.
 - Path classes: `stabilize`, `deduplicate`, `boundary`, `seam`, `simplify`, `migrate`. One primary

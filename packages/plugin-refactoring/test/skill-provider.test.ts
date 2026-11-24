@@ -82,6 +82,15 @@ function frontmatterDescription(asset: string): string {
 
 const collapse = (text: string): string => text.split(/\s+/).filter(Boolean).join(' ')
 
+/** The adapter note the provider appends after the asset body; pinned on purpose. */
+const ADAPTER_NOTE = [
+  '',
+  '',
+  '---',
+  '',
+  'DeepSeek Harness adapter: this skill ships inside @dsh-setup/plugin-refactoring as first-party guidance for this Harness; it is not pinned upstream text. Its copy-ready artifacts are in `templates.md` in the same package.',
+].join('\n')
+
 describe('refactoring plugin', () => {
   it('exports the package identity and injects only the skills service', async () => {
     const plugin = await loadPlugin()
@@ -138,7 +147,8 @@ describe('refactoring plugin', () => {
       invocation: { modelInvocable: true, userInvocable: true },
     })
     expect(definition?.content.startsWith(skillAsset)).toBe(true)
-    expect(definition?.content).toContain('templates.md')
+    // Exactly the body plus the adapter note: dropping or appending anything fails here.
+    expect(definition?.content.slice(skillAsset.length)).toBe(ADAPTER_NOTE)
   })
 
   it('returns nothing for a name it does not ship', async () => {
