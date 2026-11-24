@@ -703,12 +703,13 @@ archived`), `Explore` and `Propose` actions that fill `/openspec-explore ` and `
 without submitting, and three counted segments — `Changes`, `Specs` and `Archive`. The segment labels
 carry the totals from the first `/changes` read, so all three are complete before Specs is opened.
 `Changes` lists the workspace's active changes, unfinished first. Each card sets a fixed readiness
-gutter beside a body of four rows: the percentile over the two counts it is made of — `58%` over
-`4/12 implemented` and `10/12 reviewed`, each with a status dot — or the plain `4/12` over `tasks`
-when this clone has no task-review state, or a dash before any task is written. Every task counts
-twice in that percent: once for being checked in `tasks.md` and once for carrying a task-review
-`PASS`, so only a fully implemented and fully reviewed change reads 100%; the reviewed line names
-its missing task numbers in a tooltip. The body holds the
+gutter beside the body: the percentile, centred in the free space above the two counts it
+is made of — `58%` over `4/12 implemented` and `10/12 reviewed by AI`, each with a status dot and
+aligned with the body row it answers (`implemented` with the facts row, `reviewed by AI` with the
+navigation row) — or the plain `4/12` over `tasks` when this clone has no task-review state, or a
+dash before any task is written. Every task counts twice in that percent: once for being checked in
+`tasks.md` and once for carrying a task-review `PASS`, so only a fully implemented and fully reviewed
+change reads 100%; the reviewed line names its missing task numbers in a tooltip. The body holds the
 change name with its relative last-modified time, the proposal's `## Why` clamped to two lines with the
 full text on its title, one facts row, and one navigation row. Every fact in that row is a static
 status dot plus a neutral label: the colour lives in the dot alone, and it names one disposition —
@@ -716,8 +717,10 @@ green for a done state, amber for one that waits on the reader, red for a failed
 running or waiting one. The derived status (`planning`, `ready to apply`, `applying` or `complete`)
 keeps its own dot and label. The whole-spec record reads `AI spec review passed` while the record
 still matches the change artifacts, `AI spec review outdated` after a plan edit, `AI spec review: N
-findings`, `AI spec review failed`, or `AI spec review not run` when this clone has no local record,
-whose tooltip names how the review starts and that archive needs it. The row keeps one uniform gap
+findings`, `AI spec review failed`, or `AI spec review not run` when this clone has no local record;
+that not-run label is a button whose tooltip names the click action and whose click fills the
+composer with a request to start the whole-spec review for that change, without submitting it, and
+archive still needs that review. The row keeps one uniform gap
 between facts. The navigation row holds one text button per artifact
 the change carries (`proposal`, `design`, `specs N`, `tasks N`) beside both actions: `Apply` while the
 change is not complete and `Archive` once every task is done, with the inapplicable one disabled and

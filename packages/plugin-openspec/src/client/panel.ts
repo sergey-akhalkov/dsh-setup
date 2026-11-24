@@ -49,6 +49,11 @@ export function applyDraft(name: string): string {
   return `/openspec-apply-change ${name}`
 }
 
+/** The draft a missing whole-spec review fills; the user sends it. */
+export function reviewDraft(name: string): string {
+  return `Review the OpenSpec change ${name} if it has no current spec review PASS: start it with workflows(action: "start", definitionId: "spec-review", change: "${name}") and report the verdict.`
+}
+
 /** Artifact kinds already present in a change, beside its progress. */
 export interface ChangePresence {
   readonly proposal: boolean
@@ -551,6 +556,8 @@ export interface ReviewUnit {
   readonly tooltip?: string
   /** A live review spins; a waiting review stays still. */
   readonly spinning?: boolean
+  /** The reader can start this review from the panel; the card renders a button. */
+  readonly action?: 'review'
 }
 
 /** The whole-spec unit: PASS, outdated, findings, error, or not reviewed. */
@@ -564,6 +571,7 @@ function reviewSpecUnit(
       label: t('review.specMissing'),
       dot: 'warning',
       tooltip: t('review.missingSpecTooltip'),
+      action: 'review',
     }
   }
   if (spec.verdict === 'PASS' && spec.current) {

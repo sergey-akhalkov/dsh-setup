@@ -704,7 +704,9 @@ The whole-spec record SHALL read as `AI spec review passed`, `AI spec review not
 `AI spec review outdated`, `AI spec review failed`, or `AI spec review: N findings`. A live review
 SHALL read as `AI spec review running · N`, `AI task review · <unit>`, or `AI code review · N`, and
 the waiting form SHALL read `Waiting for the AI reviewer`. A live unit MUST replace only its own
-unit and MUST NOT be rendered as settled.
+unit and MUST NOT be rendered as settled. The `AI spec review not run` label SHALL be a button: its
+click SHALL fill the composer with a request to start the whole-spec review for that change, without
+submitting it, and its tooltip SHALL name that action and that archive needs the review.
 
 #### Scenario: Current whole-spec PASS
 
@@ -734,7 +736,7 @@ unit and MUST NOT be rendered as settled.
 #### Scenario: No local record
 
 - **WHEN** the change has no local whole-spec record, for example in a fresh clone
-- **THEN** the row shows `AI spec review not run` with a warning dot and a tooltip naming how the review starts and that archive needs it, and claims no failure
+- **THEN** the row shows `AI spec review not run` with a warning dot, a tooltip naming the click action and that archive needs the review, and a click fills the composer with the review request for that change; it claims no failure
 
 ### Requirement: Live review on a change row
 
@@ -798,8 +800,10 @@ understand the review field MUST keep rendering the row.
 
 A change card for an active change in the `Changes` list SHALL render a fixed-width readiness
 gutter, separated from the card body by a hairline. With task-review state available the gutter
-SHALL state a readiness percent over the two counts that produce it: `N/T implemented` and
-`N/T reviewed`, each with its own status dot and label. A line whose count equals the total SHALL
+SHALL state a readiness percent centred in the free space above the two counts that produce it:
+`N/T implemented` and `N/T reviewed by AI`, each with its own status dot and label. The
+`implemented` line SHALL sit on the body's facts row and the `reviewed by AI` line on its navigation
+row. A line whose count equals the total SHALL
 carry the success dot; a line that is still behind SHALL carry the informational dot the phase
 already uses, never a warning one, because unfinished work is not a problem to fix. Every task MUST
 count twice in that percent, once for being checked in `tasks.md` and once for carrying a
@@ -823,12 +827,12 @@ are written. The gutter MUST NOT draw a tracking bar.
 #### Scenario: Readiness from two counts
 
 - **WHEN** an active change has 9 tasks, 6 of them checked, and 4 of the checked tasks carry a task-review PASS
-- **THEN** the gutter reads `56%` over `6/9 implemented` and `4/9 reviewed`, each with the informational dot
+- **THEN** the gutter reads `56%` over `6/9 implemented` and `4/9 reviewed by AI`, each with the informational dot
 
 #### Scenario: Fully implemented and reviewed
 
 - **WHEN** every task is checked and every checked task carries a PASS
-- **THEN** the gutter reads `100%` over `9/9 implemented` and `9/9 reviewed` with success dots
+- **THEN** the gutter reads `100%` over `9/9 implemented` and `9/9 reviewed by AI` with success dots
 
 #### Scenario: Rounding never reports completion
 

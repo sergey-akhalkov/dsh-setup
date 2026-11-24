@@ -76,6 +76,7 @@ import {
   type ReadState,
   type Requirement,
   type ReviewLiveEntry,
+  type ReviewUnit,
   ROOT_ADDRESS,
   ROOT_SEGMENTS,
   type RootSegment,
@@ -87,6 +88,7 @@ import {
   requestChange,
   requestChangeList,
   requestLiveReviews,
+  reviewDraft,
   reviewUnits,
   type SegmentStorage,
   settledReviews,
@@ -263,7 +265,7 @@ const EN: Record<string, string> = {
   'change.archiveIncomplete': 'every task must be complete before archiving',
   'change.tasks': 'tasks',
   'change.implemented': 'implemented',
-  'change.reviewed': 'reviewed',
+  'change.reviewed': 'reviewed by AI',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
   'change.updated': 'updated',
@@ -309,8 +311,7 @@ const EN: Record<string, string> = {
   'review.passTooltip': 'AI spec review of the plan ·',
   'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
   'review.missingTooltip': 'No AI review yet for tasks',
-  'review.missingSpecTooltip':
-    'Starts when the turn ends, or ask the agent to start it. Archive needs it',
+  'review.missingSpecTooltip': 'Click to ask the agent to run it. Archive needs it',
   'review.liveTooltip': 'Started',
   'review.waitTooltip': 'Waiting for the AI reviewer to start',
 }
@@ -1033,6 +1034,7 @@ export function RootBody(props: RootBodyProps): ReactNode {
         onPropose={() => draft(PROPOSE_DRAFT)}
         onSeeArchive={() => choose('archive')}
         onApply={(name) => draft(applyDraft(name))}
+        onReview={(name) => draft(reviewDraft(name))}
         onArchiveChange={archive}
         archiveState={archiveState}
       />
@@ -1276,6 +1278,8 @@ export interface RootViewProps {
   onSeeArchive(): void
   /** Fill the apply draft for a change that is not complete. */
   onApply(name: string): void
+  /** Fill the review draft for a change whose whole-spec review has not run. */
+  onReview(name: string): void
   /** Archive a completed change; the click is the authorization. */
   onArchiveChange(name: string): void
   /** The in-flight archive and its last refusal, if any. */
@@ -1385,6 +1389,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 onOpen: (name) => props.onOpenChange(name, false),
                 onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
                 onApply: () => props.onApply(row.name),
+                onReview: () => props.onReview(row.name),
               }),
             )}
           </div>
@@ -1406,6 +1411,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 onOpen: (name) => props.onOpenChange(name, false),
                 onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
                 onArchive: () => props.onArchiveChange(row.name),
+                onReview: () => props.onReview(row.name),
                 ...archiveFacts(row.name),
               }),
             )}
@@ -1640,12 +1646,55 @@ interface ChangeCardProps {
   onOpenArtifact?(kind: ArtifactKind): void
   onApply?(): void
   onArchive?(): void
+  /** Fill the review draft for a change whose whole-spec review has not run. */
+  onReview?(): void
 }
 
 /** One change card: the active gutter row, or the archived history row. */
 function ChangeCard(props: ChangeCardProps): ReactNode {
   if (props.archived === true || props.row.archived === true) return archivedChangeCard(props)
   return activeChangeCard(props)
+}
+
+/** One status dot and label; the not-run spec review is the card's own action. */
+function reviewUnit(unit: ReviewUnit, key: string, onReview?: () => void): ReactNode {
+  const state =
+    unit.spinning === true ? (
+      Spinner()
+    ) : (
+      <span className="dsh-openspec-change-state" data-state={unit.dot} />
+    )
+  const label = <span className="dsh-openspec-change-verdict-label">{unit.label}</span>
+  if (unit.action === 'review') {
+    return (
+      <button
+        key={key}
+        type="button"
+        className="dsh-openspec-change-verdict dsh-openspec-change-review-action"
+        title={unit.tooltip === undefined ? unit.label : `${unit.label} - ${unit.tooltip}`}
+        onClick={(event) => {
+          // The row opens the change; the status itself fills the review draft.
+          event.stopPropagation()
+          onReview?.()
+        }}
+      >
+        {state}
+        {label}
+      </button>
+    )
+  }
+  return (
+    <span className="dsh-openspec-change-verdict" key={key}>
+      {state}
+      {unit.tooltip === undefined ? (
+        label
+      ) : (
+        <primitives.Tooltip label={`${unit.label} - ${unit.tooltip}`} portal>
+          {label}
+        </primitives.Tooltip>
+      )}
+    </span>
+  )
 }
 
 /** An active change: a numeric gutter, then name, purpose, facts and navigation. */
@@ -1658,12 +1707,76 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
   // Readiness counts each task twice: once checked in tasks.md, once reviewed by AI.
   const progress = changeProgress(row)
   const purpose = summaryText(row.why ?? row.summary) === null ? null : (row.why ?? row.summary)
+  const head = (
+    <span className="dsh-openspec-card-head">
+      <span className="dsh-openspec-card-title">{row.name}</span>
+      {updated === null ? null : <span className="dsh-openspec-card-count">{updated}</span>}
+    </span>
+  )
+  const purposeNode =
+    purpose === null ? null : (
+      <span
+        className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-two"
+        title={purpose}
+      >
+        {purpose}
+      </span>
+    )
+  const facts = (
+    <>
+      <span className="dsh-openspec-change-phase">
+        <span className="dsh-openspec-change-dot" data-phase={phase} aria-hidden="true" />
+        {t(`phase.${phase}`)}
+      </span>
+      {row.totalTasks > 0 ? null : <span>{t('change.tasksNotWritten')}</span>}
+      {units.map((unit, index) =>
+        reviewUnit(unit, `${unit.label}-${String(index)}`, props.onReview),
+      )}
+    </>
+  )
+  const nav = (
+    <span className="dsh-openspec-change-nav">
+      {changeNav({ row, t, onOpenArtifact: props.onOpenArtifact })}
+      <span className="dsh-openspec-change-actions">
+        <button
+          type="button"
+          className="dsh-openspec-change-action"
+          disabled={complete || props.onApply === undefined}
+          {...(complete ? { title: t('change.applyComplete') } : {})}
+          onClick={(event) => {
+            event.stopPropagation()
+            props.onApply?.()
+          }}
+        >
+          {t('change.applyShort')}
+        </button>
+        <button
+          type="button"
+          className="dsh-openspec-change-action"
+          disabled={!complete || props.archiving === true}
+          {...(complete ? {} : { title: t('change.archiveIncomplete') })}
+          onClick={(event) => {
+            event.stopPropagation()
+            props.onArchive?.()
+          }}
+        >
+          {props.archiving === true ? t('change.archiving') : t('change.archive')}
+        </button>
+      </span>
+    </span>
+  )
+  const refusal =
+    props.archiveReason === undefined ? null : (
+      <span className="dsh-openspec-action-refusal" role="alert">
+        {`${t('change.archiveRefused')}: ${props.archiveReason}`}
+      </span>
+    )
   return (
     // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
     <div
       role="button"
       tabIndex={0}
-      className={`dsh-openspec-change-row${row.review === undefined ? '' : ' dsh-openspec-change-row-progress'}`}
+      className={`dsh-openspec-change-row${row.review === undefined ? '' : ' dsh-openspec-change-row-progress'}${progress === null ? '' : ' dsh-openspec-change-row-review'}`}
       onClick={() => props.onOpen(row.name)}
       onKeyDown={(event) => {
         // A nested button handles its own Enter/Space; only the row itself opens.
@@ -1673,39 +1786,43 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
         props.onOpen(row.name)
       }}
     >
-      <span className="dsh-openspec-change-gutter">
-        {row.review === undefined ? (
-          <>
-            <span
-              className={`dsh-openspec-change-count${row.totalTasks > 0 ? '' : ' dsh-openspec-change-count-none'}`}
-            >
-              {row.totalTasks > 0 ? (
-                <>
-                  {String(row.completedTasks)}
-                  <span className="dsh-openspec-change-count-total">{`/${String(row.totalTasks)}`}</span>
-                </>
-              ) : (
-                '—'
-              )}
-            </span>
-            <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
-          </>
-        ) : progress === null ? (
-          <>
-            <span className="dsh-openspec-change-percent">
-              {row.totalTasks > 0 ? (
-                <>
-                  {String(row.completedTasks)}
-                  <span className="dsh-openspec-change-percent-unit">{`/${String(row.totalTasks)}`}</span>
-                </>
-              ) : (
-                '—'
-              )}
-            </span>
-            <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
-          </>
-        ) : (
-          <>
+      {progress === null ? (
+        <span className="dsh-openspec-change-gutter">
+          {row.review === undefined ? (
+            <>
+              <span
+                className={`dsh-openspec-change-count${row.totalTasks > 0 ? '' : ' dsh-openspec-change-count-none'}`}
+              >
+                {row.totalTasks > 0 ? (
+                  <>
+                    {String(row.completedTasks)}
+                    <span className="dsh-openspec-change-count-total">{`/${String(row.totalTasks)}`}</span>
+                  </>
+                ) : (
+                  '—'
+                )}
+              </span>
+              <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
+            </>
+          ) : (
+            <>
+              <span className="dsh-openspec-change-percent">
+                {row.totalTasks > 0 ? (
+                  <>
+                    {String(row.completedTasks)}
+                    <span className="dsh-openspec-change-percent-unit">{`/${String(row.totalTasks)}`}</span>
+                  </>
+                ) : (
+                  '—'
+                )}
+              </span>
+              <span className="dsh-openspec-change-gutter-label">{t('change.tasks')}</span>
+            </>
+          )}
+        </span>
+      ) : (
+        <>
+          <span className="dsh-openspec-change-percent-cell">
             <span
               className="dsh-openspec-change-percent"
               title={`${String(progress.implemented)}/${String(progress.total)} ${t('change.implemented')} · ${String(progress.reviewed)}/${String(progress.total)} ${t('change.reviewed')}`}
@@ -1713,103 +1830,52 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
               {String(progress.percent)}
               <span className="dsh-openspec-change-percent-unit">%</span>
             </span>
-            <span className="dsh-openspec-change-gutter-line">
-              <span
-                className="dsh-openspec-change-state"
-                data-state={progress.implemented === progress.total ? 'done' : 'active'}
-              />
-              <b>{`${String(progress.implemented)}/${String(progress.total)}`}</b>{' '}
-              {t('change.implemented')}
-            </span>
+          </span>
+          <span className="dsh-openspec-change-gutter-line dsh-openspec-change-gutter-facts">
             <span
-              className="dsh-openspec-change-gutter-line"
-              title={
-                progress.missing.length === 0
-                  ? undefined
-                  : `${t('review.missingTooltip')} ${progress.missing.join(', ')}`
-              }
-            >
-              <span
-                className="dsh-openspec-change-state"
-                data-state={progress.reviewed === progress.total ? 'done' : 'active'}
-              />
-              <b>{`${String(progress.reviewed)}/${String(progress.total)}`}</b>{' '}
-              {t('change.reviewed')}
-            </span>
-          </>
-        )}
-      </span>
-      <span className="dsh-openspec-change-body">
-        <span className="dsh-openspec-card-head">
-          <span className="dsh-openspec-card-title">{row.name}</span>
-          {updated === null ? null : <span className="dsh-openspec-card-count">{updated}</span>}
-        </span>
-        {purpose === null ? null : (
+              className="dsh-openspec-change-state"
+              data-state={progress.implemented === progress.total ? 'done' : 'active'}
+            />
+            <b>{`${String(progress.implemented)}/${String(progress.total)}`}</b>{' '}
+            {t('change.implemented')}
+          </span>
           <span
-            className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-two"
-            title={purpose}
+            className="dsh-openspec-change-gutter-line dsh-openspec-change-gutter-nav"
+            title={
+              progress.missing.length === 0
+                ? undefined
+                : `${t('review.missingTooltip')} ${progress.missing.join(', ')}`
+            }
           >
-            {purpose}
+            <span
+              className="dsh-openspec-change-state"
+              data-state={progress.reviewed === progress.total ? 'done' : 'active'}
+            />
+            <b>{`${String(progress.reviewed)}/${String(progress.total)}`}</b> {t('change.reviewed')}
           </span>
-        )}
-        <span className="dsh-openspec-change-facts">
-          <span className="dsh-openspec-change-phase">
-            <span className="dsh-openspec-change-dot" data-phase={phase} aria-hidden="true" />
-            {t(`phase.${phase}`)}
-          </span>
-          {row.totalTasks > 0 ? null : <span>{t('change.tasksNotWritten')}</span>}
-          {units.map((unit, index) => (
-            <span className="dsh-openspec-change-verdict" key={`${unit.label}-${String(index)}`}>
-              {unit.spinning === true ? (
-                Spinner()
-              ) : (
-                <span className="dsh-openspec-change-state" data-state={unit.dot} />
-              )}
-              {unit.tooltip === undefined ? (
-                <span className="dsh-openspec-change-verdict-label">{unit.label}</span>
-              ) : (
-                <primitives.Tooltip label={`${unit.label} - ${unit.tooltip}`} portal>
-                  <span className="dsh-openspec-change-verdict-label">{unit.label}</span>
-                </primitives.Tooltip>
-              )}
-            </span>
-          ))}
+        </>
+      )}
+      {progress === null ? (
+        <span className="dsh-openspec-change-body">
+          {head}
+          {purposeNode}
+          <span className="dsh-openspec-change-facts">{facts}</span>
+          {nav}
+          {refusal}
         </span>
-        <span className="dsh-openspec-change-nav">
-          {changeNav({ row, t, onOpenArtifact: props.onOpenArtifact })}
-          <span className="dsh-openspec-change-actions">
-            <button
-              type="button"
-              className="dsh-openspec-change-action"
-              disabled={complete || props.onApply === undefined}
-              {...(complete ? { title: t('change.applyComplete') } : {})}
-              onClick={(event) => {
-                event.stopPropagation()
-                props.onApply?.()
-              }}
-            >
-              {t('change.applyShort')}
-            </button>
-            <button
-              type="button"
-              className="dsh-openspec-change-action"
-              disabled={!complete || props.archiving === true}
-              {...(complete ? {} : { title: t('change.archiveIncomplete') })}
-              onClick={(event) => {
-                event.stopPropagation()
-                props.onArchive?.()
-              }}
-            >
-              {props.archiving === true ? t('change.archiving') : t('change.archive')}
-            </button>
+      ) : (
+        <>
+          <span className="dsh-openspec-card-top">
+            {head}
+            {purposeNode}
           </span>
-        </span>
-        {props.archiveReason === undefined ? null : (
-          <span className="dsh-openspec-action-refusal" role="alert">
-            {`${t('change.archiveRefused')}: ${props.archiveReason}`}
+          <span className="dsh-openspec-change-facts dsh-openspec-change-facts-cell">{facts}</span>
+          <span className="dsh-openspec-change-nav-cell">
+            {nav}
+            {refusal}
           </span>
-        )}
-      </span>
+        </>
+      )}
     </div>
   )
 }
@@ -2979,6 +3045,88 @@ export const PANEL_CSS = `
 .dsh-openspec-change-row-progress {
   grid-template-columns: 132px minmax(0, 1fr);
 }
+/*
+ * A ready row splits into three rows so each count sits on the body row it
+ * answers; the percent is centred in the free space above both counts.
+ */
+.dsh-openspec-change-row-review {
+  position: relative;
+  grid-template-rows: auto auto auto;
+  align-items: start;
+  padding: 8px 0;
+  row-gap: 4px;
+}
+.dsh-openspec-change-row-review::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 132px;
+  width: 1px;
+  background: var(--dsw-alias-border-l1);
+  pointer-events: none;
+}
+.dsh-openspec-change-percent-cell {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 10px;
+}
+/* The sign hangs off the numeral so the numeral itself is centred. */
+.dsh-openspec-change-percent-cell .dsh-openspec-change-percent-unit {
+  display: inline-block;
+  width: 0;
+  margin-left: 0;
+  overflow: visible;
+  white-space: nowrap;
+  position: relative;
+  left: 1px;
+}
+.dsh-openspec-change-gutter-facts {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  justify-self: start;
+  padding-left: 8px;
+}
+.dsh-openspec-change-gutter-nav {
+  grid-column: 1;
+  grid-row: 3;
+  align-self: start;
+  justify-self: start;
+  padding-left: 8px;
+}
+.dsh-openspec-card-top {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 12px;
+}
+.dsh-openspec-change-facts-cell {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  padding: 0 12px;
+}
+.dsh-openspec-change-nav-cell {
+  grid-column: 2;
+  grid-row: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 12px;
+}
+.dsh-openspec-change-nav-cell .dsh-openspec-action-refusal {
+  flex: none;
+}
 .dsh-openspec-change-percent {
   align-self: center;
   font-size: 26px;
@@ -3075,6 +3223,20 @@ export const PANEL_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The not-run spec review is the card's one fact that starts an action. */
+.dsh-openspec-change-review-action {
+  padding: 0 5px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.dsh-openspec-change-review-action:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
 }
 /* A status dot: one shape and one colour vocabulary for the phase and every review state. */
 .dsh-openspec-change-state {

@@ -77,6 +77,9 @@ window.__ModuleLoader__.load({
     function applyDraft(name) {
       return `/openspec-apply-change ${name}`;
     }
+    function reviewDraft(name) {
+      return `Review the OpenSpec change ${name} if it has no current spec review PASS: start it with workflows(action: "start", definitionId: "spec-review", change: "${name}") and report the verdict.`;
+    }
     var CHANGE_SEGMENT = "dsh-resource://openspec/change/";
     var ARCHIVED_CHANGE_SEGMENT = "dsh-resource://openspec/archive-change/";
     var CAPABILITY_SEGMENT = "dsh-resource://openspec/spec/";
@@ -264,7 +267,8 @@ window.__ModuleLoader__.load({
         return {
           label: t("review.specMissing"),
           dot: "warning",
-          tooltip: t("review.missingSpecTooltip")
+          tooltip: t("review.missingSpecTooltip"),
+          action: "review"
         };
       }
       if (spec.verdict === "PASS" && spec.current) {
@@ -954,7 +958,7 @@ window.__ModuleLoader__.load({
       "change.archiveIncomplete": "every task must be complete before archiving",
       "change.tasks": "tasks",
       "change.implemented": "implemented",
-      "change.reviewed": "reviewed",
+      "change.reviewed": "reviewed by AI",
       "change.artifactLabel": "Change artifacts",
       "change.deltas": "delta specs",
       "change.updated": "updated",
@@ -1000,7 +1004,7 @@ window.__ModuleLoader__.load({
       "review.passTooltip": "AI spec review of the plan \xB7",
       "review.staleTooltip": "The PASS is stale: the change artifacts changed after it",
       "review.missingTooltip": "No AI review yet for tasks",
-      "review.missingSpecTooltip": "Starts when the turn ends, or ask the agent to start it. Archive needs it",
+      "review.missingSpecTooltip": "Click to ask the agent to run it. Archive needs it",
       "review.liveTooltip": "Started",
       "review.waitTooltip": "Waiting for the AI reviewer to start"
     };
@@ -1449,6 +1453,7 @@ window.__ModuleLoader__.load({
             onPropose: () => draft(PROPOSE_DRAFT),
             onSeeArchive: () => choose("archive"),
             onApply: (name) => draft(applyDraft(name)),
+            onReview: (name) => draft(reviewDraft(name)),
             onArchiveChange: archive,
             archiveState
           }
@@ -1680,7 +1685,8 @@ window.__ModuleLoader__.load({
               live: props.live?.[row.name],
               onOpen: (name) => props.onOpenChange(name, false),
               onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
-              onApply: () => props.onApply(row.name)
+              onApply: () => props.onApply(row.name),
+              onReview: () => props.onReview(row.name)
             })
           ) })
         ] }) : null,
@@ -1698,6 +1704,7 @@ window.__ModuleLoader__.load({
               onOpen: (name) => props.onOpenChange(name, false),
               onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
               onArchive: () => props.onArchiveChange(row.name),
+              onReview: () => props.onReview(row.name),
               ...archiveFacts(row.name)
             })
           ) })
@@ -1845,6 +1852,33 @@ window.__ModuleLoader__.load({
       if (props.archived === true || props.row.archived === true) return archivedChangeCard(props);
       return activeChangeCard(props);
     }
+    function reviewUnit(unit, key, onReview) {
+      const state = unit.spinning === true ? Spinner() : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-state", "data-state": unit.dot });
+      const label = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label });
+      if (unit.action === "review") {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "button",
+          {
+            type: "button",
+            className: "dsh-openspec-change-verdict dsh-openspec-change-review-action",
+            title: unit.tooltip === void 0 ? unit.label : `${unit.label} - ${unit.tooltip}`,
+            onClick: (event) => {
+              event.stopPropagation();
+              onReview?.();
+            },
+            children: [
+              state,
+              label
+            ]
+          },
+          key
+        );
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-verdict", children: [
+        state,
+        unit.tooltip === void 0 ? label : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: `${unit.label} - ${unit.tooltip}`, portal: true, children: label })
+      ] }, key);
+    }
     function activeChangeCard(props) {
       const { row, t } = props;
       const phase = phaseOf(row);
@@ -1853,6 +1887,62 @@ window.__ModuleLoader__.load({
       const units = reviewUnits(row.review, props.live, t, props.now);
       const progress = changeProgress(row);
       const purpose = summaryText(row.why ?? row.summary) === null ? null : row.why ?? row.summary;
+      const head = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: row.name }),
+        updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: updated })
+      ] });
+      const purposeNode = purpose === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "span",
+        {
+          className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-two",
+          title: purpose,
+          children: purpose
+        }
+      );
+      const facts = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-phase", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-dot", "data-phase": phase, "aria-hidden": "true" }),
+          t(`phase.${phase}`)
+        ] }),
+        row.totalTasks > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("change.tasksNotWritten") }),
+        units.map(
+          (unit, index) => reviewUnit(unit, `${unit.label}-${String(index)}`, props.onReview)
+        )
+      ] });
+      const nav = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-nav", children: [
+        changeNav({ row, t, onOpenArtifact: props.onOpenArtifact }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-actions", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "button",
+            {
+              type: "button",
+              className: "dsh-openspec-change-action",
+              disabled: complete || props.onApply === void 0,
+              ...complete ? { title: t("change.applyComplete") } : {},
+              onClick: (event) => {
+                event.stopPropagation();
+                props.onApply?.();
+              },
+              children: t("change.applyShort")
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "button",
+            {
+              type: "button",
+              className: "dsh-openspec-change-action",
+              disabled: !complete || props.archiving === true,
+              ...complete ? {} : { title: t("change.archiveIncomplete") },
+              onClick: (event) => {
+                event.stopPropagation();
+                props.onArchive?.();
+              },
+              children: props.archiving === true ? t("change.archiving") : t("change.archive")
+            }
+          )
+        ] })
+      ] });
+      const refusal = props.archiveReason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-action-refusal", role: "alert", children: `${t("change.archiveRefused")}: ${props.archiveReason}` });
       return (
         // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
@@ -1860,7 +1950,7 @@ window.__ModuleLoader__.load({
           {
             role: "button",
             tabIndex: 0,
-            className: `dsh-openspec-change-row${row.review === void 0 ? "" : " dsh-openspec-change-row-progress"}`,
+            className: `dsh-openspec-change-row${row.review === void 0 ? "" : " dsh-openspec-change-row-progress"}${progress === null ? "" : " dsh-openspec-change-row-review"}`,
             onClick: () => props.onOpen(row.name),
             onKeyDown: (event) => {
               if (event.target !== event.currentTarget) return;
@@ -1869,7 +1959,7 @@ window.__ModuleLoader__.load({
               props.onOpen(row.name);
             },
             children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter", children: row.review === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+              progress === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter", children: row.review === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                   "span",
                   {
@@ -1881,14 +1971,14 @@ window.__ModuleLoader__.load({
                   }
                 ),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
-              ] }) : progress === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+              ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent", children: row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
                   String(row.completedTasks),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent-unit", children: `/${String(row.totalTasks)}` })
                 ] }) : "\u2014" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-gutter-label", children: t("change.tasks") })
-              ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+              ] }) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent-cell", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
                   "span",
                   {
                     className: "dsh-openspec-change-percent",
@@ -1898,8 +1988,8 @@ window.__ModuleLoader__.load({
                       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-percent-unit", children: "%" })
                     ]
                   }
-                ),
-                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-gutter-line", children: [
+                ) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-gutter-line dsh-openspec-change-gutter-facts", children: [
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                     "span",
                     {
@@ -1914,7 +2004,7 @@ window.__ModuleLoader__.load({
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
                   "span",
                   {
-                    className: "dsh-openspec-change-gutter-line",
+                    className: "dsh-openspec-change-gutter-line dsh-openspec-change-gutter-nav",
                     title: progress.missing.length === 0 ? void 0 : `${t("review.missingTooltip")} ${progress.missing.join(", ")}`,
                     children: [
                       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -1930,65 +2020,23 @@ window.__ModuleLoader__.load({
                     ]
                   }
                 )
-              ] }) }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-body", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: row.name }),
-                  updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: updated })
+              ] }),
+              progress === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-body", children: [
+                head,
+                purposeNode,
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-facts", children: facts }),
+                nav,
+                refusal
+              ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-top", children: [
+                  head,
+                  purposeNode
                 ] }),
-                purpose === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                  "span",
-                  {
-                    className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-two",
-                    title: purpose,
-                    children: purpose
-                  }
-                ),
-                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-facts", children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-phase", children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-dot", "data-phase": phase, "aria-hidden": "true" }),
-                    t(`phase.${phase}`)
-                  ] }),
-                  row.totalTasks > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("change.tasksNotWritten") }),
-                  units.map((unit, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-verdict", children: [
-                    unit.spinning === true ? Spinner() : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-state", "data-state": unit.dot }),
-                    unit.tooltip === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: `${unit.label} - ${unit.tooltip}`, portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label }) })
-                  ] }, `${unit.label}-${String(index)}`))
-                ] }),
-                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-nav", children: [
-                  changeNav({ row, t, onOpenArtifact: props.onOpenArtifact }),
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-actions", children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                      "button",
-                      {
-                        type: "button",
-                        className: "dsh-openspec-change-action",
-                        disabled: complete || props.onApply === void 0,
-                        ...complete ? { title: t("change.applyComplete") } : {},
-                        onClick: (event) => {
-                          event.stopPropagation();
-                          props.onApply?.();
-                        },
-                        children: t("change.applyShort")
-                      }
-                    ),
-                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                      "button",
-                      {
-                        type: "button",
-                        className: "dsh-openspec-change-action",
-                        disabled: !complete || props.archiving === true,
-                        ...complete ? {} : { title: t("change.archiveIncomplete") },
-                        onClick: (event) => {
-                          event.stopPropagation();
-                          props.onArchive?.();
-                        },
-                        children: props.archiving === true ? t("change.archiving") : t("change.archive")
-                      }
-                    )
-                  ] })
-                ] }),
-                props.archiveReason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-action-refusal", role: "alert", children: `${t("change.archiveRefused")}: ${props.archiveReason}` })
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-facts dsh-openspec-change-facts-cell", children: facts }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-nav-cell", children: [
+                  nav,
+                  refusal
+                ] })
               ] })
             ]
           }
@@ -2841,6 +2889,88 @@ window.__ModuleLoader__.load({
     .dsh-openspec-change-row-progress {
       grid-template-columns: 132px minmax(0, 1fr);
     }
+    /*
+     * A ready row splits into three rows so each count sits on the body row it
+     * answers; the percent is centred in the free space above both counts.
+     */
+    .dsh-openspec-change-row-review {
+      position: relative;
+      grid-template-rows: auto auto auto;
+      align-items: start;
+      padding: 8px 0;
+      row-gap: 4px;
+    }
+    .dsh-openspec-change-row-review::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 132px;
+      width: 1px;
+      background: var(--dsw-alias-border-l1);
+      pointer-events: none;
+    }
+    .dsh-openspec-change-percent-cell {
+      grid-column: 1;
+      grid-row: 1;
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      padding: 0 10px;
+    }
+    /* The sign hangs off the numeral so the numeral itself is centred. */
+    .dsh-openspec-change-percent-cell .dsh-openspec-change-percent-unit {
+      display: inline-block;
+      width: 0;
+      margin-left: 0;
+      overflow: visible;
+      white-space: nowrap;
+      position: relative;
+      left: 1px;
+    }
+    .dsh-openspec-change-gutter-facts {
+      grid-column: 1;
+      grid-row: 2;
+      align-self: start;
+      justify-self: start;
+      padding-left: 8px;
+    }
+    .dsh-openspec-change-gutter-nav {
+      grid-column: 1;
+      grid-row: 3;
+      align-self: start;
+      justify-self: start;
+      padding-left: 8px;
+    }
+    .dsh-openspec-card-top {
+      grid-column: 2;
+      grid-row: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      padding: 0 12px;
+    }
+    .dsh-openspec-change-facts-cell {
+      grid-column: 2;
+      grid-row: 2;
+      min-width: 0;
+      padding: 0 12px;
+    }
+    .dsh-openspec-change-nav-cell {
+      grid-column: 2;
+      grid-row: 3;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      padding: 0 12px;
+    }
+    .dsh-openspec-change-nav-cell .dsh-openspec-action-refusal {
+      flex: none;
+    }
     .dsh-openspec-change-percent {
       align-self: center;
       font-size: 26px;
@@ -2937,6 +3067,20 @@ window.__ModuleLoader__.load({
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    /* The not-run spec review is the card's one fact that starts an action. */
+    .dsh-openspec-change-review-action {
+      padding: 0 5px;
+      border: 0;
+      border-radius: var(--dsw-radius-sm);
+      background: none;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+    .dsh-openspec-change-review-action:hover {
+      background: var(--dsw-alias-interactive-bg-hover);
+      color: var(--dsw-alias-label-primary);
     }
     /* A status dot: one shape and one colour vocabulary for the phase and every review state. */
     .dsh-openspec-change-state {

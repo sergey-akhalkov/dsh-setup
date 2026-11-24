@@ -165,6 +165,7 @@ import {
   requestCapability,
   requestChange,
   requestChangeList,
+  reviewDraft,
   reviewUnits,
   type SegmentStorage,
   SPECS_ADDRESS,
@@ -239,7 +240,7 @@ const COPY: Record<string, string> = {
   'change.archiveIncomplete': 'every task must be complete before archiving',
   'change.tasks': 'tasks',
   'change.implemented': 'implemented',
-  'change.reviewed': 'reviewed',
+  'change.reviewed': 'reviewed by AI',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
   'change.updated': 'updated',
@@ -285,8 +286,7 @@ const COPY: Record<string, string> = {
   'review.passTooltip': 'AI spec review of the plan ·',
   'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
   'review.missingTooltip': 'No AI review yet for tasks',
-  'review.missingSpecTooltip':
-    'Starts when the turn ends, or ask the agent to start it. Archive needs it',
+  'review.missingSpecTooltip': 'Click to ask the agent to run it. Archive needs it',
   'review.liveTooltip': 'Started',
   'review.waitTooltip': 'Waiting for the AI reviewer to start',
 }
@@ -973,6 +973,7 @@ function rootProps(overrides: Partial<RootViewProps> = {}): RootViewProps {
     onPropose: () => {},
     onSeeArchive: () => {},
     onApply: () => {},
+    onReview: () => {},
     onArchiveChange: () => {},
     ...overrides,
   }
@@ -1686,8 +1687,10 @@ describe('OpenSpec panel registration', () => {
     expect(fake.locales[0]?.dictionary['review.specPass']).toBe('AI spec review passed')
     expect(fake.locales[0]?.dictionary['review.specMissing']).toBe('AI spec review not run')
     expect(fake.locales[0]?.dictionary['change.implemented']).toBe('implemented')
-    expect(fake.locales[0]?.dictionary['change.reviewed']).toBe('reviewed')
-    expect(fake.locales[0]?.dictionary['review.missingSpecTooltip']).toContain('Archive needs it')
+    expect(fake.locales[0]?.dictionary['change.reviewed']).toBe('reviewed by AI')
+    expect(fake.locales[0]?.dictionary['review.missingSpecTooltip']).toContain(
+      'Click to ask the agent',
+    )
     expect(fake.locales[0]?.dictionary['capability.historyEmpty']).toBe(
       'No archived change produced this capability.',
     )
@@ -5037,7 +5040,7 @@ describe('OpenSpec panel capability body', () => {
 })
 
 describe('OpenSpec panel visual contract', () => {
-  it('puts the count in a gutter above one facts row and one navigation row', () => {
+  it('centres the percent and lands each count on its body row', () => {
     const review: ChangeReviewSummary = {
       spec: {
         verdict: 'PASS',
@@ -5069,24 +5072,63 @@ describe('OpenSpec panel visual contract', () => {
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
     const order = nodes(card)
-    const gutter = order.find((node) => node.props.className === 'dsh-openspec-change-gutter')
-    const facts = order.find((node) => node.props.className === 'dsh-openspec-change-facts')
+    const percent = order.find(
+      (node) => node.props.className === 'dsh-openspec-change-percent-cell',
+    )
+    const top = order.find((node) => node.props.className === 'dsh-openspec-card-top')
+    const facts = order.find(
+      (node) => node.props.className === 'dsh-openspec-change-facts dsh-openspec-change-facts-cell',
+    )
     const nav = order.find((node) => node.props.className === 'dsh-openspec-change-nav')
-    if (gutter === undefined || facts === undefined || nav === undefined) {
+    const implemented = order.find(
+      (node) =>
+        node.props.className === 'dsh-openspec-change-gutter-line dsh-openspec-change-gutter-facts',
+    )
+    const reviewed = order.find(
+      (node) =>
+        node.props.className === 'dsh-openspec-change-gutter-line dsh-openspec-change-gutter-nav',
+    )
+    if (
+      percent === undefined ||
+      top === undefined ||
+      facts === undefined ||
+      nav === undefined ||
+      implemented === undefined ||
+      reviewed === undefined
+    ) {
       throw new Error('card layout missing')
     }
-    expect(order.indexOf(gutter)).toBeLessThan(order.indexOf(facts))
-    expect(order.indexOf(facts)).toBeLessThan(order.indexOf(nav))
-    expect(textOf(gutter)).toContain('58%')
-    expect(textOf(gutter)).toContain('4/12 implemented')
-    expect(textOf(gutter)).toContain('10/12 reviewed')
+    expect(textOf(percent)).toContain('58%')
+    expect(textOf(implemented)).toContain('4/12 implemented')
+    expect(textOf(reviewed)).toContain('10/12 reviewed by AI')
+    expect(reviewed.props.title).toBe('No AI review yet for tasks 2.3, 4.1')
+    expect(nodes(implemented).map((node) => node.props['data-state'])).toContain('active')
+    expect(textOf(top)).toContain('add-auth')
     expect(textOf(facts)).toContain('applying')
     expect(textOf(facts)).toContain('AI spec review passed')
-    const reviewed = order.find(
-      (node) => node.props.title === 'No AI review yet for tasks 2.3, 4.1',
+    // The count lines occupy the body's facts and navigation rows, and the
+    // percent is centred in the free space above them.
+    const reviewCss = /\.dsh-openspec-change-row-review \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
+    expect(reviewCss).toContain('grid-template-rows: auto auto auto')
+    const percentCss = /\.dsh-openspec-change-percent-cell \{([^}]*)\}/.exec(PANEL_CSS)?.[1] ?? ''
+    expect(percentCss).toContain('grid-row: 1')
+    expect(percentCss).toContain('align-items: center')
+    expect(percentCss).toContain('justify-content: center')
+    expect(PANEL_CSS).toContain('.dsh-openspec-change-row-review::after')
+    const unitCss =
+      /\.dsh-openspec-change-percent-cell \.dsh-openspec-change-percent-unit \{([^}]*)\}/.exec(
+        PANEL_CSS,
+      )?.[1] ?? ''
+    expect(unitCss).toContain('width: 0')
+    expect(/\.dsh-openspec-change-gutter-facts \{([^}]*)\}/.exec(PANEL_CSS)?.[1]).toContain(
+      'grid-row: 2',
     )
-    if (reviewed === undefined) throw new Error('reviewed line missing')
-    expect(nodes(reviewed).map((node) => node.props['data-state'])).toContain('active')
+    expect(/\.dsh-openspec-change-gutter-nav \{([^}]*)\}/.exec(PANEL_CSS)?.[1]).toContain(
+      'grid-row: 3',
+    )
+    expect(/\.dsh-openspec-change-facts-cell \{([^}]*)\}/.exec(PANEL_CSS)?.[1]).toContain(
+      'grid-row: 2',
+    )
     // The gutter count and the coverage word are counts, not tracking bars.
     expect(nodes(card).filter((node) => node.props.role === 'progressbar')).toHaveLength(0)
     // One navigation row carries the artifact entries beside both actions.
@@ -5131,7 +5173,7 @@ describe('OpenSpec panel visual contract', () => {
     expect(textOf(reviewedCard)).toContain('ready to apply')
     expect(textOf(reviewedCard)).toContain('0%')
     expect(textOf(reviewedCard)).toContain('0/12 implemented')
-    expect(textOf(reviewedCard)).toContain('0/12 reviewed')
+    expect(textOf(reviewedCard)).toContain('0/12 reviewed by AI')
     const plain = RootView(
       rootProps({
         changes: {
@@ -5186,6 +5228,44 @@ describe('OpenSpec panel visual contract', () => {
     expect(String(emptyCard.props.className)).toContain('dsh-openspec-change-row-progress')
     expect(textOf(emptyCard)).toContain('—')
     expect(textOf(emptyCard)).not.toContain('implemented')
+  })
+
+  it('fills the review draft from the not-run status without opening the change', () => {
+    const reviewed: string[] = []
+    const opened: string[] = []
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 0, 12, EMPTY_PRESENCE, {
+              phase: 'ready-to-apply',
+              review: { spec: null, tasks: { checked: 0, passed: 0, missing: [] } },
+            }),
+          ]),
+        },
+        now: NOW,
+        onReview: (name) => reviewed.push(name),
+        onOpenChange: (name) => opened.push(name),
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const status = nodes(card).find(
+      (node) => node.type === 'button' && textOf(node) === 'AI spec review not run',
+    )
+    if (status === undefined) throw new Error('review action missing')
+    expect(String(status.props.className)).toContain('dsh-openspec-change-review-action')
+    expect(status.props.title).toBe(
+      'AI spec review not run - Click to ask the agent to run it. Archive needs it',
+    )
+    const stop = vi.fn()
+    ;(status.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: stop,
+    })
+    expect(stop).toHaveBeenCalled()
+    expect(reviewed).toEqual(['add-auth'])
+    expect(opened).toEqual([])
   })
 
   it('keeps a long live-review fact on one line with its full text in the tooltip', () => {
@@ -5393,15 +5473,22 @@ describe('OpenSpec review state', () => {
     expect(error[0]).toMatchObject({ label: 'AI spec review failed', dot: 'error' })
   })
 
-  it('reads a missing local record as not run and drops an unreadable task unit', () => {
+  it('reads a missing local record as not run with its start action', () => {
     const units = reviewUnits({ spec: null, tasks: null }, undefined, t, NOW)
     expect(units).toEqual([
       {
         label: 'AI spec review not run',
         dot: 'warning',
-        tooltip: 'Starts when the turn ends, or ask the agent to start it. Archive needs it',
+        tooltip: 'Click to ask the agent to run it. Archive needs it',
+        action: 'review',
       },
     ])
+  })
+
+  it('writes a review draft that names the spec-review start', () => {
+    expect(reviewDraft('add-auth')).toBe(
+      'Review the OpenSpec change add-auth if it has no current spec review PASS: start it with workflows(action: "start", definitionId: "spec-review", change: "add-auth") and report the verdict.',
+    )
   })
 
   it('counts each task twice in the readiness percent', () => {
