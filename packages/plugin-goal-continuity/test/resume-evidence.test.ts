@@ -90,6 +90,38 @@ describe('checkpoint-evidenced continuation', () => {
     expect(notices(harness)).toContain('check the log at 07:00')
   })
 
+  it('keeps an earlier stop as the only cause and notice on a reset round', async () => {
+    const done = createHarness()
+    setGoal(done)
+    turnStart(done, 1)
+    const doneGoal = done.goals.goal
+    if (doneGoal === undefined) throw new Error('test goal missing')
+    goalMessage(done, doneGoal, 1)
+    checkpointCall(done, { outcome: 'done', next: 'nothing left' })
+    turnEnd(done, RESET, 1)
+    done.emitStatus('idle')
+    await done.flush()
+    expect(done.injected).toHaveLength(1)
+    expect(notices(done)).toContain('declares the objective done')
+    expect(notices(done)).not.toContain('loop guard')
+    expect(done.goals.goal?.phase).toBe('active')
+
+    const decision = createHarness()
+    setGoal(decision)
+    turnStart(decision, 1)
+    const decisionGoal = decision.goals.goal
+    if (decisionGoal === undefined) throw new Error('test goal missing')
+    goalMessage(decision, decisionGoal, 1)
+    checkpointCall(decision, continuePlan('user_decision', 'first-night', 'check the log at 07:00'))
+    turnEnd(decision, RESET, 1)
+    decision.emitStatus('idle')
+    await decision.flush()
+    expect(decision.injected).toHaveLength(1)
+    expect(notices(decision)).toContain('first-night')
+    expect(notices(decision)).not.toContain('loop guard')
+    expect(decision.goals.goal?.phase).toBe('active')
+  })
+
   it('resumes a disarmed goal with the plan next action in the notice', async () => {
     const harness = createHarness()
     setGoal(harness, { activation: 'disarmed' })

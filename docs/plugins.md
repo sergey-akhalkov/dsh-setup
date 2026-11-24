@@ -165,10 +165,10 @@ attribution are in [answer-pages.md](answer-pages.md).
 
 [`packages/plugin-goal-continuity`](../packages/plugin-goal-continuity) is the Host-only supervisor
 for an existing root-agent goal. It reconciles an active but disarmed goal after recoverable harness
-stops, prevents the goal driver's pause for a loop-guard reset, extends a reached round cap under a
-bounded budget, and records a visible `continuity-stopped` block on real stops. Notices are
-non-waking (`agent.inject`); the supervisor never starts a turn, forks the driver, or calls the
-model.
+stops, prevents the goal driver's pause and stops continuation when the loop guard resets a repeated
+line, extends a reached round cap under a bounded budget, and records a visible `continuity-stopped`
+block on real stops. Notices are non-waking (`agent.inject`); the supervisor never starts a turn,
+forks the driver, or calls the model.
 
 Automatic continuation is a decision, not a reflex. A user Stop ends it by default, and the
 supervisor otherwise reads the session's latest successful `work_checkpoint` plan before it resumes:
@@ -183,6 +183,12 @@ supervisor otherwise reads the session's latest successful `work_checkpoint` pla
   agent to continue;
 - two consecutive no-effect goal rounds — no write, no worker start, no checkpoint, whatever the end
   reason — stop the run the same way; an effective round or a direct user message resets the count;
+- a loop-guard reset stops the run: it is not a recoverable harness stop, because the model a resume
+  would drive is still looping. The driver's pause is prevented, the goal stays active and disarmed,
+  and one bounded notice names the reset and its recovery — a message, or `/goal resume` below the
+  round cap; at or above it the notice names the cap, because `/goal resume` is refused until a
+  message lets the supervisor raise it. A stop the rules above already made keeps its own cause and
+  single notice;
 - a user-aborted goal round is the exception: it already ends through the driver's durable pause, so
   the supervisor never disarms it;
 - the rules apply to a recoverable end; a token limit, an agent error, or a final or unrecognized hook

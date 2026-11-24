@@ -49,13 +49,14 @@ async function nonGoalAbort(harness: Harness, reason: Record<string, unknown>): 
 }
 
 describe('deterministic signal tracking', () => {
-  it('resumes after a non-goal hook reset', async () => {
+  it('does not resume after a non-goal hook reset', async () => {
     const harness = createHarness()
     setGoal(harness)
     await nonGoalAbort(harness, RESET)
-    expect(countCalls(harness, 'resume')).toBe(1)
+    expect(countCalls(harness, 'resume')).toBe(0)
     expect(harness.injected).toHaveLength(1)
-    expect(harness.goals.goal?.activation).toBe('armed')
+    expect(harness.goals.goal?.activation).toBe('disarmed')
+    expect(harness.goals.goal?.phase).toBe('active')
   })
 
   it('acts on a round-limit goal change without an activation edge', async () => {
@@ -127,7 +128,7 @@ describe('deferred reconciliation', () => {
     setGoal(harness)
     turnStart(harness)
     driverDisarm(harness)
-    turnEnd(harness, RESET)
+    turnEnd(harness, COMPLETED)
     expect(countCalls(harness, 'resume')).toBe(0)
     await harness.flush()
     expect(countCalls(harness, 'resume')).toBe(1)
@@ -274,12 +275,16 @@ describe('user abort policy', () => {
 })
 
 describe('pause prevention', () => {
-  it('disarms before the idle settlement so a reset does not become a pause', async () => {
+  it('resumes nothing on a reset and leaves one notice, the goal disarmed and active', async () => {
     const harness = createHarness()
     setGoal(harness, { roundsStarted: 4 })
     await goalRoundAbort(harness, RESET)
     expect(countCalls(harness, 'pause')).toBe(0)
-    expect(countCalls(harness, 'resume')).toBe(1)
+    expect(countCalls(harness, 'resume')).toBe(0)
+    expect(harness.goals.goal?.phase).toBe('active')
+    expect(harness.goals.goal?.activation).toBe('disarmed')
+    expect(harness.injected).toHaveLength(1)
+    expect(noticeText(harness.injected[0] as UserMessage)).toContain('loop guard')
   })
 
   it('prevents the pause for a final cause and then blocks the goal', async () => {
@@ -329,21 +334,44 @@ describe('pause prevention', () => {
   })
 })
 
-describe('reset continuation and round-cap extension', () => {
-  it('extends the cap for a reset on the last permitted round', async () => {
+describe('reset stop and round-cap extension', () => {
+  it('extends nothing for a reset at the round cap and names the cap in the notice', async () => {
     const harness = createHarness()
     setGoal(harness, { roundsStarted: 256, maxGoalRounds: 256 })
     await goalRoundAbort(harness, RESET)
+    expect(countCalls(harness, 'edit')).toBe(0)
+    expect(countCalls(harness, 'resume')).toBe(0)
+    expect(harness.goals.goal?.maxGoalRounds).toBe(256)
+    expect(harness.goals.goal?.phase).toBe('active')
+    expect(harness.goals.goal?.activation).toBe('disarmed')
+    expect(harness.injected).toHaveLength(1)
+    expect(noticeText(harness.injected[0] as UserMessage)).toContain('/goal resume is refused')
+  })
+
+  it('extends the cap and continues after a direct message clears the reset stop', async () => {
+    const harness = createHarness()
+    setGoal(harness, { roundsStarted: 256, maxGoalRounds: 256 })
+    await goalRoundAbort(harness, RESET)
+    expect(countCalls(harness, 'edit')).toBe(0)
+    expect(countCalls(harness, 'resume')).toBe(0)
+
+    turnStart(harness, 2)
+    directMessage(harness)
+    turnEnd(harness, COMPLETED, 2)
+    harness.emitStatus('idle')
+    await harness.flush()
     expect(countCalls(harness, 'edit')).toBe(1)
     expect(harness.goals.goal?.maxGoalRounds).toBe(1256)
     expect(countCalls(harness, 'resume')).toBe(1)
-    expect(harness.injected).toHaveLength(1)
+    expect(harness.injected).toHaveLength(2)
   })
 
-  it('blocks an active goal when no extension capacity remains', async () => {
+  it('blocks a disarmed goal at its cap when no extension capacity remains', async () => {
     const harness = createHarness({ config: { maxRoundExtensions: 0 } })
+    await harness.flush()
     setGoal(harness, { roundsStarted: 256, maxGoalRounds: 256 })
-    await goalRoundAbort(harness, RESET)
+    driverDisarm(harness)
+    await harness.flush()
     expect(countCalls(harness, 'edit')).toBe(0)
     expect(countCalls(harness, 'resume')).toBe(0)
     expect(harness.goals.goal?.blockedReason?.code).toBe('continuity-stopped')
@@ -409,8 +437,10 @@ describe('reset continuation and round-cap extension', () => {
 
   it('enforces the hard total cap', async () => {
     const harness = createHarness()
+    await harness.flush()
     setGoal(harness, { roundsStarted: 4500, maxGoalRounds: 4500 })
-    await goalRoundAbort(harness, RESET)
+    driverDisarm(harness)
+    await harness.flush()
     expect(countCalls(harness, 'edit')).toBe(0)
     expect(harness.goals.goal?.blockedReason?.code).toBe('continuity-stopped')
     expect(harness.injected).toHaveLength(1)
@@ -436,8 +466,10 @@ describe('reset continuation and round-cap extension', () => {
 
   it('blocks when one extension still cannot cover the rounds already started', async () => {
     const harness = createHarness({ config: { maxRoundExtensions: 1 } })
+    await harness.flush()
     setGoal(harness, { roundsStarted: 1500, maxGoalRounds: 256 })
-    await goalRoundAbort(harness, RESET)
+    driverDisarm(harness)
+    await harness.flush()
     expect(countCalls(harness, 'edit')).toBe(1)
     expect(harness.goals.goal?.maxGoalRounds).toBe(1256)
     expect(countCalls(harness, 'resume')).toBe(0)
@@ -447,8 +479,10 @@ describe('reset continuation and round-cap extension', () => {
 
   it('keeps extending while extension capacity remains to cover the started rounds', async () => {
     const harness = createHarness()
+    await harness.flush()
     setGoal(harness, { roundsStarted: 1500, maxGoalRounds: 256 })
-    await goalRoundAbort(harness, RESET)
+    driverDisarm(harness)
+    await harness.flush()
     expect(countCalls(harness, 'edit')).toBe(2)
     expect(harness.goals.goal?.maxGoalRounds).toBe(2256)
     expect(countCalls(harness, 'resume')).toBe(1)
@@ -457,9 +491,11 @@ describe('reset continuation and round-cap extension', () => {
 
   it('blocks after an extension when every resume attempt fails', async () => {
     const harness = createHarness()
+    await harness.flush()
     setGoal(harness, { roundsStarted: 256, maxGoalRounds: 256 })
     harness.goals.failResumeAttempts = 2
-    await goalRoundAbort(harness, RESET)
+    driverDisarm(harness)
+    await harness.flush()
     expect(countCalls(harness, 'edit')).toBe(1)
     expect(countCalls(harness, 'resume')).toBe(2)
     expect(harness.goals.goal?.blockedReason?.code).toBe('continuity-stopped')
@@ -471,10 +507,12 @@ describe('reset continuation and round-cap extension', () => {
 
   it('blocks when a later extension fails after a partial extension', async () => {
     const harness = createHarness()
+    await harness.flush()
     setGoal(harness, { roundsStarted: 1500, maxGoalRounds: 256 })
     harness.goals.failEditAfter = 1
     harness.goals.failEditAttempts = 2
-    await goalRoundAbort(harness, RESET)
+    driverDisarm(harness)
+    await harness.flush()
     expect(countCalls(harness, 'edit')).toBe(3)
     expect(harness.goals.goal?.maxGoalRounds).toBe(1256)
     expect(harness.goals.goal?.blockedReason?.code).toBe('continuity-stopped')
@@ -671,7 +709,7 @@ describe('visible bounded notices', () => {
     const text = noticeText(notice)
     expect(text.length).toBeLessThanOrEqual(600)
     expect(text).not.toContain('SECRET OBJECTIVE')
-    expect(text).toContain('resumed the goal')
+    expect(text).toContain('stopped automatic continuation')
     const summary = (notice.source as { summary?: string }).summary ?? ''
     expect(summary.length).toBeLessThanOrEqual(120)
     expect(harness.followups).toHaveLength(0)
@@ -679,7 +717,7 @@ describe('visible bounded notices', () => {
     expect(harness.agent.status).toBe('idle')
   })
 
-  it('produces exactly one notice for an extension and resume', async () => {
+  it('produces exactly one notice for a reset at the cap', async () => {
     const harness = createHarness()
     setGoal(harness, { roundsStarted: 256, maxGoalRounds: 256 })
     await goalRoundAbort(harness, RESET)

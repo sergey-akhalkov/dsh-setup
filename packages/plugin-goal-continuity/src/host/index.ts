@@ -431,7 +431,7 @@ interface Suppression {
 
 /** The cause named in a notice or block. */
 type StopCause =
-  | 'reset'
+  | 'loop-guard-reset'
   | 'non-goal-stop'
   | 'restart'
   | 'in-process-disarm'
@@ -553,8 +553,8 @@ function isSpecificCause(cause: StopCause): boolean {
 /** Human-readable cause used by notices and block reasons. */
 function causeLabel(cause: StopCause): string {
   switch (cause) {
-    case 'reset':
-      return 'a recoverable loop-guard reset'
+    case 'loop-guard-reset':
+      return 'the loop guard reset'
     case 'non-goal-stop':
       return 'your Stop on a turn that was not a goal round'
     case 'restart':
@@ -2673,10 +2673,12 @@ function planStop(plan: ContinuationPlan): { cause: StopCause; detail: string } 
  * bounded to the room the recovery sentence leaves, so truncation can never cut
  * the one instruction the notice exists for.
  */
-function stopNotice(stop: { readonly cause: StopCause; readonly detail: string }): string {
+function stopNotice(
+  stop: { readonly cause: StopCause; readonly detail: string },
+  recovery = 'Send a message with what to do next, or resume with /goal resume.',
+): string {
   const header = 'Goal continuity stopped automatic continuation: '
   const tail = '. The goal stays active and unchanged. '
-  const recovery = 'Send a message with what to do next, or resume with /goal resume.'
   const room = NOTICE_TEXT_MAX_CHARS - header.length - tail.length - recovery.length
   return `${header}${bound(stop.detail, Math.max(80, room))}${tail}${recovery}`
 }
@@ -4203,6 +4205,34 @@ export function apply(ctx: Context, config?: Config): void {
     stopForEvidence(agent, state, turn)
   }
 
+  /**
+   * Stop continuation on a loop-guard reset: the model that a resume would drive
+   * is still looping, so the goal stays active and disarmed until a user signal.
+   * A stop the continuation decision already set keeps its own cause and notice.
+   */
+  function stopForReset(agent: Agent, state: AgentState): void {
+    if (state.suppression !== null) return
+    const cause = 'loop-guard-reset'
+    const detail = 'the loop guard stopped a repeated reasoning line'
+    state.suppression = { cause, terminal: false, detail }
+    const goal = readGoal(agent)
+    if (goal === undefined || goal.phase !== 'active') return
+    const atCap = goal.roundsStarted >= goal.maxGoalRounds
+    // A notice injected inside the turn/end dispatch never reaches the inbox.
+    queueMicrotask(() => {
+      deliverNotice(
+        agent,
+        stopNotice(
+          { cause, detail },
+          atCap
+            ? 'Send a message with what to do next; the supervisor raises the round cap and continues. /goal resume is refused until the cap rises.'
+            : undefined,
+        ),
+        'goal-continuity: stopped after the loop guard reset',
+      )
+    })
+  }
+
   function handleTurnEnd(agent: Agent, state: AgentState, reason: TurnEndReason): void {
     const goalRound = state.goalRound
     state.goalRound = false
@@ -4210,18 +4240,20 @@ export function apply(ctx: Context, config?: Config): void {
     applyContinuationDecision(agent, state, goalRound, reason)
     const hook = hookCause(reason)
     if (hook !== undefined) {
-      const cause: StopCause =
-        hook === 'reset' ? 'reset' : hook === 'final' ? 'final-hook' : 'unknown-hook'
-      if (hook !== 'reset') {
-        state.suppression = {
-          cause,
-          terminal: true,
-          detail:
-            hook === 'final' ? 'the loop guard final stop' : 'an unrecognized hook cancellation',
-        }
+      if (hook === 'reset') {
+        if (goalRound) preventPause(agent)
+        schedule(agent, state, 'loop-guard-reset')
+        stopForReset(agent, state)
+        return
+      }
+      state.suppression = {
+        cause: hook === 'final' ? 'final-hook' : 'unknown-hook',
+        terminal: true,
+        detail:
+          hook === 'final' ? 'the loop guard final stop' : 'an unrecognized hook cancellation',
       }
       if (goalRound) preventPause(agent)
-      schedule(agent, state, cause)
+      schedule(agent, state, hook === 'final' ? 'final-hook' : 'unknown-hook')
       return
     }
     if (reason.kind === 'aborted') {
