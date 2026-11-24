@@ -49,9 +49,29 @@ export function applyDraft(name: string): string {
   return `/openspec-apply-change ${name}`
 }
 
-/** The draft a missing whole-spec review fills; the user sends it. */
-export function reviewDraft(name: string): string {
-  return `Review the OpenSpec change ${name} if it has no current spec review PASS: start it with workflows(action: "start", definitionId: "spec-review", change: "${name}") and report the verdict.`
+/** The repair a card status offers; a click only fills a draft. */
+export type RepairAction =
+  | 'finish-planning'
+  | 'start-review'
+  | 'refresh-review'
+  | 'fix-findings'
+  | 'retry-review'
+
+/** The composer draft for one status action; the user sends it. */
+export function repairDraft(action: RepairAction, name: string, findings = 0): string {
+  const review = `workflows(action: "start", definitionId: "spec-review", change: "${name}")`
+  switch (action) {
+    case 'finish-planning':
+      return `Finish the plan for the OpenSpec change ${name}: complete its design, delta specs and tasks so it is ready to apply.`
+    case 'start-review':
+      return `Review the OpenSpec change ${name} if it has no current spec review PASS: start it with ${review} and report the verdict.`
+    case 'refresh-review':
+      return `The AI spec review of the OpenSpec change ${name} is outdated because the plan changed after the review. Re-run it with ${review} and report the verdict.`
+    case 'fix-findings':
+      return `The AI spec review of the OpenSpec change ${name} reported ${String(findings)} findings. Fix them, then re-run the review with ${review} and report the verdict.`
+    case 'retry-review':
+      return `The AI spec review of the OpenSpec change ${name} failed. Re-run it with ${review} and report the verdict; if it fails again, report why.`
+  }
 }
 
 /** Artifact kinds already present in a change, beside its progress. */
@@ -556,8 +576,10 @@ export interface ReviewUnit {
   readonly tooltip?: string
   /** A live review spins; a waiting review stays still. */
   readonly spinning?: boolean
-  /** The reader can start this review from the panel; the card renders a button. */
-  readonly action?: 'review'
+  /** The reader can ask the agent to repair this state; the card renders a button. */
+  readonly action?: RepairAction
+  /** The findings count, when the action is `fix-findings`. */
+  readonly findings?: number
 }
 
 /** The whole-spec unit: PASS, outdated, findings, error, or not reviewed. */
@@ -571,7 +593,7 @@ function reviewSpecUnit(
       label: t('review.specMissing'),
       dot: 'warning',
       tooltip: t('review.missingSpecTooltip'),
-      action: 'review',
+      action: 'start-review',
     }
   }
   if (spec.verdict === 'PASS' && spec.current) {
@@ -584,15 +606,28 @@ function reviewSpecUnit(
     }
   }
   if (!spec.current) {
-    return { label: t('review.specOutdated'), dot: 'warning', tooltip: t('review.staleTooltip') }
+    return {
+      label: t('review.specOutdated'),
+      dot: 'warning',
+      tooltip: t('review.staleTooltip'),
+      action: 'refresh-review',
+    }
   }
   if (spec.verdict === 'FINDINGS') {
     return {
       label: `${t('review.specFindings')}: ${String(spec.findings)} ${t('review.findings')}`,
       dot: 'error',
+      tooltip: t('review.findingsTooltip'),
+      action: 'fix-findings',
+      findings: spec.findings,
     }
   }
-  return { label: t('review.specError'), dot: 'error' }
+  return {
+    label: t('review.specError'),
+    dot: 'error',
+    tooltip: t('review.errorTooltip'),
+    action: 'retry-review',
+  }
 }
 
 /** One live review: a running unit spins, a waiting unit stays still. */

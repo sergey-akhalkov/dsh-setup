@@ -717,11 +717,14 @@ green for a done state, amber for one that waits on the reader, red for a failed
 running or waiting one. The derived status (`planning`, `ready to apply`, `applying` or `complete`)
 keeps its own dot and label. The whole-spec record reads `AI spec review passed` while the record
 still matches the change artifacts, `AI spec review outdated` after a plan edit, `AI spec review: N
-findings`, `AI spec review failed`, or `AI spec review not run` when this clone has no local record;
-that not-run label is a button whose tooltip names the click action and whose click fills the
-composer with a request to start the whole-spec review for that change, without submitting it, and
-archive still needs that review. The row keeps one uniform gap
-between facts. The navigation row holds one text button per artifact
+findings`, `AI spec review failed`, or `AI spec review not run` when this clone has no local record.
+Every fact with the warning or error dot is a button whose tooltip names its click action; the click
+fills the composer with a repair request for that change, without submitting it: `planning` asks for
+the plan to be finished, `AI spec review outdated` for the review to be refreshed, `AI spec review:
+N findings` for the findings to be fixed and the review re-run, `AI spec review failed` for the
+review to be retried, and `AI spec review not run` for it to be started (archive still needs that
+review). A passed review and the informational statuses stay plain facts. The row keeps one uniform
+gap between facts. The navigation row holds one text button per artifact
 the change carries (`proposal`, `design`, `specs N`, `tasks N`) beside both actions: `Apply` while the
 change is not complete and `Archive` once every task is done, with the inapplicable one disabled and
 its reason on the control. An active row states no commit fact — the change detail header carries it —

@@ -74,6 +74,7 @@ import {
   phaseOf,
   phaseTone,
   type ReadState,
+  type RepairAction,
   type Requirement,
   type ReviewLiveEntry,
   type ReviewUnit,
@@ -82,13 +83,13 @@ import {
   type RootSegment,
   readSegment,
   relativeLabel,
+  repairDraft,
   requestArchive,
   requestCapabilities,
   requestCapability,
   requestChange,
   requestChangeList,
   requestLiveReviews,
-  reviewDraft,
   reviewUnits,
   type SegmentStorage,
   settledReviews,
@@ -309,9 +310,12 @@ const EN: Record<string, string> = {
   'review.integrationUnit': 'AI code review ·',
   'review.waiting': 'Waiting for the AI reviewer',
   'review.passTooltip': 'AI spec review of the plan ·',
-  'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
+  'review.staleTooltip': 'Click to ask the agent to refresh it: the plan changed after the review',
   'review.missingTooltip': 'No AI review yet for tasks',
   'review.missingSpecTooltip': 'Click to ask the agent to run it. Archive needs it',
+  'review.findingsTooltip': 'Click to ask the agent to fix the findings and re-run the review',
+  'review.errorTooltip': 'Click to ask the agent to retry the review',
+  'review.planningHint': 'Click to ask the agent to finish the plan',
   'review.liveTooltip': 'Started',
   'review.waitTooltip': 'Waiting for the AI reviewer to start',
 }
@@ -1034,7 +1038,7 @@ export function RootBody(props: RootBodyProps): ReactNode {
         onPropose={() => draft(PROPOSE_DRAFT)}
         onSeeArchive={() => choose('archive')}
         onApply={(name) => draft(applyDraft(name))}
-        onReview={(name) => draft(reviewDraft(name))}
+        onRepair={(name, action, findings) => draft(repairDraft(action, name, findings))}
         onArchiveChange={archive}
         archiveState={archiveState}
       />
@@ -1278,8 +1282,8 @@ export interface RootViewProps {
   onSeeArchive(): void
   /** Fill the apply draft for a change that is not complete. */
   onApply(name: string): void
-  /** Fill the review draft for a change whose whole-spec review has not run. */
-  onReview(name: string): void
+  /** Fill the repair draft for a state that waits on the reader. */
+  onRepair(name: string, action: RepairAction, findings?: number): void
   /** Archive a completed change; the click is the authorization. */
   onArchiveChange(name: string): void
   /** The in-flight archive and its last refusal, if any. */
@@ -1389,7 +1393,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 onOpen: (name) => props.onOpenChange(name, false),
                 onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
                 onApply: () => props.onApply(row.name),
-                onReview: () => props.onReview(row.name),
+                onRepair: (action, findings) => props.onRepair(row.name, action, findings),
               }),
             )}
           </div>
@@ -1411,7 +1415,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 onOpen: (name) => props.onOpenChange(name, false),
                 onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
                 onArchive: () => props.onArchiveChange(row.name),
-                onReview: () => props.onReview(row.name),
+                onRepair: (action, findings) => props.onRepair(row.name, action, findings),
                 ...archiveFacts(row.name),
               }),
             )}
@@ -1646,8 +1650,8 @@ interface ChangeCardProps {
   onOpenArtifact?(kind: ArtifactKind): void
   onApply?(): void
   onArchive?(): void
-  /** Fill the review draft for a change whose whole-spec review has not run. */
-  onReview?(): void
+  /** Fill the repair draft for a state that waits on the reader. */
+  onRepair?(action: RepairAction, findings?: number): void
 }
 
 /** One change card: the active gutter row, or the archived history row. */
@@ -1656,8 +1660,12 @@ function ChangeCard(props: ChangeCardProps): ReactNode {
   return activeChangeCard(props)
 }
 
-/** One status dot and label; the not-run spec review is the card's own action. */
-function reviewUnit(unit: ReviewUnit, key: string, onReview?: () => void): ReactNode {
+/** One status dot and label; a repair state is the card's own action. */
+function reviewUnit(
+  unit: ReviewUnit,
+  key: string,
+  onRepair?: (action: RepairAction, findings?: number) => void,
+): ReactNode {
   const state =
     unit.spinning === true ? (
       Spinner()
@@ -1665,17 +1673,18 @@ function reviewUnit(unit: ReviewUnit, key: string, onReview?: () => void): React
       <span className="dsh-openspec-change-state" data-state={unit.dot} />
     )
   const label = <span className="dsh-openspec-change-verdict-label">{unit.label}</span>
-  if (unit.action === 'review') {
+  if (unit.action !== undefined) {
+    const action = unit.action
     return (
       <button
         key={key}
         type="button"
-        className="dsh-openspec-change-verdict dsh-openspec-change-review-action"
+        className="dsh-openspec-change-verdict dsh-openspec-change-repair-action"
         title={unit.tooltip === undefined ? unit.label : `${unit.label} - ${unit.tooltip}`}
         onClick={(event) => {
-          // The row opens the change; the status itself fills the review draft.
+          // The row opens the change; the status itself fills the repair draft.
           event.stopPropagation()
-          onReview?.()
+          onRepair?.(action, unit.findings)
         }}
       >
         {state}
@@ -1724,13 +1733,28 @@ function activeChangeCard(props: ChangeCardProps): ReactNode {
     )
   const facts = (
     <>
-      <span className="dsh-openspec-change-phase">
-        <span className="dsh-openspec-change-dot" data-phase={phase} aria-hidden="true" />
-        {t(`phase.${phase}`)}
-      </span>
+      {phase === 'planning' ? (
+        <button
+          type="button"
+          className="dsh-openspec-change-phase dsh-openspec-change-repair-action"
+          title={`${t(`phase.${phase}`)} - ${t('review.planningHint')}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            props.onRepair?.('finish-planning')
+          }}
+        >
+          <span className="dsh-openspec-change-dot" data-phase={phase} aria-hidden="true" />
+          {t(`phase.${phase}`)}
+        </button>
+      ) : (
+        <span className="dsh-openspec-change-phase">
+          <span className="dsh-openspec-change-dot" data-phase={phase} aria-hidden="true" />
+          {t(`phase.${phase}`)}
+        </span>
+      )}
       {row.totalTasks > 0 ? null : <span>{t('change.tasksNotWritten')}</span>}
       {units.map((unit, index) =>
-        reviewUnit(unit, `${unit.label}-${String(index)}`, props.onReview),
+        reviewUnit(unit, `${unit.label}-${String(index)}`, props.onRepair),
       )}
     </>
   )
@@ -3224,8 +3248,8 @@ export const PANEL_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The not-run spec review is the card's one fact that starts an action. */
-.dsh-openspec-change-review-action {
+/* Every repair state is one text button: the same hover fill as the actions. */
+.dsh-openspec-change-repair-action {
   padding: 0 5px;
   border: 0;
   border-radius: var(--dsw-radius-sm);
@@ -3234,7 +3258,7 @@ export const PANEL_CSS = `
   font: inherit;
   cursor: pointer;
 }
-.dsh-openspec-change-review-action:hover {
+.dsh-openspec-change-repair-action:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }

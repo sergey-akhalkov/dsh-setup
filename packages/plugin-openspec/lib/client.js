@@ -77,8 +77,20 @@ window.__ModuleLoader__.load({
     function applyDraft(name) {
       return `/openspec-apply-change ${name}`;
     }
-    function reviewDraft(name) {
-      return `Review the OpenSpec change ${name} if it has no current spec review PASS: start it with workflows(action: "start", definitionId: "spec-review", change: "${name}") and report the verdict.`;
+    function repairDraft(action, name, findings = 0) {
+      const review = `workflows(action: "start", definitionId: "spec-review", change: "${name}")`;
+      switch (action) {
+        case "finish-planning":
+          return `Finish the plan for the OpenSpec change ${name}: complete its design, delta specs and tasks so it is ready to apply.`;
+        case "start-review":
+          return `Review the OpenSpec change ${name} if it has no current spec review PASS: start it with ${review} and report the verdict.`;
+        case "refresh-review":
+          return `The AI spec review of the OpenSpec change ${name} is outdated because the plan changed after the review. Re-run it with ${review} and report the verdict.`;
+        case "fix-findings":
+          return `The AI spec review of the OpenSpec change ${name} reported ${String(findings)} findings. Fix them, then re-run the review with ${review} and report the verdict.`;
+        case "retry-review":
+          return `The AI spec review of the OpenSpec change ${name} failed. Re-run it with ${review} and report the verdict; if it fails again, report why.`;
+      }
     }
     var CHANGE_SEGMENT = "dsh-resource://openspec/change/";
     var ARCHIVED_CHANGE_SEGMENT = "dsh-resource://openspec/archive-change/";
@@ -268,7 +280,7 @@ window.__ModuleLoader__.load({
           label: t("review.specMissing"),
           dot: "warning",
           tooltip: t("review.missingSpecTooltip"),
-          action: "review"
+          action: "start-review"
         };
       }
       if (spec.verdict === "PASS" && spec.current) {
@@ -281,15 +293,28 @@ window.__ModuleLoader__.load({
         };
       }
       if (!spec.current) {
-        return { label: t("review.specOutdated"), dot: "warning", tooltip: t("review.staleTooltip") };
+        return {
+          label: t("review.specOutdated"),
+          dot: "warning",
+          tooltip: t("review.staleTooltip"),
+          action: "refresh-review"
+        };
       }
       if (spec.verdict === "FINDINGS") {
         return {
           label: `${t("review.specFindings")}: ${String(spec.findings)} ${t("review.findings")}`,
-          dot: "error"
+          dot: "error",
+          tooltip: t("review.findingsTooltip"),
+          action: "fix-findings",
+          findings: spec.findings
         };
       }
-      return { label: t("review.specError"), dot: "error" };
+      return {
+        label: t("review.specError"),
+        dot: "error",
+        tooltip: t("review.errorTooltip"),
+        action: "retry-review"
+      };
     }
     function reviewLiveUnit(entry, t, now) {
       if (entry.state === "waiting") {
@@ -1002,9 +1027,12 @@ window.__ModuleLoader__.load({
       "review.integrationUnit": "AI code review \xB7",
       "review.waiting": "Waiting for the AI reviewer",
       "review.passTooltip": "AI spec review of the plan \xB7",
-      "review.staleTooltip": "The PASS is stale: the change artifacts changed after it",
+      "review.staleTooltip": "Click to ask the agent to refresh it: the plan changed after the review",
       "review.missingTooltip": "No AI review yet for tasks",
       "review.missingSpecTooltip": "Click to ask the agent to run it. Archive needs it",
+      "review.findingsTooltip": "Click to ask the agent to fix the findings and re-run the review",
+      "review.errorTooltip": "Click to ask the agent to retry the review",
+      "review.planningHint": "Click to ask the agent to finish the plan",
       "review.liveTooltip": "Started",
       "review.waitTooltip": "Waiting for the AI reviewer to start"
     };
@@ -1453,7 +1481,7 @@ window.__ModuleLoader__.load({
             onPropose: () => draft(PROPOSE_DRAFT),
             onSeeArchive: () => choose("archive"),
             onApply: (name) => draft(applyDraft(name)),
-            onReview: (name) => draft(reviewDraft(name)),
+            onRepair: (name, action, findings) => draft(repairDraft(action, name, findings)),
             onArchiveChange: archive,
             archiveState
           }
@@ -1686,7 +1714,7 @@ window.__ModuleLoader__.load({
               onOpen: (name) => props.onOpenChange(name, false),
               onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
               onApply: () => props.onApply(row.name),
-              onReview: () => props.onReview(row.name)
+              onRepair: (action, findings) => props.onRepair(row.name, action, findings)
             })
           ) })
         ] }) : null,
@@ -1704,7 +1732,7 @@ window.__ModuleLoader__.load({
               onOpen: (name) => props.onOpenChange(name, false),
               onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
               onArchive: () => props.onArchiveChange(row.name),
-              onReview: () => props.onReview(row.name),
+              onRepair: (action, findings) => props.onRepair(row.name, action, findings),
               ...archiveFacts(row.name)
             })
           ) })
@@ -1852,19 +1880,20 @@ window.__ModuleLoader__.load({
       if (props.archived === true || props.row.archived === true) return archivedChangeCard(props);
       return activeChangeCard(props);
     }
-    function reviewUnit(unit, key, onReview) {
+    function reviewUnit(unit, key, onRepair) {
       const state = unit.spinning === true ? Spinner() : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-state", "data-state": unit.dot });
       const label = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-verdict-label", children: unit.label });
-      if (unit.action === "review") {
+      if (unit.action !== void 0) {
+        const action = unit.action;
         return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
           "button",
           {
             type: "button",
-            className: "dsh-openspec-change-verdict dsh-openspec-change-review-action",
+            className: "dsh-openspec-change-verdict dsh-openspec-change-repair-action",
             title: unit.tooltip === void 0 ? unit.label : `${unit.label} - ${unit.tooltip}`,
             onClick: (event) => {
               event.stopPropagation();
-              onReview?.();
+              onRepair?.(action, unit.findings);
             },
             children: [
               state,
@@ -1900,13 +1929,28 @@ window.__ModuleLoader__.load({
         }
       );
       const facts = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-phase", children: [
+        phase === "planning" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "button",
+          {
+            type: "button",
+            className: "dsh-openspec-change-phase dsh-openspec-change-repair-action",
+            title: `${t(`phase.${phase}`)} - ${t("review.planningHint")}`,
+            onClick: (event) => {
+              event.stopPropagation();
+              props.onRepair?.("finish-planning");
+            },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-dot", "data-phase": phase, "aria-hidden": "true" }),
+              t(`phase.${phase}`)
+            ]
+          }
+        ) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-phase", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-change-dot", "data-phase": phase, "aria-hidden": "true" }),
           t(`phase.${phase}`)
         ] }),
         row.totalTasks > 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("change.tasksNotWritten") }),
         units.map(
-          (unit, index) => reviewUnit(unit, `${unit.label}-${String(index)}`, props.onReview)
+          (unit, index) => reviewUnit(unit, `${unit.label}-${String(index)}`, props.onRepair)
         )
       ] });
       const nav = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-change-nav", children: [
@@ -3068,8 +3112,8 @@ window.__ModuleLoader__.load({
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    /* The not-run spec review is the card's one fact that starts an action. */
-    .dsh-openspec-change-review-action {
+    /* Every repair state is one text button: the same hover fill as the actions. */
+    .dsh-openspec-change-repair-action {
       padding: 0 5px;
       border: 0;
       border-radius: var(--dsw-radius-sm);
@@ -3078,7 +3122,7 @@ window.__ModuleLoader__.load({
       font: inherit;
       cursor: pointer;
     }
-    .dsh-openspec-change-review-action:hover {
+    .dsh-openspec-change-repair-action:hover {
       background: var(--dsw-alias-interactive-bg-hover);
       color: var(--dsw-alias-label-primary);
     }

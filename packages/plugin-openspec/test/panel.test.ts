@@ -161,11 +161,11 @@ import {
   ROOT_ADDRESS,
   readSegment,
   relativeLabel,
+  repairDraft,
   requestCapabilities,
   requestCapability,
   requestChange,
   requestChangeList,
-  reviewDraft,
   reviewUnits,
   type SegmentStorage,
   SPECS_ADDRESS,
@@ -284,9 +284,12 @@ const COPY: Record<string, string> = {
   'review.integrationUnit': 'AI code review ·',
   'review.waiting': 'Waiting for the AI reviewer',
   'review.passTooltip': 'AI spec review of the plan ·',
-  'review.staleTooltip': 'The PASS is stale: the change artifacts changed after it',
+  'review.staleTooltip': 'Click to ask the agent to refresh it: the plan changed after the review',
   'review.missingTooltip': 'No AI review yet for tasks',
   'review.missingSpecTooltip': 'Click to ask the agent to run it. Archive needs it',
+  'review.findingsTooltip': 'Click to ask the agent to fix the findings and re-run the review',
+  'review.errorTooltip': 'Click to ask the agent to retry the review',
+  'review.planningHint': 'Click to ask the agent to finish the plan',
   'review.liveTooltip': 'Started',
   'review.waitTooltip': 'Waiting for the AI reviewer to start',
 }
@@ -973,7 +976,7 @@ function rootProps(overrides: Partial<RootViewProps> = {}): RootViewProps {
     onPropose: () => {},
     onSeeArchive: () => {},
     onApply: () => {},
-    onReview: () => {},
+    onRepair: () => {},
     onArchiveChange: () => {},
     ...overrides,
   }
@@ -5230,8 +5233,8 @@ describe('OpenSpec panel visual contract', () => {
     expect(textOf(emptyCard)).not.toContain('implemented')
   })
 
-  it('fills the review draft from the not-run status without opening the change', () => {
-    const reviewed: string[] = []
+  it('fills the repair draft from a warning status without opening the change', () => {
+    const repaired: string[] = []
     const opened: string[] = []
     const tree = RootView(
       rootProps({
@@ -5245,7 +5248,7 @@ describe('OpenSpec panel visual contract', () => {
           ]),
         },
         now: NOW,
-        onReview: (name) => reviewed.push(name),
+        onRepair: (name, action) => repaired.push(`${name}:${action}`),
         onOpenChange: (name) => opened.push(name),
       }),
     )
@@ -5255,7 +5258,7 @@ describe('OpenSpec panel visual contract', () => {
       (node) => node.type === 'button' && textOf(node) === 'AI spec review not run',
     )
     if (status === undefined) throw new Error('review action missing')
-    expect(String(status.props.className)).toContain('dsh-openspec-change-review-action')
+    expect(String(status.props.className)).toContain('dsh-openspec-change-repair-action')
     expect(status.props.title).toBe(
       'AI spec review not run - Click to ask the agent to run it. Archive needs it',
     )
@@ -5264,8 +5267,78 @@ describe('OpenSpec panel visual contract', () => {
       stopPropagation: stop,
     })
     expect(stop).toHaveBeenCalled()
-    expect(reviewed).toEqual(['add-auth'])
+    expect(repaired).toEqual(['add-auth:start-review'])
     expect(opened).toEqual([])
+  })
+
+  it('offers the planning status as a repair action', () => {
+    const repaired: string[] = []
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'no-tasks', 0, 0, EMPTY_PRESENCE, {
+              phase: 'planning',
+              summary: 'A change that still needs its plan.',
+            }),
+          ]),
+        },
+        now: NOW,
+        onRepair: (_name, action) => repaired.push(action),
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const phase = nodes(card).find((node) => node.type === 'button' && textOf(node) === 'planning')
+    if (phase === undefined) throw new Error('planning action missing')
+    expect(String(phase.props.className)).toContain('dsh-openspec-change-repair-action')
+    expect(phase.props.title).toBe('planning - Click to ask the agent to finish the plan')
+    ;(phase.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: () => {},
+    })
+    expect(repaired).toEqual(['finish-planning'])
+  })
+
+  it('offers findings as a repair action with the findings count', () => {
+    const repaired: Array<[string, string, number | undefined]> = []
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+              phase: 'applying',
+              review: {
+                spec: {
+                  verdict: 'FINDINGS',
+                  current: true,
+                  at: '2026-11-05T15:00:00',
+                  findings: 2,
+                  reviewer: 'codex',
+                },
+                tasks: { checked: 12, passed: 12, missing: [] },
+              },
+            }),
+          ]),
+        },
+        now: NOW,
+        onRepair: (name, action, findings) => repaired.push([name, action, findings]),
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const status = nodes(card).find(
+      (node) => node.type === 'button' && textOf(node) === 'AI spec review: 2 findings',
+    )
+    if (status === undefined) throw new Error('findings action missing')
+    expect(status.props.title).toBe(
+      'AI spec review: 2 findings - Click to ask the agent to fix the findings and re-run the review',
+    )
+    ;(status.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: () => {},
+    })
+    expect(repaired).toEqual([['add-auth', 'fix-findings', 2]])
   })
 
   it('keeps a long live-review fact on one line with its full text in the tooltip', () => {
@@ -5419,9 +5492,11 @@ describe('OpenSpec review state', () => {
     const units = reviewUnits(summary(), undefined, t, NOW)
     expect(units.map((unit) => [unit.label, unit.dot])).toEqual([['AI spec review passed', 'done']])
     expect(units[0]?.tooltip).toBe('AI spec review of the plan · codex (gpt-5.1-codex) · 2h ago')
+    // A passed review is a fact, not a repair: no action.
+    expect(units[0]?.action).toBeUndefined()
   })
 
-  it('renders a stale PASS as outdated without claiming the change is reviewed', () => {
+  it('renders a stale PASS as outdated with its refresh action', () => {
     const units = reviewUnits(
       summary({
         spec: {
@@ -5436,11 +5511,17 @@ describe('OpenSpec review state', () => {
       t,
       NOW,
     )
-    expect(units[0]).toMatchObject({ label: 'AI spec review outdated', dot: 'warning' })
-    expect(units[0]?.tooltip).toBe('The PASS is stale: the change artifacts changed after it')
+    expect(units[0]).toMatchObject({
+      label: 'AI spec review outdated',
+      dot: 'warning',
+      action: 'refresh-review',
+    })
+    expect(units[0]?.tooltip).toBe(
+      'Click to ask the agent to refresh it: the plan changed after the review',
+    )
   })
 
-  it('names the findings count and an engine error instead of PASS', () => {
+  it('names the findings count and an engine error with their repair actions', () => {
     const findings = reviewUnits(
       summary({
         spec: {
@@ -5455,7 +5536,15 @@ describe('OpenSpec review state', () => {
       t,
       NOW,
     )
-    expect(findings[0]).toMatchObject({ label: 'AI spec review: 2 findings', dot: 'error' })
+    expect(findings[0]).toMatchObject({
+      label: 'AI spec review: 2 findings',
+      dot: 'error',
+      action: 'fix-findings',
+      findings: 2,
+    })
+    expect(findings[0]?.tooltip).toBe(
+      'Click to ask the agent to fix the findings and re-run the review',
+    )
     const error = reviewUnits(
       summary({
         spec: {
@@ -5470,7 +5559,12 @@ describe('OpenSpec review state', () => {
       t,
       NOW,
     )
-    expect(error[0]).toMatchObject({ label: 'AI spec review failed', dot: 'error' })
+    expect(error[0]).toMatchObject({
+      label: 'AI spec review failed',
+      dot: 'error',
+      action: 'retry-review',
+    })
+    expect(error[0]?.tooltip).toBe('Click to ask the agent to retry the review')
   })
 
   it('reads a missing local record as not run with its start action', () => {
@@ -5480,14 +5574,27 @@ describe('OpenSpec review state', () => {
         label: 'AI spec review not run',
         dot: 'warning',
         tooltip: 'Click to ask the agent to run it. Archive needs it',
-        action: 'review',
+        action: 'start-review',
       },
     ])
   })
 
-  it('writes a review draft that names the spec-review start', () => {
-    expect(reviewDraft('add-auth')).toBe(
-      'Review the OpenSpec change add-auth if it has no current spec review PASS: start it with workflows(action: "start", definitionId: "spec-review", change: "add-auth") and report the verdict.',
+  it('writes one repair draft per status action', () => {
+    const start = `workflows(action: "start", definitionId: "spec-review", change: "add-auth")`
+    expect(repairDraft('finish-planning', 'add-auth')).toContain(
+      'Finish the plan for the OpenSpec change add-auth',
+    )
+    expect(repairDraft('start-review', 'add-auth')).toBe(
+      `Review the OpenSpec change add-auth if it has no current spec review PASS: start it with ${start} and report the verdict.`,
+    )
+    expect(repairDraft('refresh-review', 'add-auth')).toBe(
+      `The AI spec review of the OpenSpec change add-auth is outdated because the plan changed after the review. Re-run it with ${start} and report the verdict.`,
+    )
+    expect(repairDraft('fix-findings', 'add-auth', 2)).toBe(
+      `The AI spec review of the OpenSpec change add-auth reported 2 findings. Fix them, then re-run the review with ${start} and report the verdict.`,
+    )
+    expect(repairDraft('retry-review', 'add-auth')).toBe(
+      `The AI spec review of the OpenSpec change add-auth failed. Re-run it with ${start} and report the verdict; if it fails again, report why.`,
     )
   })
 

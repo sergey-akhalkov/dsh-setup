@@ -363,7 +363,9 @@ fresh session SHALL start on Changes.
 
 Each active change row SHALL state a derived status — planning, ready to apply, applying, complete, or
 archived — as a status dot with a short label, the task counts, a purpose taken from the proposal's
-Why clamped to two lines, and the last-modified time, inside the card layout. The change detail header
+Why clamped to two lines, and the last-modified time, inside the card layout. The planning status
+SHALL be a button: its click SHALL fill the composer with a request to finish the plan, without
+submitting it, and the informational statuses MUST NOT be buttons. The change detail header
 SHALL state the derived status, the task counts, the purpose, the last-modified time, and the last
 commit when available. An active change row MUST NOT show commit facts; an archived row keeps the
 archive facts the `Archived changes are browsable` requirement states.
@@ -371,7 +373,7 @@ archive facts the `Archived changes are browsable` requirement states.
 #### Scenario: Planning change
 
 - **WHEN** a change has a proposal but no tasks
-- **THEN** its status reads planning in the attention colour, its gutter states a dash, and its facts say that tasks are not written yet
+- **THEN** its status reads planning in the attention colour, its gutter states a dash, its facts say that tasks are not written yet, and clicking the status fills the composer with the finish-the-plan request
 
 #### Scenario: Ready to apply
 
@@ -704,9 +706,11 @@ The whole-spec record SHALL read as `AI spec review passed`, `AI spec review not
 `AI spec review outdated`, `AI spec review failed`, or `AI spec review: N findings`. A live review
 SHALL read as `AI spec review running · N`, `AI task review · <unit>`, or `AI code review · N`, and
 the waiting form SHALL read `Waiting for the AI reviewer`. A live unit MUST replace only its own
-unit and MUST NOT be rendered as settled. The `AI spec review not run` label SHALL be a button: its
-click SHALL fill the composer with a request to start the whole-spec review for that change, without
-submitting it, and its tooltip SHALL name that action and that archive needs the review.
+unit and MUST NOT be rendered as settled. Every whole-spec state whose dot is the warning or error
+token — not run, outdated, N findings, failed — SHALL be a button: its click SHALL fill the composer
+with a request that matches its state (start the review, refresh it, fix the findings and re-run it,
+or retry it), without submitting it, and its tooltip SHALL name that action; not run and outdated
+also SHALL state that archive needs the review. A passed review MUST NOT be a button.
 
 #### Scenario: Current whole-spec PASS
 
@@ -716,7 +720,7 @@ submitting it, and its tooltip SHALL name that action and that archive needs the
 #### Scenario: Plan edited after the PASS
 
 - **WHEN** the whole-spec record is a PASS whose digest differs from the current change artifacts
-- **THEN** the row shows `AI spec review outdated` with a warning dot and does not present the change as reviewed
+- **THEN** the row shows `AI spec review outdated` with a warning dot, does not present the change as reviewed, and clicking it fills the composer with the refresh request
 
 #### Scenario: Missing task approvals
 
@@ -731,12 +735,12 @@ submitting it, and its tooltip SHALL name that action and that archive needs the
 #### Scenario: Findings or error
 
 - **WHEN** the last whole-spec record is findings or an engine error at the current digest
-- **THEN** the row shows `AI spec review: N findings` or `AI spec review failed` with an error dot while the label itself stays neutral
+- **THEN** the row shows `AI spec review: N findings` or `AI spec review failed` with an error dot while the label itself stays neutral, and clicking it fills the composer with the fix-the-findings or retry request
 
 #### Scenario: No local record
 
 - **WHEN** the change has no local whole-spec record, for example in a fresh clone
-- **THEN** the row shows `AI spec review not run` with a warning dot, a tooltip naming the click action and that archive needs the review, and a click fills the composer with the review request for that change; it claims no failure
+- **THEN** the row shows `AI spec review not run` with a warning dot, a tooltip naming the click action and that archive needs the review, and a click fills the composer with the start-the-review request; it claims no failure
 
 ### Requirement: Live review on a change row
 
