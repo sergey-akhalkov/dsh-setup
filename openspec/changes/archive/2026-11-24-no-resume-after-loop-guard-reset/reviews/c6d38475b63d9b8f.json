@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "no-resume-after-loop-guard-reset",
+  "scope": "task",
+  "taskId": "c6d38475b63d9b8f",
+  "digest": "2ce8c25ae93e87aeb2e02796f97b88f0375f4e39fb95af1680ada82990cc8279",
+  "worktreeDigest": "699b9f01e8b2d01490b7bf0cd4daed3da1df74fd027588cbcd5cf5f8956a46d7",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-24T10:46:28.387Z"
+}

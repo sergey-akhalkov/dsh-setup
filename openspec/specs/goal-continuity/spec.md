@@ -112,48 +112,24 @@ When a goal-round `turn/end` carries a hook cause, the supervisor SHALL disarm t
 - **WHEN** the user aborts a goal round rather than a hook cause
 - **THEN** the supervisor does not disarm the goal and the driver's pause remains the user's stop
 
-### Requirement: Recoverable reset continuation
-
-After the pause prevention, the supervisor SHALL resume the active disarmed goal once within the resume budget, unless the checkpoint-evidenced continuation rule or the no-effect round rule stops it first. It MUST NOT resume a `paused` goal, so a pause is reserved for the user abort policy.
-
-#### Scenario: Guard reset is translated into continuation
-
-- **WHEN** a goal round is aborted by a loop-guard reset, the goal is active and disarmed, and no continuation rule stops it
-- **THEN** the supervisor resumes the goal and records one notice naming the retry budget
-
-#### Scenario: Reset is stopped by evidence
-
-- **WHEN** a goal round is aborted by a loop-guard reset and a fresh plan declares `outcome: done` or a `user_decision` bottleneck
-- **THEN** the supervisor resumes nothing and records one notice naming that plan
-
-#### Scenario: Reset is stopped by two no-effect rounds
-
-- **WHEN** a reset-aborted round makes the second consecutive no-effect round
-- **THEN** the supervisor resumes nothing and records one notice naming the no-effect rounds
-
-#### Scenario: Paused goal is never resumed
-
-- **WHEN** the goal is paused
-- **THEN** the supervisor does not resume it
-
 ### Requirement: Reset at the round cap
 
-When the active disarmed goal has `roundsStarted` at or above `maxGoalRounds` and no continuation rule stops it, the supervisor SHALL extend `maxGoalRounds` by the configured extension under the per-goal extension budget before resuming. When no continuation rule stops it and the extension budget or the hard total cap is exhausted, it MUST NOT resume and SHALL block the goal with `continuity-stopped` and a bounded reason.
+When an active disarmed goal has `roundsStarted` at or above `maxGoalRounds` and no continuation rule stops it — for example after a direct user message cleared a reset stop — the supervisor SHALL extend `maxGoalRounds` by the configured extension under the per-goal extension budget before resuming. At the reset itself the reset stop is a continuation rule, so no extension happens and the notice names the cap as the prerequisite for `/goal resume`. When no continuation rule stops it and the extension budget or the hard total cap is exhausted, it MUST NOT resume and SHALL block the goal with `continuity-stopped` and a bounded reason.
 
 #### Scenario: Reset on the last permitted round
 
-- **WHEN** a recoverable reset leaves an active disarmed goal that already spent its round budget, the extension budget is available, and no continuation rule stops it
+- **WHEN** a direct user message cleared a reset stop and the capped active disarmed goal is reconciled with extension budget available
 - **THEN** the supervisor extends the cap, resumes the goal, and records one notice
 
 #### Scenario: Withheld reset extends no cap
 
-- **WHEN** a recoverable reset leaves an active disarmed goal at its cap and a continuation rule stops it
-- **THEN** the supervisor extends no cap, resumes nothing, leaves the phase active, and records one notice naming the rule
+- **WHEN** a reset leaves an active disarmed goal at or above its round cap
+- **THEN** the supervisor extends no cap, resumes nothing, leaves the phase active, and records one notice naming the reset
 
 #### Scenario: No extension capacity at the cap
 
-- **WHEN** a recoverable reset leaves an active disarmed goal at its cap, no continuation rule stops it, and the extension budget or the hard total cap is exhausted
-- **THEN** the supervisor blocks the goal with `continuity-stopped` and the reason
+- **WHEN** a capped unsuppressed active disarmed goal has no extension budget or no hard-cap room left
+- **THEN** the supervisor resumes nothing and blocks the goal with `continuity-stopped` and the reason
 
 ### Requirement: Bounded round-cap extension
 
@@ -753,3 +729,36 @@ A user abort of a goal round ends that turn through the driver's pause, which is
 
 - **WHEN** the user aborts a turn that is not a goal round, `resumeAfterUserStop` is `non-goal`, and a fresh plan allows continuation
 - **THEN** an armed goal keeps running and a disarmed goal is resumed, so the opt-in differs from `never`
+
+### Requirement: Loop-guard reset stops continuation
+
+A goal round that ends on a `loop-guard:reset` hook cause MUST NOT resume the goal, even when the checkpoint-evidenced and no-effect continuation rules would permit it. After the disarm that prevents a recorded pause, the supervisor SHALL deliver one bounded notice naming the reset and the recovery. The goal MUST stay `active`; only a later direct user message or an explicit `/goal resume` continues it.
+
+#### Scenario: Guard reset is not continued
+
+- **WHEN** a goal round is aborted by a `loop-guard:reset` hook cause, the goal is active and disarmed, and no continuation rule stops it
+- **THEN** the supervisor resumes nothing, records one notice naming the reset, and leaves the goal active
+
+#### Scenario: Reset at the cap extends nothing
+
+- **WHEN** a reset leaves an active disarmed goal at its round cap
+- **THEN** the supervisor extends no cap, resumes nothing, leaves the phase active, and its notice names the cap as the prerequisite for an explicit resume
+
+#### Scenario: A user signal continues the goal
+
+- **WHEN** the user sends a direct message after a reset stop
+- **THEN** the suppression clears and the ordinary continuation rules apply, including the capped-goal extension
+
+#### Scenario: Paused goal is never resumed
+
+- **WHEN** the goal is paused
+- **THEN** the supervisor does not resume it
+
+### Requirement: An earlier stop keeps its own notice
+
+When the continuation decision for a reset-aborted round already stopped it, the supervisor MUST keep that cause, its suppression, and its single notice, and MUST NOT add a reset notice or replace the cause.
+
+#### Scenario: Evidence keeps its own notice
+
+- **WHEN** a goal round is aborted by a reset and the preceding continuation decision already stopped it with a plan or no-effect notice
+- **THEN** the existing suppression and its single notice stay, and no reset notice is added
