@@ -19,7 +19,7 @@ work, so no parallel lane is available.
 ## 3. Metadata, docs, and setup integration (owns README.md, docs/plugins.md, packages/plugin-refactoring/lib/**, packages/setup/**)
 
 - [x] 3.1 Add the plugin row and the opt-in/no-always-on behavior to the root `README.md` plugin table and a short `docs/plugins.md` entry; verify `pnpm lint` passes and the README row is present
-- [ ] 3.2 Run `pnpm gen` and `pnpm build`, then commit the generated package patch, `lib/**`, and the vendored setup tree; verify `pnpm gen:check` passes, the setup patch contains `dsh-setup-refactoring`, and the setup manifest lists the package
+- [x] 3.2 Run `pnpm gen` and `pnpm build`, then commit the generated package patch, `lib/**`, and the vendored setup tree; verify `pnpm gen:check` passes, the setup patch contains `dsh-setup-refactoring`, and the setup manifest lists the package
 - [x] 3.3 Verify the package ships only declared files (`lib/index.js`, `lib/index.d.ts`, both assets, locale, icon, both YAML files) with `pnpm pack --dry-run --pack-destination .tmp`; confirm no Client entry and no install scripts
 
 ## 4. Platform prerequisite and review-scope verification (verification only; owns no source path)
