@@ -112,6 +112,8 @@
       name: "@dsh-setup/plugin-openspec"
     - id: dsh-setup-ponytail
       name: "@dsh-setup/plugin-ponytail"
+    - id: dsh-setup-refactoring
+      name: "@dsh-setup/plugin-refactoring"
     - id: dsh-setup-rtk
       name: "@dsh-setup/plugin-rtk"
     - id: dsh-setup-rust

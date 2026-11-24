@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-refactoring.
+- insert:
+    - id: dsh-setup-refactoring
+      name: "@dsh-setup/plugin-refactoring"

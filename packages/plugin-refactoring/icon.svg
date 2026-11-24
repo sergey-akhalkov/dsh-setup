@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Refactoring">
+  <rect x="9" y="10" width="20" height="20" rx="3" fill="none" stroke="#3b5bdb" stroke-width="3"/>
+  <rect x="35" y="34" width="20" height="20" rx="3" fill="none" stroke="#3b5bdb" stroke-width="3"/>
+  <path d="M29 20h9a5 5 0 0 1 5 5v9" fill="none" stroke="#3b5bdb" stroke-width="3" stroke-linecap="round"/>
+  <path d="M38 29l5 5 5-5" fill="none" stroke="#3b5bdb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

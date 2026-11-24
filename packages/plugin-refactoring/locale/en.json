@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Refactoring method",
+    "description": "On-demand refactoring method: a read-only audit change ranks candidate refactoring paths by evidence and ROI, the user approves one path, four proofs build a test safety net before the first production edit, and small green steps restructure the code and leave an enforceable ratchet. No always-on prompt. Needs the OpenSpec CLI."
+  }
+}

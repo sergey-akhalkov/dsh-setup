@@ -161,6 +161,26 @@ the vendored prompt carries one upstream example Windows path, `scripts/lib/scan
 the lock-listed files from the machine-path check while secret scanning still runs. Usage, policy, and
 attribution are in [answer-pages.md](answer-pages.md).
 
+## Refactoring method
+
+[`packages/plugin-refactoring`](../packages/plugin-refactoring) is the on-demand-method shape: one
+Host module registers the `refactoring` skill (bundled rank 600, model- and user-invocable) with
+`assets/refactoring/` as the resource base, and the method body loads only when the skill is invoked.
+It ships no always-on section, no tool, no Client half, and no configuration, so disabling the
+`dsh-setup-refactoring` row removes it from the catalog and costs nothing per step.
+
+The method is a cycle, not a single change: a read-only `audit-*` change records the project brief,
+the baseline evidence, and a nine-factor ROI register; the user approves one path (gate 1); the
+`refactor-*` change proves a green baseline, behavior oracles, a mutation proof, and a performance or
+data baseline before the first production edit (gate 2); small green steps restructure the code; and
+the change closes with an enforcement ratchet. A behavior change discovered mid-refactor is split into
+its own red-test-first change, and a refactor change declares `skip_specs: true` unless a contract or
+an enforceable rule actually changes — the spec-less support comes from the
+[`plugin-exploratory-testing`](../packages/plugin-exploratory-testing) platform work, so this bundle
+adds no platform edit and no fake delta. Evidence is the host project's own git, compiler, test, lint,
+and dependency tools; Serena is optional for symbol-level work, and no tool is installed without
+approval. Acceptance evidence: [refactoring-method-acceptance.md](refactoring-method-acceptance.md).
+
 ## Goal continuity
 
 [`packages/plugin-goal-continuity`](../packages/plugin-goal-continuity) is the Host-only supervisor
