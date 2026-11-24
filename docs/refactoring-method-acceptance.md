@@ -20,6 +20,22 @@ green before any refactoring artifact was written:
   directory except `reviews/`, normalizes `tasks.md` checkboxes, and binds the effective `skip_specs`
   marker, so an edit to a finding record or the marker invalidates a PASS.
 
+## Integration gate
+
+Run at revision `7b2f6041` (the fix commit) with a clean worktree:
+
+| Command                                         | Result                                              |
+| ----------------------------------------------- | --------------------------------------------------- |
+| `pnpm check` (typecheck → lint → build → test)  | exit 0; 176 test files, 3289 tests passed           |
+| `git diff --exit-code` right after `pnpm build` | exit 0 — no generated drift                         |
+| `pnpm gen:check`                                | exit 0; 696 generated files match for 20 plugins    |
+| `pnpm validate:repo`                            | exit 0; 1416 files, 20 plugin packages, no problems |
+| `pnpm validate:composition`                     | exit 0; setup bundle composes on DSH 0.2.2-rc.2     |
+
+The dry-run and package numbers below were re-confirmed at the same revision; the later review
+fixes (adapter-note assertion, the refactor B task template, the anti-repetition wording) are
+covered by `pnpm check` above.
+
 ## Method dry run
 
 Executed on 2026-11-24 in the disposable git workspace `.tmp/refactor-dry-run` (its own repository, a
@@ -65,11 +81,13 @@ follows the prose. The method prose is covered by `test/skill-content.test.ts` a
 
 ## Skill load
 
-- **Catalog and body** — `pnpm exec vitest run packages/plugin-refactoring/test` (21 tests): the
+- **Catalog and body** — `pnpm exec vitest run packages/plugin-refactoring/test` (23 tests): the
   provider lists one `refactoring` candidate at bundled rank 600 with `assets/refactoring` as its
   resource base and `SKILL.md` as its locator, keeps the catalog description identical to the asset
   frontmatter, returns the body only through `get`, rejects an unknown name, injects only `skills`,
-  and reads no `systemPrompt`.
+  and reads no `systemPrompt`. The loaded content is asserted as the asset body followed by exactly
+  the adapter note; emitting the body alone makes that test fail (`expected '' to be '\n\n---\n\n…'`),
+  which was checked by mutating the built provider and restoring it.
 - **Throwaway profile** — with `DSH_HOME` pointing at the kept dogfood home, `dsh --profile
   owner-copy --dump-config` composes the `dsh-setup-refactoring` row mounting
   `@dsh-setup/plugin-refactoring` from the vendored setup tree.
