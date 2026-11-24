@@ -1167,3 +1167,34 @@ readiness as a percent over `N/T implemented` and `N/T reviewed`, counting each 
 means implemented and reviewed; the value is reserved for a finished change and never rounded up to it.
 Archived rows wear the same skeleton, and their artifact entries now open from the Archive segment as
 well as from the empty-state recents. Released in 0.55.0.
+
+## add-refactoring-method (2026-11-24)
+
+**An opt-in refactoring method as a packaged skill.** `@dsh-setup/plugin-refactoring` registers the
+on-demand `refactoring` skill (bundled rank 600, model- and user-invocable, `assets/refactoring` as
+its resource base) with no always-on prompt, tool, Client half, or configuration: the catalog lists it
+and the body loads only on invocation. The method is a cycle, not a change: a read-only `audit-*`
+change with `skip_specs: true` records the brief, the raw baseline, a nine-factor ROI register
+(H, C, D, A, M, B, E, R, F with
+`value = (H + 1) * (C + D + A + M) * (B + 1)`, `cost = (E + 1) * (R + F + 1)`), and one
+`findings/P-*.md` record per candidate; user gate 1 approves the path; the `refactor-*` change proves a
+green baseline, oracles at the moved public seams, one mutation, and a performance or data baseline
+where the path is hot or stateful; user gate 2 approves the net before the first production edit; one
+behavior-preserving step per green commit keeps the suite green; and the close lands an enforceable
+ratchet whose pre-existing violations are frozen in a baseline. A discovered behavior change is split
+into its own red-test-first change, a refactor change carries a delta only when a contract or rule
+really changes, and the method never installs a tool or assumes dsh-setup paths.
+
+Acceptance is recorded in [refactoring-method-acceptance](refactoring-method-acceptance.md): a dry run
+in a throwaway git workspace walked the whole cycle (audit A valid strict, no `src` edit before gate 1,
+mutation broke two oracles then restored byte-identically, the step and the ratchet landed, final suite
+7/7 with the baseline oracles unedited), and a real headless run in a throwaway `probe` profile — the
+shipped bundle installed, a private `local-test` adapter serving the model route — proved the catalog
+entry, the body's absence from the assembled request before invocation, and the invocation returning
+the packaged body. The full gate ran at `7b2f6041`: 3289 tests, `gen:check` 696 files, `validate:repo`
+1416 files, `validate:composition` clean, `pnpm dogfood` round-trip green. Review: whole-spec PASS,
+16/16 task-review PASS, integration PASS; the four findings raised by the first rounds (the
+adapter-note assertion, a missing refactor `tasks.md` template, an anti-repetition exception the spec
+scenario does not allow, and missing 5.1/5.2 gate evidence) were fixed before the approvals. The
+change is filed as `2026-11-24-add-refactoring-method` with the new `refactoring` capability (17
+requirements) synced; the first real audit/refactor cycle is a separate change.
