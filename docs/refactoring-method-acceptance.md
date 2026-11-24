@@ -88,15 +88,43 @@ follows the prose. The method prose is covered by `test/skill-content.test.ts` a
   and reads no `systemPrompt`. The loaded content is asserted as the asset body followed by exactly
   the adapter note; emitting the body alone makes that test fail (`expected '' to be '\n\n---\n\n…'`),
   which was checked by mutating the built provider and restoring it.
-- **Throwaway profile** — with `DSH_HOME` pointing at the kept dogfood home, `dsh --profile
-  owner-copy --dump-config` composes the `dsh-setup-refactoring` row mounting
+- **Throwaway profile composition** — with `DSH_HOME` pointing at the kept dogfood home,
+  `dsh --profile owner-copy --dump-config` composes the `dsh-setup-refactoring` row mounting
   `@dsh-setup/plugin-refactoring` from the vendored setup tree.
-- **Live assembly** — the running dev profile lists `refactoring` in its skill catalog with the
-  shipped description and no skill body, which is the catalog-only state the spec requires before
-  invocation.
-- **Gap** — a model-driven headless run inside the throwaway home is not possible here: it has no
-  provider credential (`dsh --profile headless` fails with `MISSING_CREDENTIAL` for the
-  `deepseek-official` route), and the session holds none to lend it. Storing a key for a throwaway
-  home is an owner action, so the engine-level and live-catalog evidence above stands in for it.
+- **Real headless run through the throwaway profile** — provider credentials are unavailable for a
+  throwaway home, so a local test provider served the model route: a private package
+  `dsh-local-test-provider` in the `probe` profile registers an adapter for the `local-test` route
+  with `ctx.llm.registerAdapter(['local-test'], adapter)` and streams one `skill` tool call for
+  `refactoring` followed by a final text answer. Its `resolveModel` declares an 8192-token context,
+  its `prepareCall` returns the same stream, and every request's `system` and `messages` are appended
+  to `DSH_LOCAL_TEST_LOG`. The `probe` profile was created from the shipped `headless` template,
+  `dsh plugin --profile probe add link:<checkout>/packages/setup` installed this repository's setup
+  bundle, and its `cordis.patch.yml` held:
+
+  ```yaml
+  - id: agent-default-model
+    config:
+      provider: local-test
+      model: fake
+  - insert:
+      - id: local-test-provider
+        name: dsh-local-test-provider
+  ```
+
+  Run: `DSH_HOME=<throwaway-home> dsh probe "Load the refactoring skill and answer done."` → exit 0,
+  answer `done`, three recorded model calls (the main agent, the session-title call, the main agent
+  after the tool result). The assertions on that log all passed (11/11):
+
+  | Assertion                           | Evidence                                                                                                                            |
+  | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+  | catalog entry, shipped description  | the assembled request carries `` `refactoring`: State-driven, behavior-preserving refactoring `` and `leave an enforceable ratchet` |
+  | body absent before invocation       | no `## Ratchet baseline`, `## Safety net: four proofs`, or mutation wording in the first assembled request                          |
+  | body load through the real service  | the model's `skill` call with `{"name":"refactoring"}` returned 18,527 characters of the packaged body, including its formula line  |
+  | body stays out of the system prompt | the post-invocation system message still has no body                                                                                |
+
+  The test provider, the profile copy, and the log are throwaway artifacts under `.tmp/`; the
+  acceptance is reproducible by following this section, and the shipped bundle itself is unchanged by
+  it.
 - The live profiles were not modified: `pnpm dogfood` round-trips a copy and reports the live profile
-  untouched, and the installer was never run against a real profile from this session.
+  untouched, the installer was never run against a real profile from this session, and every probe
+  write went to `DSH_HOME` pointing at the throwaway home.
