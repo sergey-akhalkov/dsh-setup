@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-refactoring-method",
+  "scope": "task",
+  "taskId": "7305f4fe10ea94d6",
+  "digest": "80c00f323e059de607268ce1d4179645e9d0cd55c2f24ba22dc895c89fc60214",
+  "worktreeDigest": "acd890f55a3a58b0b9665b38d4bb5fc74ef287145cd7d031775d09215ffc5e06",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-24T12:05:24.386Z"
+}
