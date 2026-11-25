@@ -36,6 +36,8 @@ an index source. The index pins every listed version to a reviewed commit; insta
 setup or individual plugins for a given plugin, never both, because both mount the same row. See
 [Manual install](docs/install.md#manual-install) for the full steps.
 
+![DeepSeek Harness Discover tab showing the dsh-setup market index with the setup bundle and plugin entries](docs/images/discover-market.png)
+
 Installing the **dsh-setup** entry from Discover mounts the setup and its plugin rows, but it does
 not enable the other shipped DSH bundles (tool worktree, Ralph, session search, terminal). Enable
 them in **Plugins**, or use the full-setup command below. See

@@ -65,7 +65,9 @@ per-release edit. Its standalone copy of the engines range and bundle list is ch
    the previously published index, merges the new version into it, generates the market directory,
    and deploys that directory. The deployment step is last: any earlier failure leaves the
    previously published index untouched. The `release` job then creates the GitHub Release for the
-   tag, and only after both jobs succeeded the `close-issues` job closes every issue the release
+   tag, after the deployed index, with notes GitHub generates from repository history; the release
+   job's only permission is `contents: write`, and a rerun for an existing Release leaves it
+   unchanged. Only after both jobs succeeded the `close-issues` job closes every issue the release
    fixed, commenting the tag, the Release URL, and the archived change. A failed publication or a
    missing Release therefore closes nothing; if the closeout job itself fails, re-run that job — it
    posts no second comment and never moves the tag.
@@ -84,6 +86,19 @@ per-release edit. Its standalone copy of the engines range and bundle list is ch
    verification run for the installer, not a per-release edit: the script resolves the newest version
    at run time, so only a `dsh.json` change, an installer behavior/option change, or a new
    shipped/registry bundle requires editing it.
+
+## Backfilling the tag that predates the Release job
+
+The `release` job publishes future tags only. The latest tag created before the job landed has no
+Release, so a maintainer creates that one once from an authenticated checkout on the merged `main`:
+
+```sh
+gh release create vX.Y.Z --generate-notes --verify-tag
+```
+
+`--verify-tag` refuses a tag that does not exist, so the command can never create one. Older tags
+stay unreleased: the Release names the version a reader is considering installing, and a changelog
+for every historical commit is history nobody needs to review.
 
 ## Refreshing the vendored Ponytail prompt
 

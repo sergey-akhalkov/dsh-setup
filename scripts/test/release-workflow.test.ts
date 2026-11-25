@@ -19,9 +19,20 @@ interface Job {
 const root = join(import.meta.dirname, '..', '..')
 const document = parse(readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')) as {
   jobs?: Record<string, Job>
+  permissions?: Record<string, string>
 }
 
 describe('release workflow closeout', () => {
+  it('reaches the Release step only after the gate and the publication', () => {
+    const jobs = document.jobs ?? {}
+    // The Release must never exist for a tag whose validation or deployment failed.
+    expect(jobs.release?.needs).toBe('publish')
+    expect(jobs.publish?.needs).toBe('validate')
+    // Only the release job gets a write scope; the workflow default stays read-only.
+    expect(jobs.release?.permissions).toEqual({ contents: 'write' })
+    expect(document.permissions?.contents).toBe('read')
+  })
+
   it('creates the tag Release only when it is missing and never moves the tag', () => {
     const step = document.jobs?.release?.steps?.find((entry) => entry.run !== undefined)
     const lines = (step?.run ?? '').split('\n').map((line) => line.trim())

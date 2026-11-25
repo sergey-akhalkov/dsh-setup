@@ -240,6 +240,8 @@ Use this path when you cannot run the installer, for example on a CLI-only machi
 4. Confirm the version and its source. The bundle is added to the running profile, its patch applies,
    and the setup rows and owner defaults appear in the composed config.
 
+![DeepSeek Harness Discover tab showing the dsh-setup market index with the setup bundle and plugin entries](images/discover-market.png)
+
 The full setup also ships two guidance bundles. The packaged Ponytail prompt is always on by default
 with its skill available on demand, and the first-party working contract is always on by default with
 two skills on demand. See [ponytail.md](ponytail.md) and [principles.md](principles.md) for the prompt

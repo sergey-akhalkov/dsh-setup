@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-releases-and-discover-screenshot",
+  "scope": "task",
+  "taskId": "71c96194524cb4ad",
+  "digest": "ac4c23aa9c0fc24da15e8bfecc80d3a87c06eba86fbf4197a7a230c54c7d67de",
+  "worktreeDigest": "e020e21417e42b9b3ac289dbc8968dfd5c8a25a6e1f848186c7597d5c1a09316",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-25T10:50:58.739Z"
+}
