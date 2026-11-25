@@ -7,6 +7,11 @@ export interface Config {
     timeout?: number;
 }
 export declare const name = "@dsh-setup/plugin-question-timeout";
+/**
+ * The profile services read here. Without this declaration the row activates before the Host
+ * config editor is up, finds no editor, and leaves every preset untimed.
+ */
+export declare const inject: string[];
 /** Resolved options. */
 export interface Options {
     readonly timed: boolean;

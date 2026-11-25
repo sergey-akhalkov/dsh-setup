@@ -2,12 +2,15 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   apply,
   configHash,
   derive,
   derivedConfig,
+  inject,
+  name,
   type Owned,
   optionsFrom,
   owned,
@@ -329,6 +332,25 @@ describe('question timeout derivation', () => {
     expect(withoutDir.logs).toContain(
       'warn:the profile directory is unavailable; preset rows are left untouched',
     )
+  })
+})
+
+describe('question timeout activation path', () => {
+  // The live Host activates the row before the config editor exists; without the declared
+  // dependencies the derivation ran into an empty context and left every preset untimed.
+  it('waits for the profile services instead of deriving into an empty context', async () => {
+    const dir = tempDir()
+    const editor = createEditor([preset('preset-standard', standard([askRow]))])
+    const app = new Context()
+    const fiber = app.plugin({ name, inject, apply }, { timeout: 240 })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(editor.writes).toHaveLength(0)
+    app.provide('profileContext', { dir })
+    app.provide('configEditor', editor)
+    await until(() => editor.writes.length === 1)
+    expect(askConfig(editor.writes[0]?.next ?? {})).toEqual({ mode: 'timed', timeout: 240 })
+    expect(readSettings(dir)).toMatchObject({ timed: true, timeout: 240 })
+    await fiber.dispose()
   })
 })
 

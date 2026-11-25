@@ -4,6 +4,11 @@ import { existsSync, readFileSync, renameSync, rmSync, watch, writeFileSync } fr
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 export const name = '@dsh-setup/plugin-question-timeout';
+/**
+ * The profile services read here. Without this declaration the row activates before the Host
+ * config editor is up, finds no editor, and leaves every preset untimed.
+ */
+export const inject = ['configEditor', 'profileContext'];
 const ASK_TOOL = 'tool-ask-user';
 const PRESET_PREFIX = 'preset-';
 const DEFAULT_TIMEOUT = 300;
