@@ -379,6 +379,20 @@ export function goalMessage(harness: Harness, goal: FakeGoal, round = 1): void {
   })
 }
 
+/** A late answer to a timed question: a user message whose source names the answered call. */
+export function lateAnswer(harness: Harness, callId = 'call-pending'): void {
+  harness.emitSession({
+    type: 'user/message',
+    seq: 1,
+    time: Date.now(),
+    data: {
+      id: randomUUID(),
+      role: 'user',
+      content: [{ type: 'text', text: 'the answer' }],
+      source: { kind: 'user-question-reply', callId },
+    },
+  } as never)
+}
 export function directMessage(harness: Harness): void {
   harness.emitSession({
     type: 'user/message',

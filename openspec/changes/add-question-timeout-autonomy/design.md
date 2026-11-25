@@ -79,7 +79,7 @@ untouched and logs one line, so local precedence is preserved. The ownership rec
 plugin wrote and which it replaced) is written ahead of each edit and restored when the edit fails, so
 a restart, an interrupted commit, or an upstream change re-derives cleanly, and a config equal to the
 installed declaration counts as untouched. A profile without `configEditor` stays untouched with one
-logged warning.
+logged warning. Disabling or removing the row cancels an in-flight derivation: the watcher, the timer, and the loop check a disposal flag, so a queued editor callback returns the current config instead of writing.
 
 *Alternatives rejected:* `agentPresets.register()` cannot override a shipped preset — the registry
 throws `Duplicate agent preset` for an existing id; a static override per preset is the

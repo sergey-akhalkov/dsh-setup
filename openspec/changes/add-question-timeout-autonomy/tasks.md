@@ -32,3 +32,17 @@
 - [x] 5.6 Run `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, and `openspec validate add-question-timeout-autonomy --strict`; verify all pass.
 - [x] 5.7 Remove the hand-written `preset-standard` override from the dev profile patch, since the bundle skips a foreign override; verify the plugin then derives the shipped declaration and a new session still composes the timed tool.
 - [x] 5.8 Runtime acceptance in a new session: edit `.dsh-setup-question-timeout.json` to `timeout: 20`, open a new session, and ask a question **without** a `timeout` parameter — observe the deadline, `pending`, and the turn continuing; set `timed: false` and confirm the next session's tool blocks; record both session ids and the observed results.
+
+### Acceptance record (4.3, 5.7, 5.8)
+
+Verified in session `session-1d74c3d2-cf49-4fc4-97a2-87ed8b51098e` (dev profile, the `cordis` preset; the acceptance run used `.dsh-setup-question-timeout.json` with `timed: true, timeout: 20`; the live row is now `timeout: 300`):
+
+- a question with no `timeout` argument returned `{pending: true, callId:"call_00_u6lNAV16xdjrGrdluN8y5189"}` after the 20-second wait, and the turn continued;
+- the question card showed the countdown;
+- a question with `timeout: -1` waited for the answer instead of returning `pending`;
+- a late answer to the pending question arrived as a steering message (`answer_to_pending_question`, same `callId`) and reached the agent;
+- after `timed: false`, session `session-67dfcf48-fb1b-4b25-8aac-5b8da733ee2e` (`agentPreset: cordis`) blocked on the question until the owner answered, instead of returning `pending`; `timed: true` was then restored.
+
+Literal 4.3 check in session `session-45a16113-837d-43f3-a8cc-926809d6dff2` (dev profile, started after the derived rows were written at 10:51; the timed definition is composed, so the tool exposes `timeout`): an explicit `timeout: 10` question returned `{pending: true, callId:"call_00_37YuFvRHzC3aHAn8Bg7C2326"}` after the 10-second wait and the turn continued with this record. The owner confirmed the countdown on an earlier 10-second card of the same session, and `.dsh-setup-question-timeout.json` holds `timed: true, timeout: 300`, so the parameter applied its own deadline instead of the configured 300 seconds.
+
+5.7 derivation: the dev profile patch's `preset-standard` `tool-ask-user` row is the plugin-derived `mode: timed` config (line 244) and no hand-written `preset-standard` override remains, with the same derived rows on `preset-ptc` (line 418) and `preset-cordis` (line 589). `.dsh-setup-question-timeout.json` records `managed["preset-standard"] = {wrote: fd822ce9…, from: 8e9a1466…}`, `managed["preset-ptc"] = {wrote: f2897e3f…, from: 9ffa076b…}`, and `managed["preset-cordis"] = {wrote: 6557d386…, from: e030da53…}`; the plugin derived all three preset rows and the timed session composed the tool.

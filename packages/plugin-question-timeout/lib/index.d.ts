@@ -66,7 +66,7 @@ export declare function owned(current: Record<string, unknown>, inherited: Recor
 export declare function derive(editor: ConfigEditorLike, options: Options, settings: SettingsFile, persist: (managed: Record<string, Owned>, applied: Options) => boolean, logger?: {
     info?(message: string): void;
     warn?(message: string): void;
-}): Promise<void>;
+}, cancelled?: () => boolean): Promise<void>;
 /** Read options from the row config overlaid by the settings file. */
 export declare function optionsFrom(settings: SettingsFile, config?: Config): Options;
 /** Derive the timed row of every preset and follow the settings file for later changes. */

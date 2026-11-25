@@ -181,9 +181,11 @@ export async function derive(
   settings: SettingsFile,
   persist: (managed: Record<string, Owned>, applied: Options) => boolean,
   logger?: { info?(message: string): void; warn?(message: string): void },
+  cancelled?: () => boolean,
 ): Promise<void> {
   const managed: Record<string, Owned> = { ...settings.managed }
   for (const configuration of editor.configuration()) {
+    if (cancelled?.()) return
     const id = configuration.entry.options.id
     if (!id.startsWith(PRESET_PREFIX)) continue
     const derived = derivedConfig(configuration.inherited, options)
@@ -203,6 +205,10 @@ export async function derive(
     }
     try {
       await editor.edit(configuration.entry, (current, inherited) => {
+        if (cancelled?.()) {
+          aborted = true
+          return current
+        }
         if (!owned(current, inherited, managed, id)) {
           aborted = true
           return current
@@ -270,7 +276,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     writeSettings(directory, optionsFrom(readSettings(directory), config))
   }
   let lastWritten: string | undefined
+  let active = true
   const persist = (managed: Record<string, Owned>, applied: Options): boolean => {
+    if (!active) return false
     const current = readSettings(directory)
     const resolved = optionsFrom(current, config)
     const value = {
@@ -298,12 +306,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     running = true
     try {
       const settings = readSettings(directory)
-      await derive(editor, optionsFrom(settings, config), settings, persist, logger)
+      await derive(editor, optionsFrom(settings, config), settings, persist, logger, () => !active)
     } catch (error) {
       logger?.warn(`preset rows were not updated: ${(error as Error).message}`)
     } finally {
       running = false
-      if (again || stale) {
+      if (active && (again || stale)) {
         again = false
         stale = false
         void run()
@@ -333,6 +341,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       schedule()
     })
     return () => {
+      active = false
       watcher.close()
       if (timer !== undefined) clearTimeout(timer)
     }

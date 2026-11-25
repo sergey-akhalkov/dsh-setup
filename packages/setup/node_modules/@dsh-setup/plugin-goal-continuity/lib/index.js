@@ -1926,7 +1926,10 @@ function latestCheckpointPlan(agent, settledTurn) {
             continue;
         }
         if (event.type === 'user/message') {
-            if (event.data.source.kind === 'user')
+            // A late timed-question answer is a user signal too, not only a direct message. The kind is
+            // compared as a string so the plugin builds against Harness versions that predate it.
+            const source = event.data.source.kind;
+            if (source === 'user' || source === 'user-question-reply')
                 lastUserSignal = index;
             continue;
         }
@@ -3356,16 +3359,18 @@ export function apply(ctx, config) {
                 state.checkpointTurn = { turn: event.data.turn, refusals: 0, unchecked: false };
                 beginStepTurn(state, event.data.turn);
                 return;
-            case 'user/message':
-                if (event.data.source.kind === 'goal') {
+            case 'user/message': {
+                const kind = event.data.source.kind;
+                if (kind === 'goal') {
                     state.goalRound = true;
                 }
-                else if (event.data.source.kind === 'user') {
+                else if (kind === 'user' || kind === 'user-question-reply') {
                     state.suppression = null;
                     state.cause = null;
                     state.noEffect = 0;
                 }
                 return;
+            }
             case 'turn/end':
                 handleTurnEnd(agent, state, event.data.reason);
                 return;

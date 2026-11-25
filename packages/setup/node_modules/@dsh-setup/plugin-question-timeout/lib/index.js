@@ -105,9 +105,11 @@ function settled(snapshot, inherited, options) {
  * rejected profile write re-derives instead of adopting a stale row or treating the plugin's own
  * override as foreign.
  */
-export async function derive(editor, options, settings, persist, logger) {
+export async function derive(editor, options, settings, persist, logger, cancelled) {
     const managed = { ...settings.managed };
     for (const configuration of editor.configuration()) {
+        if (cancelled?.())
+            return;
         const id = configuration.entry.options.id;
         if (!id.startsWith(PRESET_PREFIX))
             continue;
@@ -132,6 +134,10 @@ export async function derive(editor, options, settings, persist, logger) {
         };
         try {
             await editor.edit(configuration.entry, (current, inherited) => {
+                if (cancelled?.()) {
+                    aborted = true;
+                    return current;
+                }
                 if (!owned(current, inherited, managed, id)) {
                     aborted = true;
                     return current;
@@ -198,7 +204,10 @@ export function apply(ctx, config = {}) {
         writeSettings(directory, optionsFrom(readSettings(directory), config));
     }
     let lastWritten;
+    let active = true;
     const persist = (managed, applied) => {
+        if (!active)
+            return false;
         const current = readSettings(directory);
         const resolved = optionsFrom(current, config);
         const value = {
@@ -227,14 +236,14 @@ export function apply(ctx, config = {}) {
         running = true;
         try {
             const settings = readSettings(directory);
-            await derive(editor, optionsFrom(settings, config), settings, persist, logger);
+            await derive(editor, optionsFrom(settings, config), settings, persist, logger, () => !active);
         }
         catch (error) {
             logger?.warn(`preset rows were not updated: ${error.message}`);
         }
         finally {
             running = false;
-            if (again || stale) {
+            if (active && (again || stale)) {
                 again = false;
                 stale = false;
                 void run();
@@ -268,6 +277,7 @@ export function apply(ctx, config = {}) {
             schedule();
         });
         return () => {
+            active = false;
             watcher.close();
             if (timer !== undefined)
                 clearTimeout(timer);

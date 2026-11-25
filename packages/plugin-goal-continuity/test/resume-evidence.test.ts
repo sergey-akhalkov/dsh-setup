@@ -8,6 +8,7 @@ import {
   driverPauseCancelledRound,
   goalMessage,
   type Harness,
+  lateAnswer,
   noticeText,
   setGoal,
   toolCall,
@@ -218,6 +219,22 @@ describe('checkpoint-evidenced continuation', () => {
     expect(harness.goals.goal?.activation).toBe('armed')
   })
 
+  it('treats a late question answer as a user signal', async () => {
+    const harness = createHarness()
+    setGoal(harness, { activation: 'disarmed' })
+    turnStart(harness, 1)
+    const goal = harness.goals.goal
+    if (goal === undefined) throw new Error('test goal missing')
+    goalMessage(harness, goal, 1)
+    checkpointCall(harness, continuePlan('user_decision', 'first-night', 'check the log at 07:00'))
+    lateAnswer(harness)
+    turnEnd(harness, COMPLETED, 1)
+    harness.emitStatus('idle')
+    await harness.flush()
+
+    expect(countCalls(harness, 'resume')).toBe(1)
+    expect(notices(harness)).not.toContain('first-night')
+  })
   it('treats an unreadable or refused checkpoint as no evidence', async () => {
     const unreadable = createHarness()
     setGoal(unreadable, { activation: 'disarmed' })

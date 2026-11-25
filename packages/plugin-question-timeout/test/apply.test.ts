@@ -41,6 +41,15 @@ function tempDir(): string {
   return dir
 }
 
+/** Wait for the watched apply path to reach a condition; a missing run fails on the bound. */
+async function until(check: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000
+  while (!check() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  expect(check()).toBe(true)
+}
+
 interface EditorOptions {
   failFor?: string
   /** Replace the commit-time composed config, simulating an edit made after the snapshot. */
@@ -81,8 +90,9 @@ function createContext(
   editor: unknown,
   dir?: string,
   hmr?: unknown,
-): { ctx: never; logs: string[] } {
+): { ctx: never; logs: string[]; disposers: Array<() => void> } {
   const logs: string[] = []
+  const disposers: Array<() => void> = []
   const logger = () => ({
     info: (message: string) => logs.push(`info:${message}`),
     warn: (message: string) => logs.push(`warn:${message}`),
@@ -96,9 +106,12 @@ function createContext(
     },
     logger,
     fiber: {},
-    effect: (callback: () => unknown) => callback(),
+    effect: (callback: () => unknown) => {
+      const cleanup = callback()
+      if (typeof cleanup === 'function') disposers.push(cleanup as () => void)
+    },
   }
-  return { ctx: ctx as never, logs }
+  return { ctx: ctx as never, logs, disposers }
 }
 
 const askRow = { id: 'tool-ask-user', name: '@deepseek-ai/dsh-tool-ask-user' }
@@ -334,16 +347,64 @@ describe('question timeout apply path', () => {
     expect(editor.writes).toHaveLength(1)
   })
 
-  it('creates the settings file with the row defaults and keeps user values', async () => {
+  it('stops deriving when the row is disposed', async () => {
     const dir = tempDir()
-    const editor = createEditor([preset('preset-standard', standard([askRow]))])
+    const configurations = [
+      preset('preset-standard', standard([askRow])),
+      preset('preset-cordis', standard([askRow])),
+    ]
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let first = true
+    const calls: string[] = []
+    const editor = {
+      configuration: () => configurations,
+      async edit(
+        entry: FakePreset['entry'],
+        change: (current: Row, inherited: Row) => Row,
+      ): Promise<void> {
+        calls.push(entry.options.id)
+        const target = configurations.find((candidate) => candidate.entry === entry)
+        if (target === undefined) throw new Error('unknown entry')
+        if (first) {
+          first = false
+          await gate
+        }
+        const next = change({}, target.inherited)
+        target.override = JSON.stringify(next) === JSON.stringify(target.inherited) ? {} : next
+      },
+    }
+    const { ctx, disposers } = createContext(editor, dir)
+    apply(ctx, {})
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    for (const dispose of disposers) dispose()
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 35))
+    expect(calls).toEqual(['preset-standard'])
+  })
+  it('applies a saved wait and restores the inherited config when timed is off', async () => {
+    const dir = tempDir()
+    const target = preset('preset-standard', standard([askRow]))
+    const editor = createEditor([target])
     const { ctx } = createContext(editor, dir)
     apply(ctx, {})
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    await until(() => editor.writes.length === 1)
+    expect(askConfig(editor.writes[0]?.next ?? {})).toEqual({ mode: 'timed', timeout: 300 })
     expect(readSettings(dir)).toMatchObject({ timed: true, timeout: 300 })
+
     writeSettings(dir, { timed: true, timeout: 20, managed: readSettings(dir).managed })
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    expect(readSettings(dir).timeout).toBe(20)
+    await until(() => editor.writes.some((write) => askConfig(write.next)?.timeout === 20))
+    expect(askConfig(target.composed)).toEqual({ mode: 'timed', timeout: 20 })
+    expect(readSettings(dir)).toMatchObject({ timed: true, timeout: 20 })
+    expect(readSettings(dir).managed?.['preset-standard']).toBeDefined()
+
+    writeSettings(dir, { timed: false, timeout: 20, managed: readSettings(dir).managed })
+    await until(() => target.override !== undefined && JSON.stringify(target.override) === '{}')
+    expect(target.override).toEqual({})
+    expect(target.composed).toEqual(standard([askRow]))
+    expect(readSettings(dir).managed).toEqual({})
   })
 })
 
