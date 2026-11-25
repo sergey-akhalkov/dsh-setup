@@ -2488,20 +2488,28 @@ function writtenPathOf(argumentsText: string): string | undefined {
   return undefined
 }
 
+/** The normalized workspace root a written path must sit beneath to keep its first component. */
+function workspaceRoot(workspace: string): string {
+  const trimmed = workspace.trim()
+  // A rooted workspace normalizes directly; a relative one resolves against itself.
+  return /^(?:[/\\]|[A-Za-z]:)/u.test(trimmed)
+    ? normalizeScopePath(trimmed, trimmed)
+    : normalizeScopePath('.', trimmed)
+}
+
 /**
  * The first path component one written path groups under. Both sides resolve
  * through the plan's own path normalization, so a workspace-internal path keeps
- * its relative component whatever the drive or directory casing, while a path
+ * its relative component whatever the drive or directory casing, while any path
  * outside the workspace collapses to one redacted group.
  */
 function pathGroupOf(path: string, workspace: string): string {
-  const root = normalizeScopePath('.', workspace)
+  const root = workspaceRoot(workspace)
   const normalized = normalizeScopePath(path, workspace)
-  const relative = normalized.startsWith(`${root}/`)
-    ? normalized.slice(root.length + 1)
-    : normalized
-  const [first] = relative.split('/')
-  return first === undefined || /^[a-z]:$/u.test(first) ? '[path]' : first
+  if (!pathContains(root, normalized)) return '[path]'
+  // The POSIX root takes no separator before the first component of its children.
+  const [first] = normalized.slice(root === '/' ? 1 : root.length + 1).split('/')
+  return first === undefined || first === '' ? '[path]' : first
 }
 
 /** Collect one turn's observed tool evidence from the committed session log. */

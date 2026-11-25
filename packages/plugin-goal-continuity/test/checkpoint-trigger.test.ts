@@ -791,4 +791,43 @@ describe('advice bound and path groups', () => {
     expect(text).toContain('src and docs')
     expect(text).not.toContain(harness.workspace)
   })
+
+  it('groups external and parent-relative writes into one redacted group', async () => {
+    const harness = await create()
+    harness.turnStart()
+    for (const path of ['a.ts', 'b.ts']) {
+      const read = harness.toolCall('read', { file_path: path })
+      harness.toolResult(read, 'ok')
+    }
+    // A sibling of the workspace: absolutely rooted, still outside it.
+    const external = join(harness.workspace, '..', 'outside', 'a.ts')
+    for (const path of [external, '../outside/b.ts', 'src/c.ts']) {
+      const call = harness.toolCall('edit', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await harness.turnStopping()
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Written groups: [path], src')
+    expect(text).toContain('[path] and src')
+    // An empty component would start the line and the sentence with nothing.
+    expect(text).not.toContain('Written groups: ,')
+    expect(text).not.toContain('Suggestion:  and')
+  })
+
+  it('keeps distinct groups under a root workspace', async () => {
+    const harness = await create({ workspace: '/' })
+    harness.turnStart()
+    for (const path of ['a.ts', 'b.ts']) {
+      const read = harness.toolCall('read', { file_path: path })
+      harness.toolResult(read, 'ok')
+    }
+    for (const path of ['/src/a.ts', '/docs/b.md']) {
+      const call = harness.toolCall('edit', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await harness.turnStopping()
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Written groups: src, docs')
+    expect(text).toContain('src and docs')
+  })
 })
