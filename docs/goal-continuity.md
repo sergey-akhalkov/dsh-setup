@@ -192,13 +192,18 @@ blockers and user-only questions.
 
 `checkpoint.automation: false` retires the enforcement without removing the checkpoint. The
 `work_checkpoint` tool, its record, and the lane schema stay exactly as documented below; the close
-gate, the parallel gate, the remedy gate, the bottleneck-age gate, and the periodic request stop
-steering. The owning path is then the `retro` workflow definition (`own`), which requests the
-checkpoint at a substantial turn close, reads the same record as evidence, and refuses the close
-until the plan, the remedy, and the age rule pass. A `defer` `retro` definition beside
-`automation: false` is refused at load, so the two owners cannot both leave the checkpoint
-unenforced. The default is `true`. Rollback is one config flip: set `automation: true` and return the
-definition to `defer`; the records are never rewritten.
+gate, the parallel gate, the remedy gate, and the bottleneck-age gate stop steering. The owning path
+is then the `retro` workflow definition (`own`), which requests the checkpoint at a substantial turn
+close, reads the same record as evidence, and refuses the close until the plan, the remedy, and the
+age rule pass. A `defer` `retro` definition beside `automation: false` is refused at load, so the two
+owners cannot both leave the checkpoint unenforced. The default is `true`. Rollback is one config
+flip: set `automation: true` and return the definition to `defer`; the records are never rewritten.
+
+The periodic request follows `checkpoint.periodic` (`false` by default) independently of
+`automation`, so the notice can run while every gate is retired. The shipped setup does exactly that:
+`automation: false` with `periodic: true`, which leaves the `retro` definition as the close-gate owner
+and keeps the mid-turn notice. With both switches false the plugin steers no request. Rollback for
+the notice is `periodic: false`.
 
 ### Trigger
 
@@ -224,14 +229,20 @@ turn and steers the same bounded request when the turn reaches `stepInterval` st
 since the turn start, the latest checkpoint, or the previous request. The mid-turn request requires a
 successful `edit`/`write` or worker start unless `requireWrite` is false, and is skipped while the
 last tool call is `ask_user_question`. It never starts or wakes an idle agent; an ignored request is
-repeated at the next interval, not at every step.
+repeated at the next interval, not at every step. It reads the turn's abort signal: a stopped turn
+submits no request, and a request still queued in the agent's inbox is removed when the turn aborts.
 
 ### Checkpoint request
 
 The plugin steers one bounded checkpoint request at the turn-close boundary and when the step
 interval is reached. It names the observed evidence: the tool-call count, up to five written paths,
-the last shell command and its exit state, the last failed tool, and the worker starts; an interval
-request also names the step count and the interval. It names each lane whose state did not change for
+the distinct first path components of those paths (at most three groups), the last shell command and
+its exit state, the last failed tool, the worker starts, and the steps since the last successful
+worker start; an interval request also names the step count and the interval. When no worker started
+since the previous checkpoint or the turn start and at least two groups were written, it adds one
+advisory sentence naming the first two groups: a worker for one "if they are independent", otherwise
+keep the plan serial. The sentence claims no independence, requires no call, and is the first text
+dropped when the bound is tight. It names each lane whose state did not change for
 `laneStaleCheckpoints` checkpoints, with that count, and the age of the current bottleneck. It asks
 for the lane plan with owners, scopes, and states, the bottleneck with its action and blocking lanes,
 the remedy that removes it, and the next action. The request is attributed to the `goal-continuity`
@@ -494,6 +505,9 @@ separate log or storage surface is written.
   bottleneck may name the same owner and blocking lanes before the close requires a route change.
 - `checkpoint.laneStaleCheckpoints` (default 2, integer 1–1000) is the number of checkpoints a lane
   state may stay unchanged before the request names that lane.
+- `checkpoint.periodic` (default `false`) steers the bounded request at `stepInterval` while
+  `automation` stays `false`; it enables no close, parallel, remedy, or age gate. The shipped setup
+  sets `automation: false` and `periodic: true`.
 - `speedReview` is deprecated: a profile may still carry the object, the plugin loads, reports one
   warning, and runs no speed review. Remove the section.
 - `blockReview.enabled: false` disables both review subjects; continuity supervision and the work

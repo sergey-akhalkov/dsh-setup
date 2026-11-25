@@ -403,3 +403,4 @@
       bottleneckAge: 2
       laneStaleCheckpoints: 2
       automation: false
+      periodic: true

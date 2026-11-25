@@ -67,6 +67,8 @@ export interface BlockReviewConfig {
 export interface CheckpointConfig {
   /** Gate-only retirement switch: false keeps the tool and record, disables every checkpoint gate (default true). */
   automation?: boolean
+  /** Steer the bounded request at `stepInterval` without enabling any gate (default false). */
+  periodic?: boolean
   /** Require a checkpoint at a substantial pause (default true). */
   enabled?: boolean
   /** A turn needs at least this many tool calls before the checkpoint is required (default 4). */
@@ -131,6 +133,8 @@ export interface ResolvedBlockReviewConfig {
 export interface ResolvedCheckpointConfig {
   /** Retained for tool/record availability; false means the gates are silent. */
   readonly automation: boolean
+  /** Whether the periodic notice runs while `automation` stays false. */
+  readonly periodic: boolean
   readonly enabled: boolean
   readonly minToolCalls: number
   readonly requireWrite: boolean
@@ -177,6 +181,7 @@ export const DEFAULT_BLOCK_REVIEW_CONFIG: ResolvedBlockReviewConfig = Object.fre
 /** Documented work-checkpoint defaults; the composition fragment repeats them. */
 export const DEFAULT_CHECKPOINT_CONFIG: ResolvedCheckpointConfig = Object.freeze({
   automation: true,
+  periodic: false,
   enabled: true,
   minToolCalls: 4,
   requireWrite: true,
@@ -327,7 +332,7 @@ function resolveCheckpoint(raw: unknown): ResolvedCheckpointConfig {
   }
 
   const boolean = (
-    field: 'automation' | 'enabled' | 'requireWrite' | 'enforceParallel',
+    field: 'automation' | 'periodic' | 'enabled' | 'requireWrite' | 'enforceParallel',
   ): boolean => {
     const value = record[field]
     if (value === undefined) return DEFAULT_CHECKPOINT_CONFIG[field]
@@ -346,6 +351,7 @@ function resolveCheckpoint(raw: unknown): ResolvedCheckpointConfig {
 
   return Object.freeze({
     automation: boolean('automation'),
+    periodic: boolean('periodic'),
     enabled: boolean('enabled'),
     minToolCalls: integer('minToolCalls'),
     requireWrite: boolean('requireWrite'),
@@ -2026,6 +2032,7 @@ const MAX_SCOPE_ITEMS = 8
 const MAX_CHECKPOINT_ITEM_CHARS = 240
 const MAX_CHECKPOINT_NEXT_CHARS = 400
 const MAX_CHECKPOINT_PATHS = 5
+const MAX_CHECKPOINT_GROUPS = 3
 const MAX_CHECKPOINT_PATH_CHARS = 120
 const MAX_CHECKPOINT_SUMMARY_CHARS = 900
 
@@ -2416,6 +2423,8 @@ function openTurnNumber(agent: Agent): number | undefined {
 /** One observed call in the open turn. */
 interface ObservedTurnCall {
   readonly index: number
+  /** The model step the call belongs to, in the same unit as the pre-step count. */
+  readonly step: number
   readonly name: string
   readonly arguments: string
   result?: 'success' | 'failure'
@@ -2433,6 +2442,10 @@ interface CheckpointEvidence {
   readonly toolCalls: number
   readonly written: readonly string[]
   readonly workers: readonly string[]
+  /** The last successful worker start in the turn, with its event index and step. */
+  readonly workerStart: { readonly index: number; readonly step: number } | undefined
+  /** Distinct first path components of the written paths, at most three, in write order. */
+  readonly groups: readonly string[]
   readonly shell:
     | {
         readonly index: number
@@ -2475,6 +2488,21 @@ function writtenPathOf(argumentsText: string): string | undefined {
   return undefined
 }
 
+/**
+ * The first path component one written path groups under. A workspace-internal
+ * path keeps its relative component; an absolute one outside the workspace is
+ * redacted to a single group instead of leaking a root.
+ */
+function pathGroupOf(path: string, workspace: string): string {
+  const normalized = path.replaceAll('\\', '/')
+  const root = workspace.replaceAll('\\', '/').replace(/\/+$/u, '')
+  const relative = normalized.startsWith(`${root}/`)
+    ? normalized.slice(root.length + 1)
+    : normalized
+  const [first] = relative.split('/').filter((part) => part !== '' && part !== '.')
+  return first === undefined || /^[A-Za-z]:$/u.test(first) ? '[path]' : first
+}
+
 /** Collect one turn's observed tool evidence from the committed session log. */
 function checkpointEvidence(
   agent: Agent,
@@ -2496,6 +2524,7 @@ function checkpointEvidence(
   let lastTool: string | undefined
   const written: string[] = []
   const workers: string[] = []
+  let workerStart: CheckpointEvidence['workerStart']
   let shell: CheckpointEvidence['shell']
   let failedTool: string | undefined
   let checkpoint: ObservedCheckpoint | undefined
@@ -2506,6 +2535,7 @@ function checkpointEvidence(
       lastTool = event.data.name
       calls.set(event.data.callId, {
         index,
+        step: event.data.step,
         name: event.data.name,
         arguments: event.data.arguments,
         resultText: '',
@@ -2542,10 +2572,29 @@ function checkpointEvidence(
       (call.name !== 'delegate' || delegateStarted(call.resultText))
     ) {
       workers.push(call.name)
+      workerStart = { index: call.index, step: call.step }
     }
     if (call.name === CHECKPOINT_TOOL) checkpoint = { index: call.index, arguments: call.arguments }
   }
-  return { toolCalls, written, workers, shell, failedTool, lastTool, checkpoint, calls }
+  const groups: string[] = []
+  for (const path of written) {
+    const group = pathGroupOf(path, workspace)
+    if (groups.includes(group)) continue
+    groups.push(group)
+    if (groups.length === MAX_CHECKPOINT_GROUPS) break
+  }
+  return {
+    toolCalls,
+    written,
+    workers,
+    workerStart,
+    groups,
+    shell,
+    failedTool,
+    lastTool,
+    checkpoint,
+    calls,
+  }
 }
 
 /** The plan one successful checkpoint carries, when it is readable. */
@@ -2847,7 +2896,7 @@ function composeCheckpointRequest(
   evidence: CheckpointEvidence,
   workspace: string,
   max: number,
-  step?: { readonly step: number; readonly interval: number },
+  steps?: { readonly count: number; readonly interval?: number },
   history?: CheckpointHistory,
 ): string {
   const paths = evidence.written
@@ -2882,24 +2931,49 @@ function composeCheckpointRequest(
           .join(', ')}`
   const ageText =
     history?.bottleneckAge === undefined ? undefined : `- Bottleneck age: ${history.bottleneckAge}`
+  const groupsText =
+    evidence.groups.length < 2 ? undefined : `- Written groups: ${evidence.groups.join(', ')}`
+  const sinceWorker =
+    evidence.workerStart === undefined || steps === undefined
+      ? undefined
+      : Math.max(0, steps.count - evidence.workerStart.step)
+  const [first, second] = evidence.groups
+  // Two written groups are necessary but not sufficient for independent work,
+  // so the split stays one conditional sentence, never an obligation.
+  const workerStarted =
+    evidence.workerStart !== undefined &&
+    (evidence.checkpoint === undefined || evidence.workerStart.index > evidence.checkpoint.index)
+  const suggestion =
+    workerStarted || first === undefined || second === undefined
+      ? undefined
+      : `- Suggestion: ${first} and ${second} may be independent lanes; start a worker for one if they are independent, otherwise keep the plan serial.`
   // The questions and the event locator survive any maxMessageChars: only the
   // evidence body is bounded, never the tail.
   const head = 'Work checkpoint required (goal-continuity).'
   const tail =
     'work_checkpoint: outcome, verified, lanes, bottleneck (action, blockingLanes, targets), next action. Refresh the plan; execute the remedy.'
   const evidenceLines = [
-    ...(step === undefined ? [] : [`- Steps: ${step.step} of ${step.interval}`]),
+    ...(steps === undefined || steps.interval === undefined
+      ? []
+      : [`- Steps: ${steps.count} of ${steps.interval}`]),
     `- Tool calls: ${evidence.toolCalls}`,
     `- Written paths: ${pathText}`,
+    ...(groupsText === undefined ? [] : [groupsText]),
     `- Last shell: ${shellText}`,
     `- Last shell exit: ${shellState}`,
     ...(evidence.failedTool === undefined ? [] : [`- Last failed tool: ${evidence.failedTool}`]),
     `- Worker starts: ${workerText}`,
+    ...(sinceWorker === undefined ? [] : [`- Steps since last worker: ${sinceWorker}`]),
     ...(staleText === undefined ? [] : [staleText]),
     ...(ageText === undefined ? [] : [ageText]),
   ]
+  const lines = (advice: boolean): string =>
+    [...evidenceLines, ...(advice && suggestion !== undefined ? [suggestion] : [])].join('\n')
   const budget = max - head.length - tail.length - 2
-  const body = budget <= 0 ? '' : bound(redact(evidenceLines.join('\n'), workspace), budget)
+  const full = lines(true)
+  // The suggestion is the first text dropped under budget pressure.
+  const body =
+    budget <= 0 ? '' : bound(redact(full.length > budget ? lines(false) : full, workspace), budget)
   return body === '' ? redact(`${head}\n${tail}`, workspace) : `${head}\n${body}\n${tail}`
 }
 
@@ -3357,13 +3431,14 @@ function installCheckpointGate(
   config: ResolvedCheckpointConfig,
   stateFor: (agent: Agent) => AgentState,
 ): void {
-  // Gate-only retirement: the tool and its record stay; every listener that
-  // steers or refuses a turn close is off. A false switch is a hard no-op.
-  if (!config.automation) return
+  // Gate-only retirement: the tool and its record stay. `periodic` keeps the
+  // bounded notice alone, so the workflows `retro` definition still owns the
+  // close; both switches false is a hard no-op.
+  if (!config.automation && !config.periodic) return
   // A running root turn gets one request at each step interval, never a wake.
   ctx.on('agent/pre-step', (payload, next) => {
     try {
-      evaluateStep(payload.agent, payload.turn)
+      evaluateStep(payload.agent, payload.turn, payload.signal)
     } catch {
       // An observer never fails a step.
     }
@@ -3384,13 +3459,15 @@ function installCheckpointGate(
       // Observation must never affect the turn.
     }
   })
-  ctx.on('agent/turn-stopping', async (payload) => {
-    try {
-      evaluate(payload.agent, payload.turn, payload.signal)
-    } catch {
-      // Fail open: an internal state error must never fail a turn.
-    }
-  })
+  if (config.automation) {
+    ctx.on('agent/turn-stopping', async (payload) => {
+      try {
+        evaluate(payload.agent, payload.turn, payload.signal)
+      } catch {
+        // Fail open: an internal state error must never fail a turn.
+      }
+    })
+  }
 
   /**
    * Steer one non-waking message; a disposed agent cannot be steered and a
@@ -3428,8 +3505,9 @@ function installCheckpointGate(
   }
 
   /** One pre-step boundary: count it and steer at the interval, never at a wake. */
-  function evaluateStep(agent: Agent, turn: number): void {
-    if (!isRootAgent(agent)) return
+  function evaluateStep(agent: Agent, turn: number, signal: AbortSignal): void {
+    // A stopped turn submits nothing and a non-running agent gets no request.
+    if (signal.aborted || agent.status !== 'running' || !isRootAgent(agent)) return
     const state = stateFor(agent)
     beginStepTurn(state, turn)
     state.steps += 1
@@ -3450,13 +3528,11 @@ function installCheckpointGate(
         evidence,
         workspace,
         config.maxMessageChars,
-        {
-          step: state.steps,
-          interval: config.stepInterval,
-        },
+        { count: state.steps, interval: config.stepInterval },
         checkpointHistory(workspace, agent.session.id, turn, config),
       ),
       'goal-continuity: periodic work checkpoint',
+      signal,
     )
   }
 
@@ -3547,7 +3623,7 @@ function installCheckpointGate(
           evidence,
           workspace,
           config.maxMessageChars,
-          undefined,
+          { count: state.steps },
           checkpointHistory(workspace, agent.session.id, turn, config),
         ),
         'goal-continuity: work checkpoint required',

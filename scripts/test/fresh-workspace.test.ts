@@ -85,6 +85,7 @@ describe('fresh-workspace migration', () => {
   it('ships the surviving gate settings', () => {
     const patch = readFileSync(join(setup, 'cordis.patch.yml'), 'utf8')
     expect(patch).toContain('automation: false')
+    expect(patch).toContain('periodic: true')
     expect(patch).toContain('- id: dsh-setup-verification-gate')
     expect(patch.match(/disabled: true/gu)?.length).toBe(1)
     expect(patch).toContain('verify:')

@@ -266,7 +266,8 @@
   disabled: true
 
 # The retired gates are switched off only for the setup bundle; standalone
-# plugin installs keep their legacy enforcement.
+# plugin installs keep their legacy enforcement. The notice-only `periodic`
+# switch keeps the bounded mid-turn request under the workflows close gate.
 - id: dsh-setup-goal-continuity
   config:
     enabled: true
@@ -300,3 +301,4 @@
       bottleneckAge: 2
       laneStaleCheckpoints: 2
       automation: false
+      periodic: true

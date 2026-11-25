@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import type { CheckpointConfig } from '../lib/index.js'
 import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
 import { noticeText } from './harness.js'
 
@@ -337,6 +338,171 @@ describe('periodic mid-turn trigger', () => {
     expect(harness.steers[0]?.source.kind).toBe('goal-continuity')
     const source = harness.steers[0]?.source as { form?: string } | undefined
     expect(source?.form).toBe('notice')
+  })
+})
+
+describe('periodic notice with the gate retired', () => {
+  /** The periodic-only path: every gate retired, the bounded request alone. */
+  async function retired(overrides: CheckpointConfig = {}): Promise<CheckpointHarness> {
+    return create({
+      config: {
+        checkpoint: { automation: false, periodic: true, stepInterval: 5, ...overrides },
+      },
+    })
+  }
+
+  async function steps(harness: CheckpointHarness, count: number, turn = 1): Promise<void> {
+    for (let index = 0; index < count; index += 1) await harness.preStep(turn)
+  }
+
+  it('keeps the interval after a successful checkpoint', async () => {
+    const harness = await retired()
+    workingTurn(harness)
+    await steps(harness, 3)
+    await harness.checkpoint(SERIAL)
+    // Steps 4-7 stay inside the checkpoint's interval; an anchor that ignored
+    // it would steer at step 5.
+    await steps(harness, 4)
+    expect(harness.steers).toHaveLength(0)
+    await steps(harness, 1)
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('Steps: 8 of 5')
+  })
+
+  it('does not steer while the last tool call awaits the user', async () => {
+    const harness = await retired()
+    workingTurn(harness)
+    const question = harness.toolCall('ask_user_question', { question: 'which lane?' })
+    harness.toolResult(question, 'answered')
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('does not steer a read-only turn while writes are required', async () => {
+    const harness = await retired()
+    harness.turnStart()
+    for (const path of ['a.ts', 'b.ts', 'c.ts', 'd.ts']) {
+      const call = harness.toolCall('read', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('does not steer a subagent turn', async () => {
+    const harness = await create({
+      config: { checkpoint: { automation: false, periodic: true, stepInterval: 5 } },
+      header: { origin: 'subagent', delegationDepth: 1, parentSession: 'root-agent' },
+    })
+    workingTurn(harness)
+    for (let index = 0; index < 5; index += 1) await harness.preStep()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('does not steer an idle agent', async () => {
+    const harness = await retired()
+    workingTurn(harness)
+    ;(harness.agent as { status: string }).status = 'idle'
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('submits nothing once the turn aborted', async () => {
+    const harness = await retired()
+    workingTurn(harness)
+    const stopped = new AbortController()
+    stopped.abort()
+    for (let index = 0; index < 5; index += 1) {
+      await harness.preStep(1, harness.agent, stopped.signal)
+    }
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('removes a queued request when the turn stops', async () => {
+    const harness = await retired()
+    workingTurn(harness)
+    const turn = new AbortController()
+    for (let index = 0; index < 5; index += 1) {
+      await harness.preStep(1, harness.agent, turn.signal)
+    }
+    expect(harness.steers).toHaveLength(1)
+    turn.abort()
+    expect(harness.steers).toHaveLength(0)
+    // The request leaves no record and no log.
+    expect(await harness.recordNames()).toEqual([])
+  })
+
+  it('names both written groups and one advisory split', async () => {
+    const harness = await retired()
+    harness.turnStart()
+    for (const path of ['src/a.ts', 'docs/b.md']) {
+      const call = harness.toolCall('edit', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(1)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Written groups: src, docs')
+    expect(text).toContain('src and docs')
+    expect(text).toContain('if they are independent')
+    expect(text).toContain('keep the plan serial')
+  })
+
+  it('carries no suggestion after a worker start', async () => {
+    const harness = await retired()
+    harness.turnStart()
+    const call = harness.toolCall('edit', { file_path: 'src/a.ts' })
+    harness.toolResult(call, 'ok')
+    const docs = harness.toolCall('edit', { file_path: 'docs/b.md' })
+    harness.toolResult(docs, 'ok')
+    const worker = harness.toolCall('subagent', { prompt: 'take the docs lane' })
+    harness.toolResult(worker, 'started')
+    await steps(harness, 5)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Worker starts: subagent')
+    expect(text).not.toContain('if they are independent')
+  })
+
+  it('makes no serial claim for one written group', async () => {
+    const harness = await retired()
+    harness.turnStart()
+    for (const path of ['src/a.ts', 'src/b.ts']) {
+      const call = harness.toolCall('edit', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await steps(harness, 5)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).not.toContain('Written groups')
+    expect(text).not.toContain('if they are independent')
+  })
+
+  it('carries no suggestion for a write-free turn', async () => {
+    const harness = await retired({ requireWrite: false })
+    harness.turnStart()
+    for (const path of ['a.ts', 'b.ts', 'c.ts', 'd.ts']) {
+      const call = harness.toolCall('read', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await steps(harness, 5)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).not.toContain('Written groups')
+    expect(text).not.toContain('if they are independent')
+  })
+
+  it('drops the suggestion first under the message bound', async () => {
+    const harness = await retired({ maxMessageChars: 400 })
+    harness.turnStart()
+    for (const path of ['src/a.ts', 'docs/b.md']) {
+      const call = harness.toolCall('edit', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await steps(harness, 5)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text.length).toBeLessThanOrEqual(400)
+    expect(text).toContain('Written groups: src, docs')
+    expect(text).toContain('- Tool calls: 2')
+    expect(text).toContain('work_checkpoint:')
+    expect(text).not.toContain('if they are independent')
   })
 })
 

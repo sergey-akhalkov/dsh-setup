@@ -3,11 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
+import { noticeText } from './harness.js'
 
 /**
  * The gate-only `checkpoint.automation` switch: the tool and its record stay
  * available while the periodic request and the close/parallel/remedy/age gates
- * are silent, and the documented default restores the old behavior.
+ * are silent, and the documented default restores the old behavior. The
+ * notice-only `checkpoint.periodic` switch keeps the bounded request alone.
  */
 
 let cleanup: (() => Promise<void>) | undefined
@@ -61,10 +63,26 @@ describe('checkpoint.automation: false', () => {
   })
 
   it('sends no periodic request at the step interval', async () => {
-    const harness = await create({ config: { checkpoint: { automation: false, stepInterval: 5 } } })
+    const harness = await create({
+      config: { checkpoint: { automation: false, periodic: false, stepInterval: 5 } },
+    })
     workingTurn(harness)
     for (let step = 0; step < 10; step += 1) await harness.preStep()
     expect(harness.steers).toHaveLength(0)
+  })
+
+  it('sends the periodic notice while every gate stays retired', async () => {
+    const harness = await create({
+      config: { checkpoint: { automation: false, periodic: true, stepInterval: 5 } },
+    })
+    workingTurn(harness)
+    // Only the notice is enabled: the close gate asks for nothing.
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+    for (let step = 0; step < 5; step += 1) await harness.preStep()
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('Work checkpoint required')
+    expect(harness.ctx.get('goalContinuityStatus')).toEqual({ automation: false })
   })
 
   it('reports the disabled automation to the workflow engine', async () => {

@@ -262,9 +262,13 @@ The row ships enabled with `resumeAfterRestart: false`, `resumeAfterUserStop: ne
 `maxSessionResumes: 20`, `roundExtension: 1000`, `maxRoundExtensions: 2`, `hardMaxGoalRounds: 5000`,
 `blockReview.enabled: true`, `blockReview.reviewQuestions: true`, and `checkpoint.enabled: true`. The
 checkpoint defaults to `minToolCalls: 4`, `requireWrite: true`, `maxBlocks: 3`, `enforceParallel:
-true`, `stepInterval: 40`, and `maxMessageChars: 1200`. Restart resume is opt-in: set
+true`, `stepInterval: 40`, `maxMessageChars: 1200`, and `periodic: false`. The setup ships
+`checkpoint.automation: false` with `checkpoint.periodic: true`: the `retro` definition owns the
+close, and the plugin keeps the bounded mid-turn request, which names the steps since the last worker
+start, the written path groups, and one conditional split sentence. Restart resume is opt-in: set
 `resumeAfterRestart: true` on the row in the profile's `cordis.patch.yml`. Set
 `blockReview.reviewQuestions: false` to review only blocks and leave questions unexamined, set
+`checkpoint.periodic: false` to silence only the mid-turn request, set
 `checkpoint.enabled: false` to keep continuity and the review while disabling only the checkpoint, or
 set `enabled: false`/disable the row to restore stock DSH goal behavior with no disarm, resume,
 extension, block, suppression, notice, user-decision review, or checkpoint.

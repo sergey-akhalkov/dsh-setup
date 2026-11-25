@@ -62,13 +62,16 @@ bytes) because it joins the always-on section, whose size is checked by the plug
 
 The contract ends a substantial pause with a `work_checkpoint` call, and the
 [goal-continuity bundle](goal-continuity.md) requests the same check at each configured step interval
-(`stepInterval`, 40 steps by default). Every checkpoint carries the lane plan, the current
-`bottleneck` with its owner and blocking lanes, its remedy, and the `next` action: independent lanes
-start a worker before the turn closes, integrated in the main agent, and serial work is a shared
-scope or a single owner. The remedy is executed before the close and the plugin checks for it; a
-bottleneck that survives a second checkpoint needs a route change (a new owner, a changed blocking
-lane, or a user decision), not another wait. A long run thus keeps surfacing what stands between the
-agent and done instead of waiting for the turn to end.
+(`stepInterval`, 40 steps by default). That request names the steps since the last worker start and
+the groups of written paths, and adds one conditional sentence: when no worker started and two groups
+were written, a worker for one of them "if they are independent", serial otherwise. The sentence is
+advice, not an obligation; the close-time lane and remedy rules stay the only enforcement. Every
+checkpoint carries the lane plan, the current `bottleneck` with its owner and blocking lanes, its
+remedy, and the `next` action: independent lanes start a worker before the turn closes, integrated in
+the main agent, and serial work is a shared scope or a single owner. The remedy is executed before
+the close and the plugin checks for it; a bottleneck that survives a second checkpoint needs a route
+change (a new owner, a changed blocking lane, or a user decision), not another wait. A long run thus
+keeps surfacing what stands between the agent and done instead of waiting for the turn to end.
 
 ## Install
 

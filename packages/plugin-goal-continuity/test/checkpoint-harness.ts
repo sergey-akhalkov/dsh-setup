@@ -227,11 +227,11 @@ export class CheckpointHarness {
     })
   }
 
-  toolCall(name: string, args: unknown): string {
+  toolCall(name: string, args: unknown, step = 1): string {
     const callId = `call-${this.events.length}`
     this.append({
       type: 'tool/call',
-      data: { turn: 1, step: 1, callId, name, arguments: JSON.stringify(args) },
+      data: { turn: 1, step, callId, name, arguments: JSON.stringify(args) },
     })
     return callId
   }
@@ -293,7 +293,11 @@ export class CheckpointHarness {
   }
 
   /** Run one `agent/pre-step` boundary through the registered waterfall. */
-  async preStep(turn = 1, agent: Agent = this.agent): Promise<void> {
+  async preStep(
+    turn = 1,
+    agent: Agent = this.agent,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<void> {
     const waterfall = this.ctx.waterfall as unknown as (
       name: string,
       payload: unknown,
@@ -307,7 +311,7 @@ export class CheckpointHarness {
         messages: [],
         turn,
         step: 1,
-        signal: new AbortController().signal,
+        signal,
       },
       async () => ({ kind: 'enter', messages: [] }),
     )

@@ -31,6 +31,7 @@ const BLOCK_REVIEW_DEFAULTS = {
 
 const CHECKPOINT_DEFAULTS = {
   automation: true,
+  periodic: false,
   enabled: true,
   minToolCalls: 4,
   requireWrite: true,
@@ -93,6 +94,7 @@ describe('goal continuity configuration', () => {
         },
         checkpoint: {
           automation: false,
+          periodic: true,
           enabled: false,
           minToolCalls: 1,
           requireWrite: false,
@@ -128,6 +130,7 @@ describe('goal continuity configuration', () => {
       },
       checkpoint: {
         automation: false,
+        periodic: true,
         enabled: false,
         minToolCalls: 1,
         requireWrite: false,
@@ -202,7 +205,7 @@ describe('goal continuity configuration', () => {
         /blockReview\.reviewQuestions/u,
       )
     }
-    for (const field of ['automation', 'enabled', 'requireWrite', 'enforceParallel']) {
+    for (const field of ['automation', 'periodic', 'enabled', 'requireWrite', 'enforceParallel']) {
       for (const value of ['yes', 1, 0, null]) {
         expect(() => resolveConfig({ checkpoint: { [field]: value } })).toThrow(
           new RegExp(`checkpoint\\.${field}`, 'u'),
@@ -217,6 +220,12 @@ describe('goal continuity configuration', () => {
     expect(() => resolveConfig({ checkpoint: { automation: 'off' } })).toThrow(
       /checkpoint\.automation/u,
     )
+  })
+
+  it('accepts the notice-only checkpoint.periodic switch and defaults it false', () => {
+    expect(resolveConfig({ checkpoint: { periodic: true } }).checkpoint.periodic).toBe(true)
+    expect(resolveConfig({}).checkpoint.periodic).toBe(false)
+    expect(() => resolveConfig({ checkpoint: { periodic: 'on' } })).toThrow(/checkpoint\.periodic/u)
   })
 
   it('rejects every invalid user-stop policy value', () => {

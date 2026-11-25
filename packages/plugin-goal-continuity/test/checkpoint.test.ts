@@ -1128,6 +1128,42 @@ describe('parallel-action gate', () => {
   })
 })
 
+describe('turn signal', () => {
+  it('names the steps since the last worker start and the written groups', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 10 } } })
+    harness.turnStart()
+    const worker = harness.toolCall('subagent', { prompt: 'take the docs lane' }, 1)
+    harness.toolResult(worker, 'started')
+    for (const [path, step] of [
+      ['src/a.ts', 2],
+      ['docs/b.md', 2],
+      ['src/c.ts', 2],
+    ] as const) {
+      const written = harness.toolCall('edit', { file_path: path }, step)
+      harness.toolResult(written, 'ok')
+    }
+    // Three pre-step boundaries after the worker start at step 1.
+    for (let step = 0; step < 3; step += 1) await harness.preStep()
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Worker starts: subagent')
+    expect(text).toContain('Steps since last worker: 2')
+    expect(text).toContain('Written groups: src, docs')
+    // A worker already started, so no split is suggested.
+    expect(text).not.toContain('if they are independent')
+  })
+
+  it('names no worker distance and no groups without them', async () => {
+    const harness = await create()
+    workingTurn(harness)
+    await harness.turnStopping()
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).not.toContain('Steps since last worker')
+    expect(text).not.toContain('Written groups')
+  })
+})
+
 describe('scope comparison', () => {
   /** One continue plan over two lanes that resolve to the given scopes. */
   function twoLanes(left: string, right: string): Record<string, unknown> {
