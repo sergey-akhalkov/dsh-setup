@@ -1816,18 +1816,19 @@ function writtenPathOf(argumentsText) {
     return undefined;
 }
 /**
- * The first path component one written path groups under. A workspace-internal
- * path keeps its relative component; an absolute one outside the workspace is
- * redacted to a single group instead of leaking a root.
+ * The first path component one written path groups under. Both sides resolve
+ * through the plan's own path normalization, so a workspace-internal path keeps
+ * its relative component whatever the drive or directory casing, while a path
+ * outside the workspace collapses to one redacted group.
  */
 function pathGroupOf(path, workspace) {
-    const normalized = path.replaceAll('\\', '/');
-    const root = workspace.replaceAll('\\', '/').replace(/\/+$/u, '');
+    const root = normalizeScopePath('.', workspace);
+    const normalized = normalizeScopePath(path, workspace);
     const relative = normalized.startsWith(`${root}/`)
         ? normalized.slice(root.length + 1)
         : normalized;
-    const [first] = relative.split('/').filter((part) => part !== '' && part !== '.');
-    return first === undefined || /^[A-Za-z]:$/u.test(first) ? '[path]' : first;
+    const [first] = relative.split('/');
+    return first === undefined || /^[a-z]:$/u.test(first) ? '[path]' : first;
 }
 /** Collect one turn's observed tool evidence from the committed session log. */
 function checkpointEvidence(agent, turn, workspace, shellOutcomes) {
@@ -2238,9 +2239,15 @@ function composeCheckpointRequest(evidence, workspace, max, steps, history) {
     ];
     const lines = (advice) => [...evidenceLines, ...(advice && suggestion !== undefined ? [suggestion] : [])].join('\n');
     const budget = max - head.length - tail.length - 2;
-    const full = lines(true);
-    // The suggestion is the first text dropped under budget pressure.
-    const body = budget <= 0 ? '' : bound(redact(full.length > budget ? lines(false) : full, workspace), budget);
+    // The suggestion is the first text dropped under budget pressure. Measure the
+    // redacted candidate: redaction can expand a value, and a suggestion measured
+    // before it would be truncated instead of dropped whole.
+    const bodyText = redact(lines(true), workspace);
+    const body = budget <= 0
+        ? ''
+        : bound(bodyText.length > budget && suggestion !== undefined
+            ? redact(lines(false), workspace)
+            : bodyText, budget);
     return body === '' ? redact(`${head}\n${tail}`, workspace) : `${head}\n${body}\n${tail}`;
 }
 /** The bounded parallel-gate steer naming the checkpoint id and both escapes. */

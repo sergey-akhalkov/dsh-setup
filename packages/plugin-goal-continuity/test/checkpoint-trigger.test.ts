@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { CheckpointConfig } from '../lib/index.js'
 import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
@@ -30,10 +33,14 @@ function remedy(harness: CheckpointHarness): void {
 }
 
 let cleanup: (() => Promise<void>) | undefined
+const sharedWorkspaces: string[] = []
 
 afterEach(async () => {
   await cleanup?.()
   cleanup = undefined
+  for (const directory of sharedWorkspaces.splice(0)) {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 async function create(options: CheckpointHarnessOptions = {}): Promise<CheckpointHarness> {
@@ -728,5 +735,60 @@ describe('checkpoint request', () => {
     const source = harness.steers[0]?.source as { form?: string } | undefined
     expect(source?.form).toBe('notice')
     expect(harness.injected).toHaveLength(0)
+  })
+})
+
+describe('advice bound and path groups', () => {
+  /** One close request for a turn that wrote two groups, the first expanded by redaction. */
+  async function advise(maxMessageChars: number): Promise<string> {
+    const workspace = await mkdtemp(join(tmpdir(), 'dsh-goal-advice-'))
+    sharedWorkspaces.push(workspace)
+    const harness = await create({ workspace, config: { checkpoint: { maxMessageChars } } })
+    harness.turnStart()
+    for (const path of ['a.ts', 'b.ts']) {
+      const read = harness.toolCall('read', { file_path: path })
+      harness.toolResult(read, 'ok')
+    }
+    for (const path of ['Bearer x/a.ts', 'docs/b.md']) {
+      const call = harness.toolCall('edit', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+    return noticeText(harness.steers[0] as never)
+  }
+
+  it('drops the advice whole when redaction pushes it past the bound', async () => {
+    const wide = await advise(20_000)
+    expect(wide).toContain('if they are independent')
+    expect(wide).toContain('keep the plan serial')
+    // One character tighter than the whole redacted request forces the advice
+    // out; measuring before redaction would truncate the sentence instead.
+    const bound = wide.length - 1
+    const tight = await advise(bound)
+    expect(tight.length).toBeLessThanOrEqual(bound)
+    expect(tight).not.toContain('if they are independent')
+    expect(tight).not.toContain('…')
+    expect(tight).toContain('- Tool calls: 4')
+    expect(tight).toContain('work_checkpoint:')
+  })
+
+  it('groups absolute workspace paths whatever their casing', async () => {
+    const harness = await create()
+    harness.turnStart()
+    for (const path of ['a.ts', 'b.ts']) {
+      const read = harness.toolCall('read', { file_path: path })
+      harness.toolResult(read, 'ok')
+    }
+    const root = harness.workspace.replaceAll('\\', '/').toUpperCase()
+    for (const path of [`${root}/src/a.ts`, `${root}/docs/b.md`]) {
+      const call = harness.toolCall('edit', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await harness.turnStopping()
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Written groups: src, docs')
+    expect(text).toContain('src and docs')
+    expect(text).not.toContain(harness.workspace)
   })
 })
