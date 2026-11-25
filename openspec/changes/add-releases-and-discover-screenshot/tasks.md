@@ -13,14 +13,16 @@ current procedure.
 
 ## 2. One-time backfill
 
-- [x] 2.1 Run `gh release create v0.57.1 --generate-notes --verify-tag` (the latest tag when the
-      change was written; the release job landed with v0.58.0 and created that Release itself) from
-      an authenticated checkout after the workflow change is on `main`; verify
-      `gh release view v0.57.1` shows generated notes while the newer `v0.59.0` stays the `Latest`
-      release, because a newly published Release would otherwise take the `Latest` badge.
+- [x] 2.1 Run `gh release create v0.57.1 --generate-notes --verify-tag --latest=false` (the latest
+      tag when the change was written; the release job landed with v0.58.0 and created that Release
+      itself) from an authenticated checkout after the workflow change is on `main`; a newly
+      published Release would otherwise take the `Latest` badge, so the executed backfill was
+      corrected with `gh release edit v0.59.0 --latest`; verify `gh release view v0.57.1` shows
+      generated notes while `v0.59.0` stays the `Latest` release.
 - [x] 2.2 Confirm only the one tag that predates the job is backfilled: no tag older than `v0.57.1`
-      gets a Release, and no tag or existing Release is edited or moved; verify with
-      `gh release list --repo sergey-akhalkov/dsh-setup`.
+      gets a Release; no tag is moved and no existing Release's notes or tag are changed; the only
+      permitted edit is the Latest metadata correction for the newest version (task 2.1); verify with
+      `gh release list --repo sergey-akhalkov/dsh-setup` and `gh release view <tag>`.
 
 ## 3. Screenshot and docs
 

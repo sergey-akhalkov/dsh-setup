@@ -93,12 +93,14 @@ The `release` job publishes future tags only. The latest tag created before the 
 Release, so a maintainer creates that one once from an authenticated checkout on the merged `main`:
 
 ```sh
-gh release create vX.Y.Z --generate-notes --verify-tag
+gh release create vX.Y.Z --generate-notes --verify-tag --latest=false
 ```
 
-`--verify-tag` refuses a tag that does not exist, so the command can never create one. Older tags
-stay unreleased: the Release names the version a reader is considering installing, and a changelog
-for every historical commit is history nobody needs to review.
+`--verify-tag` refuses a tag that does not exist, so the command can never create one. A newly
+published Release would otherwise become Latest; `--latest=false` keeps the newest version as Latest,
+and an earlier backfill that took the badge is corrected with `gh release edit v<newest> --latest`.
+Older tags stay unreleased: the Release names the version a reader is considering installing, and a
+changelog for every historical commit is history nobody needs to review.
 
 ## Refreshing the vendored Ponytail prompt
 

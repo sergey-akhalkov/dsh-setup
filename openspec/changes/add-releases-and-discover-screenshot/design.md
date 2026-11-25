@@ -70,9 +70,9 @@ CI step does this, and older tags stay unreleased: the issue asks for the latest
 releases for old commits adds history nobody needs to review. The tag number is the only part of this
 plan that ages: the maintainer runs the command for whatever tag is latest when the workflow change is
 merged. The command is documented in `docs/releasing.md` and in the change tasks. A newly published
-Release defaults to Latest, so a delayed backfill takes the badge from the newest version; the
-backfill must leave the newest version as Latest, and its acceptance is `v0.57.1` with generated
-notes while the newer tag keeps the badge.
+Release defaults to Latest, so the backfill passes `--latest=false` to keep the newest version's
+badge; its acceptance is `v0.57.1` with generated notes while the newer tag keeps Latest. A backfill
+created without the flag is corrected with `gh release edit <newest> --latest`.
 
 **D5 — The screenshot is `docs/images/discover-market.png`, embedded in both Discover descriptions.**
 It is captured from a throwaway Harness profile (never the live desktop profile) with **Custom plugin

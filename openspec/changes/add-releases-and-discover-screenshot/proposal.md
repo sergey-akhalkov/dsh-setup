@@ -19,8 +19,8 @@ Fixes #1
 - The Release is created last: a failed validation or Pages deployment publishes no Release, and a
   rerun leaves an existing Release and its notes untouched.
 - Backfill the latest existing tag once when the job lands (`v0.57.1` at the time of writing):
-  `gh release create v0.57.1 --generate-notes --verify-tag`, run by a maintainer. Older tags stay
-  unreleased.
+  `gh release create v0.57.1 --generate-notes --verify-tag --latest=false`, run by a maintainer, so
+  the newest version keeps the Latest badge. Older tags stay unreleased.
 - Commit `docs/images/discover-market.png`, a screenshot of Discover with the `dsh-setup` index
   added, and embed it with descriptive alt text in `docs/install.md` (Manual install) and the README
   Discover section; the numbered text steps stay complete.
