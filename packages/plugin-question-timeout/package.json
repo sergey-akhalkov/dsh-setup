@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-question-timeout",
-  "version": "0.60.0",
+  "version": "0.61.0",
   "description": "Configurable question timeout: the setup derives the timed ask_user_question row of every preset from a watched settings file, so a pending result releases the turn",
   "license": "MIT",
   "icon": "./icon.svg",
