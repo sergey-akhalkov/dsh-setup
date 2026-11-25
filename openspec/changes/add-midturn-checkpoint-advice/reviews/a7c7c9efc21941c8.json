@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-midturn-checkpoint-advice",
+  "scope": "task",
+  "taskId": "a7c7c9efc21941c8",
+  "digest": "4d11995e5823532d57ee5e8089a1cc616200650b5f22d31c0c9f0e65ce43dd79",
+  "worktreeDigest": "f786e1ff6cde37aba90867cf939ee1f0274bbc6dc54be8925763dc78e29a041b",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-25T13:10:18.088Z"
+}
