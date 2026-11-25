@@ -42,7 +42,7 @@ resolved the four active names above.
 The run then read every issue with
 `gh issue view <n> --json number,title,body,state,labels,comments` and derived one verdict per issue
 from repository evidence: source and workflow files, `.gitignore` and `biome.json`, the run history
-in the issue bodies, and the full test suite (3366 tests in 183 files, 162.4 s, exit 0).
+in the issue bodies, and the full test suite (3367 tests in 183 files, 164.3 s, exit 0).
 
 ### The stub log
 
@@ -175,7 +175,7 @@ and the closed state on #16 suppressed a second close.
 
 ## Full gate
 
-Recorded on a clean worktree of the completed implementation, so `git diff --exit-code` is exact.
+Recorded on a worktree whose tracked files are clean (only untracked review records remain), so `git diff --exit-code` is exact.
 
 | Command                                | Result                                               |
 | -------------------------------------- | ---------------------------------------------------- |
@@ -184,7 +184,7 @@ Recorded on a clean worktree of the completed implementation, so `git diff --exi
 | `pnpm gen:check`                       | exit 0; 713 generated files match for 22 plugins     |
 | `pnpm typecheck`                       | exit 0 — no errors                                   |
 | `pnpm lint`                            | exit 0 — warnings and infos only, no errors          |
-| `pnpm test`                            | exit 0; 183 files, 3366 tests (162.4 s)              |
+| `pnpm test`                            | exit 0; 183 files, 3367 tests (164.3 s)              |
 | `pnpm validate:repo`                   | exit 0; 1462 files scanned, 22 plugin packages, none |
 
 ## What this does not prove
