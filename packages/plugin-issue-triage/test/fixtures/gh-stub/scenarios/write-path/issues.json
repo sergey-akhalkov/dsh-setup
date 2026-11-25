@@ -1,0 +1,32 @@
+[
+  {
+    "number": 16,
+    "title": "Validators and the machine-path scan walk ignored local worktrees and skill output",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-23T09:24:38Z",
+    "updatedAt": "2026-11-23T09:24:38Z",
+    "body": "Duplicate report of the ignored-worktree scan failure.",
+    "comments": []
+  },
+  {
+    "number": 17,
+    "title": "Validators and the machine-path scan walk ignored local worktrees and skill output",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-23T09:25:57Z",
+    "updatedAt": "2026-11-23T09:25:57Z",
+    "body": "Canonical report: the scan and the validators walk git-ignored local worktrees and skill output.",
+    "comments": [{ "author": { "login": "owner" }, "body": "Keep this one open." }]
+  },
+  {
+    "number": 99,
+    "title": "How do I use the Discover route without a profile?",
+    "state": "open",
+    "labels": [],
+    "createdAt": "2026-11-25T12:00:00Z",
+    "updatedAt": "2026-11-25T12:00:00Z",
+    "body": "A usage question, not a defect in this repository.",
+    "comments": []
+  }
+]

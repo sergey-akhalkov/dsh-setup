@@ -1,0 +1,112 @@
+[
+  {
+    "number": 1,
+    "title": "Turn the tags into Releases, plus a screenshot for the Discover route",
+    "state": "open",
+    "labels": [],
+    "createdAt": "2026-10-31T16:23:24Z",
+    "updatedAt": "2026-11-22T12:56:08Z",
+    "body": "Two suggestions from an external checker: turn the tags into GitHub Releases, and add a Discover screenshot.",
+    "comments": []
+  },
+  {
+    "number": 9,
+    "title": "Git commit messages are scanned as archive invocations",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-19T09:06:47Z",
+    "updatedAt": "2026-11-22T12:56:05Z",
+    "body": "The shell pre-execute check refuses a git commit whose message mentions a change path and the word archive.",
+    "comments": []
+  },
+  {
+    "number": 13,
+    "title": "CI: validate on main failed in host-wiring 'run admission at capacity'",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-22T14:59:23Z",
+    "updatedAt": "2026-11-24T12:50:04Z",
+    "body": "The validate workflow on main failed in the host-wiring run-admission test, while the same file passes locally.",
+    "comments": []
+  },
+  {
+    "number": 14,
+    "title": "Flaky test: recovery-completion task-review recovery times out on CI",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-22T20:30:03Z",
+    "updatedAt": "2026-11-22T22:37:41Z",
+    "body": "The recovery-completion task-review recovery test timed out on the release build of v0.54.0 while the same commit passed on main.",
+    "comments": []
+  },
+  {
+    "number": 15,
+    "title": "pnpm lint fails when the huashu-design skill leaves .huashu-design/ in the workspace",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-22T21:33:29Z",
+    "updatedAt": "2026-11-22T21:33:29Z",
+    "body": "pnpm lint reports an error in .huashu-design/<file>.md on a checkout where the huashu-design skill has run.",
+    "comments": []
+  },
+  {
+    "number": 16,
+    "title": "Validators and the machine-path scan walk ignored local worktrees and skill output",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-23T09:24:38Z",
+    "updatedAt": "2026-11-23T09:24:38Z",
+    "body": "Validators and the machine-path scan walk git-ignored local worktrees and skill output, so a working checkout and CI disagree.",
+    "comments": []
+  },
+  {
+    "number": 17,
+    "title": "Validators and the machine-path scan walk ignored local worktrees and skill output",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-23T09:25:57Z",
+    "updatedAt": "2026-11-23T09:25:57Z",
+    "body": "Validators and the machine-path scan walk git-ignored local worktrees and skill output, so a working checkout and CI disagree.",
+    "comments": []
+  },
+  {
+    "number": 18,
+    "title": "workflows: task-progress gate cannot be satisfied for a fully checked change",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-24T18:55:16Z",
+    "updatedAt": "2026-11-24T18:55:16Z",
+    "body": "After every task is checked and reviewed, the task-progress gate still refuses the turn close with remedies that cannot work.",
+    "comments": []
+  },
+  {
+    "number": 19,
+    "title": "plugin-workflows full-suite tests fail intermittently under load (different test per run)",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-24T21:32:14Z",
+    "updatedAt": "2026-11-24T21:32:14Z",
+    "body": "Three consecutive full pnpm test runs each failed a different plugin-workflows test, and each failing test passed when re-run alone.",
+    "comments": []
+  },
+  {
+    "number": 20,
+    "title": "workflows: pre-execute guard refuses VCS commands naming a completed change path",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-25T07:39:26Z",
+    "updatedAt": "2026-11-25T07:39:26Z",
+    "body": "After a change is moved into the completed-changes directory, ordinary VCS commands naming its path are refused by the pre-execute guard.",
+    "comments": []
+  },
+  {
+    "number": 21,
+    "title": "release: Pages deploy fails on an artifact visibility race and duplicate github-pages artifacts",
+    "state": "open",
+    "labels": [{ "name": "bug" }],
+    "createdAt": "2026-11-25T10:10:49Z",
+    "updatedAt": "2026-11-25T10:10:49Z",
+    "body": "The v0.59.0 release workflow failed twice on a Pages artifact visibility race and a duplicate github-pages artifact.",
+    "comments": []
+  }
+]

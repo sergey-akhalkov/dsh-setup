@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Issue triage",
+    "description": "On-demand issue triage: turns the repository's open GitHub issues into evidence-backed verdicts, closes duplicates and already-fixed issues with a comment, clusters the valid ones into at most three change drafts, and reports one summary table plus the items closed. No always-on prompt. Needs the gh CLI and the OpenSpec CLI."
+  }
+}

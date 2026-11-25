@@ -181,6 +181,26 @@ adds no platform edit and no fake delta. Evidence is the host project's own git,
 and dependency tools; Serena is optional for symbol-level work, and no tool is installed without
 approval. Acceptance evidence: [refactoring-method-acceptance.md](refactoring-method-acceptance.md).
 
+## Issue triage
+
+[`packages/plugin-issue-triage`](../packages/plugin-issue-triage) reuses the on-demand-method shape:
+one Host module registers the `issue-triage` skill (bundled rank 600, model- and user-invocable) with
+`assets/issue-triage/` as the resource base, and the method body loads only when the skill is
+invoked. It ships no always-on section, no tool, no Client half, and no configuration, so disabling
+the `dsh-setup-issue-triage` row removes it from the catalog and costs nothing per step.
+
+One run turns the open GitHub issues into one verdict each — `tracked`, `shipped`, `fixed`,
+`duplicate`, `invalid`, `needs-info`, `deferred`, or `needs-change` — and every verdict carries the
+command or the canonical issue number that proves it. Only duplicates and already-fixed issues close,
+each with a comment; an `invalid` verdict waits for the owner's recorded answer. The valid
+`needs-change` issues are clustered by the paths they touch and capped at three change drafts per
+run, written under `.dsh/workflows/drafts/`; promotion invokes `openspec new change <name>` through
+the Harness shell, so the normal intake decides the spec before implementation. The lead makes every
+GitHub write, marked `<!-- dsh-setup:change=<name> -->` and skipped on a rerun; a subagent writes
+only its own draft directory. The run needs an authenticated `gh` and the `openspec` CLI, and stops
+with one line naming the remedy when either is missing. Acceptance evidence:
+[issue-triage-acceptance.md](issue-triage-acceptance.md).
+
 ## Goal continuity
 
 [`packages/plugin-goal-continuity`](../packages/plugin-goal-continuity) is the Host-only supervisor

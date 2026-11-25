@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-issue-triage.
+- insert:
+    - id: dsh-setup-issue-triage
+      name: "@dsh-setup/plugin-issue-triage"

@@ -86,6 +86,8 @@
           importOnEmpty: false
     - id: dsh-setup-huashu-design
       name: "@dsh-setup/plugin-huashu-design"
+    - id: dsh-setup-issue-triage
+      name: "@dsh-setup/plugin-issue-triage"
     - id: dsh-setup-loop-guard
       name: "@dsh-setup/plugin-loop-guard"
       config:
