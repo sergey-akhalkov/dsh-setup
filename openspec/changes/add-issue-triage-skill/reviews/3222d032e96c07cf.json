@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-issue-triage-skill",
+  "scope": "task",
+  "taskId": "3222d032e96c07cf",
+  "digest": "5832231ffc35cd651ffade62932a39d720572326b39a1a913848c10eb09d2174",
+  "worktreeDigest": "463734825ba26746d64e235d75bade266a6a746297134c5cc744b14c07e6a298",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-25T11:29:12.409Z"
+}
