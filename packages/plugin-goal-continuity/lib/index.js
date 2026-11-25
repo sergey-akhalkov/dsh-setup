@@ -1524,7 +1524,9 @@ function resolveFromWorkspace(value, workspace) {
         const drive = /^([A-Za-z]:)/u.exec(workspace.replaceAll('\\', '/'))?.[1];
         return drive === undefined ? trimmed : `${drive}${unified}`;
     }
-    return `${workspace}/${trimmed}`;
+    // A workspace that already ends in a separator must not push the join over a
+    // second one: `//` plus a relative segment reads as a UNC path, not the root.
+    return `${workspace.replace(/[\\/]+$/u, '')}/${trimmed}`;
 }
 /**
  * Normalize one workspace-resolved path: separators unified, dot segments

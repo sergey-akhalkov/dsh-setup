@@ -830,4 +830,37 @@ describe('advice bound and path groups', () => {
     expect(text).toContain('Written groups: src, docs')
     expect(text).toContain('src and docs')
   })
+
+  it('keeps relative and mixed groups under a root workspace', async () => {
+    const relative = await create({ workspace: '/' })
+    relative.turnStart()
+    for (const path of ['a.ts', 'b.ts']) {
+      const read = relative.toolCall('read', { file_path: path })
+      relative.toolResult(read, 'ok')
+    }
+    for (const path of ['src/a.ts', 'docs/b.md']) {
+      const call = relative.toolCall('edit', { file_path: path })
+      relative.toolResult(call, 'ok')
+    }
+    await relative.turnStopping()
+    const text = noticeText(relative.steers[0] as never)
+    expect(text).toContain('Written groups: src, docs')
+    expect(text).toContain('src and docs')
+
+    // A relative and an absolute write to the same group are one group.
+    const mixed = await create({ workspace: '/' })
+    mixed.turnStart()
+    for (const path of ['a.ts', 'b.ts']) {
+      const read = mixed.toolCall('read', { file_path: path })
+      mixed.toolResult(read, 'ok')
+    }
+    for (const path of ['/src/a.ts', 'src/b.ts']) {
+      const call = mixed.toolCall('edit', { file_path: path })
+      mixed.toolResult(call, 'ok')
+    }
+    await mixed.turnStopping()
+    const mixedText = noticeText(mixed.steers[0] as never)
+    expect(mixedText).not.toContain('Written groups')
+    expect(mixedText).not.toContain('if they are independent')
+  })
 })
