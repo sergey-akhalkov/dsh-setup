@@ -1198,3 +1198,32 @@ adapter-note assertion, a missing refactor `tasks.md` template, an anti-repetiti
 scenario does not allow, and missing 5.1/5.2 gate evidence) were fixed before the approvals. The
 change is filed as `2026-11-24-add-refactoring-method` with the new `refactoring` capability (17
 requirements) synced; the first real audit/refactor cycle is a separate change.
+
+## add-question-timeout-autonomy (2026-11-25)
+
+**A configurable timed question plus the pending-question policy.** The new Host bundle
+`@dsh-setup/plugin-question-timeout` makes the question foreground wait configurable: on activation and
+on every save of the watched `.dsh-setup-question-timeout.json` it derives the `tool-ask-user` row from
+each installed `preset-*` declaration, never from its own persisted row, re-commits it through the
+profile's config editor, leaves a preset with its own override untouched, and fails open with a warning
+when the service is absent. `timed` defaults on and `timeout` to 300 seconds; a saved value applies to
+the next session without a restart, and `timed: false` restores the shipped blocking row. The setup
+ships the row in `packages/setup/defaults.yml`. The always-on working contract gained the pending policy
+(pending is neither a pause nor permission; the recommended option only for a reversible operational
+choice, recorded in the next checkpoint; scope, product, release, credential, and destructive choices
+stay open; `timeout: -1` only before the call when the decision is irreversible and no independent work
+can proceed) and the configurability rule, both inside the existing section and within its 1500-token
+budget. `goal-continuity` now counts a timed `pending` result as a user signal that settles the ask
+without deciding it, pinned by `resume-evidence.test.ts`, and `docs/autonomy.md` documents the row, the
+settings file, the limits, and the acceptance check.
+
+Acceptance was live on the dev profile: an explicit `timeout: 10` question returned `{pending: true}`
+at the 10-second deadline while the turn continued (session `session-45a16113`), the card countdown was
+confirmed and a late answer arrived as `answer_to_pending_question` (sessions `session-45a16113`,
+`session-1d74c3d2`), a `timeout: -1` question waited for the answer, and with `timed: false` a new
+session blocked on the question instead (session `session-67dfcf48`). Review: whole-spec PASS
+(`c629c14a`), 18/18 task-review PASS, integration PASS (`b1adace3`); the earlier P1 findings (a
+settings-file-only assertion and a missing runtime acceptance record) were fixed before the approvals.
+The change is filed as `2026-11-25-add-question-timeout-autonomy`; `session-guidance` gained the four
+pending-policy and configurability requirements and `goal-continuity`'s continuation-evidence
+requirement now names the pending signal.
