@@ -52,12 +52,15 @@ describe('issue-triage skill content', () => {
     )
   })
 
-  it('requires the complete paginated backlog before any verdict', () => {
+  it('requires the complete inventory before any verdict with a supported command', () => {
     expect(prose).toContain(
-      '`gh issue list --state open --paginate --limit 100 --json number,title,labels,createdAt,updatedAt`',
+      '`gh issue list --state open --limit 1000 --json number,title,labels,createdAt,updatedAt`',
     )
-    expect(prose).toContain('never assign a verdict from a truncated page')
-    expect(prose).toContain('The inventory returns exactly the page cap')
+    expect(prose).toContain('when the read returns exactly that many, raise it and read')
+    expect(prose).toContain('never assign a verdict from a truncated list')
+    expect(prose).toContain('The inventory returns exactly the limit')
+    // `gh issue list` has no `--paginate` flag; the installed CLI exits 1 on it.
+    expect(skill).not.toContain('--paginate')
   })
 
   it('pins the full verdict vocabulary, one verdict per issue', () => {

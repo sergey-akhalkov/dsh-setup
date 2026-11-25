@@ -86,14 +86,15 @@ if (group === 'repo' && action === 'view') {
 const state = readState()
 
 if (group === 'issue' && action === 'list') {
+  // Mirror the CLI contract: `gh issue list` has no `--paginate`, and `--limit` caps the read.
+  if (rest.includes('--paginate')) fail('unknown flag: --paginate')
+  const limit = Number(option('--limit', rest) ?? '30')
   const wanted = option('--state', rest) ?? 'open'
   const issues = JSON.parse(readFileSync(issuesFile, 'utf8')).map((issue) =>
     withState(issue, state),
   )
-  finish(
-    0,
-    JSON.stringify(wanted === 'all' ? issues : issues.filter((issue) => issue.state === wanted)),
-  )
+  const matching = wanted === 'all' ? issues : issues.filter((issue) => issue.state === wanted)
+  finish(0, JSON.stringify(matching.slice(0, limit)))
 }
 
 if (group === 'issue' && action === 'view') {

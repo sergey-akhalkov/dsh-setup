@@ -69,6 +69,18 @@ describe.skipIf(!onWindows)('gh stub fixture', () => {
     expect((JSON.parse(view.stdout) as { number: number }).number).toBe(17)
   })
 
+  it('mirrors the real list contract: honors --limit and rejects --paginate', () => {
+    const limited = gh('issue list --state open --limit 2 --json number', { log: 'limit.log' })
+    expect(limited.status).toBe(0)
+    expect((JSON.parse(limited.stdout) as unknown[]).length).toBe(2)
+
+    const refused = gh('issue list --state open --paginate --limit 100', { log: 'refuse.log' })
+    expect(refused.status).toBe(1)
+    expect(invocations('refuse.log')).toEqual([
+      { args: ['issue', 'list', '--state', 'open', '--paginate', '--limit', '100'], exit: 1 },
+    ])
+  })
+
   it('records an issue-comment invocation with its body and honors a configured exit code', () => {
     const comment = gh('issue comment 16 --body duplicate-of-17', { log: 'write.log' })
     expect(comment.status).toBe(0)

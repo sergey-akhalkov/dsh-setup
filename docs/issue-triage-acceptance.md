@@ -29,7 +29,7 @@ github.com
 repo: {"nameWithOwner":"sergey-akhalkov/dsh-setup"}
 ## preflight: openspec list --json (active changes)
 add-issue-triage-skill, add-releases-and-discover-screenshot, rebrand-to-dsh-studio, add-worktree-cleanup
-## inventory: gh issue list --state open --paginate --limit 100
+## inventory: gh issue list --state open --limit 1000
 open issues: 11
 ## existing links: git grep -n "Fixes #" -- openspec/changes
 openspec/changes/add-releases-and-discover-screenshot/proposal.md:12:Fixes #1
@@ -47,25 +47,25 @@ in the issue bodies, and the full test suite (3366 tests in 183 files, 162.4 s, 
 ### The stub log
 
 Fourteen invocations: `auth status`, `repo view --json nameWithOwner`, `issue list --state open
---paginate …`, and eleven `issue view` calls, one per issue. Each required preflight and inventory
+--limit 1000 …`, and eleven `issue view` calls, one per issue. Each required preflight and inventory
 read is present exactly once, and **mutating calls: 0** (`issue comment`, `issue close`,
 `issue edit`). No issue was closed and no comment was posted.
 
-### Backlog coverage beyond one page
+### Backlog completeness beyond one page
 
-The inventory command carries `--paginate`, so it asks `gh` for every page rather than one capped
-list. A generated 101-issue fixture at `.tmp/issue-triage-acceptance/backlog-101.json` served the
-same command:
+`gh issue list` has no `--paginate` flag (the installed CLI exits 1 with `unknown flag: --paginate`),
+so the inventory uses `--limit` and raises it when the read hits the limit. A generated 101-issue
+fixture at `.tmp/issue-triage-acceptance/backlog-101.json` drove the sequence:
 
 ```text
-$big = gh issue list --state open --paginate --limit 100 --json number,title | ConvertFrom-Json
-inventory size: 101
-logged command: issue list --state open --paginate --limit 100 --json number,title
+page at limit 100: 100
+raised to limit 1000: 101 (below the limit, so the inventory is complete)
+logged: issue list --state open --limit 100 --json number | issue list --state open --limit 1000 --json number
 ```
 
-The stub answers any page with its whole fixture, so this proves the run's command shape and its
-101-row inventory, not that the stub paginates like GitHub. The skill body requires the complete
-paginated backlog before any verdict.
+The stub mirrors the real contract: it honors `--limit`, caps the read at it, and refuses
+`--paginate` with the same message. The skill body requires the raised read before any verdict, and
+`test/skill-content.test.ts` rejects any `--paginate` in the body.
 
 ### Verdict table
 
@@ -160,13 +160,13 @@ and the closed state on #16 suppressed a second close.
 
 ## Verification
 
-- `pnpm exec vitest run packages/plugin-issue-triage/test` — 27 tests in 3 files pass: the skill
-  content pins every section, the verdict vocabulary, the evidence rule, the paginated inventory, the
-  closes, the cap, the drafts path, the promotion call, the subagent brief, the four templates, the
-  report columns, and the worked example's placeholders; the provider test pins the catalog candidate,
-  the frontmatter description, the adapter note, no import-time registration, and the generated
-  enabled row; the stub test pins PATH precedence, the exit code, the recorded arguments, and the
-  persisted comment.
+- `pnpm exec vitest run packages/plugin-issue-triage/test` — 28 tests in 3 files pass: the skill
+  content pins every section, the verdict vocabulary, the evidence rule, the supported complete
+  inventory, the closes, the cap, the drafts path, the promotion call, the subagent brief, the four
+  templates, the report columns, and the worked example's placeholders; the provider test pins the
+  catalog candidate, the frontmatter description, the adapter note, no import-time registration, and
+  the generated enabled row; the stub test pins PATH precedence, the exit code, the recorded
+  arguments, the `--limit` cap, the `--paginate` refusal, and the persisted comment.
 - `pnpm validate:composition` — exit 0 against DSH 0.2.2-rc.2, including the new `issue-triage` steps:
   the setup composes the row enabled with no configuration, and a profile patch with `disabled: true`
   composes it disabled. That is the real loader's decision that keeps the skill out of the catalog,
@@ -190,8 +190,8 @@ Recorded on a clean worktree of the completed implementation, so `git diff --exi
 ## What this does not prove
 
 - The stub is not GitHub: it proves which calls the procedure makes, not that GitHub accepts them.
-  It records `--duplicate-of` and `--paginate` as given and answers any page with its whole fixture,
-  so pagination itself is the real binary's job.
+  It mirrors the installed CLI for the flags it exercises — `--limit` caps the read, `--duplicate-of`
+  is recorded, and `--paginate` is refused — but the real binary owns the network and the pages.
 - The verdicts are one lead's judgement over the evidence above. A worker never decides a verdict, and
   no worker ran in this acceptance, so the subagent brief is pinned by content only.
 - The acceptance ran no drafts: a draft is the owner's commitment, and this read-only run recorded the
