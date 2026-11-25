@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-issue-triage",
-  "version": "0.61.0",
+  "version": "0.62.0",
   "description": "Opt-in issue triage: turns open GitHub issues into evidence-backed verdicts, closes duplicates and already-fixed issues with a comment, clusters the valid ones into at most three change drafts, and reports one summary table",
   "license": "MIT",
   "icon": "./icon.svg",
