@@ -73,11 +73,11 @@ Ordered by severity: gate-breaking, visible breakage, then flake, then the closu
 
 | Issue | Verdict      | Evidence                                                                                                                                                                                                                                      | Change or draft                         | Next step                                                |
 | ----- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------- |
-| #20   | needs-change | `packages/plugin-workflows/src/host/index.ts:5420` refuses a VCS command that names an archived path; reproduced when a `git log … -- openspec/changes/archive/<name>` call was refused with `the archive command could not be parsed safely` | draft `guard-command-text-is-data`      | promote the draft                                        |
+| #20   | needs-change | `packages/plugin-workflows/src/host/index.ts:5421` refuses a VCS command that names an archived path; reproduced when a `git log … -- openspec/changes/archive/<name>` call was refused with `the archive command could not be parsed safely` | draft `guard-command-text-is-data`      | promote the draft                                        |
 | #9    | needs-change | the same parser; the issue reproduces it with a `git commit -m` body that names the change path and the word archive                                                                                                                          | draft `guard-command-text-is-data`      | promote the draft                                        |
 | #15   | needs-change | probe: a `.huashu-design/probe.md` file makes `pnpm exec biome check .huashu-design` report 1 error and `pnpm lint` exit 1, although `.gitignore:31` lists the directory (Biome's `files.includes` does not)                                  | draft `skip-ignored-local-artifacts`    | promote the draft                                        |
 | #17   | needs-change | `scripts/lib/scan.ts` `SKIP_DIRECTORIES` has no `.agents` and the walk has no `.gitignore` awareness; `.agents/worktrees/verify-quiet-gate` held only `.dsh` state today, so the machine-path failure is latent                               | draft `skip-ignored-local-artifacts`    | promote the draft                                        |
-| #16   | duplicate    | byte-identical to #17 (same title and body); `docs/openspec-status.md:1144` references #17 and no artifact references #16                                                                                                                     | —                                       | close now (proposed; not executed in this read-only run) |
+| #16   | duplicate    | byte-identical to #17 (same title and body); `docs/openspec-status.md:1144` references #17, and no artifact links #16 with a `Fixes`/`Refs` line (it is named only in prose)                                                                  | —                                       | close now (proposed; not executed in this read-only run) |
 | #21   | needs-change | `.github/workflows/release.yml` uploads the Pages artifact (`upload-pages-artifact@v3`) then deploys (`deploy-pages@v4`) with no retry or stale-artifact cleanup; v0.59.0 run 45590026312 failed twice                                        | draft `release-pages-artifact-race`     | promote the draft                                        |
 | #18   | deferred     | the archived `stop-close-steer-loops` bounds the refusal (`Refs #18`) but does not add the "a current PASS satisfies a fully checked plan" rule in `packages/plugin-workflows/src/host/engine-gates.ts`                                       | deferred: visible breakage, cap reached | re-rank next run                                         |
 | #14   | deferred     | the fixed 10 s poll is still at `packages/plugin-workflows/test/recovery-completion.test.ts:176`; the v0.54.0 release failed twice on it                                                                                                      | deferred: flake tier, cap reached       | re-rank next run                                         |
@@ -129,7 +129,7 @@ Log:
 
 ```text
 auth status
-issue list --state open --paginate
+issue list --state open --limit 1000
 issue view 17 --json number,comments
 issue view 16 --json number,title,state
 issue view 17 --json number,state
@@ -140,9 +140,9 @@ issue view 99 --json number,title,state
 ```
 
 Assertions: nine calls, exactly one close — #16 with `--duplicate-of 17`, which is the reason the
-spec requires; the canonical #17 received the marker comment; **zero calls on #99** (`calls on 99:
-0`), because an `invalid` verdict waits for the owner's answer and the run asked in the report
-instead.
+spec requires; the canonical #17 received the marker comment; **zero mutating calls on #99** (one
+view, no comment or close), because an `invalid` verdict waits for the owner's answer and the run
+asked in the report instead.
 
 ### Transcript 2 — the rerun over the same marker
 
