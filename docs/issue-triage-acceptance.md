@@ -122,7 +122,7 @@ inventory: 16, 17, 99
 https://example.invalid/issues/16#issuecomment-stub
 ✓ Closed issue #16
 https://example.invalid/issues/17#issuecomment-stub
-state after run 1: {"comments":{"16":["Duplicate of #17. Closing this one; the canonical issue carries the fix."],"17":["<!-- dsh-setup:change=ignored-artifacts --> Tracked in ignored-artifacts. Scope: repository checks must skip ignored local artifacts. Next step: promote the draft."]},"closed":{"16":"duplicate of #17"}}
+state after run 1: {"comments":{"16":["<!-- dsh-setup:change=none --> Duplicate of #17. Closing this one; the canonical issue carries the fix."],"17":["<!-- dsh-setup:change=ignored-artifacts --> Tracked in ignored-artifacts. Scope: repository checks must skip ignored local artifacts. Next step: promote the draft."]},"closed":{"16":"duplicate of #17"}}
 ```
 
 Log:
@@ -133,16 +133,16 @@ issue list --state open --limit 1000
 issue view 17 --json number,comments
 issue view 16 --json number,title,state
 issue view 17 --json number,state
-issue comment 16 --body Duplicate of #17. Closing this one; the canonical issue carries the fix.
+issue comment 16 --body <!-- dsh-setup:change=none --> Duplicate of #17. Closing this one; the canonical issue carries the fix.
 issue close 16 --duplicate-of 17
 issue comment 17 --body <!-- dsh-setup:change=ignored-artifacts --> Tracked in ignored-artifacts. Scope: repository checks must skip ignored local artifacts. Next step: promote the draft.
 issue view 99 --json number,title,state
 ```
 
 Assertions: nine calls, exactly one close — #16 with `--duplicate-of 17`, which is the reason the
-spec requires; the canonical #17 received the marker comment; **zero mutating calls on #99** (one
-view, no comment or close), because an `invalid` verdict waits for the owner's answer and the run
-asked in the report instead.
+spec requires; both comments carry the required marker (the duplicate close `change=none`, the #17
+link `change=ignored-artifacts`); **zero mutating calls on #99** (one view, no comment or close),
+because an `invalid` verdict waits for the owner's answer and the run asked in the report instead.
 
 ### Transcript 2 — the rerun over the same marker
 
