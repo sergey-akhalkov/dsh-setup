@@ -1,6 +1,6 @@
 {
   "name": "dsh-setup",
-  "version": "0.62.1",
+  "version": "0.62.2",
   "private": true,
   "type": "module",
   "description": "A portable, installable DeepSeek Harness setup: plugin bundles, agent presets, and a static plugin market index",
@@ -44,6 +44,7 @@
     "@deepseek-ai/dsh-error": "0.2.2-rc.2",
     "@deepseek-ai/dsh-plugin-market-index": "0.2.2-rc.2",
     "@modelcontextprotocol/client": "2.2.0",
+    "@openai/codex": "0.170.0",
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/semver": "7.8.0",

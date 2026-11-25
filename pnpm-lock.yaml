@@ -23,6 +23,9 @@ importers:
       '@modelcontextprotocol/client':
         specifier: 2.2.0
         version: 2.2.0
+      '@openai/codex':
+        specifier: 0.170.0
+        version: 0.170.0
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2

@@ -1641,7 +1641,7 @@ var CodexProvider = class {
 			sandbox: this.sandbox,
 			...target,
 			...reviewKey === void 0 ? {} : { reviewKey },
-			permissionMode: "never",
+			permissionMode: "approve-for-me",
 			env: this.config.env,
 			disposeGraceMs: this.config.disposeGraceMs,
 			spawn: (spawnSpec) => this.ctx.subprocess.spawn(spawnSpec),
