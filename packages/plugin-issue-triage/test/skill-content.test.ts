@@ -52,6 +52,14 @@ describe('issue-triage skill content', () => {
     )
   })
 
+  it('requires the complete paginated backlog before any verdict', () => {
+    expect(prose).toContain(
+      '`gh issue list --state open --paginate --limit 100 --json number,title,labels,createdAt,updatedAt`',
+    )
+    expect(prose).toContain('never assign a verdict from a truncated page')
+    expect(prose).toContain('The inventory returns exactly the page cap')
+  })
+
   it('pins the full verdict vocabulary, one verdict per issue', () => {
     for (const verdict of VERDICTS) {
       const row = new RegExp(`^\\| \`${verdict}\` +\\|`, 'mu')
@@ -77,7 +85,8 @@ describe('issue-triage skill content', () => {
     expect(prose).toContain('Only `duplicate`, `fixed`, and `shipped` are closeable in a run')
     expect(prose).toContain('Never close an `invalid` issue')
     expect(prose).toContain("without the owner's recorded answer")
-    expect(prose).toContain('`gh issue close <n> --reason "not planned"`')
+    expect(prose).toContain('`gh issue close <n> --duplicate-of <canonical>`')
+    expect(prose).toContain('`gh issue close <n> --reason completed`')
     expect(prose).toContain('Do not edit the body.')
   })
 

@@ -38,8 +38,10 @@ and nothing in the repository changes during preflight or inventory.
 ## The run
 
 1. Preflight: the two checks above.
-2. Inventory: `gh issue list --state open --limit 100 --json number,title,labels,createdAt,updatedAt`,
-   then `gh issue view <n> --json number,title,body,state,labels,comments` for every issue.
+2. Inventory: `gh issue list --state open --paginate --limit 100 --json number,title,labels,createdAt,updatedAt`,
+   then `gh issue view <n> --json number,title,body,state,labels,comments` for every issue. `--paginate`
+   returns every page, so the verdict set is the whole backlog; never assign a verdict from a truncated
+   page, and when the read returns exactly the page size, fetch the next page before proceeding.
 3. Existing links: `openspec list --json` for the active changes, `git grep -n "Fixes #<n>" -- openspec/changes/`
    for each issue, and the issue's comments for an existing triage marker. An issue already owned by
    a change is `tracked`; it is never drafted twice.
@@ -94,8 +96,9 @@ Each verdict names the read-only command that supports it:
 
 ## Closes
 
-Close a `duplicate` with `gh issue close <n> --reason "not planned"` after one comment that names the
-canonical issue; the triage reason is `duplicate`. Close a `fixed` or `shipped` issue with
+Close a `duplicate` with `gh issue close <n> --duplicate-of <canonical>` after one comment that names
+the canonical issue; GitHub records the duplicate closure and links the canonical issue. Close a
+`fixed` or `shipped` issue with
 `gh issue close <n> --reason completed` after one comment naming the command and its passing output
 (for `shipped`, also the version). Do not edit the body.
 
@@ -224,6 +227,7 @@ deferred, C closed`), and the decisions the owner must make: which drafts to pro
 | `gh auth status` fails                    | stop before inventory; one line naming `gh auth login`                        |
 | No OpenSpec root                          | stop before inventory; one line naming `openspec init --tools none`           |
 | Zero open issues                          | report the empty table and stop; write nothing                               |
+| The inventory returns exactly the page cap | rerun with `--paginate`; judge only the complete backlog                    |
 | More valid issues than the cap            | draft three, defer the rest with deferral comments                            |
 | The marker already exists                 | skip the comment; the run is idempotent                                       |
 | A worker proposes a change directory      | discard it; drafts live only under `.dsh/workflows/drafts/`                   |

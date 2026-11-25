@@ -99,20 +99,10 @@ interface BundleRow {
   disabled?: boolean
 }
 
-/** The generated bundle row a profile mounts and can disable. */
+/** The generated bundle row a profile mounts. */
 const bundleRows = (parse(bundlePatch) as Array<{ insert?: BundleRow[] }>).flatMap(
   (patch) => patch.insert ?? [],
 )
-
-/**
- * Mounts one row the way the Harness loader does: a `disabled: true` row is
- * skipped and its plugin never applies, so the provider cannot observe the flag.
- */
-function mountRow(plugin: PluginModule, row: BundleRow) {
-  const { ctx, providers } = createContext()
-  if (row.disabled !== true) plugin.apply(ctx)
-  return providers
-}
 
 describe('issue-triage plugin', () => {
   it('exports the package identity and injects only the skills service', async () => {
@@ -195,19 +185,23 @@ describe('issue-triage plugin', () => {
     expect(ctx.systemPromptReads).toBe(0)
   })
 
-  it('mounts the generated row enabled and lists no candidate when the row is disabled', async () => {
+  it('ships the generated row enabled and registers one candidate when applied', async () => {
     const plugin = await loadPlugin()
     const row = bundleRows.find((entry) => entry.id === 'dsh-setup-issue-triage')
     expect(row).toBeDefined()
     if (row === undefined) return
     expect(row.disabled).toBeUndefined()
 
-    const enabled = mountRow(plugin, row)
-    expect(enabled).toHaveLength(1)
-    const candidates = await enabled[0]?.list()
+    const { ctx, providers } = createContext()
+    plugin.apply(ctx)
+    expect(providers).toHaveLength(1)
+    const candidates = await providers[0]?.list()
     expect(candidates?.map((candidate) => candidate.name)).toEqual(['issue-triage'])
+  })
 
-    const disabled = mountRow(plugin, { ...row, disabled: true })
-    expect(disabled).toHaveLength(0)
+  it('registers nothing at import time, so the loader decides whether the row mounts', async () => {
+    const { providers } = createContext()
+    await loadPlugin()
+    expect(providers).toHaveLength(0)
   })
 })

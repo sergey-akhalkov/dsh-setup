@@ -328,6 +328,13 @@ function main(): number {
         }
       })
 
+      step('compose the issue-triage row enabled with no configuration', () => {
+        const row = rowBlock(dump.stdout, 'dsh-setup-issue-triage')
+        if (row === '') throw new Error('issue-triage row is missing')
+        if (rowHasLine(row, 'disabled: true')) throw new Error('issue-triage row is disabled')
+        if (row.includes('config:')) throw new Error('the setup shipped issue-triage configuration')
+      })
+
       step('ship the workflow review owner and no delegation row', () => {
         if (rowBlock(dump.stdout, 'dsh-setup-delegation-rules') !== '') {
           throw new Error('the removed delegation-rules row is still mounted')
@@ -442,6 +449,26 @@ function main(): number {
             throw new Error(`disabled goal-continuity row lacks "${expected}"`)
           }
         }
+      })
+
+      const issueTriageDisabled = run(
+        base,
+        [
+          '--profile',
+          'ci',
+          '--patch',
+          overlay('issue-triage-disabled.yml', '- id: dsh-setup-issue-triage\n  disabled: true\n'),
+          '--dump-config',
+        ],
+        env,
+      )
+      step('compose the issue-triage row disabled by a profile patch', () => {
+        if (issueTriageDisabled.status !== 0) throw failure(issueTriageDisabled)
+        const row = rowBlock(issueTriageDisabled.stdout, 'dsh-setup-issue-triage')
+        if (!rowHasLine(row, 'disabled: true')) {
+          throw new Error('profile disabled:true did not disable the issue-triage row')
+        }
+        if (row.includes('config:')) throw new Error('the disabled row carries configuration')
       })
 
       step('compose the Hindsight row with local defaults', () => {

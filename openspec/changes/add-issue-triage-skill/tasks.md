@@ -23,8 +23,9 @@
 ## 3. Tests and packaging (lane 3, owns `packages/plugin-issue-triage/test/skill-provider.test.ts`, `packages/setup/**`, `docs/plugins.md`, `README.md`)
 
 - [x] 3.1 Add the provider test: one candidate, the catalog description equal to the body's
-      frontmatter, no always-on contribution, and no candidate when the row is disabled; verify
-      `pnpm test` passes.
+      frontmatter, no always-on contribution, no candidate before the module is applied, and the
+      generated row ships enabled; the loader owns the disabled-row behavior; verify `pnpm test`
+      passes.
 - [x] 3.2 Add the bundle to the setup composition and the `docs/plugins.md` and `README.md` rows, run
       `pnpm gen`; verify `pnpm gen:check`, `pnpm validate:repo`, and `pnpm lint` pass.
 

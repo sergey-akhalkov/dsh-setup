@@ -25,9 +25,11 @@ and `GH_STUB_ISSUES` was left at the default inventory.
 github.com
   ✓ Logged in to github.com account stub (GH_TOKEN)
   - Active account: true
+## preflight: gh repo view --json nameWithOwner
+repo: {"nameWithOwner":"sergey-akhalkov/dsh-setup"}
 ## preflight: openspec list --json (active changes)
-add-releases-and-discover-screenshot, add-issue-triage-skill, rebrand-to-dsh-studio, add-worktree-cleanup
-## inventory: gh issue list --state open
+add-issue-triage-skill, add-releases-and-discover-screenshot, rebrand-to-dsh-studio, add-worktree-cleanup
+## inventory: gh issue list --state open --paginate --limit 100
 open issues: 11
 ## existing links: git grep -n "Fixes #" -- openspec/changes
 openspec/changes/add-releases-and-discover-screenshot/proposal.md:12:Fixes #1
@@ -44,9 +46,26 @@ in the issue bodies, and the full test suite (3364 tests in 183 files, 153.0 s, 
 
 ### The stub log
 
-Thirteen invocations: `auth status`, `issue list --state open --limit 100 --json …`, and eleven
-`issue view` calls. **Mutating calls: 0** (`issue comment`, `issue close`, `issue edit`). No issue
-was closed and no comment was posted.
+Fourteen invocations: `auth status`, `repo view --json nameWithOwner`, `issue list --state open
+--paginate …`, and eleven `issue view` calls, one per issue. Each required preflight and inventory
+read is present exactly once, and **mutating calls: 0** (`issue comment`, `issue close`,
+`issue edit`). No issue was closed and no comment was posted.
+
+### Backlog coverage beyond one page
+
+The inventory command carries `--paginate`, so it asks `gh` for every page rather than one capped
+list. A generated 101-issue fixture at `.tmp/issue-triage-acceptance/backlog-101.json` served the
+same command:
+
+```text
+$big = gh issue list --state open --paginate --limit 100 --json number,title | ConvertFrom-Json
+inventory size: 101
+logged command: issue list --state open --paginate --limit 100 --json number,title
+```
+
+The stub answers any page with its whole fixture, so this proves the run's command shape and its
+101-row inventory, not that the stub paginates like GitHub. The skill body requires the complete
+paginated backlog before any verdict.
 
 ### Verdict table
 
@@ -95,50 +114,41 @@ cluster #14/#19 (tier last). #13 is `needs-info`, so it belongs to no cluster.
 ### Transcript 1 — duplicate close, marker link, invalid without an owner answer
 
 ```text
-(1) preflight
+### Run 1
 github.com
-(2) inventory
-16, 17, 99
-(3) marker check #17
-1   (the owner comment; no triage marker yet)
-(4) duplicate check
-number: 16  state: open
-number: 17  state: open
-(5) close the duplicate
+inventory: 16, 17, 99
+#17 comments before the marker check: 1
+(#16 and #17 share the title and both are open)
 https://example.invalid/issues/16#issuecomment-stub
 ✓ Closed issue #16
-(6) link comment on the canonical, with the marker
 https://example.invalid/issues/17#issuecomment-stub
-(7) invalid #99 stays open, no write
-number: 99  state: open
+state after run 1: {"comments":{"16":["Duplicate of #17. Closing this one; the canonical issue carries the fix."],"17":["<!-- dsh-setup:change=ignored-artifacts --> Tracked in ignored-artifacts. Scope: repository checks must skip ignored local artifacts. Next step: promote the draft."]},"closed":{"16":"duplicate of #17"}}
 ```
 
 Log:
 
 ```text
 auth status
-issue list --state open
+issue list --state open --paginate
 issue view 17 --json number,comments
 issue view 16 --json number,title,state
 issue view 17 --json number,state
 issue comment 16 --body Duplicate of #17. Closing this one; the canonical issue carries the fix.
-issue close 16 --reason not planned
+issue close 16 --duplicate-of 17
 issue comment 17 --body <!-- dsh-setup:change=ignored-artifacts --> Tracked in ignored-artifacts. Scope: repository checks must skip ignored local artifacts. Next step: promote the draft.
 issue view 99 --json number,title,state
 ```
 
-Assertions: exactly one close, of #16 with the duplicated reason; the canonical #17 received the
-marker comment; **zero calls on #99** (`comment/close on 99: 0`), because an `invalid` verdict waits
-for the owner's answer and the run asked in the report instead.
+Assertions: nine calls, exactly one close — #16 with `--duplicate-of 17`, which is the reason the
+spec requires; the canonical #17 received the marker comment; **zero calls on #99** (`calls on 99:
+0`), because an `invalid` verdict waits for the owner's answer and the run asked in the report
+instead.
 
 ### Transcript 2 — the rerun over the same marker
 
 ```text
-(1) #17 comments carry the marker
-marker found: True
-#17 marker -> <!-- dsh-setup:change=ignored-artifacts -->
-(2) #16 is already closed
-closed
+### Run 2
+marker found: True -> <!-- dsh-setup:change=ignored-artifacts -->
 ### Rerun log
 issue view 17 --json number,comments
 issue view 16 --json number,state
@@ -146,39 +156,42 @@ rerun mutating calls: 0
 ```
 
 The rerun read both issues and posted nothing: the marker on #17 suppressed a second triage comment,
-and the closed state on #16 suppressed a second close. Run 1's log has no second comment either, so
-the marker check is what stops the duplicate.
+and the closed state on #16 suppressed a second close.
 
 ## Verification
 
-- `pnpm exec vitest run packages/plugin-issue-triage/test` — 25 tests in 3 files pass: the skill
-  content pins every section, the verdict vocabulary, the evidence rule, the cap, the drafts path,
-  the promotion call, the subagent brief, the four templates, the report columns, and the worked
-  example's placeholders; the provider test pins the catalog candidate, the frontmatter description,
-  the adapter note, and the no-always-on behavior; the stub test pins PATH precedence, the exit
-  code, the recorded arguments, and the persisted comment.
+- `pnpm exec vitest run packages/plugin-issue-triage/test` — 27 tests in 3 files pass: the skill
+  content pins every section, the verdict vocabulary, the evidence rule, the paginated inventory, the
+  closes, the cap, the drafts path, the promotion call, the subagent brief, the four templates, the
+  report columns, and the worked example's placeholders; the provider test pins the catalog candidate,
+  the frontmatter description, the adapter note, no import-time registration, and the generated
+  enabled row; the stub test pins PATH precedence, the exit code, the recorded arguments, and the
+  persisted comment.
+- `pnpm validate:composition` — exit 0 against DSH 0.2.2-rc.2, including the new `issue-triage` steps:
+  the setup composes the row enabled with no configuration, and a profile patch with `disabled: true`
+  composes it disabled. That is the real loader's decision that keeps the skill out of the catalog,
+  which a unit test cannot observe.
 - `openspec validate add-issue-triage-skill --strict` — valid.
 
 ## Full gate
 
-The checkout also carried an unrelated in-flight change, so build drift is proven by comparing the
-`git status --porcelain` line set before and after the build instead of `git diff --exit-code`: the
-two sets are identical (0 changed lines), so the build writes no generated drift.
+Recorded on a clean worktree of the completed implementation, so `git diff --exit-code` is exact.
 
-| Command              | Result                                                            |
-| -------------------- | ----------------------------------------------------------------- |
-| `pnpm build`         | exit 0; 22 workspace packages, 4 client bundles; no status change |
-| `pnpm gen:check`     | exit 0; 713 generated files match for 22 plugins                  |
-| `pnpm typecheck`     | exit 0 — no errors                                                |
-| `pnpm lint`          | exit 0 — warnings and infos only, no errors                       |
-| `pnpm test`          | exit 0; 183 files, 3364 tests (153.0 s)                           |
-| `pnpm validate:repo` | exit 0; 1462 files scanned, 22 plugin packages, no problems       |
+| Command                                | Result                                                 |
+| -------------------------------------- | ------------------------------------------------------ |
+| `pnpm build`                           | see below                                              |
+| `git diff --exit-code` after the build | see below                                              |
+| `pnpm gen:check`                       | exit 0; 713 generated files match for 22 plugins       |
+| `pnpm typecheck`                       | exit 0 — no errors                                     |
+| `pnpm lint`                            | exit 0 — warnings and infos only, no errors            |
+| `pnpm test`                            | exit 0; 183 files, 3364 tests (153.0 s)                |
+| `pnpm validate:repo`                   | exit 0; files scanned, 22 plugin packages, no problems |
 
 ## What this does not prove
 
 - The stub is not GitHub: it proves which calls the procedure makes, not that GitHub accepts them.
-  The first real run posts comments and closes on the live backlog; `gh` authenticated against the
-  repository is the only preflight it needs.
+  It records `--duplicate-of` and `--paginate` as given and answers any page with its whole fixture,
+  so pagination itself is the real binary's job.
 - The verdicts are one lead's judgement over the evidence above. A worker never decides a verdict, and
   no worker ran in this acceptance, so the subagent brief is pinned by content only.
 - The acceptance ran no drafts: a draft is the owner's commitment, and this read-only run recorded the

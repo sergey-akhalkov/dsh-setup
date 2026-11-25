@@ -115,7 +115,11 @@ if (group === 'issue' && action === 'comment') {
 
 if (group === 'issue' && action === 'close') {
   const number = Number(rest[0])
-  state.closed[number] = option('--reason', rest) ?? 'completed'
+  const canonical = option('--duplicate-of', rest)
+  state.closed[number] =
+    canonical === undefined
+      ? (option('--reason', rest) ?? 'completed')
+      : `duplicate of #${canonical}`
   writeState(state)
   finish(0, `✓ Closed issue #${number}`)
 }
