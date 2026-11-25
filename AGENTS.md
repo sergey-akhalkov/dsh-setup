@@ -155,11 +155,11 @@ drift, typecheck, lint, tests, and the three validators. Any failing step blocks
 
 ## 11. Hard rules and gotchas
 
-- **Never clear the Harness home**: do not delete, move, or recursively reset `~/.dsh`, `~/.pg0`,
-  `~/.hindsight`, or the `desktop` profile, and do not run recursive deletes outside the workspace.
-  A clean-state test uses a throwaway `DSH_HOME`; touching live data needs explicit owner
-  confirmation plus a completed Hindsight export or backup first. The 2026-10-29 incident wiped
-  every session and the Hindsight database this way.
+- **Never clear the Harness home**: no delete, move, or recursive reset of `~/.dsh`, `~/.pg0`,
+  `~/.hindsight`, or the `desktop` profile; no recursive delete, `git clean -fdx`, or `/MIR`
+  outside the workspace; rename instead. A clean-state test uses a throwaway `DSH_HOME`; live data
+  needs the owner's approval plus a backup. Two incidents (2026-10-29, 2026-11-25) wiped every
+  session: [docs/session-safety.md](docs/session-safety.md).
 - **Capture what you are not fixing now**: a bug or improvement idea in this setup that surfaces
   mid-task is filed as an issue in this repo before the task continues (`gh issue create`,
   `bug`/`enhancement`, no machine paths, credentials, or session dumps). Procedure and body template:

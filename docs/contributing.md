@@ -408,11 +408,13 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 ## Hard rules and gotchas
 
 - **Protect the Harness home.** An agent command must never delete, move, or wholesale reset
-  `~/.dsh`, `~/.pg0`, `~/.hindsight`, or the desktop profile, and must not run recursive deletes
-  outside the workspace. A clean-state test sets a throwaway `DSH_HOME` (the `pnpm dogfood` path).
-  Any destructive operation against live data requires explicit owner confirmation plus a completed
-  Hindsight export or backup first. On 2026-10-29 a careless recursive delete destroyed every session
-  and the local Hindsight database; `docs/hindsight.md` owns the export and restore procedure.
+  `~/.dsh`, `~/.pg0`, `~/.hindsight`, or the desktop profile, and must not run recursive deletes,
+  `git clean -fdx`, or `robocopy /MIR` outside the workspace. A clean-state test sets a throwaway
+  `DSH_HOME` (the `pnpm dogfood` path). Any destructive operation against live data requires
+  explicit owner confirmation plus a completed backup first; rename instead of deleting. On
+  2026-10-29 and again on 2026-11-25 a careless recursive delete destroyed every session (the second
+  with no recoverable snapshot); `docs/hindsight.md` owns the export and restore procedure and
+  [docs/session-safety.md](session-safety.md) owns the delete, backup, and recovery protocol.
 - **Live acceptance runs locally, not through the owner.** An agent runs review/acceptance scenarios
   itself in a throwaway profile: copy the owner profile with the `pnpm dogfood` path, install the
   built bundles into that `DSH_HOME`, create a fake OpenSpec change in a temp workspace, and drive

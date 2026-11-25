@@ -14,7 +14,9 @@ restarts the app, which kills the process tree behind that terminal and aborts t
 the Harness home while the app runs is worse still, because the running session's file can be removed
 from under it (`This turn failed ENOENT`). The installer refuses a `desktop` target when the calling
 shell lives inside the app. To verify this checkout on the current machine without touching the live
-profile, use [`pnpm dogfood`](#dogfood-on-the-current-machine) instead.
+profile, use [`pnpm dogfood`](#dogfood-on-the-current-machine) instead. Never reset the Harness home
+to "fix" an install: it destroys every session;
+[docs/session-safety.md](session-safety.md) owns the delete, backup, and recovery protocol.
 
 ## Prerequisites
 
