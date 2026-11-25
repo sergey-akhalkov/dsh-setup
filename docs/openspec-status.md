@@ -1227,3 +1227,40 @@ settings-file-only assertion and a missing runtime acceptance record) were fixed
 The change is filed as `2026-11-25-add-question-timeout-autonomy`; `session-guidance` gained the four
 pending-policy and configurability requirements and `goal-continuity`'s continuation-evidence
 requirement now names the pending signal.
+
+## add-issue-triage-skill (2026-11-25)
+
+**An opt-in issue-triage method as a packaged skill.** `@dsh-setup/plugin-issue-triage` registers the
+on-demand `issue-triage` skill (bundled rank 600, model- and user-invocable, `assets/issue-triage` as
+its resource base) with no always-on prompt, tool, Client half, or configuration, so disabling the
+`dsh-setup-issue-triage` row removes it from the catalog and costs nothing per step. One run verifies
+`gh` authentication, the repository slug, and the OpenSpec root before any inventory; reads the whole
+open backlog with `gh issue list --limit 1000` and raises the limit when a read returns exactly it;
+checks each issue's `Fixes #` link; and attaches one evidence-bound verdict per issue (`tracked`,
+`shipped`, `fixed`, `duplicate`, `invalid`, `needs-info`, `deferred`, `needs-change`). Only duplicates
+and already-fixed issues close — a duplicate with `gh issue close --duplicate-of <canonical>`, a fixed
+or shipped issue with `--reason completed` and the reproducing command — while `invalid` waits for the
+owner's recorded answer. The `needs-change` issues are clustered by the paths they would touch and
+capped at three change drafts under `.dsh/workflows/drafts/<name>/` (requirements, architecture,
+interface, proposal, design, delta specs, tasks), with every issue beyond the cap deferred and
+commented. A draft is promoted by the owner and then by `openspec new change <name>` through the
+Harness shell, so the normal intake decides the spec; the run itself never creates a change. Every
+GitHub write is the lead's, carries `<!-- dsh-setup:change=<name> -->`, and is skipped when the marker
+or the closed state already exists; a worker writes only its own draft directory. The run ends with the
+verdict table (issue, verdict, evidence, change or draft, next step) and the items-closed table.
+
+Acceptance is recorded in [issue-triage-acceptance](issue-triage-acceptance.md): an offline `gh` stub
+(records every argument, honors `--limit`, refuses the unsupported `--paginate`, persists comments and
+closes) replayed the read-only run over the current eleven issues with 14 invocations and zero mutating
+calls, the 101-issue completeness sequence, a duplicate close with `--duplicate-of 17`, an `invalid`
+issue left untouched, and a rerun that posted nothing because the marker and the closed state were
+found. The full gate on the final tree: 3367 tests in 183 files, `gen:check` 713 files for 22 plugins,
+`validate:repo` 1462 files, `validate:composition` clean including the new enabled and disabled row
+steps, and `pnpm build` followed by `git diff --exit-code` exit 0 on a committed tree. Review:
+whole-spec PASS (`c30268ec`), 11/11 task-review PASS, integration PASS (`009d1b3d`); the five findings
+of the first rounds were fixed before the approvals — the provider test's simulated loader behavior
+(moved to `validate:composition`, which composes the row enabled and disabled through the real DSH
+CLI), the missing `gh repo view` preflight read, a drift proof replaced by the real build-then-diff on
+a clean tree, the duplicate close reason, and the unsupported `--paginate` inventory. The change is
+filed as `2026-11-25-add-issue-triage-skill`; the new `issue-triage` capability (8 requirements) is
+synced.
